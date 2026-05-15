@@ -1,0 +1,14 @@
+diff --git a/setup.py b/setup.py
+index c4f2fa3..3e70e0a 100644
+--- a/setup.py
++++ b/setup.py
+@@ -213,8 +213,7 @@ if has_flag("--cuda_ext", "APEX_CUDA_EXT"):
+     if "--cuda_ext" in sys.argv:
+         sys.argv.remove("--cuda_ext")
+     raise_if_cuda_home_none("--cuda_ext")
+-    check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)
+-
++    pass  # patched out: minor-version mismatch accepted
+     ext_modules.append(
+         CUDAExtension(
+             name="amp_C",

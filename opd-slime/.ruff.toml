@@ -1,0 +1,26 @@
+# Strict ruff config for the tiny Python surface in this repo
+# (opd_plugins/). Standalone .ruff.toml (not pyproject.toml) because
+# opd-slime intentionally has no pyproject — see README.md "Not a uv
+# project".
+
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
+    "PL",   # pylint
+    "TID",  # flake8-tidy-imports
+    "PTH",  # flake8-use-pathlib
+    "RET",  # flake8-return
+    "C4",   # flake8-comprehensions
+    "N",    # pep8-naming
+    "ARG",  # flake8-unused-arguments
+]

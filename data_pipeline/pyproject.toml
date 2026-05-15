@@ -1,0 +1,89 @@
+[project]
+name = "crowdcast-data-pipeline"
+version = "0.1.0"
+description = "Crowd-cast SFT data pipeline (stages: prepare, run_length_cap, grain_payload, chunk_index). Configs consumed by pmanager."
+license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
+requires-python = ">=3.11"
+# Entrypoints only — pmanager itself is loaded by the *outer* process (the
+# `pmanager launch` invocation), not by these stage scripts. Configs in
+# this project use ``from pmanager.configs.schema import …``, but those
+# imports resolve in pmanager's own venv, not here.
+#
+# Several scripts in this repo deliberately run inside OTHER venvs and
+# therefore do NOT contribute to this dep set:
+#   * filter_truncated.py — runs under omegalax's uv venv (uses its pinned
+#     transformers + Qwen3-VL fast tokenizer).
+#   * stage_c_grain_payload.py / stage_d_chunk_index.py — subprocess-wrap
+#     omegalax scripts via ``uv run --project <omegalax_repo>``.
+#   * generate_onpolicy_completions{,_mm}.py / _smoke_mm_sglang.py — run
+#     under the crowdcast-eval venv (sglang + openai client live there).
+dependencies = [
+    "absl-py>=2.0",                # flag-based entrypoints across every stage_*.py / prep_*.py
+    "msgpack>=1.0",                # stage A: parse per-recording keylog msgpacks
+    "Pillow>=10.0",                # stage A JPEG encode + prep_finevision image materialization
+    "numpy>=2.0",                  # stage A frame-array math
+    "imageio-ffmpeg>=0.6.0",       # stage A fallback when system ffmpeg/ffprobe are off PATH
+    "datasets>=3.0",               # prep_{finevision,smoltalk2,tulu3_persona_if} + preprocess_smoltalk_prompts HF loaders
+    # tokenizer for prompt-length filtering in preprocess_smoltalk_prompts.py
+    # (Qwen3-VL-2B chat template).
+    "transformers>=4.45",
+    # transformers' chat-template renderer pulls jinja2 lazily; needed so
+    # apply_chat_template doesn't ImportError on first call.
+    "jinja2>=3.1",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Not a published package — pyproject anchors a uv venv at this directory.
+py-modules = []
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
+    "PL",   # pylint
+    "TID",  # flake8-tidy-imports
+    "PTH",  # flake8-use-pathlib
+    "RET",  # flake8-return
+    "C4",   # flake8-comprehensions
+    "N",    # pep8-naming
+]
+ignore = [
+    "PLR0912",  # too many branches (stage main() loops are long by design)
+    "PLR0913",  # too many arguments (absl-flags entrypoints have many)
+    "PLR0915",  # too many statements (per-segment processing loops are long by nature)
+    "PLR2004",  # magic value (port numbers, fps, jpeg quality inline are fine)
+    "E501",     # line length (enforced by formatter, not lint)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "_manifest",
+    "configs",
+    "filter_truncated",
+    "generate_onpolicy_completions",
+    "generate_onpolicy_completions_mm",
+    "prep_finevision",
+    "prep_smoltalk2",
+    "prep_tulu3_persona_if",
+    "preprocess_smoltalk_prompts",
+    "stage_a_prepare",
+    "stage_b_run_length_cap",
+    "stage_c_grain_payload",
+    "stage_d_chunk_index",
+]
