@@ -8,3 +8,5 @@ __pycache__/
 wandb/
 cache/
 draft/
+.env
+annotation_pilot/

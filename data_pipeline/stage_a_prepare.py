@@ -62,6 +62,12 @@ flags.DEFINE_integer(
 flags.DEFINE_integer(
     "max_segments", None, "Cap on segments processed (0 = unlimited).", required=True
 )
+flags.DEFINE_float(
+    "black_frame_threshold",
+    5.0,
+    "Mean pixel intensity (0-255) below which a frame is considered black "
+    "and dropped. 0 = disable black-frame filtering.",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -119,13 +125,18 @@ def _collect_videos(source_path: Path) -> list[Path]:
 
 def _keylog_path_for(video_path: Path) -> Path:
     """<contrib>/recordings/recording_<sess>_seg<N><suffix>.mp4
-    → <contrib>/keylogs/input_<sess>_seg<N><suffix>.msgpack"""
+    → <contrib>/keylogs/input_<sess>_seg<N><suffix>.msgpack
+
+    Also supports flat layout where mp4 and msgpack live in the same directory.
+    """
     m = RECORDING_RE.match(video_path.name)
     assert m is not None, f"Unexpected video filename: {video_path.name}"
     sess, seg_str, suffix = m.group(1), m.group(2), (m.group(3) or "")
-    return (
-        video_path.parent.parent / "keylogs" / f"input_{sess}_seg{int(seg_str):04d}{suffix}.msgpack"
-    )
+    msgpack_name = f"input_{sess}_seg{int(seg_str):04d}{suffix}.msgpack"
+    hierarchical = video_path.parent.parent / "keylogs" / msgpack_name
+    if hierarchical.exists():
+        return hierarchical
+    return video_path.parent / msgpack_name
 
 
 def _split_videos(
@@ -380,7 +391,17 @@ def _extract_frames(
     target_fps: int,
     target_height: int,
     jpeg_quality: int,
-) -> tuple[int, int]:
+    black_frame_threshold: float = 0.0,
+) -> tuple[int, int, int, list[int] | None]:
+    """Returns (n_written, out_width, n_raw, kept_indices).
+
+    *n_raw* is the total number of frames extracted from the video before
+    any filtering.  *kept_indices* is ``None`` when no black-frame
+    filtering is applied (threshold <= 0) — meaning every extracted frame
+    was written.  When filtering is active it lists the original
+    (pre-filter) frame indices that survived, so callers can align keylog
+    buckets.
+    """
     in_width, in_height = _probe_resolution(video_path)
     out_width = round(target_height * in_width / in_height)
     out_width += out_width % 2  # ensure even
@@ -408,18 +429,27 @@ def _extract_frames(
         )
     out = proc.stdout
     frame_size = target_height * out_width * 3
-    n_frames = len(out) // frame_size
-    if n_frames == 0:
-        return 0, out_width
-    frames = np.frombuffer(out, np.uint8).reshape(n_frames, target_height, out_width, 3)
+    n_raw = len(out) // frame_size
+    if n_raw == 0:
+        return 0, out_width, 0, None
+    frames = np.frombuffer(out, np.uint8).reshape(n_raw, target_height, out_width, 3)
+
+    if black_frame_threshold > 0:
+        mean_intensity = frames.mean(axis=(1, 2, 3))
+        keep_mask = mean_intensity >= black_frame_threshold
+        kept_indices = [int(i) for i in np.where(keep_mask)[0]]
+        frames = frames[keep_mask]
+    else:
+        kept_indices = None
+
     out_dir.mkdir(parents=True, exist_ok=True)
-    for fi in range(n_frames):
+    for fi in range(len(frames)):
         Image.fromarray(frames[fi]).save(
             out_dir / f"frame_{fi:06d}.jpg",
             format="JPEG",
             quality=jpeg_quality,
         )
-    return n_frames, out_width
+    return len(frames), out_width, n_raw, kept_indices
 
 
 # ---------------------------------------------------------------------------
@@ -453,9 +483,13 @@ def _process_segment(args: dict) -> dict:
     target_fps = args["target_fps"]
     target_height = args["target_height"]
     jpeg_quality = args["jpeg_quality"]
+    black_frame_threshold = args.get("black_frame_threshold", 0.0)
 
     segment_id = video_path.stem
-    contributor_hash = video_path.parent.parent.name  # <hash>/recordings/foo.mp4
+    if video_path.parent.name == "recordings":
+        contributor_hash = video_path.parent.parent.name
+    else:
+        contributor_hash = video_path.parent.name
     segment_dir = output_root / split / segment_id
     frames_dir = segment_dir / "frames"
     summary = {
@@ -468,8 +502,9 @@ def _process_segment(args: dict) -> dict:
     }
 
     try:
-        n_frames, out_width = _extract_frames(
-            video_path, frames_dir, target_fps, target_height, jpeg_quality
+        n_frames, out_width, n_raw, kept_indices = _extract_frames(
+            video_path, frames_dir, target_fps, target_height, jpeg_quality,
+            black_frame_threshold=black_frame_threshold,
         )
     except Exception as e:
         summary["skip_reason"] = f"frame_extraction_failed: {e}"
@@ -485,7 +520,17 @@ def _process_segment(args: dict) -> dict:
         summary["n_frames"] = n_frames
         return summary
 
-    per_frame, stats = _aggregate_events(keylog_path, n_frames, target_fps)
+    # Aggregate events over the *original* frame count so bucket indices
+    # line up with the raw video timeline, then select only the kept frames.
+    per_frame_raw, stats = _aggregate_events(keylog_path, n_raw, target_fps)
+
+    if kept_indices is not None:
+        per_frame = [per_frame_raw[i] for i in kept_indices]
+        n_black_dropped = n_raw - len(kept_indices)
+    else:
+        per_frame = per_frame_raw
+        n_black_dropped = 0
+
     action_strings = [_format_action(ev) for ev in per_frame]
     messages = _build_messages(frames_dir, n_frames, action_strings)
     n_no_op = sum(1 for s in action_strings if s == "NO_OP")
@@ -497,6 +542,9 @@ def _process_segment(args: dict) -> dict:
         "video_path": str(video_path),
         "keylog_path": str(keylog_path),
         "n_frames": n_frames,
+        "n_frames_before_black_filter": n_raw,
+        "n_black_dropped": n_black_dropped,
+        "kept_indices": kept_indices,
         "frame_height": target_height,
         "frame_width": out_width,
         "target_fps": target_fps,
@@ -529,6 +577,7 @@ def _process_segment(args: dict) -> dict:
     summary.update(
         {
             "n_frames": n_frames,
+            "n_black_dropped": n_black_dropped,
             "n_no_op": n_no_op,
             "n_context_changed": stats.n_context_changed,
             "n_held_at_end": stats.n_held_at_end,
@@ -598,6 +647,7 @@ def main(_):
                     "target_fps": FLAGS.target_fps,
                     "target_height": FLAGS.target_height,
                     "jpeg_quality": FLAGS.jpeg_quality,
+                    "black_frame_threshold": FLAGS.black_frame_threshold,
                 }
             )
 
@@ -613,6 +663,7 @@ def main(_):
                 f"[{len(summaries)}/{len(pool_args)}] "
                 f"{s['split']}/{s['segment_id']} "
                 f"frames={s.get('n_frames', 0)} "
+                f"black_dropped={s.get('n_black_dropped', 0)} "
                 f"skip={s['skip_reason']}",
                 flush=True,
             )
@@ -623,6 +674,7 @@ def main(_):
 
     failed = [s for s in summaries if s["skip_reason"]]
     total_frames = sum(s.get("n_frames", 0) for s in summaries)
+    total_black_dropped = sum(s.get("n_black_dropped", 0) for s in summaries)
 
     write_manifest(
         output_dir,
@@ -636,6 +688,7 @@ def main(_):
             "test_ratio": test_ratio,
             "seed": FLAGS.seed,
             "max_segments": FLAGS.max_segments,
+            "black_frame_threshold": FLAGS.black_frame_threshold,
         },
         inputs={"source": str(source_path)},
         stats={
@@ -643,6 +696,7 @@ def main(_):
             "n_segments_processed": len(summaries) - len(failed),
             "n_segments_failed": len(failed),
             "total_frames": total_frames,
+            "total_black_dropped": total_black_dropped,
             "split_counts": {
                 split: sum(1 for s in summaries if s["split"] == split and not s["skip_reason"])
                 for split in ("train", "val", "test")

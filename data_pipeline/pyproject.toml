@@ -1,7 +1,7 @@
 [project]
 name = "crowdcast-data-pipeline"
 version = "0.1.0"
-description = "Crowd-cast SFT data pipeline (stages: prepare, run_length_cap, grain_payload, chunk_index). Configs consumed by pmanager."
+description = "Crowd-cast SFT data pipeline (A-G: prepare, run_length_cap, caption, task_tree, chunk_buckets, grain_payload, chunk_index). Configs consumed by pmanager."
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
@@ -15,7 +15,7 @@ requires-python = ">=3.11"
 # therefore do NOT contribute to this dep set:
 #   * filter_truncated.py — runs under omegalax's uv venv (uses its pinned
 #     transformers + Qwen3-VL fast tokenizer).
-#   * stage_c_grain_payload.py / stage_d_chunk_index.py — subprocess-wrap
+#   * stage_f_grain_payload.py / stage_g_chunk_index.py — subprocess-wrap
 #     omegalax scripts via ``uv run --project <omegalax_repo>``.
 #   * generate_onpolicy_completions{,_mm}.py / _smoke_mm_sglang.py — run
 #     under the crowdcast-eval venv (sglang + openai client live there).
@@ -24,7 +24,7 @@ dependencies = [
     "msgpack>=1.0",                # stage A: parse per-recording keylog msgpacks
     "Pillow>=10.0",                # stage A JPEG encode + prep_finevision image materialization
     "numpy>=2.0",                  # stage A frame-array math
-    "imageio-ffmpeg>=0.6.0",       # stage A fallback when system ffmpeg/ffprobe are off PATH
+    "imageio-ffmpeg>=0.5.1",       # stage A fallback when system ffmpeg/ffprobe are off PATH
     "datasets>=3.0",               # prep_{finevision,smoltalk2,tulu3_persona_if} + preprocess_smoltalk_prompts HF loaders
     # tokenizer for prompt-length filtering in preprocess_smoltalk_prompts.py
     # (Qwen3-VL-2B chat template).
@@ -32,6 +32,8 @@ dependencies = [
     # transformers' chat-template renderer pulls jinja2 lazily; needed so
     # apply_chat_template doesn't ImportError on first call.
     "jinja2>=3.1",
+    "openai>=1.30",                # annotation stage: Azure AI Foundry (Kimi K2.6) API client
+    "opencv-python-headless>=4.8", # annotation stage: frame extraction via cv2 (no ffmpeg needed)
 ]
 
 [build-system]
@@ -84,6 +86,9 @@ known-first-party = [
     "preprocess_smoltalk_prompts",
     "stage_a_prepare",
     "stage_b_run_length_cap",
-    "stage_c_grain_payload",
-    "stage_d_chunk_index",
+    "stage_c_caption",
+    "stage_d_task_tree",
+    "stage_e_chunk_buckets",
+    "stage_f_grain_payload",
+    "stage_g_chunk_index",
 ]

@@ -18,7 +18,7 @@ dependencies = [
     # (huggingface-hub<1.0), which conflicted with inspect-evals's
     # huggingface-hub>=1.0 floor. That conflict is gone since
     # transformers 5.x requires huggingface-hub>=1.5; back to upstream.
-    "sglang[all]>=0.5,<0.6",
+    "sglang[all]>=0.5.12,<0.6",
     "inspect-ai>=0.3.213",
     "inspect-evals>=0.10",
     # inspect-ai's SGLang model provider requires openai>=2.26.0, but sglang
