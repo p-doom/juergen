@@ -23,7 +23,7 @@ import urllib.request
 from pathlib import Path
 
 
-def _reserve_free_port(host: str = "127.0.0.1") -> int:
+def _reserve_free_port(host: str = "127.0.0.1", *, max_attempts: int = 64) -> int:
     """Ask the kernel for a free ephemeral TCP port and release it.
 
     Used when the caller passes ``port=0`` (meaning "any free port"). SGLang
@@ -36,13 +36,20 @@ def _reserve_free_port(host: str = "127.0.0.1") -> int:
     SGLang. By picking a real free port here and passing it to both
     ``--port`` and the probe URL, we sidestep the SGLang bug.
 
-    Small race window: another process could grab the port between
-    ``close()`` and SGLang's bind. In our cluster topology each ifeval job
-    is on its own node with no contender, so this is fine in practice.
+    SGLang derives ``grpc_port = port + 10000`` and rejects anything above
+    65535 in ``ServerArgs.__post_init__``. With Linux's default ephemeral
+    range of 32768-60999, roughly 16% of kernel-picked ports overflow.
+    Retry until we land in the safe sub-range.
     """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((host, 0))
-        return s.getsockname()[1]
+    for _ in range(max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind((host, 0))
+            port = s.getsockname()[1]
+        if port + 10000 <= 65535:
+            return port
+    raise RuntimeError(
+        f"could not reserve sglang-safe port (port + 10000 <= 65535) in {max_attempts} attempts"
+    )
 
 
 @contextlib.contextmanager

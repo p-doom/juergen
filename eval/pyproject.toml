@@ -18,7 +18,19 @@ dependencies = [
     # (huggingface-hub<1.0), which conflicted with inspect-evals's
     # huggingface-hub>=1.0 floor. That conflict is gone since
     # transformers 5.x requires huggingface-hub>=1.5; back to upstream.
-    "sglang[all]>=0.5.11,<0.6",
+    # torch pinned directly so [tool.uv.sources] at the workspace root
+    # can redirect it to the cu128 wheel index. Without an explicit
+    # mention here it's transitive-only and sources don't apply.
+    "torch",
+    "torchaudio",
+    "torchvision",
+    "torchcodec",
+    # Upper-bound sglang at <0.5.11: sglang 0.5.12 requires
+    # cuda-python>=13.0 which forces a CUDA 13 torch wheel, but the hai
+    # nodes' NVIDIA driver (12080) only supports CUDA 12.8. Until either
+    # the cluster drivers move or sglang relaxes the cuda-python floor,
+    # we stay on the CUDA-12-compatible 0.5.x line.
+    "sglang[all]>=0.5,<0.5.11",
     "inspect-ai>=0.3.213",
     "inspect-evals>=0.10",
     # inspect-ai's SGLang model provider requires openai>=2.26.0, but sglang
