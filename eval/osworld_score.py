@@ -18,10 +18,16 @@ from collections import defaultdict
 from pathlib import Path
 
 
-def _mean(rewards: list[float]) -> float:
-    """Mean over non-NaN rewards. NaN when all-NaN or empty."""
-    valid = [r for r in rewards if not math.isnan(r)]
-    return sum(valid) / len(valid) if valid else float("nan")
+def _mean_count_nan_as_zero(rewards: list[float]) -> float:
+    """Mean treating NaN (eval-time crash) as a failed task (0.0).
+
+    Excluding NaN from the denominator would let an evaluator crash
+    silently inflate the score; comparing against published OSWorld
+    numbers requires every task to count.
+    """
+    if not rewards:
+        return float("nan")
+    return sum(0.0 if math.isnan(r) else r for r in rewards) / len(rewards)
 
 
 def main() -> None:
@@ -62,21 +68,25 @@ def main() -> None:
             app_results[app_name].append(reward)
 
     print(f"\nOSWorld benchmark results: {base}\n")
-    print(f"{'App':<25} {'Done':>6} {'Total':>6} {'Success':>8}")
-    print("-" * 50)
+    print(f"{'App':<25} {'Done':>6} {'NaN':>4} {'Total':>6} {'Success':>8}")
+    print("-" * 55)
 
     all_rewards: list[float] = []
+    total_nan = 0
     for app_name, task_ids in sorted(test_split.items()):
         rewards = app_results.get(app_name, [])
-        mean = _mean(rewards)
+        n_nan = sum(1 for r in rewards if math.isnan(r))
+        total_nan += n_nan
+        mean = _mean_count_nan_as_zero(rewards)
         pct = f"{mean * 100:.1f}%" if not math.isnan(mean) else "N/A"
-        print(f"{app_name:<25} {len(rewards):>6} {len(task_ids):>6} {pct:>8}")
-        all_rewards.extend(r for r in rewards if not math.isnan(r))
+        print(f"{app_name:<25} {len(rewards):>6} {n_nan:>4} {len(task_ids):>6} {pct:>8}")
+        all_rewards.extend(rewards)
 
-    print("-" * 50)
-    overall = sum(all_rewards) / len(all_rewards) if all_rewards else float("nan")
+    print("-" * 55)
+    overall = _mean_count_nan_as_zero(all_rewards)
     n_done = sum(len(v) for v in app_results.values())
-    print(f"{'OVERALL':<25} {n_done:>6} {total_tasks:>6} {overall * 100:.2f}%\n")
+    overall_pct = f"{overall * 100:.2f}%" if not math.isnan(overall) else "N/A"
+    print(f"{'OVERALL':<25} {n_done:>6} {total_nan:>4} {total_tasks:>6} {overall_pct:>8}\n")
 
     if missing:
         print(f"Missing results ({len(missing)} tasks):")
@@ -91,11 +101,13 @@ def main() -> None:
         "n_done": n_done,
         "n_total": total_tasks,
         "n_missing": len(missing),
+        "n_nan": total_nan,
         "per_app": {
             app_name: {
                 "n_done": len(app_results.get(app_name, [])),
                 "n_total": len(tids),
-                "success_rate": _mean(app_results.get(app_name, [])),
+                "n_nan": sum(1 for r in app_results.get(app_name, []) if math.isnan(r)),
+                "success_rate": _mean_count_nan_as_zero(app_results.get(app_name, [])),
             }
             for app_name, tids in sorted(test_split.items())
         },

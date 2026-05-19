@@ -4,9 +4,11 @@ Reads test_all.json (or another split), picks task at --task_index, runs
 it end-to-end, and writes result.json to:
   {base_output_dir}/{app}/{task_id}/result.json
 
-Designed to be called from a SLURM --array job. The array task index
-must match --task_index. sglang port and OSWORLD_PORT_BASE are set in
-the sbatch script from SLURM_ARRAY_TASK_ID.
+Designed to be called from a SLURM --array job: --task_index must equal
+$SLURM_ARRAY_TASK_ID, which the recipe wires up. When --sglang_port=0,
+the runner derives a deterministic per-array-task sglang port from the
+same env var. VM-host port collisions on multi-task nodes are handled
+by ApptainerProvider's scan-based port allocator (no env var needed).
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ if not _OSWORLD_ROOT:
 if _OSWORLD_ROOT not in sys.path:
     sys.path.insert(0, _OSWORLD_ROOT)
 
-from result import write_result  # noqa: E402  must follow sys.path injection above
+from result import write_result  # noqa: E402
 from sglang_runner import sglang_server  # noqa: E402
 
 FLAGS = flags.FLAGS
@@ -169,9 +171,8 @@ def main(_) -> None:
     else:
         sglang_port = FLAGS.sglang_port
 
-    served_name = FLAGS.served_model_name or FLAGS.model_path
     t_start = time.time()
-    scores: list[float] = []
+    final_reward: float = float("nan")
     n_steps_taken = 0
     stop_reason = "max_steps"
 
@@ -182,7 +183,7 @@ def main(_) -> None:
         log_path=sglang_log,
         mem_fraction_static=FLAGS.mem_fraction_static,
         chunked_prefill_size=FLAGS.chunked_prefill_size,
-        served_model_name=FLAGS.served_model_name or None,
+        served_model_name=FLAGS.served_model_name,
     ) as server_url:
         os.environ["OPENAI_BASE_URL"] = server_url
         os.environ["OPENAI_API_KEY"] = FLAGS.sglang_api_key
@@ -194,7 +195,7 @@ def main(_) -> None:
 
         agent = Qwen3VLAgent(
             platform="ubuntu",
-            model=served_name,
+            model=FLAGS.served_model_name,
             max_tokens=FLAGS.max_tokens,
             top_p=FLAGS.top_p,
             temperature=FLAGS.temperature,
@@ -279,12 +280,11 @@ def main(_) -> None:
 
             time.sleep(10)
             try:
-                result = float(env.evaluate())
+                final_reward = float(env.evaluate())
             except Exception as e:
                 log.exception("env.evaluate raised: %s", e)
-                result = float("nan")
-            log.info("env.evaluate -> %.4f", result)
-            scores.append(result)
+                final_reward = float("nan")
+            log.info("env.evaluate -> %.4f", final_reward)
         finally:
             try:
                 env.close()
@@ -303,7 +303,7 @@ def main(_) -> None:
         result_path,
         task="osworld_fullbench",
         scores={
-            "reward": scores[0] if scores else float("nan"),
+            "reward": final_reward,
             "n_steps_taken": n_steps_taken,
             "stop_reason_code": (
                 1 if stop_reason == "agent_terminate" else 2 if stop_reason == "max_steps" else 0
@@ -329,7 +329,7 @@ def main(_) -> None:
         },
         inputs={
             "model_path": FLAGS.model_path,
-            "served_model_name": served_name,
+            "served_model_name": FLAGS.served_model_name,
             "test_split_path": FLAGS.test_split_path,
             "path_to_vm": FLAGS.path_to_vm,
         },
@@ -343,7 +343,7 @@ def main(_) -> None:
         FLAGS.task_index,
         app_name,
         task_id,
-        scores[0] if scores else float("nan"),
+        final_reward,
     )
 
 
