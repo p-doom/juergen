@@ -90,35 +90,112 @@ def _assistant_text(content) -> str:
     return ""
 
 
-def iter_eval_steps(val_jsonl: Path, max_trajectories: int, max_history_turns: int):
-    """Yield (history_messages_openai, gold_action_str) for each assistant turn.
+def _gold_assistant_indices(msgs: list) -> list[int]:
+    """Message-indices of assistant turns with non-empty gold text."""
+    return [
+        i for i, m in enumerate(msgs)
+        if m.get("role") == "assistant" and _assistant_text(m.get("content", ""))
+    ]
 
-    history is teacher-forced: the real messages preceding the assistant turn,
-    converted to OpenAI format. ``max_history_turns`` keeps only the most recent
-    N non-system turns (system is always kept) to bound prompt cost.
+
+# Fraction of the scored budget reserved for terminal (last/TERMINATE) turns so
+# the terminate metric has real support. Each trajectory ends with one TERMINATE
+# (~1% of all turns), so a naive prefix/position-sweep would score ~0 of them.
+_TERMINAL_RESERVE = 0.15
+
+
+def iter_eval_steps(
+    val_jsonl: Path, max_trajectories: int, max_history_turns: int, max_pairs: int
+):
+    """Yield (history_messages_openai, gold_action_str) for a representative,
+    terminal-covering spread of assistant turns (teacher-forced history).
+
+    A naive prefix of ``max_pairs`` turns only covers the first couple of long
+    trajectories and almost no TERMINATE (one per trajectory, ~1% of turns).
+    Instead we sample ACROSS trajectories and turn-positions:
+      * budget <= #trajectories: pick that many trajectories strided across the
+        set; reserve ~15% for terminal turns (so TERMINATE is measurable) and
+        sweep the rest over non-terminal positions 0..m-2.
+      * budget  > #trajectories: take evenly-spaced turns per trajectory, always
+        including the terminal turn.
+    ``max_history_turns`` keeps only the most recent N non-system turns.
+    NOTE: terminals are deliberately mildly oversampled vs their ~1% natural
+    rate; read per-class terminate P/R/F1 (prevalence-independent) for that
+    action. Sampling is deterministic, so checkpoint-to-checkpoint trends hold.
     """
-    n_traj = 0
+    # --- Pass 1: cheap index of gold assistant-turn counts (no image encoding) ---
+    traj_turns: list[int] = []
+    with val_jsonl.open() as fh:
+        for line in fh:
+            row = line.strip()
+            if not row:
+                continue
+            gi = _gold_assistant_indices(json.loads(row).get("messages", []))
+            if not gi:
+                continue
+            traj_turns.append(len(gi))
+            if max_trajectories and len(traj_turns) >= max_trajectories:
+                break
+    n_traj = len(traj_turns)
+    if n_traj == 0:
+        return
+    budget = max_pairs if (max_pairs and max_pairs > 0) else sum(traj_turns)
+
+    # --- Decide which (trajectory, turn-ordinal) steps to score ---
+    selection: dict[int, set[int]] = {}
+
+    def add(t: int, ordn: int) -> None:
+        selection.setdefault(t, set()).add(max(0, min(ordn, traj_turns[t] - 1)))
+
+    if n_traj >= budget:
+        n_term = min(n_traj, max(1, round(budget * _TERMINAL_RESERVE)))
+        n_rep = max(0, budget - n_term)
+        for j in range(n_term):  # terminal turns, strided across trajectories
+            t = (j * n_traj) // n_term
+            add(t, traj_turns[t] - 1)
+        for k in range(n_rep):  # representative position sweep, strided
+            t = (k * n_traj) // n_rep
+            m = traj_turns[t]
+            frac = k / (n_rep - 1) if n_rep > 1 else 0.0
+            add(t, round(frac * max(0, m - 2)))
+    else:
+        per, extra = divmod(budget, n_traj)
+        for t, m in enumerate(traj_turns):
+            k = min(per + (1 if t < extra else 0), m)
+            if k <= 0:
+                continue
+            if k == 1:
+                add(t, m - 1)  # terminal turn
+            else:
+                for j in range(k):  # evenly spaced, incl. first and terminal
+                    add(t, round(j * (m - 1) / (k - 1)))
+
+    # --- Pass 2: encode + yield only the selected trajectories' selected turns ---
+    t = -1
     with val_jsonl.open() as fh:
         for line in fh:
             row = line.strip()
             if not row:
                 continue
             msgs = json.loads(row).get("messages", [])
+            gi = _gold_assistant_indices(msgs)
+            if not gi:
+                continue
+            t += 1
+            if max_trajectories and t >= max_trajectories:
+                break
+            ords = selection.get(t)
+            if not ords:
+                continue
             oa = [{"role": m["role"], "content": _to_openai_content(m["content"])} for m in msgs]
-            for i, m in enumerate(msgs):
-                if m.get("role") != "assistant":
-                    continue
-                gold = _assistant_text(m["content"])
-                if not gold:
-                    continue
+            for ordn in sorted(ords):
+                i = gi[ordn]
+                gold = _assistant_text(msgs[i]["content"])
                 history = oa[:i]
                 if max_history_turns > 0:
                     sys_part = [h for h in history[:1] if h["role"] == "system"]
                     history = sys_part + history[len(sys_part):][-max_history_turns:]
                 yield history, gold
-            n_traj += 1
-            if max_trajectories and n_traj >= max_trajectories:
-                return
 
 
 def main(_):
@@ -171,7 +248,8 @@ def main(_):
     ) as server_url:
         client = OpenAI(base_url=server_url, api_key=FLAGS.sglang_api_key)
         for history, gold in iter_eval_steps(
-            Path(FLAGS.val_jsonl), FLAGS.max_trajectories, FLAGS.max_history_turns
+            Path(FLAGS.val_jsonl), FLAGS.max_trajectories, FLAGS.max_history_turns,
+            FLAGS.max_pairs,
         ):
             resp = client.chat.completions.create(
                 model=str(export_dir),
