@@ -29,7 +29,7 @@ _DEFAULT_QEMU_BIN = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin
 # uv project root for the inner sglang.launch_server call. The outer
 # `uv run` (in the labctl recipe command) uses the same path; keeping it
 # as a module constant survives the sys.path-shim removal in juergen 39d6d5f.
-_EVAL_DIR = Path("/fast/home/franz.srambical/juergen/eval")
+_EVAL_DIR = Path(__file__).resolve().parent
 
 
 def _pil_to_data_url(img: Image.Image, *, quality: int = 85) -> str:
