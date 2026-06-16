@@ -18,7 +18,6 @@ draft/
 /manual_caption_repair/
 
 # Local outputs from the annotation pipeline copy.
-annotation_pipeline/.venv/
 annotation_pipeline/__pycache__/
 annotation_pipeline/logs/
 annotation_pipeline/outputs/

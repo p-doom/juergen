@@ -11,8 +11,8 @@ from typing import Any
 
 import cv2
 
-import config
-from common import ensure_dir, keylog_summary, write_json, write_jsonl
+from annotation_pipeline import config
+from annotation_pipeline.common import ensure_dir, keylog_summary, write_json, write_jsonl
 
 
 RECORDING_RE = re.compile(r"^recording_(?P<recording_id>[0-9a-fA-F-]+)_seg(?P<seg>\d+).*\.mp4$")

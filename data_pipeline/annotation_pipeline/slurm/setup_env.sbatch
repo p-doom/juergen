@@ -6,21 +6,23 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32GB
 #SBATCH --time=02:00:00
-#SBATCH --output=/fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline/annotation-pipeline/logs/%x_%j.log
-#SBATCH --error=/fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline/annotation-pipeline/logs/%x_%j.log
+#SBATCH --output=/fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline/annotation_pipeline/logs/%x_%j.log
+#SBATCH --error=/fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline/annotation_pipeline/logs/%x_%j.log
 
 # One-time environment setup for the v3 pipeline. Builds two venvs:
 #   1. vllm-annotate  - sglang serving stack (torch cu126, cuDNN 9.16), from the
 #                       proven slime pins; serves Qwen3.6-27B.
-#   2. v3/.venv        - pipeline stages 00-04. Pinned transformers==5.2.0 so the
-#                       slow (numpy/PIL) Qwen3-VL image processor builds torch-free
-#                       for exact stage-04 token counts (no omegalax dependency).
+#   2. juergen workspace venv - pipeline stages 00-04 via data_pipeline's uv
+#                       project. Pinned transformers==5.3.0 to match the
+#                       workspace/sglang dependency solution (no omegalax
+#                       dependency).
 # Also downloads the annotator (Qwen3.6-27B) and trainee (Qwen3-VL-2B) weights.
 
 set -euo pipefail
 
 YLL=/fast/project/HFMI_SynergyUnit/yll
-V3=$YLL/juergen/data_pipeline/annotation-pipeline
+V3=$YLL/juergen/data_pipeline/annotation_pipeline
+DATA_PIPELINE=$YLL/juergen/data_pipeline
 VENV=$YLL/venvs/vllm-annotate
 SLIME_VENV=$YLL/venvs/slime
 SGL_SRC=$YLL/deps/sglang/python
@@ -64,12 +66,11 @@ rm -rf "$VENV"
 "$VENV/bin/python" -c "import sglang, torch; print('sglang', sglang.__version__, 'torch', torch.__version__)"
 rm -f "$CONSTRAINTS"
 
-# --- 2. pipeline venv (stages 00-04) -------------------------------------
-# Pin transformers 5.2.0: the slow Qwen3-VL image processor builds without
-# torch there, which the vendored qwen3_encoding uses for exact token counts.
-"$UV" sync --project "$V3" 2>/dev/null || true
-"$UV" pip install --python "$V3/.venv/bin/python" "transformers==5.2.0" pillow
-"$V3/.venv/bin/python" -c "import transformers, qwen3_encoding; print('v3 transformers', transformers.__version__)"
+# --- 2. pipeline env (stages 00-04) --------------------------------------
+# Pin lives in data_pipeline/pyproject.toml and juergen/uv.lock. Keep this
+# locked so SLURM jobs do not silently re-resolve the annotation environment.
+"$UV" sync --project "$DATA_PIPELINE" --locked
+"$UV" run --project "$DATA_PIPELINE" --locked python -c "import transformers, annotation_pipeline.qwen3_encoding; print('data_pipeline transformers', transformers.__version__)"
 
 # --- 3. weights ----------------------------------------------------------
 "$VENV/bin/hf" download Qwen/Qwen3.6-27B >/dev/null        # annotator (BF16)

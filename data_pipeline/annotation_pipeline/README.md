@@ -47,17 +47,19 @@ run, so the CPU work (frames, assemble) runs as 0-GPU jobs and the GPU phase
 
 ## Run it
 
-One-time environment setup (builds both venvs + downloads weights):
+One-time environment setup (syncs the pipeline env, builds the serving venv, and downloads weights):
 
 ```bash
-sbatch slurm/setup_env.sbatch
+cd /fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline
+sbatch annotation_pipeline/slurm/setup_env.sbatch
 ```
 
 **A curated set** (clips in `clips.json`) on one node, all stages:
 
 ```bash
-sbatch slurm/run_pipeline.sbatch --run-name v1 --clips all
-sbatch slurm/run_pipeline.sbatch --run-name v1 --clips bbbf_s0000-0003   # one clip
+cd /fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline
+sbatch annotation_pipeline/slurm/run_pipeline.sbatch --run-name v1 --clips all
+sbatch annotation_pipeline/slurm/run_pipeline.sbatch --run-name v1 --clips bbbf_s0000-0003   # one clip
 ```
 
 **The whole dataset** — three decoupled phases so GPUs only ever run the VLM.
@@ -65,10 +67,11 @@ Discover once, then run each phase as a sharded array (`N` = array size; phases
 resume independently, re-run a phase's line after any timeout):
 
 ```bash
-python discover_clips.py                                       # -> clips_dataset.json (+ report)
-sbatch --array=0-15 slurm/extract.sbatch  dataset_v1           # phase 1: frames   (0 GPU, CPU)
-sbatch --array=0-1  slurm/annotate.sbatch dataset_v1           # phase 2: VLM      (2x 8 H100)
-sbatch --array=0-7  slurm/assemble.sbatch dataset_v1           # phase 3: SFT+tok  (0 GPU, CPU)
+cd /fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline
+uv run --project . --locked python -m annotation_pipeline.discover_clips  # -> clips_dataset.json (+ report)
+sbatch --array=0-15 annotation_pipeline/slurm/extract.sbatch  dataset_v1   # phase 1: frames
+sbatch --array=0-1  annotation_pipeline/slurm/annotate.sbatch dataset_v1   # phase 2: VLM
+sbatch --array=0-7  annotation_pipeline/slurm/assemble.sbatch dataset_v1   # phase 3: SFT+tok
 ```
 
 `--gres=gpu:0` extract/assemble jobs use idle CPU cores and hold no GPUs, so the
@@ -81,16 +84,17 @@ frames aren't cached yet (never fall back to ffmpeg). A finished clip (stage-04
 
 ## Environments
 
-Two venvs, both built by `setup_env.sbatch`:
+Two uv-managed environments, both built by `setup_env.sbatch`:
 
-- **`v3/.venv`** — the whole pipeline, stages 00–04 (cv2, msgpack, openai
-  client, and `transformers==5.2.0` so the slow Qwen3-VL image processor builds
-  torch-free for exact stage-04 token counts via the vendored
-  `qwen3_encoding.py`). **No omegalax dependency.**
+- **`juergen` workspace / `data_pipeline` project** — the whole pipeline,
+  stages 00–04 (cv2, msgpack, openai client, and `transformers==5.3.0` to
+  match the workspace/sglang dependency solution for exact stage-04 token counts
+  via the vendored `qwen3_encoding.py`). **No omegalax dependency.**
 - **`yll/venvs/vllm-annotate`** — sglang serving only (torch cu126, cuDNN 9.16).
 
-`run_pipeline.py` runs stages 00–04 in `v3/.venv`; the slurm entrypoint serves
-the model from `vllm-annotate` alongside.
+The SLURM entrypoints run stages 00–04 with
+`uv run --project <juergen>/data_pipeline --locked python -m annotation_pipeline...`;
+the model is served from `vllm-annotate` alongside.
 
 ## Outputs
 
@@ -141,9 +145,8 @@ stage 04's buckets match training exactly with no external dependency.
 ## Inspect a run
 
 ```bash
-.venv/bin/python visualize_pipeline.py      # opens a local web UI: clips,
-                                            # frames, instructions, actions,
-                                            # and per-trajectory verify checks
+cd /fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline
+uv run --project . --locked python -m annotation_pipeline.visualize_pipeline
 ```
 
 ## Layout

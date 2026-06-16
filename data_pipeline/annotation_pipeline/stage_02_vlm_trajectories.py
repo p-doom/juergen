@@ -27,8 +27,8 @@ from typing import Any
 
 import cv2
 
-import config
-from common import (
+from annotation_pipeline import config
+from annotation_pipeline.common import (
     ensure_dir,
     extract_json_object,
     image_data_url,

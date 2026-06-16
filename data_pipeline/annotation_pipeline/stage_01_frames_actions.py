@@ -12,8 +12,8 @@ from typing import Any
 
 import cv2
 
-import config
-from common import (
+from annotation_pipeline import config
+from annotation_pipeline.common import (
     ActionBin,
     aggregate_actions,
     ceil_frames,

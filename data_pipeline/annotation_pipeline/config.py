@@ -51,9 +51,8 @@ DEFAULT_VLM_MAX_TOKENS = 4096
 DEFAULT_VERIFY_MAX_TOKENS = 1024
 
 # Trainee model whose tokenizer/processor define exact stage-04 token buckets.
-# Stage 04 counts in the same v3 venv via the vendored qwen3_encoding; the slow
-# (numpy/PIL) image processor builds torch-free under transformers 5.2 (pinned
-# by setup_env). No omegalax dependency.
+# Stage 04 counts in the data_pipeline uv env via the vendored qwen3_encoding.
+# No omegalax dependency.
 DEFAULT_TRAINEE_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
 
 # Stage 02 pass A (segmentation): one sparse-sampled request covers a window so

@@ -12,7 +12,7 @@ from typing import Any, Iterable
 
 import msgpack
 
-from config import SYSTEM_PROMPT
+from annotation_pipeline.config import SYSTEM_PROMPT
 
 
 UNKNOWN_RE = re.compile(r"^Unknown\((-?\d+)\)$")

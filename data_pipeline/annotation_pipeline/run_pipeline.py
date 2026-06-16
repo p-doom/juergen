@@ -18,8 +18,8 @@ each run's annotations/samples live under outputs/runs/<run-name>/.
 
 Requires a running sglang server (slurm/run_pipeline.sbatch starts one and sets
 V3_VLM_BASE_URL). Example:
-    python run_pipeline.py --run-name v1 --clips bbbf_s0000-0003
-    python run_pipeline.py --run-name v1 --clips all
+    python -m annotation_pipeline.run_pipeline --run-name v1 --clips bbbf_s0000-0003
+    python -m annotation_pipeline.run_pipeline --run-name v1 --clips all
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import config
+from annotation_pipeline import config
 
 
 PIPELINE_DIR = Path(__file__).resolve().parent
@@ -59,7 +59,8 @@ def phase_done(args: argparse.Namespace, clip: dict[str, Any], clip_id: str, run
 
 
 def run_step(script: str, args: list[str], python: str | None = None) -> None:
-    cmd = [python or sys.executable, str(PIPELINE_DIR / script), *args]
+    module = f"annotation_pipeline.{Path(script).stem}"
+    cmd = [python or sys.executable, "-m", module, *args]
     print("\n$ " + " ".join(cmd), flush=True)
     result = subprocess.run(cmd, check=False)
     if result.returncode != 0:
@@ -167,8 +168,8 @@ def run_clip(args: argparse.Namespace, clip_id: str, clip: dict[str, Any], run_d
             "--trajectories", str(stage02 / "trajectories_raw.json"),
             "--output-dir", str(stage03),
         ])
-        # Exact token buckets via the vendored qwen3_encoding + trainee processor,
-        # in this same venv (transformers 5.2, torch-free). No omegalax.
+        # Exact token buckets via the vendored qwen3_encoding + trainee processor.
+        # No omegalax dependency.
         run_step("stage_04_length_buckets.py", [
             "--samples", str(stage03 / "trajectories.jsonl"),
             "--output-dir", str(stage04),

@@ -7,9 +7,9 @@ Two counting modes:
   tokenizer and image processor and measure every message through the vendored
   `qwen3_encoding.make_message_length_fn` - the same code the training chunk
   indexer uses, so bucket boundaries match training exactly. Defaults to
-  Qwen3-VL-2B-Instruct. The slow image processor builds torch-free under the
-  pinned transformers 5.2 in v3/.venv (see setup_env); it preprocesses every
-  frame, so run on a compute node, not a login node.
+  Qwen3-VL-2B-Instruct. The data_pipeline uv environment pins transformers 5.3
+  to match the juergen workspace; exact counting preprocesses every frame, so
+  run on a compute node, not a login node.
 
 - Estimated (fallback): --tokens-per-image with a value you calibrated
   yourself, used only if --tokenizer is set to "" to disable exact mode.
@@ -26,8 +26,14 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-import config
-from common import ensure_dir, read_jsonl, text_token_estimate, write_json, write_jsonl
+from annotation_pipeline import config
+from annotation_pipeline.common import (
+    ensure_dir,
+    read_jsonl,
+    text_token_estimate,
+    write_json,
+    write_jsonl,
+)
 
 
 def message_text(message: dict[str, Any]) -> str:
@@ -57,12 +63,11 @@ def make_exact_measurer(
     """Build the per-message measurer from the trainee model's actual stack.
 
     Uses the vendored qwen3_encoding (identical to the training chunk indexer),
-    so bucket boundaries match training. Needs the slow numpy/PIL image
-    processor, which builds torch-free under transformers 5.2 (see setup_env).
+    so bucket boundaries match training.
     """
     from transformers import AutoImageProcessor, AutoTokenizer
 
-    from qwen3_encoding import make_message_length_fn
+    from annotation_pipeline.qwen3_encoding import make_message_length_fn
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     image_processor = None

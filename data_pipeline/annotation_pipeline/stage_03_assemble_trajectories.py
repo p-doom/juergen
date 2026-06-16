@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any
 
-from common import (
+from annotation_pipeline.common import (
     assistant_text,
     ensure_dir,
     read_jsonl,
@@ -16,7 +17,6 @@ from common import (
     write_json,
     write_jsonl,
 )
-import json
 
 
 def load_trajectories(path: Path) -> tuple[list[dict[str, Any]], str]:

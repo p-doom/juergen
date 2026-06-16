@@ -15,9 +15,9 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
-import config
-from common import read_jsonl
-from run_pipeline import frames_cache_dir, load_clips
+from annotation_pipeline import config
+from annotation_pipeline.common import read_jsonl
+from annotation_pipeline.run_pipeline import frames_cache_dir, load_clips
 
 
 PIPELINE_DIR = Path(__file__).resolve().parent

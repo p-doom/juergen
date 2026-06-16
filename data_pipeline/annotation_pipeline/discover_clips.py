@@ -6,8 +6,8 @@ is kept only if its keylogs carry enough *actionable* input (keypresses, clicks,
 scrolls — not mouse-move/idle), which drops the ~46% idle/black recordings before
 any VLM cost. Writes a clips file in the same schema as clips.json plus a report.
 
-    python discover_clips.py                       # all versions -> clips_dataset.json
-    python discover_clips.py --versions 1.0.2 1.0.3 --min-actionable 15
+    python -m annotation_pipeline.discover_clips
+    python -m annotation_pipeline.discover_clips --versions 1.0.2 1.0.3 --min-actionable 15
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-import config
-from common import keylog_summary
+from annotation_pipeline import config
+from annotation_pipeline.common import keylog_summary
 
 REC_RE = re.compile(r"^recording_(?P<rec>[0-9a-fA-F-]+)_seg(?P<seg>\d+).*\.mp4$")
 # Presses + scroll are user intent; mouse-move and ContextChanged alone are idle.

@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = "==3.12.*"
 resolution-markers = [
     "sys_platform == 'darwin'",
@@ -549,6 +549,8 @@ dependencies = [
     { name = "jinja2" },
     { name = "msgpack" },
     { name = "numpy" },
+    { name = "openai" },
+    { name = "opencv-python-headless" },
     { name = "pillow" },
     { name = "transformers" },
 ]
@@ -561,8 +563,10 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1" },
     { name = "msgpack", specifier = ">=1.0" },
     { name = "numpy", specifier = ">=2.0" },
-    { name = "pillow", specifier = ">=10.0" },
-    { name = "transformers", specifier = ">=4.45" },
+    { name = "openai", specifier = ">=2.26.0" },
+    { name = "opencv-python-headless", specifier = ">=4.10.0.84" },
+    { name = "pillow", specifier = ">=11.3.0" },
+    { name = "transformers", specifier = "==5.3.0" },
 ]
 
 [[package]]
