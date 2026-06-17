@@ -90,6 +90,9 @@ def main(_) -> None:
         if not src.is_dir():
             print(f"[stage_d] no payload for split {split}, skipping")
             continue
+        if not (src / "metadata.json").is_file():
+            print(f"[stage_d] incomplete/empty payload for split {split}, skipping")
+            continue
         out_split_dir = output_dir / split
         per_split.append(_run_split(split, src, out_split_dir))
 

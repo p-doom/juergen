@@ -24,6 +24,7 @@ dependencies = [
     "msgpack>=1.0",                # stage A: parse per-recording keylog msgpacks
     "Pillow>=10.0",                # stage A JPEG encode + prep_finevision image materialization
     "numpy>=2.0",                  # stage A frame-array math
+    "array-record>=0.5.1",         # stage A optional JPEG ArrayRecord image store
     # Floor at 0.5.1 (not 0.6.0) so sglang's diffusion extra — which pins ==0.5.1 — can co-resolve in the workspace lock. Only a PATH fallback; minor version doesn't matter.
     "imageio-ffmpeg>=0.5.1",
     "datasets>=3.0",               # prep_{finevision,smoltalk2,tulu3_persona_if} + preprocess_smoltalk_prompts HF loaders
