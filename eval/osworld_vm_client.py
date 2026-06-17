@@ -70,6 +70,17 @@ _RDEV_TO_PYAUTOGUI = {
     "End": "end",
     "Delete": "delete",
     "Insert": "insert",
+    "Comma": ",",
+    "Period": ".",
+    "Slash": "/",
+    "Backslash": "\\",
+    "Semicolon": ";",
+    "Quote": "'",
+    "Minus": "-",
+    "Equal": "=",
+    "Backquote": "`",
+    "BracketLeft": "[",
+    "BracketRight": "]",
 }
 
 _MOUSE_BUTTON_NAMES = {1: "left", 2: "middle", 3: "right"}
@@ -84,6 +95,9 @@ def _rdev_to_pyautogui(name: str) -> str:
     # rdev "Num0".."Num9" → "0".."9"
     if name.startswith("Num") and len(name) == 4 and name[3].isdigit():
         return name[3]
+    # DOM-style "Digit0".."Digit9" appears in some generated traces/prompts.
+    if name.startswith("Digit") and len(name) == 6 and name[5].isdigit():
+        return name[5]
     return name.lower()
 
 
