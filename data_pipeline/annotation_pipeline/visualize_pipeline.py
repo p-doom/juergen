@@ -61,11 +61,8 @@ def format_seconds(value: Any) -> str:
     return f"{rest:.1f}s"
 
 
-def existing_stage04_dir(clip_dir: Path) -> Path:
-    stage04 = clip_dir / "stage_04_sft_samples"
-    if stage04.exists():
-        return stage04
-    return clip_dir
+def stage05_dir(run_dir: Path) -> Path:
+    return run_dir / "stage_05_length_buckets"
 
 
 def existing_stage02_dir(clip_dir: Path) -> Path:
@@ -281,7 +278,7 @@ def build_segment_lineage(
                         "dir": str(stage03_dir),
                         "samples": seg_samples,
                     },
-                    "stage_04_sft_samples": {
+                    "stage_05_length_buckets": {
                         "dir": str(stage04_dir),
                         "rows": stage04_rows,
                     },
@@ -329,7 +326,7 @@ def build_run_summary(run_name: str) -> dict[str, Any]:
         stage01 = cache_dir / "stage_01_frames_actions" if cache_dir else clip_dir / "stage_01_frames_actions"
         stage02 = existing_stage02_dir(clip_dir)
         stage03 = clip_dir / "stage_03_assemble"
-        stage04 = existing_stage04_dir(clip_dir)
+        stage04 = stage05_dir(run_dir)
 
         manifest = read_jsonl_limited(stage00 / "manifest.jsonl")
         frame_records = read_jsonl_limited(stage01 / "frame_records.jsonl")
@@ -391,7 +388,7 @@ def build_run_summary(run_name: str) -> dict[str, Any]:
                 "samples": assembled_all[:25],
                 "rejected": rejected[:100],
             },
-            "stage_04_sft_samples": {
+            "stage_05_length_buckets": {
                 "dir": str(stage04),
                 "summary": read_json(stage04 / "bucket_summary.json", {}),
                 "manifest": trajectory_manifest[:100],
@@ -1229,7 +1226,7 @@ INDEX_HTML = r"""<!doctype html>
       const s01 = stages.stage_01_frames_actions || {};
       const s02 = stages.stage_02_vlm_trajectories || {};
       const s03 = stages.stage_03_assemble || {};
-      const s04 = stages.stage_04_sft_samples || {};
+      const s04 = stages.stage_05_length_buckets || {};
       const segName = `seg ${String(segment.segment_idx ?? "?").padStart(4, "0")}`;
       return `<div class="lineage-canvas">
         <div class="lineage-flow">
@@ -1506,7 +1503,7 @@ INDEX_HTML = r"""<!doctype html>
       const s01 = stages.stage_01_frames_actions || {};
       const s02 = stages.stage_02_vlm_trajectories || {};
       const s03 = stages.stage_03_assemble || {};
-      const s04 = stages.stage_04_sft_samples || {};
+      const s04 = stages.stage_05_length_buckets || {};
       const row = s00.row || {};
       const cfg = state.run?.run_config || {};
       const summary01 = s01.summary || {};
@@ -1605,7 +1602,7 @@ INDEX_HTML = r"""<!doctype html>
         ${stage("03", "Assembled SFT samples from this segment", s03.dir || "", `
           ${renderSamples(s03, s04)}
         `)}
-        ${stage("04", "Final chat rows and buckets", s04.dir || "", `
+        ${stage("05", "Optional token buckets", s04.dir || "", `
           ${table(finalRows, [
             {key:"sample_id", label:"Sample"},
             {key:"bucket", label:"Bucket"},
@@ -1624,7 +1621,7 @@ INDEX_HTML = r"""<!doctype html>
       const s01 = stages.stage_01_frames_actions;
       const s02 = stages.stage_02_vlm_trajectories;
       const s03 = stages.stage_03_assemble;
-      const s04 = stages.stage_04_sft_samples;
+      const s04 = stages.stage_05_length_buckets;
       const raw = s00.summary || {};
       const fr = s01.summary || {};
       const a = s03.summary || {};
@@ -1685,7 +1682,7 @@ INDEX_HTML = r"""<!doctype html>
             ${renderSamples(s03, s04)}
           </div>
         `)}
-        ${stage("04", "Chat JSONL + length buckets", s04.dir, `
+        ${stage("05", "Optional token buckets", s04.dir, `
           <div class="grid-2">
             ${smallStats(s04.summary)}
             <div>

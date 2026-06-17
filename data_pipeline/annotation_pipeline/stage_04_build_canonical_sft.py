@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import re
@@ -12,9 +13,9 @@ from pathlib import Path
 from typing import Any
 
 
-VALID_IMAGE_MODES = ("hardlink", "copy", "symlink")
+VALID_IMAGE_PATH_MODES = ("absolute", "preserve")
 VALID_SPLIT_GROUPS = ("recording_id", "clip_id")
-DEFAULT_SYSTEM_PROMPT_VERSION = "annotation_pipeline_v3"
+VALID_TERMINAL_MODES = ("none", "replace_final_assistant", "append_assistant")
 
 
 def ensure_empty_dir(path: Path, *, overwrite: bool) -> Path:
@@ -90,24 +91,60 @@ def resolve_image_path(image: str, *, run_dir: Path, image_base: Path | None) ->
     raise FileNotFoundError(f"image not found: {image} (tried {tried})")
 
 
-def materialize_image(src: Path, dst: Path, *, mode: str) -> None:
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if dst.exists():
+def load_system_prompt(
+    *,
+    system_prompt_text: str | None,
+    system_prompt_file: Path | None,
+) -> tuple[str | None, dict[str, Any]]:
+    if system_prompt_text and system_prompt_file:
+        raise ValueError("pass only one of --system-prompt-text or --system-prompt-file")
+    if system_prompt_file:
+        text = system_prompt_file.expanduser().read_text().rstrip("\n")
+        source: dict[str, Any] = {"kind": "file", "path": str(system_prompt_file)}
+    elif system_prompt_text:
+        text = system_prompt_text
+        source = {"kind": "arg"}
+    else:
+        return None, {"kind": "none"}
+    if not text.strip():
+        raise ValueError("system prompt is empty")
+    source["sha256"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return text, source
+
+
+def render_image_path(raw_value: str, resolved: Path, *, image_path_mode: str) -> str:
+    if image_path_mode == "absolute":
+        return str(resolved)
+    if image_path_mode == "preserve":
+        return raw_value
+    raise ValueError(f"unknown image_path_mode: {image_path_mode}")
+
+
+def text_content(text: str) -> list[dict[str, str]]:
+    return [{"type": "text", "text": text}]
+
+
+def apply_terminal_policy(
+    messages: list[dict[str, Any]],
+    *,
+    terminal_token: str | None,
+    terminal_mode: str,
+) -> None:
+    if terminal_mode == "none":
         return
-    if mode == "hardlink":
-        try:
-            dst.hardlink_to(src)
-            return
-        except OSError:
-            shutil.copy2(src, dst)
-            return
-    if mode == "copy":
-        shutil.copy2(src, dst)
+    if not terminal_token:
+        raise ValueError("terminal_token is required when terminal_mode is not 'none'")
+    terminal_message = {"role": "assistant", "content": text_content(terminal_token)}
+    if terminal_mode == "append_assistant":
+        messages.append(terminal_message)
         return
-    if mode == "symlink":
-        dst.symlink_to(src)
-        return
-    raise ValueError(f"unknown image mode: {mode}")
+    if terminal_mode == "replace_final_assistant":
+        for idx in range(len(messages) - 1, -1, -1):
+            if messages[idx].get("role") == "assistant":
+                messages[idx] = terminal_message
+                return
+        raise ValueError("no assistant turn found")
+    raise ValueError(f"unknown terminal_mode: {terminal_mode}")
 
 
 def transform_messages(
@@ -116,9 +153,10 @@ def transform_messages(
     sample_id: str,
     run_dir: Path,
     image_base: Path | None,
-    images_root: Path,
-    image_mode: str,
-    terminate_token: str,
+    image_path_mode: str,
+    system_prompt_text: str | None,
+    terminal_token: str | None,
+    terminal_mode: str,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     messages = raw.get("messages")
     if not isinstance(messages, list):
@@ -129,16 +167,17 @@ def transform_messages(
         raise ValueError("missing instruction")
 
     rewritten: list[dict[str, Any]] = []
-    rel_images: list[str] = []
+    image_paths: list[str] = []
     first_user_seen = False
-    last_assistant_idx = -1
 
     for message in messages:
         if not isinstance(message, dict):
             raise ValueError("message is not an object")
         role = message.get("role")
         content = message.get("content", [])
-        if role not in {"system", "user", "assistant"}:
+        if role == "system":
+            raise ValueError("stage-03 samples must not contain system messages")
+        if role not in {"user", "assistant"}:
             raise ValueError(f"unsupported message role: {role!r}")
 
         new_content: str | list[dict[str, Any]]
@@ -157,13 +196,15 @@ def transform_messages(
                     image_value = block.get("image") or block.get("path") or block.get("url")
                     if not image_value:
                         raise ValueError("image block missing image/path/url")
-                    src = resolve_image_path(str(image_value), run_dir=run_dir, image_base=image_base)
-                    index = len(rel_images)
-                    suffix = src.suffix or ".jpg"
-                    rel_path = Path("images") / sanitize_component(sample_id) / f"frame_{index:05d}{suffix}"
-                    materialize_image(src, images_root.parent / rel_path, mode=image_mode)
-                    image_blocks.append({"type": "image", "image": rel_path.as_posix()})
-                    rel_images.append(rel_path.as_posix())
+                    raw_image = str(image_value)
+                    src = resolve_image_path(raw_image, run_dir=run_dir, image_base=image_base)
+                    image_path = render_image_path(
+                        raw_image,
+                        src,
+                        image_path_mode=image_path_mode,
+                    )
+                    image_blocks.append({"type": "image", "image": image_path})
+                    image_paths.append(image_path)
                 elif block_type == "text":
                     text = str(block.get("text", ""))
                     if text:
@@ -187,18 +228,19 @@ def transform_messages(
             raise ValueError("message content must be string or list")
 
         rewritten.append({"role": role, "content": new_content})
-        if role == "assistant":
-            last_assistant_idx = len(rewritten) - 1
 
     if not first_user_seen:
         raise ValueError("no user turn found")
-    if last_assistant_idx < 0:
+    if not any(message.get("role") == "assistant" for message in rewritten):
         raise ValueError("no assistant turn found")
-    rewritten[last_assistant_idx] = {
-        "role": "assistant",
-        "content": [{"type": "text", "text": terminate_token}],
-    }
-    return rewritten, rel_images
+    apply_terminal_policy(
+        rewritten,
+        terminal_token=terminal_token,
+        terminal_mode=terminal_mode,
+    )
+    if system_prompt_text is not None:
+        rewritten.insert(0, {"role": "system", "content": text_content(system_prompt_text)})
+    return rewritten, image_paths
 
 
 def assign_splits(
@@ -231,18 +273,33 @@ def build_canonical_sft(
     split_group: str = "recording_id",
     val_frac: float = 0.1,
     seed: int = 0,
-    image_mode: str = "hardlink",
-    terminate_token: str = "TERMINATE",
+    image_path_mode: str = "absolute",
+    system_prompt_text: str | None = None,
+    system_prompt_file: Path | None = None,
+    terminal_token: str | None = None,
+    terminal_mode: str = "none",
     overwrite: bool = False,
 ) -> dict[str, Any]:
     if split_group not in VALID_SPLIT_GROUPS:
         raise ValueError(f"split_group must be one of {VALID_SPLIT_GROUPS}")
-    if image_mode not in VALID_IMAGE_MODES:
-        raise ValueError(f"image_mode must be one of {VALID_IMAGE_MODES}")
+    if image_path_mode not in VALID_IMAGE_PATH_MODES:
+        raise ValueError(f"image_path_mode must be one of {VALID_IMAGE_PATH_MODES}")
+    if terminal_mode not in VALID_TERMINAL_MODES:
+        raise ValueError(f"terminal_mode must be one of {VALID_TERMINAL_MODES}")
 
     run_dir = run_dir.expanduser().resolve()
     output_dir = ensure_empty_dir(output_dir, overwrite=overwrite)
-    images_root = output_dir / "images"
+    system_prompt_text, system_prompt_source = load_system_prompt(
+        system_prompt_text=system_prompt_text,
+        system_prompt_file=system_prompt_file,
+    )
+    if (
+        system_prompt_text is not None
+        and terminal_mode != "none"
+        and terminal_token
+        and terminal_token not in system_prompt_text
+    ):
+        raise ValueError("terminal_token is not mentioned in the selected system prompt")
 
     records: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
@@ -256,9 +313,10 @@ def build_canonical_sft(
                     sample_id=sample_id,
                     run_dir=run_dir,
                     image_base=image_base,
-                    images_root=images_root,
-                    image_mode=image_mode,
-                    terminate_token=terminate_token,
+                    image_path_mode=image_path_mode,
+                    system_prompt_text=system_prompt_text,
+                    terminal_token=terminal_token,
+                    terminal_mode=terminal_mode,
                 )
                 recording_id = str(raw.get("recording_id") or "")
                 if not recording_id:
@@ -333,9 +391,13 @@ def build_canonical_sft(
         "split_group": split_group,
         "val_frac": val_frac,
         "seed": seed,
-        "image_mode": image_mode,
-        "terminate_token": terminate_token,
-        "system_prompt_version": DEFAULT_SYSTEM_PROMPT_VERSION,
+        "image_path_mode": image_path_mode,
+        "message_policy": {
+            "owner": "labctl",
+            "system_prompt": system_prompt_source,
+            "terminal_mode": terminal_mode,
+            "terminal_token": terminal_token,
+        },
         "n_samples": len(records),
         "n_rejected": len(rejected),
         "counts_by_split": counts_by_split,
@@ -344,7 +406,6 @@ def build_canonical_sft(
             "split_manifest": "split_manifest.jsonl",
             "sample_manifest": "sample_manifest.jsonl",
             "rejected": "rejected.jsonl",
-            "images": "images/",
         },
     }
     write_json(output_dir / "manifest.json", manifest)
@@ -359,9 +420,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-group", "--split_group", dest="split_group", default="recording_id")
     parser.add_argument("--val-frac", "--val_frac", dest="val_frac", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--image-mode", "--image_mode", dest="image_mode", default="hardlink")
     parser.add_argument(
-        "--terminate-token", "--terminate_token", dest="terminate_token", default="TERMINATE"
+        "--image-path-mode",
+        "--image_path_mode",
+        dest="image_path_mode",
+        default="absolute",
+        choices=VALID_IMAGE_PATH_MODES,
+    )
+    parser.add_argument(
+        "--system-prompt-text",
+        "--system_prompt_text",
+        dest="system_prompt_text",
+    )
+    parser.add_argument(
+        "--system-prompt-file",
+        "--system_prompt_file",
+        dest="system_prompt_file",
+        type=Path,
+    )
+    parser.add_argument("--terminal-token", "--terminal_token", dest="terminal_token")
+    parser.add_argument(
+        "--terminal-mode",
+        "--terminal_mode",
+        dest="terminal_mode",
+        default="none",
+        choices=VALID_TERMINAL_MODES,
     )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -376,8 +459,11 @@ def main() -> None:
         split_group=args.split_group,
         val_frac=args.val_frac,
         seed=args.seed,
-        image_mode=args.image_mode,
-        terminate_token=args.terminate_token,
+        image_path_mode=args.image_path_mode,
+        system_prompt_text=args.system_prompt_text,
+        system_prompt_file=args.system_prompt_file,
+        terminal_token=args.terminal_token,
+        terminal_mode=args.terminal_mode,
         overwrite=args.overwrite,
     )
     print(

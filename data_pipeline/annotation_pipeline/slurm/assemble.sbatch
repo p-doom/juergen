@@ -10,9 +10,10 @@
 #SBATCH --output=/fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline/annotation_pipeline/logs/%x_%A_%a.log
 #SBATCH --error=/fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline/annotation_pipeline/logs/%x_%A_%a.log
 
-# Phase 3 of 3 (CPU, 0 GPU): assemble verified trajectories into SFT chat
-# messages (stage 03) and exact Qwen3-VL-2B token buckets (stage 04). Holds no
-# GPUs; can overlap the annotate phase (consumes stage-02 outputs as they land).
+# Phase 3 of 3 (CPU, 0 GPU): assemble verified trajectories into neutral
+# samples (stage 03) and export the run-level canonical SFT artifact (stage 04).
+# Holds no GPUs; can overlap the annotate phase (consumes stage-02 outputs as
+# they land).
 #   sbatch --array=0-7 slurm/assemble.sbatch dataset_full_20260615
 
 set -euo pipefail

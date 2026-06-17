@@ -12,7 +12,6 @@ from annotation_pipeline.common import (
     assistant_text,
     ensure_dir,
     read_jsonl,
-    system_message,
     user_image,
     write_json,
     write_jsonl,
@@ -77,7 +76,7 @@ def make_sample(
     frames: list[dict[str, Any]],
 ) -> dict[str, Any]:
     instruction = str(trajectory.get("instruction") or "").strip()
-    messages = [system_message()]
+    messages = []
     for idx, frame in enumerate(frames):
         messages.append(
             user_image(frame["image_path"], instruction if idx == 0 else None)

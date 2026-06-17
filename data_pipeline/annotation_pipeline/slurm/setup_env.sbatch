@@ -66,7 +66,7 @@ rm -rf "$VENV"
 "$VENV/bin/python" -c "import sglang, torch; print('sglang', sglang.__version__, 'torch', torch.__version__)"
 rm -f "$CONSTRAINTS"
 
-# --- 2. pipeline env (stages 00-04) --------------------------------------
+# --- 2. pipeline env (stages 00-04; stage 05 optional) --------------------
 # Pin lives in data_pipeline/pyproject.toml and juergen/uv.lock. Keep this
 # locked so SLURM jobs do not silently re-resolve the annotation environment.
 "$UV" sync --project "$DATA_PIPELINE" --locked

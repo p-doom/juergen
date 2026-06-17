@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 04: count trajectory tokens and write bucketed chat JSONL.
+"""Stage 05: optional local token-count and length-bucket distribution inspector.
 
 Two counting modes:
 
@@ -14,7 +14,7 @@ Two counting modes:
 - Estimated (fallback): --tokens-per-image with a value you calibrated
   yourself, used only if --tokenizer is set to "" to disable exact mode.
 
-With neither, stage 04 writes chat.jsonl and the manifest but skips length
+With neither, stage 05 writes chat.jsonl and the manifest but skips length
 bucketing instead of guessing.
 """
 

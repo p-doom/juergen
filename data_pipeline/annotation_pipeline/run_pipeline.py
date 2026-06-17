@@ -3,15 +3,17 @@
 
 Single validated configuration: Qwen3.6-27B (BF16, sglang) annotates 90s
 windows with thinking off; a verification pass (stage 02 pass C) is the quality
-gate; samples are tokenized with the trainee model's real processor.
+gate; canonical SFT export is stage 04. Labctl + omegalax own training token
+counts and bucket materialization.
 
 Stages:
   00 manifest          MP4 + keylog pairs for a clip's segment slice
   01 frames+actions    2fps 720p frames + per-frame action strings (cached)
   02 segment+name+verify   pass A boundaries -> pass B instructions -> pass C
                            grounded verification (writes a `verified` flag)
-  03 assemble          verified trajectories -> SFT chat messages
-  04 buckets           exact Qwen3-VL-2B token counts -> length-bucketed JSONL
+  03 assemble          verified trajectories -> neutral per-clip samples
+  04 canonical         run-level canonical SFT artifact
+  05 buckets           optional local token/bucket distribution inspector
 
 Stages 00+01 are cached per (clip, fps, height) under outputs/cache/frames/;
 each run's annotations/samples live under outputs/runs/<run-name>/.
@@ -54,8 +56,9 @@ def phase_done(args: argparse.Namespace, clip: dict[str, Any], clip_id: str, run
         return frames_cache_is_complete(cache, args.target_fps, args.target_height, args.stage01_max_noop_run)
     if args.stages == "annotate":
         return (cd / "stage_02_segment" / "trajectories_raw.json").exists()
-    # "assemble" and "all" both finish at the stage-04 bucket summary.
-    return (cd / "stage_04_sft_samples" / "bucket_summary.json").exists()
+    # "assemble" and "all" finish per clip at stage 03. Stage 04 is a
+    # run-level artifact built once after the selected clips finish.
+    return (cd / "stage_03_assemble" / "trajectories.jsonl").exists()
 
 
 def run_step(script: str, args: list[str], python: str | None = None) -> None:
@@ -146,7 +149,6 @@ def run_clip(args: argparse.Namespace, clip_id: str, clip: dict[str, Any], run_d
     clip_dir = run_dir / clip_id
     stage02 = clip_dir / "stage_02_segment"
     stage03 = clip_dir / "stage_03_assemble"
-    stage04 = clip_dir / "stage_04_sft_samples"
 
     if args.stages in ("all", "annotate"):
         run_step("stage_02_vlm_trajectories.py", [
@@ -168,14 +170,39 @@ def run_clip(args: argparse.Namespace, clip_id: str, clip: dict[str, Any], run_d
             "--trajectories", str(stage02 / "trajectories_raw.json"),
             "--output-dir", str(stage03),
         ])
-        # Exact token buckets via the vendored qwen3_encoding + trainee processor.
-        # No omegalax dependency.
-        run_step("stage_04_length_buckets.py", [
-            "--samples", str(stage03 / "trajectories.jsonl"),
-            "--output-dir", str(stage04),
-            "--tokenizer", args.trainee_model,
-            "--processor", args.trainee_model,
-        ])
+
+
+def run_stage04_canonical(args: argparse.Namespace, run_dir: Path) -> Path:
+    output_dir = args.canonical_output_dir or (run_dir / "stage_04_canonical_sft")
+    cmd = [
+        "--run-dir", str(run_dir),
+        "--output-dir", str(output_dir),
+        "--split-group", args.canonical_split_group,
+        "--val-frac", str(args.canonical_val_frac),
+        "--seed", str(args.canonical_seed),
+        "--image-path-mode", args.canonical_image_path_mode,
+        "--terminal-mode", args.canonical_terminal_mode,
+        "--overwrite",
+    ]
+    if args.canonical_system_prompt_text:
+        cmd.extend(["--system-prompt-text", args.canonical_system_prompt_text])
+    if args.canonical_system_prompt_file:
+        cmd.extend(["--system-prompt-file", str(args.canonical_system_prompt_file)])
+    if args.canonical_terminal_token:
+        cmd.extend(["--terminal-token", args.canonical_terminal_token])
+    run_step("stage_04_build_canonical_sft.py", cmd)
+    return output_dir
+
+
+def run_stage05_length_buckets(args: argparse.Namespace, canonical_dir: Path, run_dir: Path) -> None:
+    # Local iteration only. The labctl/omegalax path owns real token counts and
+    # training buckets.
+    run_step("stage_05_length_buckets.py", [
+        "--samples", str(canonical_dir / "chat.jsonl"),
+        "--output-dir", str(run_dir / "stage_05_length_buckets"),
+        "--tokenizer", args.trainee_model,
+        "--processor", args.trainee_model,
+    ])
 
 
 def parse_args() -> argparse.Namespace:
@@ -204,6 +231,20 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--trainee-model", default=config.DEFAULT_TRAINEE_MODEL)
     p.add_argument("--segment-window-s", type=float, default=config.DEFAULT_SEGMENT_WINDOW_S)
     p.add_argument("--segment-overlap-s", type=float, default=config.DEFAULT_SEGMENT_OVERLAP_S)
+    p.add_argument("--canonical-output-dir", type=Path, default=None)
+    p.add_argument("--canonical-split-group", choices=["recording_id", "clip_id"], default="recording_id")
+    p.add_argument("--canonical-val-frac", type=float, default=0.1)
+    p.add_argument("--canonical-seed", type=int, default=0)
+    p.add_argument("--canonical-image-path-mode", choices=["absolute", "preserve"], default="absolute")
+    p.add_argument("--canonical-system-prompt-text", default=None)
+    p.add_argument("--canonical-system-prompt-file", type=Path, default=None)
+    p.add_argument("--canonical-terminal-token", default=None)
+    p.add_argument("--canonical-terminal-mode", choices=["none", "replace_final_assistant", "append_assistant"], default="none")
+    p.add_argument(
+        "--stage05-length-buckets",
+        action="store_true",
+        help="After stage 04, run the old local length-bucket distribution inspector.",
+    )
     return p.parse_args()
 
 
@@ -265,6 +306,14 @@ def main() -> None:
             print(f"!!! clip {clip_id} failed: {type(exc).__name__}: {exc}", flush=True)
             with (run_dir / "failed_clips.jsonl").open("a") as fh:
                 fh.write(json.dumps({"clip_id": clip_id, "error": f"{type(exc).__name__}: {exc}"}) + "\n")
+    if args.stages in ("all", "assemble"):
+        try:
+            canonical_dir = run_stage04_canonical(args, run_dir)
+            if args.stage05_length_buckets:
+                run_stage05_length_buckets(args, canonical_dir, run_dir)
+        except Exception as exc:  # noqa: BLE001 - report run-level export failure clearly.
+            failures += 1
+            print(f"!!! run-level stage failed: {type(exc).__name__}: {exc}", flush=True)
     print(f"\nDone. Run outputs under {run_dir}" + (f" ({failures} clip(s) failed)" if failures else ""))
 
 

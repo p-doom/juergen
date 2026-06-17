@@ -3,7 +3,8 @@
 Turns Crowd-Cast screen recordings + msgpack keylogs into Omegalax-compatible
 SFT JSONL. **Single validated configuration:** Qwen3.6-27B (BF16, served with
 sglang) annotates the recordings, a grounded verification pass is the quality
-gate, and samples are tokenized with the trainee model's real processor.
+gate, and stage 04 exports the canonical SFT artifact. Labctl + omegalax own
+training token counts and bucket materialization.
 
 ## Configuration (the one we run)
 
@@ -33,8 +34,9 @@ validated setup.
      pass B  write the imperative instruction + refined bounds per segment
      pass C  verify each on its frames (active / action_visible /
              start_grounded / end_reached) -> writes a `verified` flag
-03 assemble          verified trajectories -> SFT chat messages             \
-04 buckets           exact Qwen3-VL-2B token counts -> length-bucketed JSONL / CPU
+03 assemble          verified trajectories -> neutral per-clip samples      \
+04 canonical         run-level canonical SFT artifact                       / CPU
+05 buckets           optional local token/bucket distribution inspector      / CPU
 ```
 
 A clip = up to 12 contiguous segments of one recording. All VLM work (A/B/C) is
@@ -71,13 +73,13 @@ cd /fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline
 uv run --project . --locked python -m annotation_pipeline.discover_clips  # -> clips_dataset.json (+ report)
 sbatch --array=0-15 annotation_pipeline/slurm/extract.sbatch  dataset_v1   # phase 1: frames
 sbatch --array=0-1  annotation_pipeline/slurm/annotate.sbatch dataset_v1   # phase 2: VLM
-sbatch --array=0-7  annotation_pipeline/slurm/assemble.sbatch dataset_v1   # phase 3: SFT+tok
+sbatch --array=0-7  annotation_pipeline/slurm/assemble.sbatch dataset_v1   # phase 3: assemble+canonical
 ```
 
 `--gres=gpu:0` extract/assemble jobs use idle CPU cores and hold no GPUs, so the
 8-GPU annotate nodes stay on the VLM. Annotate/assemble **skip** clips whose
-frames aren't cached yet (never fall back to ffmpeg). A finished clip (stage-04
-`bucket_summary.json`) is skipped on resume; a bad clip is isolated to
+frames aren't cached yet (never fall back to ffmpeg). A finished clip (stage-03
+`trajectories.jsonl`) is skipped on resume; a bad clip is isolated to
 `failed_clips.jsonl` instead of killing the shard. Stage 02 issues
 `--max-concurrency` requests at once (default 6 after a 720p OOM; raise via
 `V3_MAX_CONCURRENCY`) to keep the DP=4 replicas busy.
@@ -87,9 +89,9 @@ frames aren't cached yet (never fall back to ffmpeg). A finished clip (stage-04
 Two uv-managed environments, both built by `setup_env.sbatch`:
 
 - **`juergen` workspace / `data_pipeline` project** — the whole pipeline,
-  stages 00–04 (cv2, msgpack, openai client, and `transformers==5.3.0` to
-  match the workspace/sglang dependency solution for exact stage-04 token counts
-  via the vendored `qwen3_encoding.py`). **No omegalax dependency.**
+  stages 00–04 (cv2, msgpack, openai client, and the annotation-side
+  dependencies). Stage 05 is an optional local token/bucket distribution
+  inspector. **No omegalax dependency.**
 - **`yll/venvs/vllm-annotate`** — sglang serving only (torch cu126, cuDNN 9.16).
 
 The SLURM entrypoints run stages 00–04 with
@@ -112,10 +114,12 @@ processed/
         pass_c_verify_segment_*.txt         # raw verification verdicts
         trajectories_raw.json               # each carries `verified` + `verify_checks`
         stage02_summary.json                # incl. n_verified
-      stage_03_assemble/trajectories.jsonl  # verified == true only
-      stage_04_sft_samples/
-        chat.jsonl, chat_8k.jsonl … chat_256k.jsonl
-        bucket_summary.json, trajectory_manifest.jsonl, rejected_oversize.jsonl
+      stage_03_assemble/trajectories.jsonl  # verified == true only; neutral
+    stage_04_canonical_sft/
+      chat.jsonl, manifest.json, sample_manifest.jsonl, split_manifest.jsonl
+    stage_05_length_buckets/                # optional local iteration only
+      chat.jsonl, chat_8k.jsonl … chat_256k.jsonl
+      bucket_summary.json, trajectory_manifest.jsonl, rejected_oversize.jsonl
 ```
 
 Raw VLM responses (A/B/C) are persisted and reused on reruns, so iterating on
@@ -139,8 +143,8 @@ downstream stages never re-spends VLM calls.
 - **Never FP8**; the cluster driver is CUDA 12.8 (serving venv pins cu126 wheels
   + cuDNN ≥9.15 for the Conv3d path).
 
-`qwen3_encoding.py` is vendored verbatim from the training chunk indexer so
-stage 04's buckets match training exactly with no external dependency.
+`qwen3_encoding.py` is kept for the optional local stage-05 distribution
+inspector. Labctl + omegalax own the training token counts and buckets.
 
 ## Inspect a run
 
@@ -153,9 +157,9 @@ uv run --project . --locked python -m annotation_pipeline.visualize_pipeline
 
 ```
 discover_clips.py            clip discovery + idle pre-gate -> clips_dataset.json
-run_pipeline.py              orchestrates 00->04 (resume, sharding, concurrency)
+run_pipeline.py              orchestrates 00->04, stage 05 optional
 config.py  common.py  qwen3_encoding.py
-stage_00…stage_04 (.py)
+stage_00…stage_05 (.py)
 visualize_pipeline.py        run inspector
 clips.json                   curated clips;  clips_dataset.json = discovered (gitignored)
 slurm/  _serve_qwen.sh  setup_env.sbatch  run_pipeline.sbatch

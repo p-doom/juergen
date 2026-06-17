@@ -50,7 +50,7 @@ DEFAULT_ENABLE_THINKING = False
 DEFAULT_VLM_MAX_TOKENS = 4096
 DEFAULT_VERIFY_MAX_TOKENS = 1024
 
-# Trainee model whose tokenizer/processor define exact stage-04 token buckets.
+# Trainee model used by the optional stage-05 local token/bucket inspector.
 # Stage 04 counts in the data_pipeline uv env via the vendored qwen3_encoding.
 # No omegalax dependency.
 DEFAULT_TRAINEE_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
