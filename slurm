@@ -1,1 +1,0 @@
-/home/alfred.nguyen/projects/omegalax/slurm
