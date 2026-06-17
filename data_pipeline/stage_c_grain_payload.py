@@ -56,6 +56,11 @@ def _run_split(split: str, src_chat: Path, out_split_dir: Path) -> dict:
     return {"split": split, "n_shards": n_shards, "elapsed_s": int(elapsed)}
 
 
+def _has_jsonl_rows(path: Path) -> bool:
+    with path.open() as f:
+        return any(line.strip() for line in f)
+
+
 def main(_) -> None:
     output_dir = Path(FLAGS.output_dir)
     source_path = Path(FLAGS.source_path)
@@ -66,6 +71,9 @@ def main(_) -> None:
         src_chat = source_path / split / "chat.jsonl"
         if not src_chat.is_file():
             print(f"[stage_c] no chat.jsonl for split {split}, skipping")
+            continue
+        if not _has_jsonl_rows(src_chat):
+            print(f"[stage_c] empty chat.jsonl for split {split}, skipping")
             continue
         out_split_dir = output_dir / split
         per_split.append(_run_split(split, src_chat, out_split_dir))
