@@ -54,22 +54,12 @@ def write_json(path: Path, obj: dict[str, Any]) -> None:
     path.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n")
 
 
-def iter_stage03_outputs(run_dir: Path) -> list[tuple[str, Path]]:
+def stage03_output(run_dir: Path) -> Path:
     run_dir = run_dir.expanduser().resolve()
-    direct = run_dir / "trajectories.jsonl"
-    if direct.is_file():
-        return [(run_dir.name, direct)]
-
-    found: list[tuple[str, Path]] = []
-    for clip_dir in sorted(p for p in run_dir.iterdir() if p.is_dir()):
-        path = clip_dir / "stage_03_assemble" / "trajectories.jsonl"
-        if path.is_file():
-            found.append((clip_dir.name, path))
-    if not found:
-        raise FileNotFoundError(
-            f"No stage_03_assemble/trajectories.jsonl files found under {run_dir}"
-        )
-    return found
+    path = run_dir / "stage_03_assemble" / "trajectories.jsonl"
+    if not path.is_file():
+        raise FileNotFoundError(f"missing stage 03 dataset: {path}")
+    return path
 
 
 def sanitize_component(value: str) -> str:
@@ -109,6 +99,7 @@ def load_system_prompt(
     if not text.strip():
         raise ValueError("system prompt is empty")
     source["sha256"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    source["text"] = text
     return text, source
 
 
@@ -303,47 +294,50 @@ def build_canonical_sft(
 
     records: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    for clip_id, trajectories_path in iter_stage03_outputs(run_dir):
-        for raw_index, raw in enumerate(read_jsonl(trajectories_path)):
-            raw_sample_id = str(raw.get("sample_id") or f"sample{raw_index:05d}")
-            sample_id = sanitize_component(f"{clip_id}__{raw_sample_id}")
-            try:
-                messages, image_paths = transform_messages(
-                    raw,
-                    sample_id=sample_id,
-                    run_dir=run_dir,
-                    image_base=image_base,
-                    image_path_mode=image_path_mode,
-                    system_prompt_text=system_prompt_text,
-                    terminal_token=terminal_token,
-                    terminal_mode=terminal_mode,
-                )
-                recording_id = str(raw.get("recording_id") or "")
-                if not recording_id:
-                    raise ValueError("missing recording_id")
-                record = dict(raw)
-                record.update(
-                    {
-                        "sample_id": sample_id,
-                        "raw_sample_id": raw_sample_id,
-                        "clip_id": clip_id,
-                        "recording_id": recording_id,
-                        "group_id": recording_id if split_group == "recording_id" else clip_id,
-                        "messages": messages,
-                        "image_paths": image_paths,
-                    }
-                )
-                records.append(record)
-            except Exception as exc:  # noqa: BLE001 - keep bad samples auditable.
-                rejected.append(
-                    {
-                        "clip_id": clip_id,
-                        "raw_sample_id": raw_sample_id,
-                        "source_path": str(trajectories_path),
-                        "reason": type(exc).__name__,
-                        "detail": str(exc),
-                    }
-                )
+    trajectories_path = stage03_output(run_dir)
+    for raw_index, raw in enumerate(read_jsonl(trajectories_path)):
+        clip_id = str(raw.get("clip_id") or "").strip()
+        raw_sample_id = str(raw.get("sample_id") or f"sample{raw_index:05d}")
+        sample_id = sanitize_component(f"{clip_id}__{raw_sample_id}")
+        try:
+            if not clip_id:
+                raise ValueError("missing clip_id")
+            messages, image_paths = transform_messages(
+                raw,
+                sample_id=sample_id,
+                run_dir=run_dir,
+                image_base=image_base,
+                image_path_mode=image_path_mode,
+                system_prompt_text=system_prompt_text,
+                terminal_token=terminal_token,
+                terminal_mode=terminal_mode,
+            )
+            recording_id = str(raw.get("recording_id") or "")
+            if not recording_id:
+                raise ValueError("missing recording_id")
+            record = dict(raw)
+            record.update(
+                {
+                    "sample_id": sample_id,
+                    "raw_sample_id": raw_sample_id,
+                    "clip_id": clip_id,
+                    "recording_id": recording_id,
+                    "group_id": recording_id if split_group == "recording_id" else clip_id,
+                    "messages": messages,
+                    "image_paths": image_paths,
+                }
+            )
+            records.append(record)
+        except Exception as exc:  # noqa: BLE001 - keep bad samples auditable.
+            rejected.append(
+                {
+                    "clip_id": clip_id,
+                    "raw_sample_id": raw_sample_id,
+                    "source_path": str(trajectories_path),
+                    "reason": type(exc).__name__,
+                    "detail": str(exc),
+                }
+            )
 
     split_of = assign_splits(records, split_group="group_id", seed=seed, val_frac=val_frac)
     for record in records:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=v3_setup_env
+#SBATCH --job-name=annotation_setup_env
 #SBATCH --partition=standard
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -9,7 +9,7 @@
 #SBATCH --output=/fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline/annotation_pipeline/logs/%x_%j.log
 #SBATCH --error=/fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline/annotation_pipeline/logs/%x_%j.log
 
-# One-time environment setup for the v3 pipeline. Builds two venvs:
+# One-time environment setup for the annotation pipeline. Builds two venvs:
 #   1. vllm-annotate  - sglang serving stack (torch cu126, cuDNN 9.16), from the
 #                       proven slime pins; serves Qwen3.6-27B.
 #   2. juergen workspace venv - pipeline stages 00-04 via data_pipeline's uv
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 YLL=/fast/project/HFMI_SynergyUnit/yll
-V3=$YLL/juergen/data_pipeline/annotation_pipeline
+ANNOTATION_PIPELINE=$YLL/juergen/data_pipeline/annotation_pipeline
 DATA_PIPELINE=$YLL/juergen/data_pipeline
 VENV=$YLL/venvs/vllm-annotate
 SLIME_VENV=$YLL/venvs/slime

@@ -1,4 +1,4 @@
-"""Shared helpers for v3 trajectory extraction and SFT assembly."""
+"""Shared helpers for trajectory extraction and SFT assembly."""
 
 from __future__ import annotations
 

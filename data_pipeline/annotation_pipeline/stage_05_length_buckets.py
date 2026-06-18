@@ -11,7 +11,7 @@ Two counting modes:
   to match the juergen workspace; exact counting preprocesses every frame, so
   run on a compute node, not a login node.
 
-- Estimated (fallback): --tokens-per-image with a value you calibrated
+- Estimated: --tokens-per-image with a value you calibrated
   yourself, used only if --tokenizer is set to "" to disable exact mode.
 
 With neither, stage 05 writes chat.jsonl and the manifest but skips length
@@ -157,7 +157,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="JSON file whose keys override the image processor config.",
     )
-    # Estimated fallback: only with an explicitly calibrated value.
+    # Estimated mode: only with an explicitly calibrated value.
     parser.add_argument(
         "--tokens-per-image",
         type=int,

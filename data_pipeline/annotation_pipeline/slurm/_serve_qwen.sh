@@ -2,7 +2,7 @@
 # Sourced by the pipeline slurm scripts. Defines serve_qwen(): start sglang
 # serving Qwen3.6-27B (BF16, TP=2 DP=4, hardened: mem-fraction 0.70 for vision-
 # encoder activation headroom under concurrent 720p prefills, cuDNN 9.16 from
-# setup_env), wait until healthy, export V3_VLM_BASE_URL, and set SERVER_PID
+# setup_env), wait until healthy, export JUERGEN_ANNOTATION_VLM_BASE_URL, and set SERVER_PID
 # so the caller can `trap 'kill $SERVER_PID' EXIT`. One place for the serve config.
 
 serve_qwen() {
@@ -26,6 +26,6 @@ serve_qwen() {
   done
   curl -sf "http://localhost:$PORT/health" >/dev/null || { echo "sglang never healthy" >&2; return 1; }
   echo "sglang serving $MODEL on :$PORT (TP=2, DP=4)"
-  export V3_VLM_BASE_URL="http://localhost:$PORT/v1"
-  export V3_VLM_TIMEOUT_S=600
+  export JUERGEN_ANNOTATION_VLM_BASE_URL="http://localhost:$PORT/v1"
+  export JUERGEN_ANNOTATION_VLM_TIMEOUT_S=600
 }

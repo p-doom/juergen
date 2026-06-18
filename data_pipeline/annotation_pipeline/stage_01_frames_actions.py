@@ -35,7 +35,7 @@ def jpeg_quality_to_qscale(jpeg_quality: int) -> int:
 def resolve_ffmpeg_bin(value: str | None) -> str:
     if not value:
         raise RuntimeError(
-            "ffmpeg binary not found. Install ffmpeg or set V3_FFMPEG_BIN/FFMPEG_BIN."
+            "ffmpeg binary not found. Install ffmpeg or set JUERGEN_ANNOTATION_FFMPEG_BIN/FFMPEG_BIN."
         )
     expanded = str(Path(value).expanduser())
     if Path(expanded).exists():

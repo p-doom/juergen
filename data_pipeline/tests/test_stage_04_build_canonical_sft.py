@@ -47,19 +47,18 @@ class BuildCanonicalSftTest(unittest.TestCase):
             run_dir = root / "run"
             out_dir = root / "canonical"
 
+            rows = []
             for clip_id, recording_id in (("clip_a", "rec_a"), ("clip_b", "rec_b")):
                 (run_dir / clip_id / "frame0.jpg").parent.mkdir(parents=True, exist_ok=True)
                 (run_dir / clip_id / "frame0.jpg").write_bytes(b"fake image")
-                _write_jsonl(
-                    run_dir / clip_id / "stage_03_assemble" / "trajectories.jsonl",
-                    [
-                        _trajectory(
-                            clip_id=clip_id,
-                            recording_id=recording_id,
-                            sample_id=f"{recording_id}_traj0000",
-                        )
-                    ],
+                row = _trajectory(
+                    clip_id=clip_id,
+                    recording_id=recording_id,
+                    sample_id=f"{recording_id}_traj0000",
                 )
+                row["clip_id"] = clip_id
+                rows.append(row)
+            _write_jsonl(run_dir / "stage_03_assemble" / "trajectories.jsonl", rows)
 
             manifest = build_canonical_sft(
                 run_dir=run_dir,
@@ -109,6 +108,32 @@ class BuildCanonicalSftTest(unittest.TestCase):
                 {"train", "val"},
                 {record["split"] for record in records},
             )
+
+    def test_requires_run_level_stage03_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            run_dir = root / "run"
+            out_dir = root / "canonical"
+            (run_dir / "clip_a" / "frame0.jpg").parent.mkdir(parents=True, exist_ok=True)
+            (run_dir / "clip_a" / "frame0.jpg").write_bytes(b"fake image")
+
+            row = _trajectory(clip_id="clip_a", recording_id="rec_a", sample_id="rec_a_traj0000")
+            row["clip_id"] = "clip_a"
+            _write_jsonl(run_dir / "stage_03_assemble" / "trajectories.jsonl", [row])
+
+            manifest = build_canonical_sft(
+                run_dir=run_dir,
+                output_dir=out_dir,
+                split_group="recording_id",
+                val_frac=0.0,
+                image_path_mode="absolute",
+            )
+
+            self.assertEqual(manifest["n_samples"], 1)
+            record = json.loads((out_dir / "chat.jsonl").read_text().strip())
+            self.assertEqual(record["clip_id"], "clip_a")
+            self.assertEqual(record["raw_sample_id"], "rec_a_traj0000")
+            self.assertEqual(record["sample_id"], "clip_a__rec_a_traj0000")
 
 
 if __name__ == "__main__":

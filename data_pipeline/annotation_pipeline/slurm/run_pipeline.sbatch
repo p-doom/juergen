@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=v3_pipeline
+#SBATCH --job-name=annotation_pipeline
 #SBATCH --partition=standard
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -12,14 +12,14 @@
 
 # Single-node entrypoint: serve Qwen3.6-27B, then run stages 00->04 over the
 # requested clips. One-time env setup first: sbatch slurm/setup_env.sbatch
-# Usage: sbatch slurm/run_pipeline.sbatch --run-name v1 --clips all
+# Usage: sbatch slurm/run_pipeline.sbatch --run-name smoke --clips all
 
 set -euo pipefail
-V3=/fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline/annotation_pipeline
+ANNOTATION_PIPELINE=/fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline/annotation_pipeline
 DATA_PIPELINE=/fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline
 UV=${UV:-/home/yll.kryeziu/.local/bin/uv}
-mkdir -p "$V3/logs"
-source "$V3/slurm/_serve_qwen.sh"
+mkdir -p "$ANNOTATION_PIPELINE/logs"
+source "$ANNOTATION_PIPELINE/slurm/_serve_qwen.sh"
 serve_qwen
 trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
 "$UV" run --project "$DATA_PIPELINE" --locked python -m annotation_pipeline.run_pipeline "$@"

@@ -1,4 +1,4 @@
-"""Defaults for the v3 Crowd-Cast trajectory pipeline."""
+"""Defaults for the Crowd-Cast annotation pipeline."""
 
 from __future__ import annotations
 
@@ -13,9 +13,10 @@ RAW_DATA_ROOT = Path(
     "crowd-cast-2026-05-19"
 )
 # All pipeline output (frame cache + runs/SFT samples) lives next to the raw
-# data under processed/, not in the code tree. Override with V3_PROCESSED_ROOT.
+# data under processed/, not in the code tree. Override with
+# JUERGEN_ANNOTATION_PROCESSED_ROOT.
 PROCESSED_ROOT = Path(
-    os.environ.get("V3_PROCESSED_ROOT") or (RAW_DATA_ROOT / "processed")
+    os.environ.get("JUERGEN_ANNOTATION_PROCESSED_ROOT") or (RAW_DATA_ROOT / "processed")
 )
 
 PILOT_VERSION = "0.1.0"
@@ -94,20 +95,20 @@ DEFAULT_VLM_BASE_URL = "http://localhost:8011/v1"
 
 
 def vlm_base_url() -> str:
-    return os.environ.get("V3_VLM_BASE_URL") or DEFAULT_VLM_BASE_URL
+    return os.environ.get("JUERGEN_ANNOTATION_VLM_BASE_URL") or DEFAULT_VLM_BASE_URL
 
 
 def vlm_api_key() -> str:
     # sglang ignores the key; any non-empty string satisfies the OpenAI client.
-    return os.environ.get("V3_VLM_API_KEY") or "local-sglang"
+    return os.environ.get("JUERGEN_ANNOTATION_VLM_API_KEY") or "local-sglang"
 
 
 def vlm_model() -> str:
-    return os.environ.get("V3_VLM_MODEL") or DEFAULT_VLM_MODEL
+    return os.environ.get("JUERGEN_ANNOTATION_VLM_MODEL") or DEFAULT_VLM_MODEL
 
 
 def ffmpeg_bin() -> str | None:
-    configured = os.environ.get("V3_FFMPEG_BIN") or os.environ.get("FFMPEG_BIN")
+    configured = os.environ.get("JUERGEN_ANNOTATION_FFMPEG_BIN") or os.environ.get("FFMPEG_BIN")
     if configured:
         return configured
     path_bin = shutil.which("ffmpeg")

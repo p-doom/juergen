@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve an ad hoc dashboard for inspecting v3 pipeline artifacts."""
+"""Serve an ad hoc dashboard for inspecting annotation pipeline artifacts."""
 
 from __future__ import annotations
 
@@ -38,6 +38,11 @@ def read_jsonl_limited(path: Path, limit: int | None = None) -> list[dict[str, A
     return rows if limit is None else rows[:limit]
 
 
+def rows_for_clip(path: Path, clip_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+    rows = [row for row in read_jsonl(path) if str(row.get("clip_id")) == clip_id]
+    return rows if limit is None else rows[:limit]
+
+
 def safe_int(value: Any, default: int) -> int:
     try:
         return int(value)
@@ -65,17 +70,12 @@ def stage05_dir(run_dir: Path) -> Path:
     return run_dir / "stage_05_length_buckets"
 
 
-def existing_stage02_dir(clip_dir: Path) -> Path:
-    """Stage 02 is `stage_02_segment` now; fall back to the pre-refactor name."""
-    for name in ("stage_02_segment", "stage_02_vlm_trajectories"):
-        candidate = clip_dir / name
-        if candidate.exists():
-            return candidate
-    return clip_dir / "stage_02_segment"
-
-
 def infer_cache_dir(run_config: dict[str, Any], clip_id: str) -> Path | None:
-    clips = load_clips()
+    clips_file = run_config.get("clips_file")
+    if clips_file and Path(str(clips_file)).exists():
+        clips = load_clips(Path(str(clips_file)))
+    else:
+        clips = load_clips()
     clip = clips.get(clip_id)
     if clip is None:
         return None
@@ -85,17 +85,7 @@ def infer_cache_dir(run_config: dict[str, Any], clip_id: str) -> Path | None:
         run_config.get("stage01_max_noop_run"),
         config.DEFAULT_STAGE01_MAX_NOOP_RUN,
     )
-    preferred = frames_cache_dir(clip, target_fps, target_height, max_noop_run)
-    if preferred.exists():
-        return preferred
-
-    rec8 = clip["recording_id"][:8]
-    legacy_pattern = (
-        f"{rec8}_s{clip['segment_start']:04d}-{clip['segment_end']:04d}"
-        f"_{target_fps}fps_{target_height}p*"
-    )
-    matches = sorted((OUTPUTS_DIR / "cache" / "frames").glob(legacy_pattern))
-    return matches[-1] if matches else preferred
+    return frames_cache_dir(clip, target_fps, target_height, max_noop_run)
 
 
 def sample_records(records: list[dict[str, Any]], count: int = 12) -> list[dict[str, Any]]:
@@ -319,32 +309,29 @@ def build_run_summary(run_name: str) -> dict[str, Any]:
     clips: list[dict[str, Any]] = []
     lineage_segments: list[dict[str, Any]] = []
 
-    for clip_dir in sorted(path for path in run_dir.iterdir() if path.is_dir()):
-        clip_id = clip_dir.name
+    for clip_id in run_config.get("clips", []):
+        clip_id = str(clip_id)
+        clip_dir = run_dir
         cache_dir = infer_cache_dir(run_config, clip_id)
         stage00 = cache_dir / "stage_00_manifest" if cache_dir else clip_dir / "stage_00_manifest"
         stage01 = cache_dir / "stage_01_frames_actions" if cache_dir else clip_dir / "stage_01_frames_actions"
-        stage02 = existing_stage02_dir(clip_dir)
-        stage03 = clip_dir / "stage_03_assemble"
+        stage02 = run_dir / "stage_02_segment"
+        stage03 = run_dir / "stage_03_assemble"
         stage04 = stage05_dir(run_dir)
 
         manifest = read_jsonl_limited(stage00 / "manifest.jsonl")
         frame_records = read_jsonl_limited(stage01 / "frame_records.jsonl")
-        assembled_all = read_jsonl_limited(stage03 / "trajectories.jsonl")
-        rejected = read_jsonl_limited(stage03 / "rejected_trajectories.jsonl")
+        assembled_all = rows_for_clip(stage03 / "trajectories.jsonl", clip_id)
+        rejected = rows_for_clip(stage03 / "rejected_trajectories.jsonl", clip_id)
         trajectory_manifest = read_jsonl_limited(stage04 / "trajectory_manifest.jsonl")
         chat_rows = read_jsonl_limited(stage04 / "chat.jsonl", 6)
 
-        stage02_raw = read_json(stage02 / "trajectories_raw.json", {})
-        stage02_summary = read_json(stage02 / "stage02_summary.json", {})
-        if not stage02_summary and stage02_raw:
-            stage02_summary = {
-                "annotation_source": stage02_raw.get("annotation_source"),
-                "n_trajectories": len(stage02_raw.get("trajectories", []) or []),
-                "dry_run": bool(stage02_raw.get("dry_run")),
-            }
-        stage02_candidates = read_jsonl_limited(stage02 / "pass_a_candidates.jsonl", 100)
-        stage02_merged = read_jsonl_limited(stage02 / "pass_a_merged_segments.jsonl", 100)
+        stage02_raw_rows = rows_for_clip(stage02 / "trajectories_raw.jsonl", clip_id, 1)
+        stage02_raw = stage02_raw_rows[0] if stage02_raw_rows else {}
+        stage02_summary_rows = rows_for_clip(stage02 / "clip_summaries.jsonl", clip_id, 1)
+        stage02_summary = stage02_summary_rows[0] if stage02_summary_rows else {}
+        stage02_candidates = rows_for_clip(stage02 / "pass_a_candidates.jsonl", clip_id, 100)
+        stage02_merged = rows_for_clip(stage02 / "pass_a_merged_segments.jsonl", clip_id, 100)
         segment_lineage = build_segment_lineage(
             clip_id=clip_id,
             stage00_dir=stage00,
@@ -380,7 +367,7 @@ def build_run_summary(run_name: str) -> dict[str, Any]:
                 "raw": stage02_raw,
                 "candidates": stage02_candidates,
                 "merged": stage02_merged,
-                "naming_rejected": read_json(stage02 / "naming_rejected.json", []),
+                "naming_rejected": rows_for_clip(stage02 / "naming_rejected.jsonl", clip_id),
             },
             "stage_03_assemble": {
                 "dir": str(stage03),
@@ -422,54 +409,56 @@ def build_sample_frame_player(run_name: str, sample_id: str) -> dict[str, Any] |
     if not run_dir.exists():
         return None
 
-    for clip_dir in sorted(path for path in run_dir.iterdir() if path.is_dir()):
-        clip_id = clip_dir.name
-        samples_path = clip_dir / "stage_03_assemble" / "trajectories.jsonl"
-        for sample in read_jsonl_limited(samples_path):
-            if str(sample.get("sample_id")) != sample_id:
-                continue
+    sample: dict[str, Any] | None = None
+    clip_id = ""
+    for candidate in read_jsonl_limited(run_dir / "stage_03_assemble" / "trajectories.jsonl"):
+        if str(candidate.get("sample_id")) == sample_id:
+            sample = candidate
+            clip_id = str(candidate.get("clip_id") or "")
+            break
+    if sample is None:
+        return None
 
-            cache_dir = infer_cache_dir(run_config, clip_id)
-            stage01 = cache_dir / "stage_01_frames_actions" if cache_dir else clip_dir / "stage_01_frames_actions"
-            frame_records = read_jsonl_limited(stage01 / "frame_records.jsonl")
-            record_by_image = {
-                normalized_path_key(record.get("image_path")): record
-                for record in frame_records
-                if record.get("image_path")
+    cache_dir = infer_cache_dir(run_config, clip_id)
+    stage01 = cache_dir / "stage_01_frames_actions" if cache_dir else run_dir / "stage_01_frames_actions"
+    frame_records = read_jsonl_limited(stage01 / "frame_records.jsonl")
+    record_by_image = {
+        normalized_path_key(record.get("image_path")): record
+        for record in frame_records
+        if record.get("image_path")
+    }
+    frames = []
+    for idx, image_path in enumerate(iter_sample_image_paths(sample)):
+        record = record_by_image.get(normalized_path_key(image_path), {})
+        frames.append(
+            {
+                "index": idx,
+                "image_path": image_path,
+                "recording_id": record.get("recording_id"),
+                "segment_id": record.get("segment_id"),
+                "segment_idx": record.get("segment_idx"),
+                "local_bin_idx": record.get("local_bin_idx"),
+                "global_frame_idx": record.get("global_frame_idx"),
+                "local_time_s": record.get("local_time_s"),
+                "global_time_s": record.get("global_time_s"),
+                "source_frame_idx": record.get("source_frame_idx"),
+                "action": record.get("action"),
             }
-            frames = []
-            for idx, image_path in enumerate(iter_sample_image_paths(sample)):
-                record = record_by_image.get(normalized_path_key(image_path), {})
-                frames.append(
-                    {
-                        "index": idx,
-                        "image_path": image_path,
-                        "recording_id": record.get("recording_id"),
-                        "segment_id": record.get("segment_id"),
-                        "segment_idx": record.get("segment_idx"),
-                        "local_bin_idx": record.get("local_bin_idx"),
-                        "global_frame_idx": record.get("global_frame_idx"),
-                        "local_time_s": record.get("local_time_s"),
-                        "global_time_s": record.get("global_time_s"),
-                        "source_frame_idx": record.get("source_frame_idx"),
-                        "action": record.get("action"),
-                    }
-                )
+        )
 
-            return {
-                "run_name": run_name,
-                "clip_id": clip_id,
-                "sample_id": sample.get("sample_id"),
-                "instruction": sample.get("instruction"),
-                "start_time_s": sample.get("start_time_s"),
-                "end_time_s": sample.get("end_time_s"),
-                "duration_s": sample.get("duration_s"),
-                "n_frames": sample.get("n_frames"),
-                "n_non_noop": sample.get("n_non_noop"),
-                "source_trajectory": sample.get("source_trajectory", {}),
-                "frames": frames,
-            }
-    return None
+    return {
+        "run_name": run_name,
+        "clip_id": clip_id,
+        "sample_id": sample.get("sample_id"),
+        "instruction": sample.get("instruction"),
+        "start_time_s": sample.get("start_time_s"),
+        "end_time_s": sample.get("end_time_s"),
+        "duration_s": sample.get("duration_s"),
+        "n_frames": sample.get("n_frames"),
+        "n_non_noop": sample.get("n_non_noop"),
+        "source_trajectory": sample.get("source_trajectory", {}),
+        "frames": frames,
+    }
 
 
 def list_runs() -> list[dict[str, Any]]:
@@ -514,7 +503,7 @@ INDEX_HTML = r"""<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>v3 Pipeline Inspector</title>
+  <title>Annotation Pipeline Inspector</title>
   <style>
     :root {
       --bg: #f6f7f9;
@@ -1023,7 +1012,7 @@ INDEX_HTML = r"""<!doctype html>
 <body>
   <header>
     <div class="topbar">
-      <h1>v3 Pipeline Inspector</h1>
+      <h1>Annotation Pipeline Inspector</h1>
       <select id="runSelect"></select>
       <button id="refreshBtn">Refresh</button>
     </div>
@@ -1712,7 +1701,7 @@ INDEX_HTML = r"""<!doctype html>
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
-    server_version = "V3PipelineDashboard/0.1"
+    server_version = "AnnotationPipelineDashboard/0.1"
 
     def send_json(self, value: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
         payload = json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -1803,7 +1792,7 @@ def main() -> None:
     with ReusableThreadingTCPServer((args.host, args.port), DashboardHandler) as httpd:
         httpd.daemon_threads = True
         url = f"http://{args.host}:{args.port}/"
-        print(f"Serving v3 pipeline dashboard at {url}")
+        print(f"Serving annotation pipeline dashboard at {url}")
         if args.open:
             webbrowser.open(url)
         httpd.serve_forever()

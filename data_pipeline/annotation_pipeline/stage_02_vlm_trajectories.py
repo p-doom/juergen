@@ -527,7 +527,7 @@ def call_with_retry_and_reuse(
 
 
 # ---------------------------------------------------------------------------
-# Dry-run fallback (plumbing only; stage 03 refuses these without --allow-heuristic)
+# Explicit dry-run heuristic (plumbing only; stage 03 refuses these without --allow-heuristic)
 # ---------------------------------------------------------------------------
 
 
@@ -608,7 +608,7 @@ def parse_args() -> argparse.Namespace:
         default=config.vlm_model(),
         help=(
             "OpenAI/Azure model or Azure deployment name. Defaults to "
-            f"{config.DEFAULT_VLM_MODEL!r}; override with V3_VLM_MODEL if the "
+            f"{config.DEFAULT_VLM_MODEL!r}; override with JUERGEN_ANNOTATION_VLM_MODEL if the "
             "Azure deployment has a different name."
         ),
     )
@@ -645,14 +645,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--timeout-s",
         type=float,
-        default=float(os.environ.get("V3_VLM_TIMEOUT_S", "900")),
-        help="Per-call timeout; override via V3_VLM_TIMEOUT_S (lower for local servers so hung requests fail fast).",
+        default=float(os.environ.get("JUERGEN_ANNOTATION_VLM_TIMEOUT_S", "900")),
+        help="Per-call timeout; override via JUERGEN_ANNOTATION_VLM_TIMEOUT_S (lower for local servers so hung requests fail fast).",
     )
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=int(os.environ.get("V3_VLM_MAX_TOKENS", "4096")),
-        help="Completion token cap; override via V3_VLM_MAX_TOKENS (e.g. for thinking modes).",
+        default=int(os.environ.get("JUERGEN_ANNOTATION_VLM_MAX_TOKENS", "4096")),
+        help="Completion token cap; override via JUERGEN_ANNOTATION_VLM_MAX_TOKENS (e.g. for thinking modes).",
     )
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--vlm-retries", type=int, default=2)
@@ -664,7 +664,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-concurrency",
         type=int,
-        default=int(os.environ.get("V3_MAX_CONCURRENCY", "8")),
+        default=int(os.environ.get("JUERGEN_ANNOTATION_MAX_CONCURRENCY", "8")),
         help="In-flight VLM requests per pass, to keep all sglang DP replicas busy.",
     )
     return parser.parse_args()
@@ -880,13 +880,15 @@ def main() -> None:
     if not frame_records:
         raise RuntimeError(f"No frame records: {args.frame_records}")
 
-    if args.dry_run or not (args.base_url and args.api_key and args.model):
+    if args.dry_run:
         trajectories = heuristic_trajectories(frame_records)
         trajectories["dry_run"] = True
-        trajectories["dry_run_reason"] = "dry_run flag or missing VLM endpoint/API key/model"
+        trajectories["dry_run_reason"] = "explicit dry_run flag"
         write_json(output_dir / "trajectories_raw.json", trajectories)
         print(f"Wrote heuristic trajectories to {output_dir / 'trajectories_raw.json'}")
         return
+    if not (args.base_url and args.api_key and args.model):
+        raise RuntimeError("missing VLM endpoint/API key/model")
 
     if args.vlm_frame_height > 0 and args.manifest is None:
         raise RuntimeError(
