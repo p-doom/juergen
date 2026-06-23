@@ -1,76 +1,33 @@
-"""Defaults for the Crowd-Cast annotation pipeline."""
+"""Defaults for the annotation pipeline.
+
+The hindsight labeler is configured by env (see labeler.py): LABELER_MODEL
+(default gpt-5.5), LABELER_BASE_URL ($AZURE_OPENAI_ENDPOINT), LABELER_API_KEY
+($AZURE_OPENAI_API_KEY), LABELER_REASONING_EFFORT.
+"""
 
 from __future__ import annotations
 
 import os
 import shutil
-from pathlib import Path
 
-
-PIPELINE_DIR = Path(__file__).resolve().parent
-RAW_DATA_ROOT = Path(
-    "/fast/project/HFMI_SynergyUnit/p-doom/crowd-cast/"
-    "crowd-cast-2026-05-19"
-)
-# All pipeline output (frame cache + runs/SFT samples) lives next to the raw
-# data under processed/, not in the code tree. Override with
-# JUERGEN_ANNOTATION_PROCESSED_ROOT.
-PROCESSED_ROOT = Path(
-    os.environ.get("JUERGEN_ANNOTATION_PROCESSED_ROOT") or (RAW_DATA_ROOT / "processed")
-)
-
-PILOT_VERSION = "0.1.0"
-PILOT_USER_ID = "9731b6e46467bf9bca177edaa889ef11d89393e94f2b5bbdbde9789162082d42"
-PILOT_RECORDING_ID = "ed57c1ff-7116-4a53-a631-9c1d1f59fc4d"
-PILOT_SEGMENT_START = 4
-PILOT_SEGMENT_END = 10
-
-DEFAULT_TARGET_FPS = 2
-# Stage 01/03/04 training frames at 720p: 540p left dense desktop UI text
-# (file tree, terminal, chat) unreadable, so the trainee couldn't learn from it.
-# 720p is the source res; downsample later (re-extract, or cap the trainee
-# processor's max_pixels at train time) if a smaller context is needed.
-DEFAULT_TARGET_HEIGHT = 720
-# Stage 02 renders separate (timestamp-overlaid) annotation frames for the VLM,
-# also at 720p so the labeler reads the same detail the trainee will.
-DEFAULT_VLM_FRAME_HEIGHT = 720
+# --- Stage 01: sampling -----------------------------------------------------
+# Base rate (frames + keylog action bins). At 1 fps each kept frame's action
+# aggregates ~1 s of input; idle is thinned by the NO_OP head/tail keep below.
+DEFAULT_TARGET_FPS = 1
+DEFAULT_TARGET_HEIGHT = 720          # training frame height (stage 01)
 DEFAULT_JPEG_QUALITY = 95
-DEFAULT_BLACK_FRAME_THRESHOLD = 5.0
-DEFAULT_ACTION_WINDOW_MS = 500
-DEFAULT_STAGE01_MAX_NOOP_RUN = 2
+# In each maximal run of consecutive NO_OP frames keep the first HEAD and the
+# last TAIL, drop the middle — so a wait's start AND end (e.g. an agent
+# finishing) stay visible without the whole idle stretch.
+DEFAULT_NOOP_KEEP_HEAD = 3
+DEFAULT_NOOP_KEEP_TAIL = 3
 
-# Annotator: Qwen3.6-27B (BF16) served locally via sglang. This is the single
-# validated configuration (see README). 40 images/request caps the pass-A
-# vision-encoder activation spike that OOM'd at 50 on 720p windows.
-DEFAULT_FRAME_IMAGE_MAX = 40
-DEFAULT_VLM_MODEL = "Qwen/Qwen3.6-27B"
-# Reasoning is disabled: the verification pass (stage 02 pass C) supersedes the
-# self-rated confidence that thinking mode improves, and thinking costs ~5x
-# wall-clock plus an empty-content failure mode.
-DEFAULT_ENABLE_THINKING = False
-DEFAULT_VLM_MAX_TOKENS = 4096
-DEFAULT_VERIFY_MAX_TOKENS = 1024
+# --- Stage 02: VLM annotation ----------------------------------------------
+DEFAULT_VLM_FRAME_HEIGHT = 720       # height of frames rendered for the labeler
+DEFAULT_NAME_IMAGE_MAX = 24          # frames per label / verify request
 
-# Trainee model used by the optional stage-05 local token/bucket inspector.
-# Stage 04 counts in the data_pipeline uv env via the vendored qwen3_encoding.
-# No omegalax dependency.
+# --- Stage 04/05: token accounting -----------------------------------------
 DEFAULT_TRAINEE_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
-
-# Stage 02 pass A (segmentation): one sparse-sampled request covers a window so
-# the VLM sees whole task arcs. 90s windows give finer, more atomic segments
-# than wider ones, with no oversize SFT samples.
-DEFAULT_SEGMENT_WINDOW_S = 90.0
-DEFAULT_SEGMENT_OVERLAP_S = 30.0
-# Stage 02 pass B (instruction naming): fewer, larger frames per candidate.
-DEFAULT_NAME_IMAGE_MAX = 24
-# Max-width caps are disabled by default so the VLM gets the configured 720p
-# frame height. Set these explicitly when endpoint cost/latency matters more.
-DEFAULT_VLM_IMAGE_MAX_WIDTH = 0
-DEFAULT_SEGMENT_IMAGE_WIDTH = DEFAULT_VLM_IMAGE_MAX_WIDTH
-DEFAULT_NAME_IMAGE_WIDTH = DEFAULT_VLM_IMAGE_MAX_WIDTH
-
-# No default tokens-per-image: it depends on the trainee model's vision
-# processor. Stage 04 counts exactly with the trainee tokenizer/processor.
 DEFAULT_TOKEN_OVERHEAD = 180
 BUCKET_LIMITS = {
     "8k": 8_192,
@@ -81,30 +38,13 @@ BUCKET_LIMITS = {
     "256k": 262_144,
 }
 
-
+# SFT system prompt: the computer-use agent's action format.
 SYSTEM_PROMPT = (
     "You operate a desktop computer. The first user turn shows the initial "
     "screen and the user's goal; subsequent user turns show the current screen. "
     "Reply with the next action toward that goal as `<dx> <dy> <scroll>` "
     "optionally followed by ` ; +KEY -KEY` events, or `NO_OP` if no action."
 )
-
-
-# Local sglang server (see slurm/run_pipeline.sbatch). Override with env.
-DEFAULT_VLM_BASE_URL = "http://localhost:8011/v1"
-
-
-def vlm_base_url() -> str:
-    return os.environ.get("JUERGEN_ANNOTATION_VLM_BASE_URL") or DEFAULT_VLM_BASE_URL
-
-
-def vlm_api_key() -> str:
-    # sglang ignores the key; any non-empty string satisfies the OpenAI client.
-    return os.environ.get("JUERGEN_ANNOTATION_VLM_API_KEY") or "local-sglang"
-
-
-def vlm_model() -> str:
-    return os.environ.get("JUERGEN_ANNOTATION_VLM_MODEL") or DEFAULT_VLM_MODEL
 
 
 def ffmpeg_bin() -> str | None:

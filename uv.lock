@@ -227,6 +227,20 @@ wheels = [
 ]
 
 [[package]]
+name = "array-record"
+version = "0.8.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "absl-py" },
+    { name = "etils", extra = ["epath"] },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/44/ff/8238c28f9bfda365ba991fc2b8a566c71847fc5a2d0913158aeadafd4e63/array_record-0.8.3-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:dada305fa0dfa3fd6f5f263c43ed37546f815e4f33ce30b066175384dead752e", size = 3989102, upload-time = "2025-11-13T16:15:33.845Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/67/4b4cd9891a36aec236e35688b47c44648bb645946e98653a7ad54f890128/array_record-0.8.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:718403dc9a364519a5fc440ed9e2784077e965489d5a44c96970d3101101e1cd", size = 4838611, upload-time = "2025-11-13T16:15:35.016Z" },
+    { url = "https://files.pythonhosted.org/packages/50/65/2f60b9ca59e5fce140be36f4136ebcc83385c9e56cd499e2942f9fb4b250/array_record-0.8.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:458f6658de86c9369b23ffe64dcb31393a919b91ae2f15147ee2beb2010b122a", size = 4995925, upload-time = "2025-11-13T16:15:37.091Z" },
+]
+
+[[package]]
 name = "asttokens"
 version = "3.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -544,6 +558,7 @@ version = "0.1.0"
 source = { editable = "data_pipeline" }
 dependencies = [
     { name = "absl-py" },
+    { name = "array-record" },
     { name = "datasets" },
     { name = "imageio-ffmpeg" },
     { name = "jinja2" },
@@ -558,6 +573,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "absl-py", specifier = ">=2.0" },
+    { name = "array-record", specifier = ">=0.5.1" },
     { name = "datasets", specifier = ">=3.0" },
     { name = "imageio-ffmpeg", specifier = ">=0.5.1" },
     { name = "jinja2", specifier = ">=3.1" },
@@ -972,6 +988,22 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d3/38/af70d7ab1ae9d4da450eeec1fa3918940a5fafb9055e934af8d6eb0c2313/et_xmlfile-2.0.0.tar.gz", hash = "sha256:dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54", size = 17234, upload-time = "2024-10-25T17:25:40.039Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/8b/5fe2cc11fee489817272089c4203e679c63b570a5aaeb18d852ae3cbba6a/et_xmlfile-2.0.0-py3-none-any.whl", hash = "sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa", size = 18059, upload-time = "2024-10-25T17:25:39.051Z" },
+]
+
+[[package]]
+name = "etils"
+version = "1.14.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/ce/6e067242fde898841922ac6fc82b0bb2fe35c38e995880bdffdfbe30182a/etils-1.14.0.tar.gz", hash = "sha256:8136e7f4c4173cd0af0ca5481c4475152f0b8686192951eefa60ee8711e1ede4", size = 108127, upload-time = "2026-03-04T17:41:36.291Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/3d/589663aeeacd59bb2f3e8596bfd3e81cf0fb18d70bb433199041f469771b/etils-1.14.0-py3-none-any.whl", hash = "sha256:b5df7341f54dbe1405a4450b2741207b4a8c279780402b45f87202b94dfc52b4", size = 172934, upload-time = "2026-03-04T17:41:35.01Z" },
+]
+
+[package.optional-dependencies]
+epath = [
+    { name = "fsspec" },
+    { name = "typing-extensions" },
+    { name = "zipp" },
 ]
 
 [[package]]

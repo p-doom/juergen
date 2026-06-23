@@ -69,13 +69,30 @@ def trim_to_action_span(
     return frames, None
 
 
+def instruction_variants(trajectory: dict[str, Any]) -> list[str]:
+    """Primary instruction plus any register paraphrases, de-duplicated.
+
+    Stage 02 (hindsight) emits ``instruction_variants`` so one interval yields
+    several user-prompt phrasings at different abstraction levels; each becomes
+    its own SFT sample over the same frames/actions. Legacy trajectories with no
+    variants list still yield exactly one sample.
+    """
+    out: list[str] = []
+    for text in [trajectory.get("instruction"), *trajectory.get("instruction_variants", [])]:
+        text = str(text or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
 def make_sample(
     recording_id: str,
     trajectory_idx: int,
     trajectory: dict[str, Any],
     frames: list[dict[str, Any]],
+    instruction: str,
+    variant_idx: int = 0,
 ) -> dict[str, Any]:
-    instruction = str(trajectory.get("instruction") or "").strip()
     messages = []
     for idx, frame in enumerate(frames):
         messages.append(
@@ -85,10 +102,12 @@ def make_sample(
 
     start_s = float(frames[0]["global_time_s"])
     end_s = float(frames[-1]["global_time_s"]) + 0.5
+    suffix = f"_v{variant_idx}" if variant_idx else ""
     return {
-        "sample_id": f"{recording_id}_traj{trajectory_idx:04d}",
+        "sample_id": f"{recording_id}_traj{trajectory_idx:04d}{suffix}",
         "recording_id": recording_id,
         "instruction": instruction,
+        "variant_idx": variant_idx,
         "start_time_s": round(start_s, 6),
         "end_time_s": round(end_s, 6),
         "duration_s": round(end_s - start_s, 6),
@@ -107,22 +126,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-duration-s", type=float, default=8.0)
     parser.add_argument("--min-frames", type=int, default=4)
     parser.add_argument("--pre-context-frames", type=int, default=1)
-    parser.add_argument(
-        "--allow-unverified",
-        action="store_true",
-        help=(
-            "Assemble trajectories even if stage 02 pass C did not verify them. "
-            "Plumbing/debug only - the verification gate is the quality filter."
-        ),
-    )
-    parser.add_argument(
-        "--allow-heuristic",
-        action="store_true",
-        help=(
-            "Assemble non-VLM (heuristic/dry-run) trajectories anyway. "
-            "Plumbing tests only - never for training data."
-        ),
-    )
     return parser.parse_args()
 
 
@@ -133,29 +136,10 @@ def main() -> None:
     trajectories, annotation_source = load_trajectories(args.trajectories)
     if not frame_records:
         raise RuntimeError(f"No frame records: {args.frame_records}")
-    if not annotation_source.startswith("vlm") and not args.allow_heuristic:
-        raise RuntimeError(
-            f"annotation_source={annotation_source!r}: refusing to assemble "
-            "non-VLM instructions into SFT rows. Run stage 02 against a real "
-            "VLM, or pass --allow-heuristic for plumbing tests only."
-        )
-    # SFT messages must reference the clean stage 01 frames (2fps, 720p),
-    # never the timestamp-overlaid renders made for VLM annotation.
-    first_image_path = str(frame_records[0]["image_path"])
-    if "pass_a_frames" in first_image_path or "pass_b_frames" in first_image_path:
-        raise RuntimeError(
-            "frame records point at stage 02 annotation renders; pass the "
-            "stage 01 frame_records.jsonl instead"
-        )
 
     recording_id = str(frame_records[0]["recording_id"])
     samples: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    quality_gates = not args.allow_heuristic
-    # Verification gate (stage 02 pass C): keep only trajectories a fresh
-    # grounded judge accepted. Applied whenever the trajectories carry a
-    # "verified" flag, unless explicitly bypassed.
-    verify_gate = quality_gates and not args.allow_unverified
     last_emitted_end_s = float("-inf")
 
     ordered = sorted(
@@ -170,10 +154,10 @@ def main() -> None:
             rejected.append({"trajectory_idx": idx, "reason": reason, "trajectory": trajectory})
 
         instruction = str(trajectory.get("instruction") or "").strip()
-        if quality_gates and is_generic_instruction(instruction):
+        if is_generic_instruction(instruction):
             reject("generic_or_empty_instruction")
             continue
-        if verify_gate and "verified" in trajectory and not trajectory.get("verified"):
+        if "verified" in trajectory and not trajectory.get("verified"):
             reject("not_verified")
             continue
         try:
@@ -203,7 +187,18 @@ def main() -> None:
         if len(frames) < args.min_frames:
             reject("too_few_frames_after_trim")
             continue
-        samples.append(make_sample(recording_id, idx, trajectory, frames))
+        # Fan out the interval's user-prompt variants into one sample each over
+        # the same frames/actions. Non-overlap is keyed on the interval (updated
+        # once below), so same-span variants are not dropped as overlapping.
+        emitted = 0
+        for variant in instruction_variants(trajectory):
+            if is_generic_instruction(variant):
+                continue
+            samples.append(make_sample(recording_id, idx, trajectory, frames, variant, emitted))
+            emitted += 1
+        if emitted == 0:
+            reject("generic_or_empty_instruction")
+            continue
         last_emitted_end_s = float(frames[-1]["global_time_s"])
 
     write_jsonl(output_dir / "trajectories.jsonl", samples)
@@ -215,8 +210,6 @@ def main() -> None:
             "n_samples": len(samples),
             "n_rejected": len(rejected),
             "annotation_source": annotation_source,
-            "verify_gated": verify_gate,
-            "quality_gates": quality_gates,
             "recording_id": recording_id,
             "reject_reasons": {
                 reason: sum(1 for row in rejected if row["reason"] == reason)

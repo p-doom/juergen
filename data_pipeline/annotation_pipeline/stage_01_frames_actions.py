@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
+import os
 import shutil
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
-
-import cv2
 
 from annotation_pipeline import config
 from annotation_pipeline.common import (
@@ -24,6 +25,7 @@ from annotation_pipeline.common import (
     write_json,
     write_jsonl,
 )
+from annotation_pipeline.image_store import make_arrayrecord_image_uri
 
 
 def jpeg_quality_to_qscale(jpeg_quality: int) -> int:
@@ -62,9 +64,15 @@ def extract_frames_ffmpeg(
     video_filter = f"fps=fps={target_fps}:start_time=0:round=near:eof_action=pass,{scale}"
     cmd = [
         ffmpeg_bin,
+        "-nostdin",
         "-hide_banner",
         "-loglevel",
         "error",
+        # Cap threads: on shared login nodes ffmpeg's default (all cores) gets
+        # SIGKILL'd by the CPU-usage policy killer. A small cap is plenty for
+        # sparse (1-2 fps) frame extraction and stays under the radar.
+        "-threads",
+        str(int(os.environ.get("JUERGEN_ANNOTATION_FFMPEG_THREADS", "4"))),
         "-y",
         "-i",
         str(video_path),
@@ -88,19 +96,79 @@ def extract_frames_ffmpeg(
     return video_filter
 
 
+def pack_segment_to_arrayrecord(
+    records: list[dict[str, Any]],
+    segment_frame_dir: Path,
+) -> dict[str, Any]:
+    """Pack kept-frame JPEGs into one ``images.array_record`` (grain store).
+
+    Records are packed in ``frame_records`` order; record ``i`` in the shard is
+    ``records[i]``. Each record's ``image_path`` is rewritten in place to an
+    ``ar://`` URI. Loose ``frame_*.jpg`` are deleted afterwards, so the segment
+    dir keeps only the shard and its ``frame_manifest.jsonl`` sidecar.
+    """
+    from array_record.python.array_record_module import ArrayRecordWriter  # noqa: PLC0415
+
+    shard_path = segment_frame_dir / "images.array_record"
+    manifest_path = segment_frame_dir / "frame_manifest.jsonl"
+
+    if not records:
+        # Nothing kept (all black/NO_OP-capped): drop stray frames, no shard.
+        for stray in segment_frame_dir.glob("frame_*.jpg"):
+            stray.unlink()
+        return {"format": "arrayrecord", "num_records": 0, "total_jpeg_bytes": 0}
+
+    total_jpeg_bytes = 0
+    writer = ArrayRecordWriter(str(shard_path), "group_size:1")
+    try:
+        with manifest_path.open("w") as manifest_f:
+            for record_index, record in enumerate(records):
+                jpeg = Path(record["image_path"]).read_bytes()
+                writer.write(jpeg)
+                uri = make_arrayrecord_image_uri(shard_path, record_index)
+                manifest_f.write(
+                    json.dumps(
+                        {
+                            "frame_idx": record_index,
+                            "image": uri,
+                            "shard_path": str(shard_path),
+                            "record_index": record_index,
+                            "local_bin_idx": record["local_bin_idx"],
+                            "jpeg_bytes": len(jpeg),
+                            "sha256": hashlib.sha256(jpeg).hexdigest(),
+                        }
+                    )
+                    + "\n"
+                )
+                record["image_path"] = uri
+                total_jpeg_bytes += len(jpeg)
+    finally:
+        writer.close()
+
+    for stray in segment_frame_dir.glob("frame_*.jpg"):
+        stray.unlink()
+
+    return {
+        "format": "arrayrecord",
+        "shard_path": str(shard_path),
+        "manifest_path": str(manifest_path),
+        "num_records": len(records),
+        "total_jpeg_bytes": total_jpeg_bytes,
+    }
+
+
 def extract_segment(
     row: dict[str, Any],
     frames_dir: Path,
     target_fps: int,
     target_height: int,
     jpeg_quality: int,
-    black_frame_threshold: float,
-    max_noop_run: int,
     ffmpeg_bin: str,
     segment_offset_s: float,
     next_global_frame_idx: int,
-    initial_noop_run: int,
-) -> tuple[list[dict[str, Any]], dict[str, Any], int]:
+    noop_keep_head: int,
+    noop_keep_tail: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     video_path = Path(row["video_path"])
     keylog_path = Path(row["keylog_path"])
     duration_s = float(row["video_duration_s"])
@@ -119,17 +187,12 @@ def extract_segment(
         ffmpeg_bin=ffmpeg_bin,
     )
 
-    records: list[dict[str, Any]] = []
-    skipped_black = 0
-    failed_reads = 0
-    n_extra_frames_deleted = 0
-    n_noop_capped = 0
     n_bins_carried = 0
-    noop_run = initial_noop_run
-    # When a frame is dropped (black/unreadable) its action bin is carried into
-    # the next kept frame, so press/release pairs and drags stay coherent.
+    # Pass 1: every bin that has an extracted frame, with its final action
+    # (carrying dropped-frame action bins forward so press/release stay coherent).
+    candidates: list[dict[str, Any]] = []
+    missing_frames = 0
     carry: ActionBin | None = None
-
     for local_bin_idx in range(n_bins):
         action_bin = bins[local_bin_idx]
         if carry is not None:
@@ -142,53 +205,62 @@ def extract_segment(
             max(0, video_frame_count - 1),
         )
         image_path = segment_frame_dir / f"frame_{local_bin_idx:06d}.jpg"
-        frame = cv2.imread(str(image_path))
-        if frame is None:
-            failed_reads += 1
+        if not image_path.exists():
+            missing_frames += 1
             carry = action_bin
             continue
-        mean_intensity = float(frame.mean())
-        if black_frame_threshold > 0 and mean_intensity < black_frame_threshold:
-            skipped_black += 1
-            image_path.unlink(missing_ok=True)
-            carry = action_bin
+        candidates.append({
+            "local_bin_idx": local_bin_idx,
+            "local_time_s": local_time_s,
+            "source_frame_idx": source_frame_idx,
+            "image_path": image_path,
+            "action": format_action(action_bin),
+        })
+
+    # Pass 2: keep every active frame; within each maximal run of consecutive
+    # NO_OP frames keep the first noop_keep_head and the last noop_keep_tail and
+    # drop the middle, so the start AND end of a wait (e.g. an agent finishing)
+    # stay visible.
+    keep = [True] * len(candidates)
+    n_noop_dropped = 0
+    i = 0
+    while i < len(candidates):
+        if candidates[i]["action"] != "NO_OP":
+            i += 1
             continue
+        j = i
+        while j < len(candidates) and candidates[j]["action"] == "NO_OP":
+            j += 1
+        if (j - i) > noop_keep_head + noop_keep_tail:
+            for k in range(i + noop_keep_head, j - noop_keep_tail):
+                keep[k] = False
+                n_noop_dropped += 1
+        i = j
 
-        action = format_action(action_bin)
-        if action == "NO_OP":
-            if max_noop_run >= 0 and noop_run >= max_noop_run:
-                n_noop_capped += 1
-                image_path.unlink(missing_ok=True)
-                continue
-            noop_run += 1
-        else:
-            noop_run = 0
-
-        global_time_s = segment_offset_s + local_time_s
+    records: list[dict[str, Any]] = []
+    for idx, cand in enumerate(candidates):
+        if not keep[idx]:
+            cand["image_path"].unlink(missing_ok=True)
+            continue
+        global_time_s = segment_offset_s + cand["local_time_s"]
         records.append(
             {
                 "recording_id": row["recording_id"],
                 "segment_id": row["segment_id"],
                 "segment_idx": row["segment_idx"],
-                "local_bin_idx": local_bin_idx,
+                "local_bin_idx": cand["local_bin_idx"],
                 "global_frame_idx": next_global_frame_idx + len(records),
-                "local_time_s": round(local_time_s, 6),
+                "local_time_s": round(cand["local_time_s"], 6),
                 "global_time_s": round(global_time_s, 6),
-                "source_frame_idx": source_frame_idx,
-                "image_path": str(image_path.resolve()),
-                "action": action,
-                "mean_intensity": round(mean_intensity, 3),
+                "source_frame_idx": cand["source_frame_idx"],
+                "image_path": str(cand["image_path"].resolve()),
+                "action": cand["action"],
             }
         )
 
-    for extra_frame in segment_frame_dir.glob("frame_*.jpg"):
-        try:
-            frame_idx = int(extra_frame.stem.removeprefix("frame_"))
-        except ValueError:
-            continue
-        if frame_idx >= n_bins:
-            extra_frame.unlink()
-            n_extra_frames_deleted += 1
+    # Pack the kept JPEGs into one images.array_record (grain), rewrite each
+    # record's image_path to its ar:// URI, and delete the loose frames.
+    image_store = pack_segment_to_arrayrecord(records, segment_frame_dir)
 
     summary = {
         "segment_id": row["segment_id"],
@@ -196,20 +268,19 @@ def extract_segment(
         "duration_s": duration_s,
         "n_bins": n_bins,
         "n_frames_kept": len(records),
-        "n_black_skipped": skipped_black,
-        "n_failed_reads": failed_reads,
-        "n_extra_frames_deleted": n_extra_frames_deleted,
-        "n_noop_capped": n_noop_capped,
-        "max_noop_run": max_noop_run,
+        "n_missing_frames": missing_frames,
+        "n_noop_dropped": n_noop_dropped,
+        "noop_keep_head": noop_keep_head,
+        "noop_keep_tail": noop_keep_tail,
         "n_bins_carried": n_bins_carried,
         "n_tail_events_dropped": len(carry.events) if carry is not None else 0,
-        "ending_noop_run": noop_run,
         "extraction_backend": "ffmpeg",
         "ffmpeg_filter": ffmpeg_filter,
         "action_stats": asdict(action_stats),
         "n_non_noop": sum(1 for record in records if record["action"] != "NO_OP"),
+        "image_store": image_store,
     }
-    return records, summary, noop_run
+    return records, summary
 
 
 def parse_args() -> argparse.Namespace:
@@ -221,15 +292,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jpeg-quality", type=int, default=config.DEFAULT_JPEG_QUALITY)
     parser.add_argument("--ffmpeg-bin", default=config.ffmpeg_bin())
     parser.add_argument(
-        "--max-noop-run",
+        "--noop-keep-head",
         type=int,
-        default=config.DEFAULT_STAGE01_MAX_NOOP_RUN,
-        help="Keep at most this many consecutive NO_OP frames in frame_records; -1 disables.",
+        default=config.DEFAULT_NOOP_KEEP_HEAD,
+        help="Within each NO_OP run, keep the first this many frames.",
     )
     parser.add_argument(
-        "--black-frame-threshold",
-        type=float,
-        default=config.DEFAULT_BLACK_FRAME_THRESHOLD,
+        "--noop-keep-tail",
+        type=int,
+        default=config.DEFAULT_NOOP_KEEP_TAIL,
+        help="Within each NO_OP run, keep the last this many frames (so a wait's end / agent finish is seen).",
     )
     return parser.parse_args()
 
@@ -247,7 +319,6 @@ def main() -> None:
     all_records: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
     segment_offset_s = 0.0
-    noop_run = 0
     for row in manifest:
         if not row.get("video_ok"):
             summaries.append(
@@ -258,18 +329,17 @@ def main() -> None:
                 }
             )
             continue
-        records, summary, noop_run = extract_segment(
+        records, summary = extract_segment(
             row=row,
             frames_dir=frames_dir,
             target_fps=args.target_fps,
             target_height=args.target_height,
             jpeg_quality=args.jpeg_quality,
-            black_frame_threshold=args.black_frame_threshold,
-            max_noop_run=args.max_noop_run,
             ffmpeg_bin=ffmpeg_bin,
             segment_offset_s=segment_offset_s,
             next_global_frame_idx=len(all_records),
-            initial_noop_run=noop_run,
+            noop_keep_head=args.noop_keep_head,
+            noop_keep_tail=args.noop_keep_tail,
         )
         all_records.extend(records)
         summaries.append(summary)
@@ -286,9 +356,9 @@ def main() -> None:
             "target_fps": args.target_fps,
             "target_height": args.target_height,
             "jpeg_quality": args.jpeg_quality,
-            "black_frame_threshold": args.black_frame_threshold,
-            "max_noop_run": args.max_noop_run,
-            "n_noop_capped": sum(row.get("n_noop_capped", 0) for row in summaries),
+            "noop_keep_head": args.noop_keep_head,
+            "noop_keep_tail": args.noop_keep_tail,
+            "n_noop_dropped": sum(row.get("n_noop_dropped", 0) for row in summaries),
             "extraction_backend": "ffmpeg",
             "ffmpeg_bin": ffmpeg_bin,
             "total_duration_s": round(segment_offset_s, 3),

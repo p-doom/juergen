@@ -12,6 +12,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from annotation_pipeline.image_store import is_arrayrecord_image_uri
+
 
 VALID_IMAGE_PATH_MODES = ("absolute", "preserve")
 VALID_SPLIT_GROUPS = ("recording_id", "clip_id")
@@ -188,12 +190,18 @@ def transform_messages(
                     if not image_value:
                         raise ValueError("image block missing image/path/url")
                     raw_image = str(image_value)
-                    src = resolve_image_path(raw_image, run_dir=run_dir, image_base=image_base)
-                    image_path = render_image_path(
-                        raw_image,
-                        src,
-                        image_path_mode=image_path_mode,
-                    )
+                    if is_arrayrecord_image_uri(raw_image):
+                        # Grain store: ar:///abs/path/images.array_record#idx is
+                        # already portable/absolute. Pass through verbatim; do
+                        # not run filesystem resolution or path rewriting.
+                        image_path = raw_image
+                    else:
+                        src = resolve_image_path(raw_image, run_dir=run_dir, image_base=image_base)
+                        image_path = render_image_path(
+                            raw_image,
+                            src,
+                            image_path_mode=image_path_mode,
+                        )
                     image_blocks.append({"type": "image", "image": image_path})
                     image_paths.append(image_path)
                 elif block_type == "text":

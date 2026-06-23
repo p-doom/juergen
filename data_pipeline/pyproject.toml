@@ -24,9 +24,11 @@ dependencies = [
     "msgpack>=1.0",                # stage A: parse per-recording keylog msgpacks
     "Pillow>=11.3.0",              # stage A JPEG encode + prep_finevision image materialization
     "numpy>=2.0",                  # stage A frame-array math
+    "array-record>=0.5.1",         # ArrayRecord (grain) JPEG image store: stage_01 pack + migration + ar:// decode
     # Floor at 0.5.1 (not 0.6.0) so sglang's diffusion extra — which pins ==0.5.1 — can co-resolve in the workspace lock. Only a PATH fallback; minor version doesn't matter.
     "imageio-ffmpeg>=0.5.1",
-    "openai>=2.26.0",              # annotation_pipeline stage 02 client for local sglang OpenAI-compatible API
+    "openai>=2.26.0",              # annotation_pipeline stage 02 labeler (Azure/OpenAI-compatible) + local Qwen
+    "PyYAML>=6.0",                 # annotation_pipeline prompts.yaml loader (prompts.py)
     "opencv-python-headless>=4.10.0.84",  # annotation_pipeline video probing/frame rendering; matches sglang workspace pin
     "datasets>=3.0",               # prep_{finevision,smoltalk2,tulu3_persona_if} + preprocess_smoltalk_prompts HF loaders
     # tokenizer for prompt-length filtering in preprocess_smoltalk_prompts.py

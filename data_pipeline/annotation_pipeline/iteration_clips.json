@@ -1,0 +1,57 @@
+{
+  "_comment": "Fixed curated iteration set for the redesigned annotation pipeline. ~10 diverse segments from crowd-cast-2026-05-19-raw-segments-intrasegment-v0 spanning app x activity x duration x user. We iterate the new stage 02 on these until annotations pass the rubric (see judge.py). Unit = segment_id (the new dataset's unit). run_iteration.py filters the dataset manifest for these segment_ids to build a stage-00/01 manifest.",
+  "dataset_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/datasets/franz.srambical/crowd-cast-2026-05-19-raw-segments-intrasegment-v0",
+  "manifest": "manifest.selected_segments.jsonl",
+  "clips": {
+    "kitty_term_23d58fa5_s3": {
+      "segment_id": "23d58fa5-543b-4d0d-a73e-592d6bcb6848_seg0003",
+      "app": "kitty terminal", "activity": "high", "duration_s": 300, "keypresses": 998,
+      "note": "Terminal-heavy typing; tests command reconstruction from keylog."
+    },
+    "vscode_2d464ee8_s20": {
+      "segment_id": "2d464ee8-1f3c-497d-91ec-89cd0bd2c1a5_seg0020",
+      "app": "VS Code", "activity": "high", "duration_s": 671, "keypresses": 788,
+      "note": "Long code-editing session; multiple intra-segment goals expected."
+    },
+    "cursor_c2b20b28_s1": {
+      "segment_id": "c2b20b28-a91b-4418-a663-07348b926c2e_seg0001",
+      "app": "Cursor", "activity": "high", "duration_s": 65, "keypresses": 136,
+      "note": "Short AI-IDE session (bright capture); agent prompt + edit. Replaces dead black-screen cursor_cb9c0487."
+    },
+    "claude_desktop_656aa6e3_s2": {
+      "segment_id": "656aa6e3-acfd-4e07-8d42-891d1a147913_seg0002",
+      "app": "Claude desktop", "activity": "medium", "duration_s": 593, "keypresses": 597,
+      "note": "Chat-with-AI; literal typed prompts are the intent (hindsight gold case)."
+    },
+    "safari_bf75aa71_s1": {
+      "segment_id": "bf75aa71-485c-4dc0-af61-4d60ba359074_seg0001",
+      "app": "Safari", "activity": "high", "duration_s": 103, "keypresses": 267,
+      "note": "Short browser task; quick iteration + web search/form typing."
+    },
+    "ghostty_term_402fe670_s38": {
+      "segment_id": "402fe670-b489-4659-88ff-663f941e8f2c_seg0038",
+      "app": "ghostty terminal", "activity": "medium", "duration_s": 842, "keypresses": 831,
+      "note": "Longest clip; terminal-heavy; stresses boundary segmentation."
+    },
+    "zed_c1259897_s6": {
+      "segment_id": "c1259897-c841-414b-a51e-dbf06d19f422_seg0006",
+      "app": "Zed editor", "activity": "high", "duration_s": 300, "keypresses": 322,
+      "note": "Different editor; coding."
+    },
+    "firefox_47063df0_s4": {
+      "segment_id": "47063df0-8925-41ae-aca9-9db7232426b2_seg0004",
+      "app": "Firefox", "activity": "high", "duration_s": 300, "keypresses": 283,
+      "note": "Browsing/navigation; mix of clicks and typing."
+    },
+    "firefox2_b5b11506_s5": {
+      "segment_id": "b5b11506-2dba-4d99-abd9-bf980a778ae7_seg0005",
+      "app": "Firefox", "activity": "medium", "duration_s": 299, "keypresses": 290,
+      "note": "Browser session (bright capture); navigation + typing. Replaces dead black-screen preview_pdf_a14ba340."
+    },
+    "ghostty2_336460f3_s23": {
+      "segment_id": "336460f3-6236-4083-b00b-15e8c175a75e_seg0023",
+      "app": "ghostty terminal", "activity": "high", "duration_s": 300, "keypresses": 360,
+      "note": "Bright terminal session, high activity spread. Replaces dead black-screen codex_6878cdfa."
+    }
+  }
+}

@@ -11,6 +11,12 @@ import numpy as np
 from PIL import Image
 from transformers import BaseImageProcessor, PreTrainedTokenizer
 
+# Local extension (not in omegalax): resolve ar:// ArrayRecord image URIs to PIL
+# images so the optional stage-05 inspector can read grain-store datasets. The
+# decoded image is byte-identical to opening the underlying JPEG, so token/bucket
+# boundaries are unchanged.
+from annotation_pipeline.image_store import is_arrayrecord_image_uri, open_image_pil
+
 
 def build_chatml_text(
     messages: list[dict[str, Any]],
@@ -58,7 +64,12 @@ def extract_images(messages: list[dict[str, Any]]) -> list[Image.Image]:
                 continue
             if "image" in block:
                 img = block["image"]
-                images.append(img if isinstance(img, Image.Image) else Image.open(img))
+                if isinstance(img, Image.Image):
+                    images.append(img)
+                elif is_arrayrecord_image_uri(img):
+                    images.append(open_image_pil(img))
+                else:
+                    images.append(Image.open(img))
             elif "url" in block:
                 images.append(Image.open(block["url"]))
     return images
