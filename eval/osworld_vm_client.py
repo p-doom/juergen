@@ -152,6 +152,45 @@ class OSWorldClient:
         r.raise_for_status()
         return Image.open(io.BytesIO(r.content)).convert("RGB")
 
+    def screenshot_settled(
+        self,
+        *,
+        min_delay_s: float = 0.0,
+        stability_timeout_s: float = 0.0,
+        poll_s: float = 0.1,
+    ) -> Image.Image:
+        """Capture a screenshot after the desktop has stopped repainting.
+
+        ``dispatch_action`` returns as soon as the pyautogui events are *sent*;
+        the app may not have handled them and repainted the framebuffer yet, so
+        a screenshot taken immediately can miss the action's visible effect. The
+        model then sees an unchanged frame and re-emits the same action. This
+        method waits for the UI to settle before grabbing the frame:
+
+        - Sleep ``min_delay_s`` first (a fixed post-action settle).
+        - If ``stability_timeout_s > 0``, poll the framebuffer every ``poll_s``
+          until two consecutive captures are pixel-identical (repainting has
+          stopped) or the timeout elapses; return the last frame.
+
+        With both delays zero this is exactly ``screenshot()``. Note: a
+        constantly-animating element (blinking caret, clock) can prevent
+        stability, in which case it waits the full ``stability_timeout_s``.
+        """
+        if min_delay_s > 0:
+            time.sleep(min_delay_s)
+        if stability_timeout_s <= 0:
+            return self.screenshot()
+
+        prev = self.screenshot()
+        deadline = time.time() + stability_timeout_s
+        while time.time() < deadline:
+            time.sleep(poll_s)
+            cur = self.screenshot()
+            if cur.tobytes() == prev.tobytes():
+                return cur
+            prev = cur
+        return prev
+
     def cursor_position(self) -> tuple[int, int]:
         r = self._sess.get(f"{self.base_url}/cursor_position", timeout=self.timeout)
         r.raise_for_status()

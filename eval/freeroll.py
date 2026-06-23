@@ -104,6 +104,9 @@ def _run_rollout(
     save_frames: bool,
     stop_on_click: bool,
     desktop_setup: str,
+    settle_s: float,
+    settle_stable_timeout_s: float,
+    settle_poll_s: float,
 ) -> dict:
     steps_dir = output_dir / "steps"
     if save_frames:
@@ -211,7 +214,11 @@ def _run_rollout(
                 _LOGGER.warning("step %d: parse error %s on %r", step, e, action_text)
 
             try:
-                frame = client.screenshot()
+                frame = client.screenshot_settled(
+                    min_delay_s=settle_s,
+                    stability_timeout_s=settle_stable_timeout_s,
+                    poll_s=settle_poll_s,
+                )
             except Exception as e:
                 _LOGGER.error("step %d: screenshot failed: %s", step, e)
                 stop_reason = "screenshot_error"
@@ -273,6 +280,9 @@ def _run_rollout(
         "max_tokens": max_tokens,
         "temperature": temperature,
         "desktop_setup": desktop_setup,
+        "settle_s": settle_s,
+        "settle_stable_timeout_s": settle_stable_timeout_s,
+        "settle_poll_s": settle_poll_s,
         "traj_path": str(traj_path),
         "gif_path": str(gif_path),
     }
@@ -358,6 +368,23 @@ def main() -> int:
     p.add_argument("--n_history_frames", type=int, default=1)
     p.add_argument("--no_frames", action="store_true")
     p.add_argument("--stop_on_click", action="store_true")
+    p.add_argument(
+        "--settle_s", type=float, default=0.0,
+        help="Fixed delay (seconds) after dispatching an action before the "
+             "post-action screenshot, giving the UI time to repaint. 0 keeps "
+             "the legacy zero-wait behaviour.",
+    )
+    p.add_argument(
+        "--settle_stable_timeout_s", type=float, default=0.0,
+        help="If >0, after --settle_s poll the framebuffer (every "
+             "--settle_poll_s) until two consecutive frames are identical or "
+             "this timeout elapses, then use the last frame. Adapts the wait "
+             "to how long the UI actually takes to settle.",
+    )
+    p.add_argument(
+        "--settle_poll_s", type=float, default=0.1,
+        help="Poll interval (seconds) for --settle_stable_timeout_s.",
+    )
     p.add_argument(
         "--desktop_setup",
         choices=("none", "terminal"),
@@ -480,6 +507,9 @@ def main() -> int:
                 save_frames=not args.no_frames,
                 stop_on_click=args.stop_on_click,
                 desktop_setup=args.desktop_setup,
+                settle_s=args.settle_s,
+                settle_stable_timeout_s=args.settle_stable_timeout_s,
+                settle_poll_s=args.settle_poll_s,
             )
             with (run_dir / "result.json").open("w") as f:
                 json.dump(result, f, indent=2)
