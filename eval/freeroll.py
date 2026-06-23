@@ -35,7 +35,7 @@ _JUERGEN_EVAL = str(Path(__file__).resolve().parent)
 if _JUERGEN_EVAL not in sys.path:
     sys.path.insert(0, _JUERGEN_EVAL)
 
-from action_parser import parse_action_tolerant  # noqa: E402
+from action_parser import parse_action_tolerant, parse_computer_use_tool_call  # noqa: E402
 from osworld_vm_client import OSWorldClient  # noqa: E402
 from osworld_system_prompts import SYSTEM_PROMPTS  # noqa: E402
 from osworld_runtime import (  # noqa: E402
@@ -66,6 +66,36 @@ class StepLog:
 
 def _is_terminate(text: str) -> bool:
     return text.strip().split("\n", 1)[0].strip() == _TERMINATE
+
+
+def _computer_use_terminate_status(text: str) -> str | None:
+    """Return the computer_use terminate status, or None for non-terminate."""
+    try:
+        call = parse_computer_use_tool_call(text)
+    except (TypeError, ValueError):
+        return None
+    if str(call.arguments.get("action", "")).strip().lower() != "terminate":
+        return None
+    return str(call.arguments.get("status", "success")).strip().lower() or "success"
+
+
+def _is_left_click(parsed: dict | None) -> bool:
+    if not parsed:
+        return False
+    computer_use_action = str(
+        parsed.get("computer_use", {}).get("action", "")
+    ).strip().lower()
+    if computer_use_action in {
+        "left_click",
+        "double_click",
+        "triple_click",
+        "left_click_drag",
+    }:
+        return True
+    return any(
+        e["what"] == "LMB" and e["kind"] == "press"
+        for e in parsed.get("events", [])
+    )
 
 
 def _prepare_desktop(client: OSWorldClient, setup: str) -> None:
@@ -104,6 +134,9 @@ def _run_rollout(
     save_frames: bool,
     stop_on_click: bool,
     desktop_setup: str,
+    settle_s: float,
+    settle_stable_timeout_s: float,
+    settle_poll_s: float,
 ) -> dict:
     steps_dir = output_dir / "steps"
     if save_frames:
@@ -150,9 +183,13 @@ def _run_rollout(
                 stop_reason = "model_error"
                 break
 
-            if _is_terminate(action_text):
-                stop_reason = "terminate"
-                _LOGGER.info("step %d: model emitted TERMINATE", step)
+            computer_use_status = _computer_use_terminate_status(action_text)
+            if _is_terminate(action_text) or computer_use_status is not None:
+                if computer_use_status and computer_use_status != "success":
+                    stop_reason = f"terminate_{computer_use_status}"
+                else:
+                    stop_reason = "terminate"
+                _LOGGER.info("step %d: model emitted terminate", step)
                 try:
                     cursor = client.cursor_position()
                     frame = client.screenshot()
@@ -171,7 +208,10 @@ def _run_rollout(
                 step_log = StepLog(
                     step=step,
                     action_text=action_text,
-                    parsed={"terminate": True},
+                    parsed={
+                        "terminate": True,
+                        "computer_use_status": computer_use_status,
+                    },
                     cursor_before=cursor,
                     cursor_after=cursor,
                     intended_target=cursor,
@@ -191,27 +231,50 @@ def _run_rollout(
             parsed = None
             sr_dict: dict | None = None
             try:
-                action = parse_action_tolerant(action_text)
-                parsed = {
-                    "dx": action.dx, "dy": action.dy,
-                    "scroll": action.scroll, "no_op": action.no_op,
-                    "events": [{"kind": e.kind, "what": e.what, "mouse_button": e.mouse_button}
-                               for e in action.events],
-                }
-                sr = client.dispatch_action(action)
+                try:
+                    computer_call = parse_computer_use_tool_call(action_text)
+                except (TypeError, ValueError):
+                    computer_call = None
+                if computer_call is not None:
+                    parsed = {
+                        "computer_use": computer_call.arguments,
+                        "no_op": str(
+                            computer_call.arguments.get("action", "")
+                        ).strip().lower() == "answer",
+                    }
+                    sr = client.dispatch_computer_use(computer_call.arguments)
+                else:
+                    action = parse_action_tolerant(action_text)
+                    parsed = {
+                        "dx": action.dx, "dy": action.dy,
+                        "scroll": action.scroll, "no_op": action.no_op,
+                        "events": [
+                            {
+                                "kind": e.kind,
+                                "what": e.what,
+                                "mouse_button": e.mouse_button,
+                            }
+                            for e in action.events
+                        ],
+                    }
+                    sr = client.dispatch_action(action)
                 sr_dict = {
                     "cursor_before": list(sr.cursor_before),
                     "cursor_after": list(sr.cursor_after),
                     "intended_target": list(sr.intended_target),
                     "events_dispatched": sr.events_dispatched,
                 }
-            except ValueError as e:
+            except (TypeError, ValueError) as e:
                 parse_err = str(e)
                 parse_errors += 1
                 _LOGGER.warning("step %d: parse error %s on %r", step, e, action_text)
 
             try:
-                frame = client.screenshot()
+                frame = client.screenshot_settled(
+                    min_delay_s=settle_s,
+                    stability_timeout_s=settle_stable_timeout_s,
+                    poll_s=settle_poll_s,
+                )
             except Exception as e:
                 _LOGGER.error("step %d: screenshot failed: %s", step, e)
                 stop_reason = "screenshot_error"
@@ -239,9 +302,7 @@ def _run_rollout(
             }) + "\n")
             traj_f.flush()
 
-            if (stop_on_click and parsed and not parsed["no_op"]
-                    and any(e["what"] == "LMB" and e["kind"] == "press"
-                            for e in parsed["events"])):
+            if stop_on_click and parsed and not parsed["no_op"] and _is_left_click(parsed):
                 stop_reason = "click"
                 _LOGGER.info("step %d: model clicked, stopping", step)
                 break
@@ -273,6 +334,9 @@ def _run_rollout(
         "max_tokens": max_tokens,
         "temperature": temperature,
         "desktop_setup": desktop_setup,
+        "settle_s": settle_s,
+        "settle_stable_timeout_s": settle_stable_timeout_s,
+        "settle_poll_s": settle_poll_s,
         "traj_path": str(traj_path),
         "gif_path": str(gif_path),
     }
@@ -358,6 +422,23 @@ def main() -> int:
     p.add_argument("--n_history_frames", type=int, default=1)
     p.add_argument("--no_frames", action="store_true")
     p.add_argument("--stop_on_click", action="store_true")
+    p.add_argument(
+        "--settle_s", type=float, default=0.0,
+        help="Fixed delay (seconds) after dispatching an action before the "
+             "post-action screenshot, giving the UI time to repaint. 0 keeps "
+             "the legacy zero-wait behaviour.",
+    )
+    p.add_argument(
+        "--settle_stable_timeout_s", type=float, default=0.0,
+        help="If >0, after --settle_s poll the framebuffer (every "
+             "--settle_poll_s) until two consecutive frames are identical or "
+             "this timeout elapses, then use the last frame. Adapts the wait "
+             "to how long the UI actually takes to settle.",
+    )
+    p.add_argument(
+        "--settle_poll_s", type=float, default=0.1,
+        help="Poll interval (seconds) for --settle_stable_timeout_s.",
+    )
     p.add_argument(
         "--desktop_setup",
         choices=("none", "terminal"),
@@ -480,6 +561,9 @@ def main() -> int:
                 save_frames=not args.no_frames,
                 stop_on_click=args.stop_on_click,
                 desktop_setup=args.desktop_setup,
+                settle_s=args.settle_s,
+                settle_stable_timeout_s=args.settle_stable_timeout_s,
+                settle_poll_s=args.settle_poll_s,
             )
             with (run_dir / "result.json").open("w") as f:
                 json.dump(result, f, indent=2)

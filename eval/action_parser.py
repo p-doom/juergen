@@ -18,6 +18,7 @@ count parse errors as a separate failure mode.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 
@@ -64,6 +65,14 @@ class Action:
     @property
     def has_left_click_release(self) -> bool:
         return any(e.kind == "release" and e.what == "LMB" for e in self.events)
+
+
+@dataclass(frozen=True)
+class ComputerUseCall:
+    """A parsed `<tool_call>` for the computer_use function."""
+
+    name: str
+    arguments: dict
 
 
 _EVENT_RE = re.compile(r"^([+-])([A-Za-z_][A-Za-z_0-9]*)$")
@@ -176,3 +185,67 @@ def parse_action_tolerant(text: str) -> Action:
     if not lines:
         raise ValueError(f"empty response in tolerant parse of {text!r}")
     return parse_action(lines[-1])
+
+
+_TOOL_CALL_RE = re.compile(
+    r"<tool_call>\s*(\{.*?\})\s*</tool_call>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _json_candidates(text: str) -> list[str]:
+    """Return possible JSON payloads for a computer-use tool call."""
+    candidates = [m.group(1).strip() for m in _TOOL_CALL_RE.finditer(text)]
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
+        stripped = re.sub(r"\s*```$", "", stripped)
+    if stripped.startswith("{"):
+        candidates.append(stripped)
+    return candidates
+
+
+def parse_computer_use_tool_call(text: str) -> ComputerUseCall:
+    """Parse the OpenAI computer-use example `<tool_call>` output.
+
+    Expected shape:
+        <tool_call>
+        {"name": "computer_use", "arguments": {"action": "..."}}
+        </tool_call>
+
+    The last valid `computer_use` call wins, matching the tolerant action
+    parser's behavior of preferring the model's final answer if it echoed
+    examples before the actual action.
+    """
+    if not isinstance(text, str):
+        raise TypeError(
+            f"parse_computer_use_tool_call expects str, got {type(text)!r}"
+        )
+    parsed: ComputerUseCall | None = None
+    errors: list[str] = []
+    for candidate in _json_candidates(text):
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError as e:
+            errors.append(str(e))
+            continue
+        if not isinstance(payload, dict):
+            errors.append("tool call payload is not an object")
+            continue
+        name = payload.get("name")
+        arguments = payload.get("arguments")
+        if name != "computer_use":
+            errors.append(f"unexpected tool call name: {name!r}")
+            continue
+        if not isinstance(arguments, dict):
+            errors.append("computer_use arguments is not an object")
+            continue
+        action = arguments.get("action")
+        if not isinstance(action, str) or not action:
+            errors.append("computer_use arguments.action missing or not a string")
+            continue
+        parsed = ComputerUseCall(name=name, arguments=arguments)
+    if parsed is None:
+        suffix = f": {'; '.join(errors)}" if errors else ""
+        raise ValueError(f"no valid computer_use tool call found{suffix}")
+    return parsed
