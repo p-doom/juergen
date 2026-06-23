@@ -4,9 +4,10 @@
 One thin client used by every annotation step, selected entirely by env so we
 can "iterate on frontier, distill to local later" without code changes:
 
-    LABELER_MODEL      (default: gpt-5.5-2026-04-24)
+    LABELER_MODEL      (default: Kimi-K2.6)
     LABELER_BASE_URL   (default: $AZURE_OPENAI_ENDPOINT  -> Azure /openai/v1/ surface)
     LABELER_API_KEY    (default: $AZURE_OPENAI_API_KEY)
+    LABELER_MAX_TOKENS (default: 32768; raise if a verbose model truncates)
 
 The Azure resource exposes the OpenAI-compatible ``/openai/v1/`` surface, so the
 stock ``openai`` client works with ``base_url`` set to the endpoint and the
@@ -30,9 +31,9 @@ from typing import Any
 
 from annotation_pipeline.common import extract_json_object, image_data_url
 
-# Azure deployment name on the mihir-4710 resource is "gpt-5.5" (the dated model
-# id from /models, gpt-5.5-2026-04-24, is NOT a deployment and 404s).
-DEFAULT_LABELER_MODEL = "gpt-5.5"
+# Served from the same Azure mihir-4710 /openai/v1/ surface; pass the model by
+# name. (Earlier iterations used the "gpt-5.5" deployment on this resource.)
+DEFAULT_LABELER_MODEL = "Kimi-K2.6"
 
 
 def labeler_model() -> str:
@@ -60,7 +61,10 @@ class LabelerConfig:
     # reasoning_effort to e.g. "low"/"medium"/"high" when supported.
     temperature: float | None = None
     reasoning_effort: str | None = os.environ.get("LABELER_REASONING_EFFORT") or None
-    max_completion_tokens: int = 8192
+    # Headroom for verbose "thinking" models (e.g. Kimi-K2.6 streams a long
+    # in-band chain-of-thought BEFORE the JSON); too small a cap truncates the
+    # response mid-reasoning so no JSON is ever emitted. Override via env.
+    max_completion_tokens: int = int(os.environ.get("LABELER_MAX_TOKENS") or 32768)
 
     @classmethod
     def from_env(cls, **overrides: Any) -> "LabelerConfig":

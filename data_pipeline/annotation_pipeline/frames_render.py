@@ -101,42 +101,20 @@ def evenly(pool: list[Any], k: int) -> list[Any]:
     return [pool[min(len(pool) - 1, int(i * step))] for i in range(k)]
 
 
-def segment_windows(t_min: float, t_max: float, window_s: float, overlap_s: float) -> list[tuple[float, float]]:
-    stride = max(1.0, window_s - overlap_s)
-    windows: list[tuple[float, float]] = []
-    start = t_min
-    while True:
-        end = start + window_s
-        windows.append((start, end))
-        if end >= t_max:
-            break
-        start += stride
-    return windows
-
-
-def sample_window_frames(
-    in_window: list[dict[str, Any]], start_s: float, end_s: float, max_images: int
+def records_in_index_span(
+    records: list[dict[str, Any]], start_idx: int, end_idx: int
 ) -> list[dict[str, Any]]:
-    """Sparse-sample a window: one frame per time slot, preferring active frames."""
-    if len(in_window) <= max_images:
-        return in_window
-    step = (end_s - start_s) / max_images
-    picked: list[dict[str, Any]] = []
-    used: set[int] = set()
-    for i in range(max_images):
-        lo = start_s + i * step
-        hi = lo + step
-        slot = [
-            j for j, r in enumerate(in_window)
-            if lo <= float(r["global_time_s"]) < hi and j not in used
-        ]
-        if not slot:
-            continue
-        active = [j for j in slot if in_window[j]["action"] != "NO_OP"]
-        j = active[len(active) // 2] if active else slot[len(slot) // 2]
-        picked.append(in_window[j])
-        used.add(j)
-    return picked
+    """Kept records whose ``global_frame_idx`` falls in the inclusive span.
+
+    Pass 1 returns activity boundaries as frame indices (stable across sampling/
+    NO_OP-filtering, unlike wall-clock time). This maps such a span back onto the
+    full kept-frame stream so Pass 2 sees every frame in it, not just the sparse
+    subset Pass 1 was shown. Returned in ``global_frame_idx`` order.
+    """
+    lo, hi = (start_idx, end_idx) if start_idx <= end_idx else (end_idx, start_idx)
+    out = [r for r in records if lo <= int(r["global_frame_idx"]) <= hi]
+    out.sort(key=lambda r: int(r["global_frame_idx"]))
+    return out
 
 
 def select_naming_frames(frames: list[dict[str, Any]], max_images: int) -> list[dict[str, Any]]:

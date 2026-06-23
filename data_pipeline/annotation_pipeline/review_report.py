@@ -52,37 +52,36 @@ def _thumbs(video_path: Path, start_s: float, end_s: float, n: int = 8, height: 
     return out
 
 
-def _checkbadge(checks: dict[str, Any]) -> str:
-    keys = ["achieved", "monotonic", "boundary_tight", "grounded",
-            "start_achievable", "user_prompt_register"]
+def _metabadge(traj: dict[str, Any]) -> str:
     bits = []
-    for k in keys:
-        v = checks.get(k)
-        cls = "ok" if v else "bad"
-        bits.append(f'<span class="badge {cls}">{k}={"T" if v else "F"}</span>')
+    for k in ("app", "user_state", "onset", "completion"):
+        v = str(traj.get(k, "") or "")
+        if v:
+            cls = "ok" if k == "user_state" and v == "actively_working" else ""
+            bits.append(f'<span class="badge {cls}">{k}={html.escape(v)}</span>')
     return " ".join(bits)
 
 
 def _traj_card(idx: int, traj: dict[str, Any], video_path: Path, transcript) -> str:
     s, e = traj["start_time_s"], traj["end_time_s"]
+    fi = traj.get("start_frame_idx"); fj = traj.get("end_frame_idx")
+    frag = f" · frames {fi}–{fj}" if fi is not None and fj is not None else ""
     thumbs = "".join(_thumbs(video_path, s, e))
     variants = "".join(f"<li>{html.escape(v)}</li>" for v in traj.get("instruction_variants", []))
     tslice = html.escape(transcript.render(s, e, max_text_chars=800))
-    checks = traj.get("verify_checks", {}) or {}
-    ev = html.escape(str(checks.get("evidence", "")))
-    rep = " <span class='badge rep'>repaired</span>" if traj.get("repaired") else ""
-    vclass = "verified" if traj.get("verified") else "unverified"
+    # Color cue only: actively-working spans carry the user's own actions; idle
+    # spans (agent/build running) usually drop out downstream as all-NO_OP.
+    vclass = "verified" if traj.get("user_state") == "actively_working" else "unverified"
     return f"""
     <div class="card {vclass}">
-      <div class="hd">#{idx} &nbsp; {s:.1f}–{e:.1f}s ({e-s:.0f}s){rep}
-        &nbsp; {_checkbadge(checks)}</div>
+      <div class="hd">#{idx} &nbsp; {s:.1f}–{e:.1f}s ({e-s:.0f}s){frag}
+        &nbsp; {_metabadge(traj)}</div>
       <div class="instr">{html.escape(traj.get('instruction',''))}</div>
       <ul class="variants">{variants}</ul>
       <div class="thumbs">{thumbs}</div>
-      <details><summary>achieved-state · grounding · verify-evidence</summary>
-        <div class="meta"><b>achieved:</b> {html.escape(str(traj.get('achieved_state','')))}<br>
-        <b>grounding:</b> {html.escape(str(traj.get('grounding','')))}<br>
-        <b>verify evidence:</b> {ev}</div></details>
+      <details><summary>pass-1 description · grounding</summary>
+        <div class="meta"><b>description:</b> {html.escape(str(traj.get('description','')))}<br>
+        <b>grounding:</b> {html.escape(str(traj.get('grounding','')))}</div></details>
       <details><summary>keylog transcript for this interval</summary>
         <pre class="tr">{tslice}</pre></details>
     </div>"""
@@ -104,9 +103,10 @@ def _clip_section(clip_dir: Path) -> str:
                     for i, t in enumerate(data.get("trajectories", [])))
     rej = stage02 / "rejected.jsonl"
     n_rej = len(read_jsonl(rej)) if rej.exists() else 0
-    stat = (f"intervals={summary['n_intervals']} · trajectories={summary['n_trajectories']} "
-            f"· verified={summary['n_verified']} · repaired={summary.get('n_repaired',0)} "
-            f"· rejected={n_rej} · variants_total={summary.get('n_variants_total','?')}")
+    stat = (f"activities={summary.get('n_pass1_activities','?')} · spans={summary.get('n_spans','?')} "
+            f"(active={summary.get('n_active_spans','?')}/idle={summary.get('n_idle_spans','?')}) "
+            f"· trajectories={summary.get('n_trajectories','?')} · rejected={n_rej} "
+            f"· variants_total={summary.get('n_variants_total','?')}")
     return f"""
     <section><h2>{clip_dir.name} <span class="sub">{row['segment_id']}</span></h2>
       <div class="stat">{stat}</div>{cards}</section>"""
@@ -142,7 +142,7 @@ def build(run_dir: Path) -> Path:
         f"<!doctype html><html><head><meta charset='utf-8'><style>{CSS}</style>"
         f"<title>annotation review · {run_dir.name}</title></head><body>"
         f"<header><b>Annotation review</b> — {run_dir.name} "
-        f"<span class='sub'>green=verified, red=rejected/unverified</span></header>"
+        f"<span class='sub'>green=actively_working span · amber=idle_waiting span (usually dropped downstream)</span></header>"
         f"{sections}</body></html>"
     )
     return out

@@ -1,7 +1,7 @@
 """Defaults for the annotation pipeline.
 
 The hindsight labeler is configured by env (see labeler.py): LABELER_MODEL
-(default gpt-5.5), LABELER_BASE_URL ($AZURE_OPENAI_ENDPOINT), LABELER_API_KEY
+(default Kimi-K2.6), LABELER_BASE_URL ($AZURE_OPENAI_ENDPOINT), LABELER_API_KEY
 ($AZURE_OPENAI_API_KEY), LABELER_REASONING_EFFORT.
 """
 

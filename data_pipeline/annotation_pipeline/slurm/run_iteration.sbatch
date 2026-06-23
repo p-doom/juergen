@@ -17,9 +17,13 @@
 # run dir are skipped. Usage:
 #   bash -lc 'cd /fast/.../data_pipeline && sbatch annotation_pipeline/slurm/run_iteration.sbatch clean'
 # (submit from a login shell so AZURE_OPENAI_* propagate via --export=ALL).
+# Extra args after the run name are forwarded to run_iteration, e.g.
+#   sbatch annotation_pipeline/slurm/run_iteration.sbatch kimi_2pass --clips safari_bf75aa71_s1
 
 set -eo pipefail
 RUN_NAME="${1:-clean}"
+shift || true
+EXTRA_ARGS=("$@")
 DATA_PIPELINE=/fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline
 export PYTHONPATH="$DATA_PIPELINE"
 # Absolute ffmpeg so we don't depend on the module system inside the job.
@@ -43,5 +47,7 @@ code=$(curl -s -o /dev/null -m 20 -w "%{http_code}" \
   "${AZURE_OPENAI_ENDPOINT%/}/models" -H "api-key: ${AZURE_OPENAI_API_KEY:-none}" 2>/dev/null || echo "000")
 echo "azure /models reachability: HTTP $code  (200 => stage 02 will work; 000 => no egress, extraction still runs & caches to grain)"
 
-python3 -m annotation_pipeline.run_iteration --run-name "$RUN_NAME" --reasoning-effort low
+# Reasoning effort: left at the model default (Kimi-K2.6 reasons in-band; Pass 1
+# is reasoning-heavy). Set LABELER_REASONING_EFFORT or pass --reasoning-effort to override.
+python3 -m annotation_pipeline.run_iteration --run-name "$RUN_NAME" "${EXTRA_ARGS[@]}"
 echo "DONE run=$RUN_NAME"

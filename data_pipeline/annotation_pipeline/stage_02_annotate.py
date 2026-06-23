@@ -1,58 +1,52 @@
 #!/usr/bin/env python3
-"""Stage 02 (redesign): hindsight instruction annotation.
+"""Stage 02 (redesign): two-pass hindsight instruction annotation.
 
-Replaces the old segment->name->verify two-pass. The objective is NOT to
-describe the recording but to **recover the prompt a user would have typed** to
-make a computer-use agent perform the observed trajectory.
+The objective is NOT to describe the recording but to **recover the prompt a
+user would have typed** to make a computer-use agent perform the observed
+trajectory. Two passes, anchored on FRAME INDEX (each frame is labelled
+``frame <N>``; after sampling/NO_OP-filtering wall-clock time is no longer exact,
+but the kept-frame ``global_frame_idx`` is stable):
 
-Four steps, per segment:
+  PASS 1  (describe + segment) -> runs once over the whole post-NO_OP-cut clip
+     (sub-sampled to an image budget). The VLM returns a list of ACTIVITIES,
+     each with one or more FRAME-INDEX spans (interleaved activity allowed), a
+     detailed *factual* description (no goal/intent), a per-span user_state
+     (actively_working / idle_waiting), and onset/completion flags. Output
+     ``activities.jsonl``.
 
-  A. PERCEIVE  -> a fine-grained textual *timeline* of what happens, built from
-     dense frames FUSED with the exact keylog transcript (typed text, chords,
-     clicks, app switches). Describing, not boundary-drawing.
-  B. SEGMENT   -> cut the timeline into goal-coherent intervals (one achievable
-     user intent each); tight starts; split non-monotonic "do->undo->redo" spans
-     keeping the final achieving sub-span; never bundle unrelated tasks.
-  C. LABEL     -> for each interval, write the achieved goal AS A USER PROMPT at
-     mixed intent level (+ a couple of varied-register paraphrases). Hindsight:
-     the goal is whatever end-state the trajectory reached, so the trajectory
-     satisfies it by construction.
-  D. VERIFY+REPAIR -> grounded check (achieved / monotonic / start-achievable /
-     reads-like-a-user-prompt). On failure, try to TRIM to the achieving
-     monotonic sub-interval and re-label once before discarding (recovers yield).
+  PASS 2  (hindsight instruction) -> for each activity, send the frames across
+     all its spans + the pass-1 description, and write the user-prompt
+     instruction (mixed intent level) + register variants. One trajectory is
+     emitted PER CONTIGUOUS SPAN, sharing the activity's instruction/variants;
+     idle-only spans fall out downstream (all-NO_OP trim in stage 03).
 
-Output ``trajectories_raw.json`` is schema-compatible with stage 03
-(``annotation_source`` starts with ``vlm``; each trajectory has
-``start_time_s/end_time_s/instruction/verified/verify_checks`` plus
-``instruction_variants``). Intermediate artifacts (timeline, intervals, the
-input transcript, raw responses) are written for the review report and free
-re-runs.
+There is intentionally no verify/repair pass here — this is the raw output of
+pass1+pass2; the independent judge (judge.py) is the quality measurement.
+
+Output ``trajectories_raw.json`` is schema-compatible with stage 03 (each
+trajectory has ``start_time_s/end_time_s/instruction/instruction_variants``;
+times are derived from the span's first/last frame ``global_time_s``). Frame
+indices (``start_frame_idx``/``end_frame_idx``) are carried for traceability.
+Intermediate artifacts (activities, input transcript, raw responses) are written
+for the inspector and free re-runs.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from typing import Any
 
 from annotation_pipeline import config, prompts
 from annotation_pipeline.common import ensure_dir, read_jsonl, write_json, write_jsonl
-from annotation_pipeline.keylog_transcript import Transcript, build_transcript
+from annotation_pipeline.keylog_transcript import build_transcript
 from annotation_pipeline.labeler import Labeler, LabelerConfig
-# Reuse the (pure) frame rendering + sampling utilities from the legacy module.
 from annotation_pipeline.frames_render import (
-    evenly,
     load_vlm_video_sources,
+    records_in_index_span,
     render_frames,
-    sample_window_frames,
-    segment_windows,
     select_naming_frames,
 )
-
-# ---------------------------------------------------------------------------
-# Shared framing
-# ---------------------------------------------------------------------------
 
 # All prompt text lives in prompts.yaml (loaded via annotation_pipeline.prompts).
 SYSTEM = prompts.get("system")
@@ -63,10 +57,28 @@ SYSTEM = prompts.get("system")
 # ---------------------------------------------------------------------------
 
 
+def pass1_prompt(transcript_text: str, n_frames: int) -> str:
+    return prompts.render("pass1", transcript_text=transcript_text, n_frames=n_frames)
+
+
+def pass2_prompt(spans_text: str, description: str, onset: str, completion: str,
+                 transcript_text: str, n_frames: int) -> str:
+    return prompts.render(
+        "pass2", spans_text=spans_text, description=description,
+        onset=onset, completion=completion,
+        transcript_text=transcript_text, n_frames=n_frames,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cache
+# ---------------------------------------------------------------------------
+
+
 def _cache(output_dir: Path, name: str) -> Path:
-    """Stable per-step cache path. Reused on re-runs so unchanged steps never
-    re-spend tokens. After editing a step's prompt, invalidate just that step
-    with --refresh (e.g. --refresh verify) to re-run only those calls."""
+    """Stable per-call cache path. Reused on re-runs so unchanged calls never
+    re-spend tokens. After editing a pass's prompt, invalidate just that pass
+    with --refresh (e.g. --refresh pass2)."""
     return output_dir / "cache" / f"{name}.txt"
 
 
@@ -82,68 +94,20 @@ def refresh_cache(output_dir: Path, prefixes: list[str]) -> int:
     return n
 
 
-def perceive_prompt(win_start: float, win_end: float, transcript_text: str, n_frames: int) -> str:
-    return prompts.render(
-        "perceive",
-        win_start=f"{win_start:.1f}", win_end=f"{win_end:.1f}",
-        transcript_text=transcript_text, n_frames=n_frames,
-    )
-
-
-def segment_prompt(timeline_text: str, transcript_text: str, span: tuple[float, float]) -> str:
-    return prompts.render(
-        "segment",
-        timeline_text=timeline_text, transcript_text=transcript_text,
-        span0=f"{span[0]:.1f}", span1=f"{span[1]:.1f}",
-    )
-
-
-def label_prompt(
-    start_s: float, end_s: float, achieved_state: str, transcript_text: str, n_frames: int
-) -> str:
-    return prompts.render(
-        "label",
-        start_s=f"{start_s:.1f}", end_s=f"{end_s:.1f}",
-        achieved_state=achieved_state, transcript_text=transcript_text, n_frames=n_frames,
-    )
-
-
-def verify_prompt(instruction: str, start_s: float, end_s: float, n_frames: int,
-                  transcript_text: str) -> str:
-    return prompts.render(
-        "verify",
-        instruction=repr(instruction), transcript_text=transcript_text,
-        start_s=f"{start_s:.1f}", end_s=f"{end_s:.1f}", n_frames=n_frames,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def frames_in_span(frame_records: list[dict[str, Any]], start_s: float, end_s: float) -> list[dict[str, Any]]:
-    return [r for r in frame_records if start_s - 0.5 <= float(r["global_time_s"]) <= end_s + 0.5]
-
-
-def select_verify_frames(frames: list[dict[str, Any]], max_images: int) -> list[dict[str, Any]]:
-    """Like select_naming_frames but tail-biased: completion/streamed results
-    land near the end, so spend ~60% of the budget on the last third."""
-    n = len(frames)
-    if n <= max_images:
-        return frames
-    picks: set[int] = {0, n - 1}
-    tail = list(range(max(1, (2 * n) // 3), n))
-    budget = max_images - len(picks)
-    picks |= set(evenly(tail, min(len(tail), max(1, int(budget * 0.6)))))
-    rest = [i for i in range(n) if i not in picks]
-    picks |= set(evenly(rest, max(0, max_images - len(picks))))
-    return [frames[i] for i in sorted(picks)]
+def frame_labels(records: list[dict[str, Any]]) -> list[str]:
+    """Per-frame text labels interleaved before each image: the stable kept-frame
+    index. Pass 1 reports boundaries in these units."""
+    return [f"frame {int(r['global_frame_idx'])}" for r in records]
 
 
 def render_for(records, out_dir, args, vlm_video_by_segment) -> list[Path]:
-    # Clean frames from the raw MP4; timestamps go to the model as interleaved
-    # text (frame_labels), not burned in.
+    # Clean frames from the raw MP4; the frame index goes to the model as
+    # interleaved text (frame_labels), not burned in.
     return render_frames(
         records, out_dir,
         jpeg_quality=args.jpeg_quality,
@@ -152,173 +116,133 @@ def render_for(records, out_dir, args, vlm_video_by_segment) -> list[Path]:
     )
 
 
-def frame_labels(records: list[dict[str, Any]]) -> list[str]:
-    """Per-frame text labels interleaved before each image in the VLM request."""
-    return [f"original_t={float(r['global_time_s']):.1f}s" for r in records]
-
-
-# Hard reject gate: a trajectory is kept only if ALL of these pass. NOTE
-# boundary_tight is deliberately NOT here — as a hard conjunctive boolean a
-# skeptical labeler marks it false on almost everything (it nuked yield 22->7
-# with no judge-agreement gain), so loose boundaries instead drive the
-# repair-trim (see needs_repair) and are fixed rather than discarded.
-VERIFY_AXES = ("achieved", "monotonic", "grounded",
-               "start_achievable", "user_prompt_register")
-
-
-def accept(checks: dict[str, Any]) -> bool:
-    return all(bool(checks.get(a)) for a in VERIFY_AXES)
-
-
-def needs_repair(checks: dict[str, Any]) -> bool:
-    """Trim+re-label when a hard axis fails OR the boundary is just loose."""
-    return (not accept(checks)) or (not checks.get("boundary_tight"))
+def _time_of_idx(by_idx: dict[int, dict[str, Any]], idx: int, default: float) -> float:
+    r = by_idx.get(int(idx))
+    return float(r["global_time_s"]) if r else default
 
 
 # ---------------------------------------------------------------------------
-# Steps
+# Pass 1 — describe + segment
 # ---------------------------------------------------------------------------
 
 
-def step_a_timeline(lab, args, frame_records, transcript, output_dir, vlm_video_by_segment):
-    t_min = float(frame_records[0]["global_time_s"])
-    t_max = float(frame_records[-1]["global_time_s"])
-    windows = segment_windows(t_min, t_max, args.perceive_window_s, args.perceive_overlap_s)
-    events: list[dict[str, Any]] = []
-    for wi, (ws, we) in enumerate(windows):
-        in_win = [r for r in frame_records if ws <= float(r["global_time_s"]) < we]
-        if not in_win:
-            continue
-        sampled = sample_window_frames(in_win, ws, we, args.perceive_image_max)
-        imgs = render_for(sampled, output_dir / "perceive_frames" / f"win_{wi:04d}", args, vlm_video_by_segment)
-        ttext = transcript.render(ws, we, max_text_chars=400)
-        prompt = perceive_prompt(ws, we, ttext, len(sampled))
-        parsed = lab.call_json(
-            SYSTEM, prompt, images=imgs, image_labels=frame_labels(sampled),
-            cache_path=_cache(output_dir, f"perceive_{wi:04d}"),
-        )
-        for e in parsed.get("events", []):
+def step_pass1(lab, args, frame_records, transcript, output_dir, vlm_video_by_segment):
+    idx_min = int(frame_records[0]["global_frame_idx"])
+    idx_max = int(frame_records[-1]["global_frame_idx"])
+
+    sampled = select_naming_frames(frame_records, args.pass1_image_max)
+    if len(sampled) < len(frame_records):
+        print(f"  pass1: sub-sampled {len(frame_records)} kept frames -> {len(sampled)} images "
+              f"(budget {args.pass1_image_max}); spans returned over the full index range "
+              f"{idx_min}..{idx_max}")
+    imgs = render_for(sampled, output_dir / "pass1_frames", args, vlm_video_by_segment)
+    prompt = pass1_prompt(transcript.render(max_text_chars=8000), len(sampled))
+    parsed = lab.call_json(
+        SYSTEM, prompt, images=imgs, image_labels=frame_labels(sampled),
+        cache_path=_cache(output_dir, "pass1"),
+    )
+
+    activities: list[dict[str, Any]] = []
+    for a in parsed.get("activities", []):
+        spans: list[dict[str, Any]] = []
+        for sp in a.get("spans", []):
             try:
-                e["t_start"] = max(ws, min(float(e["t_start"]), we))
-                e["t_end"] = max(ws, min(float(e["t_end"]), we))
+                sf = int(sp["start_frame"]); ef = int(sp["end_frame"])
             except (KeyError, TypeError, ValueError):
                 continue
-            e["window"] = wi
-            events.append(e)
-    events.sort(key=lambda e: (e["t_start"], e["t_end"]))
-    write_jsonl(output_dir / "timeline.jsonl", events)
-    return events
-
-
-def timeline_text(events: list[dict[str, Any]], max_events: int = 400) -> str:
-    lines = [
-        f"[{e['t_start']:7.1f}-{e['t_end']:.1f}s] {e.get('app','?')}: {e.get('observation','')}"
-        for e in events[:max_events]
-    ]
-    return "\n".join(lines) if lines else "(empty timeline)"
-
-
-def step_b_segment(lab, args, events, transcript, span, output_dir):
-    prompt = segment_prompt(timeline_text(events), transcript.render(max_text_chars=4000), span)
-    parsed = lab.call_json(SYSTEM, prompt, cache_path=_cache(output_dir, "segment"))
-    intervals = []
-    for iv in parsed.get("intervals", []):
-        try:
-            s = float(iv["start_time_s"]); e = float(iv["end_time_s"])
-        except (KeyError, TypeError, ValueError):
+            if ef < sf:
+                sf, ef = ef, sf
+            sf = max(idx_min, min(sf, idx_max))
+            ef = max(idx_min, min(ef, idx_max))
+            spans.append({"start_frame": sf, "end_frame": ef,
+                          "user_state": str(sp.get("user_state", ""))})
+        if not spans:
             continue
-        if e - s < args.min_segment_s:
-            continue
-        intervals.append({
-            "start_time_s": round(max(span[0], s), 1),
-            "end_time_s": round(min(span[1], e), 1),
-            "achieved_state": str(iv.get("achieved_state", "")),
-            "monotonic_flag": bool(iv.get("monotonic", True)),
-            "rationale": str(iv.get("rationale", "")),
+        spans.sort(key=lambda s: (s["start_frame"], s["end_frame"]))
+        activities.append({
+            "id": a.get("id"),
+            "app": str(a.get("app", "")),
+            "spans": spans,
+            "description": str(a.get("description", "")),
+            "onset": str(a.get("onset", "unknown")),
+            "completion": str(a.get("completion", "unknown")),
         })
-    intervals.sort(key=lambda iv: (iv["start_time_s"], iv["end_time_s"]))
-    write_jsonl(output_dir / "intervals.jsonl", intervals)
-    return intervals
+    write_jsonl(output_dir / "activities.jsonl", activities)
+    return activities
 
 
-def label_interval(lab, args, frame_records, transcript, iv, tag, output_dir, vlm_video_by_segment):
-    s, e = iv["start_time_s"], iv["end_time_s"]
-    in_span = frames_in_span(frame_records, s, e)
-    if len(in_span) < 2:
-        return None, None
-    frames = select_naming_frames(in_span, args.label_image_max)
-    imgs = render_for(frames, output_dir / "label_frames" / tag, args, vlm_video_by_segment)
-    prompt = label_prompt(s, e, iv.get("achieved_state", ""), transcript.render(s, e, max_text_chars=1500), len(frames))
+# ---------------------------------------------------------------------------
+# Pass 2 — hindsight instruction (+ per-span trajectory emission)
+# ---------------------------------------------------------------------------
+
+
+def label_activity(lab, args, frame_records, transcript, act, tag, output_dir, vlm_video_by_segment):
+    # Frames across ALL of the activity's spans, so the labeler sees the whole
+    # (possibly interleaved) line of work before writing one shared instruction.
+    span_records: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for sp in act["spans"]:
+        for r in records_in_index_span(frame_records, sp["start_frame"], sp["end_frame"]):
+            gi = int(r["global_frame_idx"])
+            if gi not in seen:
+                seen.add(gi)
+                span_records.append(r)
+    span_records.sort(key=lambda r: int(r["global_frame_idx"]))
+    if len(span_records) < 2:
+        return None, span_records
+
+    frames = select_naming_frames(span_records, args.label_image_max)
+    imgs = render_for(frames, output_dir / "pass2_frames" / tag, args, vlm_video_by_segment)
+    spans_text = "frames " + ", ".join(
+        f"{s['start_frame']}–{s['end_frame']}" for s in act["spans"]
+    )
+    t0 = float(span_records[0]["global_time_s"]); t1 = float(span_records[-1]["global_time_s"])
+    prompt = pass2_prompt(
+        spans_text, act.get("description", ""), act.get("onset", "unknown"),
+        act.get("completion", "unknown"), transcript.render(t0, t1, max_text_chars=2000), len(frames),
+    )
     parsed = lab.call_json(SYSTEM, prompt, images=imgs, image_labels=frame_labels(frames),
-                           cache_path=_cache(output_dir, f"label_{tag}"))
-    return parsed, imgs
+                           cache_path=_cache(output_dir, f"pass2_{tag}"))
+    return parsed, span_records
 
 
-def verify_interval(lab, args, frame_records, transcript, instruction, s, e, tag, output_dir, vlm_video_by_segment):
-    # Extend the tail so a streamed/async result lands in-frame, and bias frame
-    # selection toward the end where completion is visible.
-    in_span = frames_in_span(frame_records, s, e + args.verify_tail_extend_s)
-    frames = select_verify_frames(in_span, args.verify_image_max)
-    imgs = render_for(frames, output_dir / "verify_frames" / tag, args, vlm_video_by_segment)
-    prompt = verify_prompt(instruction, s, e, len(frames), transcript.render(s, e, max_text_chars=1500))
-    checks = lab.call_json(SYSTEM, prompt, images=imgs, image_labels=frame_labels(frames),
-                           cache_path=_cache(output_dir, f"verify_{tag}"))
-    return checks
-
-
-def step_cd(lab, args, frame_records, transcript, intervals, output_dir, vlm_video_by_segment):
-    trajectories, rejected = [], []
-    for i, iv in enumerate(intervals):
-        tag = f"{i:04d}"
-        parsed, _ = label_interval(lab, args, frame_records, transcript, iv, tag, output_dir, vlm_video_by_segment)
+def step_pass2(lab, args, frame_records, transcript, activities, output_dir, vlm_video_by_segment):
+    trajectories: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for ai, act in enumerate(activities):
+        tag = f"{ai:04d}"
+        parsed, _ = label_activity(lab, args, frame_records, transcript, act, tag, output_dir, vlm_video_by_segment)
         if not parsed:
-            rejected.append({"interval": iv, "reason": "too_few_frames_in_span"})
+            rejected.append({"activity": act, "reason": "too_few_frames_in_span"})
             continue
         instruction = str(parsed.get("instruction", "")).strip()
         if not instruction:
-            rejected.append({"interval": iv, "reason": "empty_instruction", "label": parsed})
+            rejected.append({"activity": act, "reason": "empty_instruction", "label": parsed})
             continue
         variants = [str(v).strip() for v in parsed.get("instruction_variants", []) if str(v).strip()]
-        s, e = iv["start_time_s"], iv["end_time_s"]
+        grounding = str(parsed.get("grounding", ""))
 
-        checks = verify_interval(lab, args, frame_records, transcript, instruction, s, e, tag, output_dir, vlm_video_by_segment)
-        repaired = False
-        # Verify-and-repair: trim to the cleaner sub-interval and re-label once,
-        # whenever a hard axis fails OR the boundary is merely loose.
-        rep = checks.get("repair") if isinstance(checks, dict) else None
-        if needs_repair(checks) and isinstance(rep, dict):
-            try:
-                rs = max(s, float(rep["start_time_s"])); re_ = min(e, float(rep["end_time_s"]))
-            except (KeyError, TypeError, ValueError):
-                rs, re_ = s, e
-            if re_ - rs >= args.min_segment_s and (rs, re_) != (s, e):
-                iv2 = {**iv, "start_time_s": round(rs, 1), "end_time_s": round(re_, 1)}
-                parsed2, _ = label_interval(lab, args, frame_records, transcript, iv2, f"{tag}_r", output_dir, vlm_video_by_segment)
-                if parsed2 and str(parsed2.get("instruction", "")).strip():
-                    instruction = str(parsed2["instruction"]).strip()
-                    variants = [str(v).strip() for v in parsed2.get("instruction_variants", []) if str(v).strip()]
-                    parsed = parsed2
-                    s, e = round(rs, 1), round(re_, 1)
-                    checks = verify_interval(lab, args, frame_records, transcript, instruction, s, e, f"{tag}_r", output_dir, vlm_video_by_segment)
-                    repaired = True
-
-        verified = accept(checks)
-        traj = {
-            "start_time_s": s, "end_time_s": e,
-            "instruction": instruction,
-            "instruction_variants": variants,
-            "achieved_state": str(parsed.get("achieved_state", "")),
-            "grounding": str(parsed.get("grounding", "")),
-            "verified": verified,
-            "verify_checks": checks,
-            "repaired": repaired,
-            "monotonic_flag": iv.get("monotonic_flag", True),
-            "rationale": iv.get("rationale", ""),
-        }
-        if verified:
-            trajectories.append(traj)
-        else:
-            rejected.append({"interval": iv, "reason": "verify_failed", "trajectory": traj})
+        # One trajectory per contiguous span, sharing the activity's instruction.
+        for si, sp in enumerate(act["spans"]):
+            recs = records_in_index_span(frame_records, sp["start_frame"], sp["end_frame"])
+            if len(recs) < 2:
+                continue
+            trajectories.append({
+                "start_time_s": round(float(recs[0]["global_time_s"]), 1),
+                "end_time_s": round(float(recs[-1]["global_time_s"]), 1),
+                "start_frame_idx": int(recs[0]["global_frame_idx"]),
+                "end_frame_idx": int(recs[-1]["global_frame_idx"]),
+                "instruction": instruction,
+                "instruction_variants": variants,
+                "description": act.get("description", ""),
+                "grounding": grounding,
+                "app": act.get("app", ""),
+                "user_state": sp.get("user_state", ""),
+                "onset": act.get("onset", "unknown"),
+                "completion": act.get("completion", "unknown"),
+                "activity_id": act.get("id"),
+                "span_idx": si,
+            })
     return trajectories, rejected
 
 
@@ -334,16 +258,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--manifest", type=Path, required=True, help="stage 00 manifest (render VLM frames from raw MP4s)")
     p.add_argument("--output-dir", type=Path, required=True)
     p.add_argument("--segment-offset-s", type=float, default=0.0)
-    # Step A
-    p.add_argument("--perceive-window-s", type=float, default=120.0)
-    p.add_argument("--perceive-overlap-s", type=float, default=20.0)
-    p.add_argument("--perceive-image-max", type=int, default=30)
-    # Step B/C/D
-    p.add_argument("--min-segment-s", type=float, default=8.0)
-    p.add_argument("--label-image-max", type=int, default=config.DEFAULT_NAME_IMAGE_MAX)
-    p.add_argument("--verify-image-max", type=int, default=config.DEFAULT_NAME_IMAGE_MAX)
-    p.add_argument("--verify-tail-extend-s", type=float, default=8.0,
-                   help="Extend the verify frame window past the interval end to capture streamed/async results.")
+    # Pass 1
+    p.add_argument("--pass1-image-max", type=int, default=96,
+                   help="Max frames sent to the single pass-1 describe+segment call "
+                        "(the whole clip is sub-sampled to this; spans still range over all kept frames).")
+    # Pass 2
+    p.add_argument("--label-image-max", type=int, default=config.DEFAULT_NAME_IMAGE_MAX,
+                   help="Max frames sent per pass-2 label call (across the activity's spans).")
     # Frame render
     p.add_argument("--vlm-frame-height", type=int, default=config.DEFAULT_VLM_FRAME_HEIGHT)
     p.add_argument("--jpeg-quality", type=int, default=80)
@@ -354,7 +275,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-cache", action="store_true")
     p.add_argument("--refresh", default=None,
                    help="Comma-separated cache prefixes to invalidate before running "
-                        "(e.g. 'verify' or 'label,verify'); only those steps re-run.")
+                        "(e.g. 'pass2' or 'pass1,pass2'); only those calls re-run.")
     return p.parse_args()
 
 
@@ -377,12 +298,11 @@ def main() -> None:
                  for e in transcript.events])
 
     vlm_video_by_segment = load_vlm_video_sources(args.manifest)
-    span = (float(frame_records[0]["global_time_s"]), float(frame_records[-1]["global_time_s"]))
 
-    events = step_a_timeline(lab, args, frame_records, transcript, output_dir, vlm_video_by_segment)
-    intervals = step_b_segment(lab, args, events, transcript, span, output_dir)
-    trajectories, rejected = step_cd(lab, args, frame_records, transcript, intervals, output_dir, vlm_video_by_segment)
+    activities = step_pass1(lab, args, frame_records, transcript, output_dir, vlm_video_by_segment)
+    trajectories, rejected = step_pass2(lab, args, frame_records, transcript, activities, output_dir, vlm_video_by_segment)
 
+    n_spans = sum(len(a["spans"]) for a in activities)
     result = {
         "recording_id": str(frame_records[0]["recording_id"]),
         "annotation_source": "vlm_hindsight",
@@ -394,15 +314,15 @@ def main() -> None:
     write_jsonl(output_dir / "rejected.jsonl", rejected)
     write_json(output_dir / "stage02_summary.json", {
         "n_frames": len(frame_records),
-        "n_timeline_events": len(events),
-        "n_intervals": len(intervals),
+        "n_pass1_activities": len(activities),
+        "n_spans": n_spans,
+        "n_active_spans": sum(1 for a in activities for s in a["spans"] if s.get("user_state") == "actively_working"),
+        "n_idle_spans": sum(1 for a in activities for s in a["spans"] if s.get("user_state") == "idle_waiting"),
         "n_trajectories": len(trajectories),
-        "n_verified": sum(1 for t in trajectories if t["verified"]),
-        "n_repaired": sum(1 for t in trajectories if t.get("repaired")),
         "n_rejected": len(rejected),
         "n_variants_total": sum(1 + len(t["instruction_variants"]) for t in trajectories),
     })
-    print(f"timeline={len(events)} intervals={len(intervals)} "
+    print(f"activities={len(activities)} spans={n_spans} "
           f"trajectories={len(trajectories)} rejected={len(rejected)} -> {output_dir/'trajectories_raw.json'}")
 
 

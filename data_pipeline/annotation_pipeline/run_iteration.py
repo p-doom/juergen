@@ -104,8 +104,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out-root", type=Path, default=PIPELINE_DIR / "iteration_runs")
     p.add_argument("--reasoning-effort", default=None)
     p.add_argument("--refresh", default=None,
-                   help="Invalidate+re-run only these stage-02 steps on every clip "
-                        "(e.g. 'verify'); reuses cached perceive/segment/label.")
+                   help="Invalidate+re-run only these stage-02 passes on every clip "
+                        "(e.g. 'pass2'); reuses cached pass1.")
     p.add_argument("--force", action="store_true", help="re-run stage 02 even if cached")
     p.add_argument("--force-frames", action="store_true", help="re-run stage 01 frame extraction")
     p.add_argument("--no-review", action="store_true")

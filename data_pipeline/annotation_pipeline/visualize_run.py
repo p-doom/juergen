@@ -5,11 +5,11 @@ Serves a single-page dashboard over an iteration run (default
 ``annotation_pipeline/iteration_runs/<run>``). For each clip you can:
 
   - play the RAW recording (HTTP Range streaming);
-  - step through every VLM call — Pass A perceive (per window), Pass B segment,
-    Pass C label + Pass D verify (per interval) — seeing the exact frames that
+  - step through every VLM call — Pass 1 describe+segment (one call over the
+    whole clip) and Pass 2 label (per activity) — seeing the exact frames that
     were sent, the reconstructed prompt, and the raw cached response;
-  - review the FINAL verified instructions, each with its trajectory clip played
-    inline (video media-fragment), plus the rejected intervals and why.
+  - review the FINAL instructions, each with its per-span trajectory clip played
+    inline, plus the rejected activities and why.
 
 Run:
     cd .../data_pipeline
@@ -38,14 +38,8 @@ from annotation_pipeline.image_store import (
     read_jpeg_bytes,
 )
 from annotation_pipeline.keylog_transcript import build_transcript
-from annotation_pipeline.stage_02_annotate import (
-    label_prompt,
-    perceive_prompt,
-    segment_prompt,
-    timeline_text,
-    verify_prompt,
-)
-from annotation_pipeline.frames_render import segment_windows
+from annotation_pipeline.stage_02_annotate import pass1_prompt, pass2_prompt
+from annotation_pipeline.frames_render import records_in_index_span
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 DEFAULT_RUN_ROOT = PIPELINE_DIR / "iteration_runs"
@@ -102,8 +96,7 @@ def build_clip(clip_dir: Path) -> dict[str, Any]:
     s02 = clip_dir / "stage_02"
     cache = s02 / "cache"
     summary = read_json(s02 / "stage02_summary.json", {})
-    timeline = read_jsonl(s02 / "timeline.jsonl")
-    intervals = read_jsonl(s02 / "intervals.jsonl")
+    activities = read_jsonl(s02 / "activities.jsonl")
     traj = read_json(s02 / "trajectories_raw.json", {}) or {}
     rejected = read_jsonl(s02 / "rejected.jsonl")
     frame_records = read_jsonl(clip_dir / "stage_01" / "frame_records.jsonl")
@@ -121,72 +114,46 @@ def build_clip(clip_dir: Path) -> dict[str, Any]:
             return "(transcript unavailable)"
         return transcript.render(a, b, max_text_chars=n)
 
-    # Pass A — perceive, per window.
-    perceive = []
-    if frame_records:
-        t_min = float(frame_records[0]["global_time_s"])
-        t_max = float(frame_records[-1]["global_time_s"])
-        windows = segment_windows(t_min, t_max, 120.0, 20.0)
-        for wi, (ws, we) in enumerate(windows):
-            fr = frame_paths(s02 / "perceive_frames" / f"win_{wi:04d}")
-            resp_path = cache / f"perceive_{wi:04d}.txt"
-            if not fr and not resp_path.exists():
-                continue
-            prompt = ""
-            try:
-                prompt = perceive_prompt(ws, we, tr(ws, we, 400), len(fr))
-            except Exception:  # noqa: BLE001
-                pass
-            perceive.append({
-                "window": wi, "span": [round(ws, 1), round(we, 1)],
-                "n_frames": len(fr), "frames": fr,
-                "prompt": prompt, "response": parse_response(resp_path),
-            })
-
-    # Pass B — segment (one call).
-    seg_prompt = ""
+    # Pass 1 — one describe+segment call over the whole (sub-sampled) clip.
+    p1_frames = frame_paths(s02 / "pass1_frames")
+    p1_prompt = ""
     try:
-        span = (float(frame_records[0]["global_time_s"]), float(frame_records[-1]["global_time_s"])) if frame_records else (0.0, 0.0)
-        seg_prompt = segment_prompt(timeline_text(timeline), tr(None, None, 4000), span)
+        p1_prompt = pass1_prompt(tr(None, None, 8000), len(p1_frames))
     except Exception:  # noqa: BLE001
         pass
-    segment = {"prompt": seg_prompt, "response": parse_response(cache / "segment.txt"),
-               "n_timeline_events": len(timeline)}
+    pass1 = {"n_frames": len(p1_frames), "frames": p1_frames, "n_activities": len(activities),
+             "prompt": p1_prompt, "response": parse_response(cache / "pass1.txt")}
 
-    # Pass C+D — per interval (with optional repair).
-    def call_pair(tag: str, iv: dict[str, Any]) -> dict[str, Any]:
-        s = float(iv.get("start_time_s", 0.0)); e = float(iv.get("end_time_s", 0.0))
-        lab_frames = frame_paths(s02 / "label_frames" / tag)
-        ver_frames = frame_paths(s02 / "verify_frames" / tag)
-        lab_resp = parse_response(cache / f"label_{tag}.txt")
-        ver_resp = parse_response(cache / f"verify_{tag}.txt")
-        instruction = str(lab_resp.get("instruction", "")) if isinstance(lab_resp, dict) else ""
-        lab_prompt = ver_prompt = ""
+    # Pass 2 — one label call per activity (frames across all its spans).
+    pass2 = []
+    for ai, act in enumerate(activities):
+        tag = f"{ai:04d}"
+        frames = frame_paths(s02 / "pass2_frames" / tag)
+        spans = act.get("spans", [])
+        spans_text = "frames " + ", ".join(f"{s.get('start_frame')}–{s.get('end_frame')}" for s in spans)
+        t0 = t1 = 0.0
+        recs = []
+        for sp in spans:
+            recs += records_in_index_span(frame_records, sp.get("start_frame", 0), sp.get("end_frame", 0))
+        if recs:
+            recs.sort(key=lambda r: int(r["global_frame_idx"]))
+            t0 = float(recs[0]["global_time_s"]); t1 = float(recs[-1]["global_time_s"])
+        prompt = ""
         try:
-            lab_prompt = label_prompt(s, e, str(iv.get("achieved_state", "")), tr(s, e, 1500), len(lab_frames))
-            ver_prompt = verify_prompt(instruction, s, e, len(ver_frames), tr(s, e, 1500))
+            prompt = pass2_prompt(spans_text, act.get("description", ""), act.get("onset", "unknown"),
+                                  act.get("completion", "unknown"), tr(t0, t1, 2000), len(frames))
         except Exception:  # noqa: BLE001
             pass
-        return {
-            "tag": tag, "span": [round(s, 1), round(e, 1)],
-            "label": {"frames": lab_frames, "prompt": lab_prompt, "response": lab_resp},
-            "verify": {"frames": ver_frames, "prompt": ver_prompt, "response": ver_resp},
-        }
-
-    interval_calls = []
-    for i, iv in enumerate(intervals):
-        tag = f"{i:04d}"
-        entry = {"idx": i, "achieved_state": iv.get("achieved_state", ""),
-                 "rationale": iv.get("rationale", ""), **call_pair(tag, iv)}
-        if (cache / f"verify_{tag}_r.txt").exists() or (cache / f"label_{tag}_r.txt").exists():
-            entry["repair"] = call_pair(f"{tag}_r", iv)
-        interval_calls.append(entry)
+        pass2.append({"idx": ai, "app": act.get("app", ""), "spans": spans,
+                      "description": act.get("description", ""), "onset": act.get("onset", ""),
+                      "completion": act.get("completion", ""),
+                      "frames": frames, "prompt": prompt, "response": parse_response(cache / f"pass2_{tag}.txt")})
 
     # Kept-frame stream = exactly what stage 01 sampled (NO_OP-capped / adaptively
     # thinned). Play it back to SEE the sampling: idle gaps show as time jumps.
     s01_summary = read_json(clip_dir / "stage_01" / "frames_actions_summary.json", {})
     kept_frames = [
-        {"t": r.get("global_time_s"), "action": r.get("action"),
+        {"t": r.get("global_time_s"), "idx": r.get("global_frame_idx"), "action": r.get("action"),
          # ar:// grain URIs are served by the /image endpoint as-is; loose files are resolved.
          "img": r["image_path"] if is_arrayrecord_image_uri(r["image_path"]) else str(Path(r["image_path"]).resolve())}
         for r in frame_records[:6000]
@@ -211,9 +178,8 @@ def build_clip(clip_dir: Path) -> dict[str, Any]:
         "summary": summary,
         "sampling": sampling,
         "kept_frames": kept_frames,
-        "perceive": perceive,
-        "segment": segment,
-        "intervals": interval_calls,
+        "pass1": pass1,
+        "pass2": pass2,
         "trajectories": traj.get("trajectories", []),
         "rejected": rejected,
     }
@@ -353,9 +319,10 @@ function callBlock(title,call){return `<details><summary>${esc(title)} — ${cal
   <details><summary>prompt</summary><div class="inner"><pre>${esc(call.prompt||'(not reconstructed)')}</pre></div></details>
   <div class="lab">model response</div>${jsonBlock(call.response)}
   </div></details>`;}
-function badges(checks){if(!checks||typeof checks!=='object')return '';
-  return ['achieved','monotonic','boundary_tight','grounded','start_achievable','user_prompt_register']
-    .filter(k=>k in checks).map(k=>`<span class="badge ${checks[k]?'t':'f'}">${k}=${checks[k]?'T':'F'}</span>`).join('');}
+function chips(obj,keys){if(!obj||typeof obj!=='object')return '';
+  return keys.map(k=>{const v=obj[k];if(v===undefined||v===null||v==='')return '';
+    const t=(k==='user_state'&&v==='actively_working')?'t':'';
+    return `<span class="badge ${t}">${esc(k)}=${esc(v)}</span>`;}).filter(Boolean).join('');}
 
 // Generic frame-player: plays the ACTUAL kept (stage-01) JPEGs a sample contains.
 let TIMERS=new Set();
@@ -374,7 +341,8 @@ function mountFramePlayer(el, frames, fps){
     cnt.textContent=`frame ${i+1}/${frames.length}`;
     const gap=i>0?(Number(f.t)-Number(frames[i-1].t)):0;
     const sk=gap>period*1.5?` · ⏭ ${gap.toFixed(1)}s gap (idle dropped)`:'';
-    meta.innerHTML=`t=${Number(f.t).toFixed(1)}s · <code>${esc(f.action)}</code>${sk}`;}
+    const fid=f.idx!=null?`frame ${f.idx} · `:'';
+    meta.innerHTML=`${fid}t=${Number(f.t).toFixed(1)}s · <code>${esc(f.action)}</code>${sk}`;}
   function stop(){if(timer){clearInterval(timer);TIMERS.delete(timer);timer=null;}play.textContent='▶';}
   function toggle(){if(timer){stop();return;}if(i>=frames.length-1)show(0);play.textContent='⏸';
     timer=setInterval(()=>{if(i>=frames.length-1){stop();return;}show(i+1);},Math.max(80,Math.round(1000/fps)));TIMERS.add(timer);}
@@ -390,7 +358,7 @@ function renderClip(){
   const c=S.run.clips[S.clip];if(!c){$('main').innerHTML='';return;}
   const s=c.summary||{};
   let h=`<h2>${esc(c.clip_key)} <span class="lab">${esc(c.segment_id||'')}</span></h2>
-    <div class="stat">${s.n_intervals??0} intervals → ${s.n_verified??0} verified · ${s.n_repaired??0} repaired · ${s.n_rejected??0} rejected · ${s.n_variants_total??0} SFT samples</div>`;
+    <div class="stat">${s.n_pass1_activities??0} activities · ${s.n_spans??0} spans (active ${s.n_active_spans??0}/idle ${s.n_idle_spans??0}) → ${s.n_trajectories??0} trajectories · ${s.n_rejected??0} rejected · ${s.n_variants_total??0} SFT samples</div>`;
   h+= c.video?`<video controls preload="metadata" src="${vid(c.video)}"></video>`:'<p class="lab">raw video not found</p>';
 
   const sm=c.sampling||{};
@@ -400,39 +368,32 @@ function renderClip(){
       dropped idle ${sm.n_noop_dropped??0}</div>
     <div class="keptplayer" id="kept-stream"></div>`;
 
-  h+=`<h2>Pass A — Perceive (frames+transcript → timeline) · ${c.perceive.length} windows</h2>`;
-  h+=c.perceive.map(w=>callBlock(`window ${w.window}  [${w.span[0]}–${w.span[1]}s]`,
-      {frames:w.frames,prompt:w.prompt,response:w.response})).join('');
+  const p1=c.pass1||{};
+  h+=`<h2>Pass 1 — Describe + Segment (whole clip → activities) · ${p1.n_activities??0} activities</h2>`;
+  h+=callBlock(`pass 1 · ${p1.n_frames??0} frames sub-sampled from the clip`,
+      {frames:p1.frames||[],prompt:p1.prompt,response:p1.response});
 
-  h+=`<h2>Pass B — Segment (timeline → intervals)</h2>`;
-  h+=`<details><summary>segment call — ${c.segment.n_timeline_events} timeline events, no images</summary><div class="inner">
-      <details><summary>prompt</summary><div class="inner"><pre>${esc(c.segment.prompt||'')}</pre></div></details>
-      <div class="lab">model response (intervals)</div>${jsonBlock(c.segment.response)}</div></details>`;
+  h+=`<h2>Pass 2 — Label (per activity → user prompt)</h2>`;
+  h+=(c.pass2||[]).map(a=>{
+    const sp=(a.spans||[]).map(s=>`${s.start_frame}–${s.end_frame} <span class="lab">${esc(s.user_state||'')}</span>`).join(' , ');
+    return `<div class="card"><div class="lab">activity ${a.idx} · ${esc(a.app||'')} · spans ${sp} · onset=${esc(a.onset||'')} completion=${esc(a.completion||'')}</div>
+      <div style="color:#b9c2d4;font-size:13px;margin:4px 0">${esc(a.description||'')}</div>
+      ${callBlock('Pass 2 · label',{frames:a.frames,prompt:a.prompt,response:a.response})}</div>`;
+  }).join('') || '<p class="lab">no activities</p>';
 
-  h+=`<h2>Pass C+D — Label &amp; Verify (per interval)</h2>`;
-  h+=c.intervals.map(iv=>{
-    let b=`<div class="card"><div class="lab">interval ${iv.idx} · ${iv.span[0]}–${iv.span[1]}s</div>
-      <div style="color:#b9c2d4;font-size:13px;margin:4px 0">achieved: ${esc(iv.achieved_state||'')}</div>
-      ${callBlock('Pass C · label',iv.label)}
-      ${callBlock('Pass D · verify',iv.verify)}`;
-    if(iv.repair)b+=`<div class="lab">↻ repaired (trim + re-label/verify)</div>
-      ${callBlock('Pass C · re-label',iv.repair.label)}${callBlock('Pass D · re-verify',iv.repair.verify)}`;
-    return b+`</div>`;
-  }).join('');
-
-  h+=`<h2>Final — verified instructions + sample clips</h2>`;
-  h+=(c.trajectories||[]).map((t,ti)=>`<div class="card ${t.verified?'ok':'no'}">
-      <div class="lab">${t.start_time_s}–${t.end_time_s}s ${t.repaired?'· repaired':''} ${badges(t.verify_checks)}</div>
+  h+=`<h2>Final — instructions + per-span trajectory clips</h2>`;
+  h+=(c.trajectories||[]).map((t,ti)=>`<div class="card ${t.user_state==='actively_working'?'ok':'no'}">
+      <div class="lab">${t.start_time_s}–${t.end_time_s}s · frames ${t.start_frame_idx}–${t.end_frame_idx} ${chips(t,['app','user_state','onset','completion'])}</div>
       <div class="instr">${esc(t.instruction)}</div>
       ${(t.instruction_variants||[]).length?`<ul class="variants">${t.instruction_variants.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:''}
       <div class="keptplayer fp" data-start="${t.start_time_s}" data-end="${t.end_time_s}"></div>
-    </div>`).join('') || '<p class="lab">no verified trajectories</p>';
+    </div>`).join('') || '<p class="lab">no trajectories</p>';
 
   if((c.rejected||[]).length){
     h+=`<h2>Rejected (${c.rejected.length})</h2>`;
-    h+=c.rejected.map(r=>{const t=r.trajectory||{};return `<div class="card no">
-      <div class="lab">${esc(r.reason||'')} ${badges(t.verify_checks)}</div>
-      <div>${esc(t.instruction|| (r.interval&&r.interval.achieved_state) ||'(no instruction)')}</div></div>`;}).join('');
+    h+=c.rejected.map(r=>{const a=r.activity||{};const lab=r.label||{};return `<div class="card no">
+      <div class="lab">${esc(r.reason||'')} · ${esc(a.app||'')}</div>
+      <div>${esc(lab.instruction|| a.description ||'(no instruction)')}</div></div>`;}).join('');
   }
   $('main').innerHTML=h;
   const fps=Number(c.sampling?.target_fps)||1;
