@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -85,6 +86,39 @@ _RDEV_TO_PYAUTOGUI = {
 
 _MOUSE_BUTTON_NAMES = {1: "left", 2: "middle", 3: "right"}
 
+_COMPUTER_USE_KEY_ALIASES = {
+    "CTRL": "ctrl",
+    "CONTROL": "ctrl",
+    "SHIFT": "shift",
+    "ALT": "alt",
+    "OPTION": "alt",
+    "CMD": "command",
+    "COMMAND": "command",
+    "META": "win",
+    "SUPER": "win",
+    "WIN": "win",
+    "WINDOWS": "win",
+    "ENTER": "enter",
+    "RETURN": "enter",
+    "ESC": "esc",
+    "ESCAPE": "esc",
+    "BACKSPACE": "backspace",
+    "DELETE": "delete",
+    "DEL": "delete",
+    "TAB": "tab",
+    "SPACE": "space",
+    "UP": "up",
+    "DOWN": "down",
+    "LEFT": "left",
+    "RIGHT": "right",
+    "PAGEUP": "pageup",
+    "PAGE_UP": "pageup",
+    "PAGEDOWN": "pagedown",
+    "PAGE_DOWN": "pagedown",
+    "HOME": "home",
+    "END": "end",
+}
+
 
 def _rdev_to_pyautogui(name: str) -> str:
     if name in _RDEV_TO_PYAUTOGUI:
@@ -99,6 +133,21 @@ def _rdev_to_pyautogui(name: str) -> str:
     if name.startswith("Digit") and len(name) == 6 and name[5].isdigit():
         return name[5]
     return name.lower()
+
+
+def _computer_use_key_to_pyautogui(name: str) -> str:
+    """Map common computer-use key spellings to pyautogui key names."""
+    if not isinstance(name, str):
+        raise TypeError(f"key must be a string, got {type(name)!r}")
+    stripped = name.strip()
+    upper = stripped.upper()
+    if upper in _COMPUTER_USE_KEY_ALIASES:
+        return _COMPUTER_USE_KEY_ALIASES[upper]
+    if m := re.match(r"^F([1-9]|1[0-9]|2[0-4])$", upper):
+        return f"f{m.group(1)}"
+    if len(stripped) == 1:
+        return stripped.lower()
+    return _rdev_to_pyautogui(stripped)
 
 
 @dataclass
@@ -281,6 +330,148 @@ class OSWorldClient:
             events_dispatched=executed,
             parse_ok=True,
             action_text="",  # caller fills the raw text
+        )
+
+    def dispatch_computer_use(self, arguments: dict) -> StepResult:
+        """Apply one OpenAI computer-use style tool call to the VM."""
+        if not isinstance(arguments, dict):
+            raise TypeError(
+                f"computer_use arguments must be dict, got {type(arguments)!r}"
+            )
+
+        action = str(arguments.get("action", "")).strip().lower()
+        cursor_before = self.cursor_position()
+        sw, sh = self.screen_size()
+        executed: list[str] = []
+        target = cursor_before
+        scroll = 0
+
+        def coord_from_args(*, required: bool) -> tuple[int, int] | None:
+            raw = arguments.get("coordinate")
+            if raw is None:
+                if required:
+                    raise ValueError(
+                        f"computer_use action {action!r} requires coordinate"
+                    )
+                return None
+            if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+                raise ValueError(f"coordinate must be [x, y], got {raw!r}")
+            try:
+                x = int(round(float(raw[0])))
+                y = int(round(float(raw[1])))
+            except (TypeError, ValueError) as e:
+                raise ValueError(
+                    f"coordinate values must be numeric, got {raw!r}"
+                ) from e
+            return max(0, min(sw - 1, x)), max(0, min(sh - 1, y))
+
+        def move_to(pos: tuple[int, int]) -> None:
+            nonlocal target
+            target = pos
+            if pos != self.cursor_position():
+                cmd = f"pyautogui.moveTo({pos[0]}, {pos[1]})"
+                self.execute(cmd)
+                executed.append(cmd)
+
+        if action == "mouse_move":
+            pos = coord_from_args(required=True)
+            assert pos is not None
+            move_to(pos)
+        elif action in {
+            "left_click",
+            "right_click",
+            "middle_click",
+            "double_click",
+            "triple_click",
+        }:
+            pos = coord_from_args(required=False)
+            if pos is not None:
+                move_to(pos)
+            button = {
+                "left_click": "left",
+                "right_click": "right",
+                "middle_click": "middle",
+                "double_click": "left",
+                "triple_click": "left",
+            }[action]
+            clicks = 2 if action in {"double_click", "triple_click"} else 1
+            cmd = (
+                f"pyautogui.click(clicks={clicks}, interval=0.05, "
+                f"button={button!r})"
+            )
+            self.execute(cmd)
+            executed.append(cmd)
+        elif action == "left_click_drag":
+            pos = coord_from_args(required=True)
+            assert pos is not None
+            target = pos
+            cmd = (
+                f"pyautogui.dragTo({pos[0]}, {pos[1]}, duration=0.2, "
+                "button='left')"
+            )
+            self.execute(cmd)
+            executed.append(cmd)
+        elif action in {"scroll", "hscroll"}:
+            try:
+                scroll = int(round(float(arguments.get("pixels", 0))))
+            except (TypeError, ValueError) as e:
+                raise ValueError(
+                    f"pixels must be numeric, got {arguments.get('pixels')!r}"
+                ) from e
+            if scroll:
+                cmd = f"pyautogui.scroll({scroll})"
+                self.execute(cmd)
+                executed.append(cmd)
+        elif action == "key":
+            keys = arguments.get("keys")
+            if isinstance(keys, str):
+                keys = [keys]
+            if not isinstance(keys, list) or not keys:
+                raise ValueError(f"keys must be a non-empty array, got {keys!r}")
+            py_keys = [_computer_use_key_to_pyautogui(k) for k in keys]
+            for key in py_keys:
+                cmd = f"pyautogui.keyDown({key!r})"
+                self.execute(cmd)
+                executed.append(cmd)
+            for key in reversed(py_keys):
+                cmd = f"pyautogui.keyUp({key!r})"
+                self.execute(cmd)
+                executed.append(cmd)
+        elif action == "type":
+            text = str(arguments.get("text", ""))
+            if text:
+                cmd = f"pyautogui.write({text!r}, interval=0)"
+                self.execute(cmd)
+                executed.append(cmd)
+        elif action == "wait":
+            try:
+                wait_s = float(arguments.get("time", 1.0))
+            except (TypeError, ValueError) as e:
+                raise ValueError(
+                    f"time must be numeric, got {arguments.get('time')!r}"
+                ) from e
+            wait_s = max(0.0, min(10.0, wait_s))
+            time.sleep(wait_s)
+            executed.append(f"time.sleep({wait_s})")
+        elif action in {"answer", "terminate"}:
+            # The freeroll loop consumes terminate as a stop condition. `answer`
+            # has no desktop side effect, so preserve it as a logged no-op.
+            pass
+        else:
+            raise ValueError(f"unsupported computer_use action: {action!r}")
+
+        cursor_after = self.cursor_position()
+        if target == cursor_before and cursor_after != cursor_before:
+            target = cursor_after
+        return StepResult(
+            cursor_before=cursor_before,
+            cursor_after=cursor_after,
+            intended_target=target,
+            delta=(target[0] - cursor_before[0], target[1] - cursor_before[1]),
+            scroll=scroll,
+            events_dispatched=executed,
+            parse_ok=True,
+            action_text="",
         )
 
 
