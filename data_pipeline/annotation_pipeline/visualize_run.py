@@ -8,7 +8,7 @@ Serves a single-page dashboard over an iteration run (default
   - step through every VLM call — Pass 1 describe+segment (one call over the
     whole clip) and Pass 2 label (per activity) — seeing the exact frames that
     were sent, the reconstructed prompt, and the raw cached response;
-  - review the FINAL instructions, each with its per-span trajectory clip played
+  - review the FINAL instructions, each with its activity trajectory clip played
     inline, plus the rejected activities and why.
 
 Run:
@@ -38,7 +38,12 @@ from annotation_pipeline.image_store import (
     read_jpeg_bytes,
 )
 from annotation_pipeline.keylog_transcript import build_transcript
-from annotation_pipeline.stage_02_annotate import pass1_prompt, pass2_prompt
+from annotation_pipeline.stage_02_annotate import (
+    activities_text,
+    pass1_prompt,
+    pass2_prompt,
+    pass3_prompt,
+)
 from annotation_pipeline.frames_render import records_in_index_span
 
 PIPELINE_DIR = Path(__file__).resolve().parent
@@ -84,9 +89,19 @@ def list_runs() -> list[dict[str, Any]]:
     if not RUN_ROOT.is_dir():
         return []
     out = []
-    for d in sorted((p for p in RUN_ROOT.iterdir() if (p / "clips").is_dir()), reverse=True):
+    for d in (p for p in RUN_ROOT.iterdir() if (p / "clips").is_dir()):
         clips = sorted(c.name for c in (d / "clips").iterdir() if c.is_dir())
-        out.append({"name": d.name, "n_clips": len(clips)})
+        marker_times = [
+            (d / "run_summary.json").stat().st_mtime if (d / "run_summary.json").exists() else 0.0,
+            (d / "judge.json").stat().st_mtime if (d / "judge.json").exists() else 0.0,
+        ]
+        for clip in clips:
+            for rel in ("stage_02/stage02_summary.json", "stage_02/pass1_windows.jsonl"):
+                p = d / "clips" / clip / rel
+                if p.exists():
+                    marker_times.append(p.stat().st_mtime)
+        out.append({"name": d.name, "n_clips": len(clips), "mtime": max(marker_times)})
+    out.sort(key=lambda r: (r["mtime"], r["name"]), reverse=True)
     return out
 
 
@@ -105,24 +120,58 @@ def build_clip(clip_dir: Path) -> dict[str, Any]:
     keylog = row.get("keylog_path")
     if keylog and Path(keylog).exists():
         try:
-            transcript = build_transcript(Path(keylog))
+            transcript = build_transcript(Path(keylog), frame_records=frame_records)
         except Exception:  # noqa: BLE001
             transcript = None
 
-    def tr(a: float | None = None, b: float | None = None, n: int = 600) -> str:
+    def tr(start_frame: int | None = None, end_frame: int | None = None, n: int = 600) -> str:
         if transcript is None:
             return "(transcript unavailable)"
-        return transcript.render(a, b, max_text_chars=n)
+        return transcript.render(start_frame, end_frame, max_text_chars=n)
 
-    # Pass 1 — one describe+segment call over the whole (sub-sampled) clip.
-    p1_frames = frame_paths(s02 / "pass1_frames")
-    p1_prompt = ""
-    try:
-        p1_prompt = pass1_prompt(tr(None, None, 8000), len(p1_frames))
-    except Exception:  # noqa: BLE001
-        pass
-    pass1 = {"n_frames": len(p1_frames), "frames": p1_frames, "n_activities": len(activities),
-             "prompt": p1_prompt, "response": parse_response(cache / "pass1.txt")}
+    # Pass 1 — describe+segment calls over fixed windows of the kept-frame stream.
+    pass1_windows = read_jsonl(s02 / "pass1_windows.jsonl")
+    p1_calls = []
+    if pass1_windows:
+        for row_w in pass1_windows:
+            wi = int(row_w.get("window_idx", len(p1_calls)))
+            frames = frame_paths(s02 / "pass1_frames" / f"window_{wi:04d}")
+            prompt = ""
+            try:
+                prompt = pass1_prompt(
+                    tr(int(row_w.get("start_frame_idx", 0)),
+                       int(row_w.get("end_frame_idx", 0)), 8000),
+                    len(frames),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            cache_name = str(row_w.get("cache_name") or f"pass1_{wi:04d}")
+            p1_calls.append({
+                "window": wi,
+                "span": [row_w.get("start_frame_idx"), row_w.get("end_frame_idx")],
+                "start_frame_idx": row_w.get("start_frame_idx"),
+                "end_frame_idx": row_w.get("end_frame_idx"),
+                "n_kept_frames": row_w.get("n_kept_frames"),
+                "n_frames": len(frames),
+                "n_activities": row_w.get("n_activities"),
+                "frames": frames,
+                "prompt": prompt,
+                "response": parse_response(cache / f"{cache_name}.txt"),
+            })
+    else:
+        # Backward-compatible view for older runs before pass1 was windowed.
+        p1_frames = frame_paths(s02 / "pass1_frames")
+        p1_prompt = ""
+        try:
+            p1_prompt = pass1_prompt(tr(None, None, 8000), len(p1_frames))
+        except Exception:  # noqa: BLE001
+            pass
+        p1_calls.append({"window": 0, "span": [None, None], "n_frames": len(p1_frames),
+                         "n_activities": len(activities), "frames": p1_frames,
+                         "prompt": p1_prompt, "response": parse_response(cache / "pass1.txt")})
+    pass1 = {"n_frames": sum(c.get("n_frames", 0) for c in p1_calls),
+             "n_windows": len(p1_calls), "windows": p1_calls,
+             "n_activities": len(activities)}
 
     # Pass 2 — one label call per activity (frames across all its spans).
     pass2 = []
@@ -131,29 +180,42 @@ def build_clip(clip_dir: Path) -> dict[str, Any]:
         frames = frame_paths(s02 / "pass2_frames" / tag)
         spans = act.get("spans", [])
         spans_text = "frames " + ", ".join(f"{s.get('start_frame')}–{s.get('end_frame')}" for s in spans)
-        t0 = t1 = 0.0
+        f0 = f1 = 0
         recs = []
         for sp in spans:
             recs += records_in_index_span(frame_records, sp.get("start_frame", 0), sp.get("end_frame", 0))
         if recs:
             recs.sort(key=lambda r: int(r["global_frame_idx"]))
-            t0 = float(recs[0]["global_time_s"]); t1 = float(recs[-1]["global_time_s"])
+            f0 = int(recs[0]["global_frame_idx"]); f1 = int(recs[-1]["global_frame_idx"])
         prompt = ""
         try:
             prompt = pass2_prompt(spans_text, act.get("description", ""), act.get("onset", "unknown"),
-                                  act.get("completion", "unknown"), tr(t0, t1, 2000), len(frames))
+                                  act.get("completion", "unknown"), tr(f0, f1, 2000), len(frames))
         except Exception:  # noqa: BLE001
             pass
         pass2.append({"idx": ai, "app": act.get("app", ""), "spans": spans,
+                      "pass1_window_idx": act.get("pass1_window_idx"),
                       "description": act.get("description", ""), "onset": act.get("onset", ""),
                       "completion": act.get("completion", ""),
                       "frames": frames, "prompt": prompt, "response": parse_response(cache / f"pass2_{tag}.txt")})
+
+    # Pass 3 — merge labelled activities into goals (text only).
+    pass2_labels = read_jsonl(s02 / "pass2_labels.jsonl")
+    goals = read_jsonl(s02 / "goals.jsonl")
+    p3_prompt = ""
+    try:
+        if pass2_labels:
+            p3_prompt = pass3_prompt(activities_text(pass2_labels))
+    except Exception:  # noqa: BLE001
+        pass
+    pass3 = {"prompt": p3_prompt, "response": parse_response(cache / "pass3.txt"),
+             "goals": goals, "n_labels": len(pass2_labels)}
 
     # Kept-frame stream = exactly what stage 01 sampled (NO_OP-capped / adaptively
     # thinned). Play it back to SEE the sampling: idle gaps show as time jumps.
     s01_summary = read_json(clip_dir / "stage_01" / "frames_actions_summary.json", {})
     kept_frames = [
-        {"t": r.get("global_time_s"), "idx": r.get("global_frame_idx"), "action": r.get("action"),
+        {"idx": r.get("global_frame_idx"), "action": r.get("action"),
          # ar:// grain URIs are served by the /image endpoint as-is; loose files are resolved.
          "img": r["image_path"] if is_arrayrecord_image_uri(r["image_path"]) else str(Path(r["image_path"]).resolve())}
         for r in frame_records[:6000]
@@ -173,13 +235,14 @@ def build_clip(clip_dir: Path) -> dict[str, Any]:
         "clip_key": clip_dir.name,
         "segment_id": row.get("segment_id"),
         "video": str(Path(video).resolve()) if video and Path(video).exists() else None,
-        "duration_s": row.get("video_duration_s"),
+        "n_kept_frames": len(frame_records),
         "fps": row.get("video_fps"),
         "summary": summary,
         "sampling": sampling,
         "kept_frames": kept_frames,
         "pass1": pass1,
         "pass2": pass2,
+        "pass3": pass3,
         "trajectories": traj.get("trajectories", []),
         "rejected": rejected,
     }
@@ -188,8 +251,18 @@ def build_clip(clip_dir: Path) -> dict[str, Any]:
 def build_run(name: str) -> dict[str, Any]:
     run_dir = RUN_ROOT / name
     clips_root = run_dir / "clips"
-    judge = read_json(run_dir / "judge.json", {})
     clip_keys = sorted(c.name for c in clips_root.iterdir() if c.is_dir()) if clips_root.is_dir() else []
+    judge_path = run_dir / "judge.json"
+    judge = read_json(judge_path, {})
+    if judge and judge_path.exists():
+        # Do not show stale judge numbers after regenerating trajectories without
+        # re-running the judge.
+        judge_mtime = judge_path.stat().st_mtime
+        for key in clip_keys:
+            traj_path = clips_root / key / "stage_02" / "trajectories_raw.json"
+            if traj_path.exists() and traj_path.stat().st_mtime > judge_mtime:
+                judge = {}
+                break
     return {
         "run": name,
         "judge": {"pass_rate": judge.get("pass_rate"), "n_pass": judge.get("n_pass"),
@@ -304,7 +377,7 @@ async function load(name){S.run=await api(`/api/run?name=${encodeURIComponent(na
 function renderNav(){$('nav').innerHTML=S.run.clips.map((c,i)=>{
   const s=c.summary||{};
   return `<button class="clip-btn ${i===S.clip?'active':''}" data-i="${i}">${esc(c.clip_key)}
-    <span class="sub">${s.n_verified??0} kept · ${s.n_intervals??0} intervals · ${Math.round(c.duration_s||0)}s</span></button>`;
+    <span class="sub">${s.n_pass1_activities??0} activities · ${s.n_spans??0} spans · ${c.n_kept_frames??0} frames</span></button>`;
 }).join('');
 document.querySelectorAll('.clip-btn').forEach(b=>b.onclick=()=>{S.clip=+b.dataset.i;renderNav();renderClip();window.scrollTo(0,0);});}
 
@@ -329,7 +402,7 @@ let TIMERS=new Set();
 function clearTimers(){for(const t of TIMERS)clearInterval(t);TIMERS.clear();}
 function mountFramePlayer(el, frames, fps){
   if(!el)return;
-  if(!frames||!frames.length){el.innerHTML='<div class="kp-meta">no kept frames in this interval</div>';return;}
+  if(!frames||!frames.length){el.innerHTML='<div class="kp-meta">no kept frames in this span</div>';return;}
   fps=fps||1; const period=1/fps; let i=0,timer=null;
   el.innerHTML=`<div class="kp-screen"><img alt=""><div class="kp-count"></div></div>
     <div class="kp-ctrls"><button class="b-prev" title="prev">◀</button><button class="b-play" title="play/pause">▶</button>
@@ -338,11 +411,9 @@ function mountFramePlayer(el, frames, fps){
   const im=el.querySelector('img'),cnt=el.querySelector('.kp-count'),rng=el.querySelector('.b-range'),
         meta=el.querySelector('.kp-meta'),play=el.querySelector('.b-play');
   function show(k){i=Math.max(0,Math.min(frames.length-1,k));const f=frames[i];im.src=img(f.img);rng.value=i;
-    cnt.textContent=`frame ${i+1}/${frames.length}`;
-    const gap=i>0?(Number(f.t)-Number(frames[i-1].t)):0;
-    const sk=gap>period*1.5?` · ⏭ ${gap.toFixed(1)}s gap (idle dropped)`:'';
-    const fid=f.idx!=null?`frame ${f.idx} · `:'';
-    meta.innerHTML=`${fid}t=${Number(f.t).toFixed(1)}s · <code>${esc(f.action)}</code>${sk}`;}
+    cnt.textContent=`${i+1}/${frames.length}`;
+    const fid=f.idx!=null?`frame ${f.idx}`:`#${i}`;
+    meta.innerHTML=`${fid} · <code>${esc(f.action)}</code>`;}
   function stop(){if(timer){clearInterval(timer);TIMERS.delete(timer);timer=null;}play.textContent='▶';}
   function toggle(){if(timer){stop();return;}if(i>=frames.length-1)show(0);play.textContent='⏸';
     timer=setInterval(()=>{if(i>=frames.length-1){stop();return;}show(i+1);},Math.max(80,Math.round(1000/fps)));TIMERS.add(timer);}
@@ -351,7 +422,7 @@ function mountFramePlayer(el, frames, fps){
   play.onclick=toggle; rng.oninput=()=>{stop();show(Number(rng.value));};
   show(0);
 }
-function framesInSpan(frames, a, b){return (frames||[]).filter(f=>Number(f.t)>=a-1e-3 && Number(f.t)<=b+0.5);}
+function framesInSpan(frames, a, b){return (frames||[]).filter(f=>Number(f.idx)>=a && Number(f.idx)<=b);}
 
 function renderClip(){
   clearTimers();
@@ -369,24 +440,38 @@ function renderClip(){
     <div class="keptplayer" id="kept-stream"></div>`;
 
   const p1=c.pass1||{};
-  h+=`<h2>Pass 1 — Describe + Segment (whole clip → activities) · ${p1.n_activities??0} activities</h2>`;
-  h+=callBlock(`pass 1 · ${p1.n_frames??0} frames sub-sampled from the clip`,
-      {frames:p1.frames||[],prompt:p1.prompt,response:p1.response});
+  h+=`<h2>Pass 1 — Describe + Segment (${p1.n_windows??0} windows → activities) · ${p1.n_activities??0} activities</h2>`;
+  h+=(p1.windows||[]).map(w=>{
+    const frames=(w.start_frame_idx!=null)?` · frames ${w.start_frame_idx}–${w.end_frame_idx}`:'';
+    return callBlock(`pass 1 window ${w.window}${frames}`, {frames:w.frames||[],prompt:w.prompt,response:w.response});
+  }).join('');
 
   h+=`<h2>Pass 2 — Label (per activity → user prompt)</h2>`;
   h+=(c.pass2||[]).map(a=>{
     const sp=(a.spans||[]).map(s=>`${s.start_frame}–${s.end_frame} <span class="lab">${esc(s.user_state||'')}</span>`).join(' , ');
-    return `<div class="card"><div class="lab">activity ${a.idx} · ${esc(a.app||'')} · spans ${sp} · onset=${esc(a.onset||'')} completion=${esc(a.completion||'')}</div>
+    const win=a.pass1_window_idx!=null?` · pass1 window ${a.pass1_window_idx}`:'';
+    return `<div class="card"><div class="lab">activity ${a.idx}${win} · ${esc(a.app||'')} · spans ${sp} · onset=${esc(a.onset||'')} completion=${esc(a.completion||'')}</div>
       <div style="color:#b9c2d4;font-size:13px;margin:4px 0">${esc(a.description||'')}</div>
       ${callBlock('Pass 2 · label',{frames:a.frames,prompt:a.prompt,response:a.response})}</div>`;
   }).join('') || '<p class="lab">no activities</p>';
 
-  h+=`<h2>Final — instructions + per-span trajectory clips</h2>`;
+  const p3=c.pass3||{};
+  h+=`<h2>Pass 3 — Merge activities into goals (text only) · ${(p3.goals||[]).length} goals</h2>`;
+  h+=`<details><summary>pass 3 call — ${p3.n_labels??0} activities in → ${(p3.goals||[]).length} goals out</summary><div class="inner">
+      <details><summary>prompt</summary><div class="inner"><pre>${esc(p3.prompt||'')}</pre></div></details>
+      <div class="lab">model response (goals)</div>${jsonBlock(p3.response)}</div></details>`;
+  h+=(p3.goals||[]).map(g=>`<div class="card ${g.merged?'ok':''}">
+      <div class="lab">members [${(g.members||[]).join(', ')}]${g.merged?' · MERGED':''}</div>
+      <div class="instr">${esc(g.instruction)}</div>
+      ${(g.instruction_variants||[]).length?`<ul class="variants">${g.instruction_variants.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:''}
+      <div style="color:#8a93a6;font-size:12px">${esc(g.rationale||'')}</div></div>`).join('') || '<p class="lab">no goals</p>';
+
+  h+=`<h2>Final — goal trajectories + clips</h2>`;
   h+=(c.trajectories||[]).map((t,ti)=>`<div class="card ${t.user_state==='actively_working'?'ok':'no'}">
-      <div class="lab">${t.start_time_s}–${t.end_time_s}s · frames ${t.start_frame_idx}–${t.end_frame_idx} ${chips(t,['app','user_state','onset','completion'])}</div>
+      <div class="lab">frames ${t.start_frame_idx}–${t.end_frame_idx}${(t.frame_spans&&t.frame_spans.length>1)?` (${t.frame_spans.length} spans)`:''}${t.merged?` · MERGED [${(t.members||[]).join(',')}]`:''} ${chips(t,['app','user_state'])}</div>
       <div class="instr">${esc(t.instruction)}</div>
       ${(t.instruction_variants||[]).length?`<ul class="variants">${t.instruction_variants.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:''}
-      <div class="keptplayer fp" data-start="${t.start_time_s}" data-end="${t.end_time_s}"></div>
+      <div class="keptplayer fp" data-start="${t.start_frame_idx}" data-end="${t.end_frame_idx}"></div>
     </div>`).join('') || '<p class="lab">no trajectories</p>';
 
   if((c.rejected||[]).length){
@@ -463,6 +548,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(body)
             elif path == "/api/runs":

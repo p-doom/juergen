@@ -49,5 +49,6 @@ echo "azure /models reachability: HTTP $code  (200 => stage 02 will work; 000 =>
 
 # Reasoning effort: left at the model default (Kimi-K2.6 reasons in-band; Pass 1
 # is reasoning-heavy). Set LABELER_REASONING_EFFORT or pass --reasoning-effort to override.
-python3 -m annotation_pipeline.run_iteration --run-name "$RUN_NAME" "${EXTRA_ARGS[@]}"
+# Judge is disabled for now (--no-judge): we are iterating on pass1/pass2/pass3 only.
+python3 -m annotation_pipeline.run_iteration --run-name "$RUN_NAME" --no-judge "${EXTRA_ARGS[@]}"
 echo "DONE run=$RUN_NAME"

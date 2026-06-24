@@ -191,7 +191,7 @@ def keylog_summary(keylog_path: Path) -> dict[str, Any]:
 
 
 def aggregate_actions(
-    keylog_path: Path, n_bins: int, target_fps: int
+    keylog_path: Path, n_bins: int, target_fps: float
 ) -> tuple[list[ActionBin], ActionStats]:
     stats = ActionStats()
     bins = [ActionBin() for _ in range(n_bins)]
@@ -214,7 +214,7 @@ def aggregate_actions(
 
         if event_type == "ContextChanged":
             continue
-        bucket_idx = (timestamp_us * target_fps) // 1_000_000
+        bucket_idx = int((timestamp_us / 1_000_000) * target_fps)
         if bucket_idx < 0 or bucket_idx >= n_bins:
             continue
         action_bin = bins[bucket_idx]
@@ -257,7 +257,7 @@ def aggregate_actions(
     return bins, stats
 
 
-def ceil_frames(duration_s: float, target_fps: int) -> int:
+def ceil_frames(duration_s: float, target_fps: float) -> int:
     if duration_s <= 0:
         return 0
     return int(math.ceil(duration_s * target_fps))

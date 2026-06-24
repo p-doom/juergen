@@ -372,7 +372,8 @@ def build_canonical_sft(
             "n_messages": len(record["messages"]),
             "n_images": len(record["image_paths"]),
             "n_frames": record.get("n_frames"),
-            "duration_s": record.get("duration_s"),
+            "start_frame_idx": record.get("start_frame_idx"),
+            "end_frame_idx": record.get("end_frame_idx"),
         }
         for record in records
     ]

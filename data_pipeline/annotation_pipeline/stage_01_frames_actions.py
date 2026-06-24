@@ -51,7 +51,7 @@ def resolve_ffmpeg_bin(value: str | None) -> str:
 def extract_frames_ffmpeg(
     video_path: Path,
     output_dir: Path,
-    target_fps: int,
+    target_fps: float,
     target_height: int,
     jpeg_quality: int,
     ffmpeg_bin: str,
@@ -160,7 +160,7 @@ def pack_segment_to_arrayrecord(
 def extract_segment(
     row: dict[str, Any],
     frames_dir: Path,
-    target_fps: int,
+    target_fps: float,
     target_height: int,
     jpeg_quality: int,
     ffmpeg_bin: str,
@@ -287,7 +287,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--target-fps", type=int, default=config.DEFAULT_TARGET_FPS)
+    parser.add_argument("--target-fps", type=float, default=config.DEFAULT_TARGET_FPS)
     parser.add_argument("--target-height", type=int, default=config.DEFAULT_TARGET_HEIGHT)
     parser.add_argument("--jpeg-quality", type=int, default=config.DEFAULT_JPEG_QUALITY)
     parser.add_argument("--ffmpeg-bin", default=config.ffmpeg_bin())

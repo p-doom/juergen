@@ -31,6 +31,7 @@ CLI (spot-check):
 from __future__ import annotations
 
 import argparse
+import bisect
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -150,58 +151,75 @@ class Event:
     t_end_s: float = 0.0
     data: dict[str, Any] = field(default_factory=dict)
 
-    def overlaps(self, start_s: float, end_s: float) -> bool:
-        end = self.t_end_s if self.t_end_s else self.t_s
-        return self.t_s <= end_s and end >= start_s
-
 
 @dataclass
 class Transcript:
     events: list[Event]
     segment_offset_s: float = 0.0
+    # (global_time_s, global_frame_idx) sorted by time — the ONLY bridge from the
+    # keylog's microsecond stamps to the frame-index anchor. Internal plumbing;
+    # callers and the model only ever see `frame <N>`.
+    frame_times: list[tuple[float, int]] = field(default_factory=list)
 
-    def slice(self, start_s: float, end_s: float) -> list[Event]:
-        return [e for e in self.events if e.overlaps(start_s, end_s)]
+    def frame_of(self, t_s: float) -> int | None:
+        """Nearest kept-frame index for a keylog timestamp (None if no mapping)."""
+        ft = self.frame_times
+        if not ft:
+            return None
+        i = bisect.bisect_left(ft, (t_s,))
+        if i <= 0:
+            return ft[0][1]
+        if i >= len(ft):
+            return ft[-1][1]
+        before, after = ft[i - 1], ft[i]
+        return before[1] if (t_s - before[0]) <= (after[0] - t_s) else after[1]
 
     def render(
         self,
-        start_s: float | None = None,
-        end_s: float | None = None,
+        start_frame: int | None = None,
+        end_frame: int | None = None,
         max_text_chars: int = 600,
     ) -> str:
-        lo = -1e18 if start_s is None else start_s
-        hi = 1e18 if end_s is None else end_s
+        lo = -(1 << 62) if start_frame is None else int(start_frame)
+        hi = (1 << 62) if end_frame is None else int(end_frame)
         lines: list[str] = []
         for e in self.events:
-            if not e.overlaps(lo, hi):
-                continue
+            f0 = self.frame_of(e.t_s)
+            f1 = self.frame_of(e.t_end_s) if e.t_end_s else f0
+            if f0 is not None:  # slice by frame index when we have a mapping
+                a, b = (f0, f1 if f1 is not None else f0)
+                a, b = min(a, b), max(a, b)
+                if b < lo or a > hi:
+                    continue
+            tag = _frame_tag(f0, f1)
             if e.kind == "app":
-                lines.append(f"[{e.t_s:7.1f}s] APP -> {e.data['app']}")
+                lines.append(f"{tag} APP -> {e.data['app']}")
             elif e.kind == "chord":
-                lines.append(f"[{e.t_s:7.1f}s] KEY  {e.data['chord']}")
+                lines.append(f"{tag} KEY  {e.data['chord']}")
             elif e.kind == "type":
                 text = e.data["text"]
                 shown = text if len(text) <= max_text_chars else text[:max_text_chars] + "…"
                 approx = " ~approx" if e.data.get("approx") else ""
-                lines.append(
-                    f"[{e.t_s:7.1f}–{e.t_end_s:.1f}s] TYPE{approx} "
-                    f"({e.data['n_keys']} keys): {shown!r}"
-                )
+                lines.append(f"{tag} TYPE{approx} ({e.data['n_keys']} keys): {shown!r}")
             elif e.kind == "mouse":
                 d = e.data
                 bits = []
                 if d.get("clicks"):
-                    bits.append(
-                        ", ".join(f"{n}x {btn}" for btn, n in sorted(d["clicks"].items()))
-                    )
+                    bits.append(", ".join(f"{n}x {btn}" for btn, n in sorted(d["clicks"].items())))
                 if d.get("scroll"):
                     bits.append(f"scroll {d['scroll_dir']} ~{abs(int(d['scroll']))}")
                 if not bits:
                     bits.append("move")
-                lines.append(
-                    f"[{e.t_s:7.1f}–{e.t_end_s:.1f}s] MOUSE {'; '.join(bits)}"
-                )
+                lines.append(f"{tag} MOUSE {'; '.join(bits)}")
         return "\n".join(lines) if lines else "(no input events in interval)"
+
+
+def _frame_tag(f0: int | None, f1: int | None) -> str:
+    if f0 is None:
+        return "[frame ?]"
+    if f1 is not None and f1 != f0:
+        return f"[frame {f0}–{f1}]"
+    return f"[frame {f0}]"
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +235,7 @@ def _payload_name(event: list[Any]) -> str | None:
 
 def build_transcript(
     keylog_path: Path,
+    frame_records: list[dict[str, Any]] | None = None,
     segment_offset_s: float = 0.0,
     typing_gap_s: float = 2.5,
     mouse_gap_s: float = 1.5,
@@ -368,25 +387,34 @@ def build_transcript(
     flush_typing()
     flush_mouse()
     events.sort(key=lambda e: e.t_s)
-    return Transcript(events=events, segment_offset_s=segment_offset_s)
+    frame_times: list[tuple[float, int]] = []
+    if frame_records:
+        frame_times = sorted(
+            (float(r["global_time_s"]), int(r["global_frame_idx"])) for r in frame_records
+        )
+    return Transcript(events=events, segment_offset_s=segment_offset_s, frame_times=frame_times)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--keylog", type=Path, required=True)
+    ap.add_argument("--frame-records", type=Path, default=None,
+                    help="stage-01 frame_records.jsonl, to anchor lines on frame <N>")
     ap.add_argument("--segment-offset-s", type=float, default=0.0)
-    ap.add_argument("--start", type=float, default=None)
-    ap.add_argument("--end", type=float, default=None)
+    ap.add_argument("--start-frame", type=int, default=None)
+    ap.add_argument("--end-frame", type=int, default=None)
     ap.add_argument("--max-text-chars", type=int, default=600)
     args = ap.parse_args()
-    tr = build_transcript(args.keylog, segment_offset_s=args.segment_offset_s)
+    from annotation_pipeline.common import read_jsonl
+    fr = read_jsonl(args.frame_records) if args.frame_records else None
+    tr = build_transcript(args.keylog, frame_records=fr, segment_offset_s=args.segment_offset_s)
     n_type = sum(1 for e in tr.events if e.kind == "type")
     n_chord = sum(1 for e in tr.events if e.kind == "chord")
     n_mouse = sum(1 for e in tr.events if e.kind == "mouse")
     n_app = sum(1 for e in tr.events if e.kind == "app")
     print(f"# {len(tr.events)} events: {n_type} typing, {n_chord} chords, "
           f"{n_mouse} mouse, {n_app} app-switches\n")
-    print(tr.render(args.start, args.end, max_text_chars=args.max_text_chars))
+    print(tr.render(args.start_frame, args.end_frame, max_text_chars=args.max_text_chars))
 
 
 if __name__ == "__main__":

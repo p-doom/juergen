@@ -71,6 +71,8 @@ def render_frames(
     target_height: int,
 ) -> list[Path]:
     ensure_dir(output_dir)
+    for old_frame in output_dir.glob("frame_*.jpg"):
+        old_frame.unlink()
     image_paths: list[Path] = []
     captures: dict[str, cv2.VideoCapture] = {}
     try:

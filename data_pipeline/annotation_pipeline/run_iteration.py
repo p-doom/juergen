@@ -22,6 +22,7 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -70,9 +71,12 @@ def process_clip(clip_key: str, clip: dict[str, Any], row: dict[str, Any], run_d
 
     frame_records = stage01 / "frame_records.jsonl"
     if args.force_frames or not frame_records.exists():
-        run_module("stage_01_frames_actions", [
+        stage01_args = [
             "--manifest", str(manifest_path), "--output-dir", str(stage01),
-        ])
+        ]
+        if args.target_fps is not None:
+            stage01_args += ["--target-fps", str(args.target_fps)]
+        run_module("stage_01_frames_actions", stage01_args)
     else:
         print("  [skip stage 01: frame_records.jsonl exists]")
 
@@ -88,6 +92,7 @@ def process_clip(clip_key: str, clip: dict[str, Any], row: dict[str, Any], run_d
             stage02_args += ["--reasoning-effort", args.reasoning_effort]
         if args.refresh:
             stage02_args += ["--refresh", args.refresh]
+        stage02_args += ["--concurrency", str(args.concurrency)]
         run_module("stage_02_annotate", stage02_args)
     else:
         print("  [skip stage 02: trajectories_raw.json exists]")
@@ -108,6 +113,14 @@ def parse_args() -> argparse.Namespace:
                         "(e.g. 'pass2'); reuses cached pass1.")
     p.add_argument("--force", action="store_true", help="re-run stage 02 even if cached")
     p.add_argument("--force-frames", action="store_true", help="re-run stage 01 frame extraction")
+    p.add_argument("--target-fps", type=float, default=None,
+                   help="Override stage-01 frame/action sampling fps when extracting frames.")
+    p.add_argument("--clip-concurrency", type=int, default=4,
+                   help="How many clips to process concurrently (each is an independent "
+                        "stage-01/stage-02 subprocess).")
+    p.add_argument("--concurrency", type=int, default=4,
+                   help="In-flight labeler calls WITHIN each clip (pass-1 windows + pass-2 "
+                        "activities). Total endpoint load is roughly clip-concurrency * concurrency.")
     p.add_argument("--no-review", action="store_true")
     p.add_argument("--no-judge", action="store_true")
     return p.parse_args()
@@ -121,7 +134,9 @@ def main() -> None:
     keys = args.clips or list(clips.keys())
 
     run_dir = ensure_dir(args.out_root / args.run_name)
-    rows = []
+
+    # Resolve clip keys to (key, clip, row), skipping any not in the manifest.
+    todo = []
     for key in keys:
         clip = clips[key]
         seg = clip["segment_id"]
@@ -129,12 +144,24 @@ def main() -> None:
         if row is None:
             print(f"[{key}] segment {seg} not in dataset manifest; skipping")
             continue
+        todo.append((key, clip, seg, row))
+
+    def run_one(item: tuple) -> dict[str, Any]:
+        key, clip, seg, row = item
         print(f"\n=== {key}  ({clip.get('app','?')}, {clip.get('duration_s','?')}s) ===")
         try:
-            rows.append(process_clip(key, clip, row, run_dir, args))
+            return process_clip(key, clip, row, run_dir, args)
         except subprocess.CalledProcessError as exc:
             print(f"[{key}] FAILED: {exc}")
-            rows.append({"clip_key": key, "segment_id": seg, "error": str(exc)})
+            return {"clip_key": key, "segment_id": seg, "error": str(exc)}
+
+    # Clips are independent (separate output dirs / subprocesses), so run several
+    # at once; the labeler calls are network-bound HTTP requests.
+    if args.clip_concurrency > 1 and len(todo) > 1:
+        with ThreadPoolExecutor(max_workers=args.clip_concurrency) as ex:
+            rows = list(ex.map(run_one, todo))
+    else:
+        rows = [run_one(item) for item in todo]
 
     (run_dir / "run_summary.json").write_text(json.dumps(rows, indent=2) + "\n")
     print(f"\nWrote run summary: {run_dir/'run_summary.json'}")

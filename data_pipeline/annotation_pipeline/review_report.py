@@ -22,21 +22,23 @@ from typing import Any
 import cv2
 
 from annotation_pipeline.common import read_jsonl
+from annotation_pipeline.frames_render import records_in_index_span
 from annotation_pipeline.keylog_transcript import build_transcript
 
 
-def _thumbs(video_path: Path, start_s: float, end_s: float, n: int = 8, height: int = 150) -> list[str]:
+def _thumbs(video_path: Path, recs: list[dict[str, Any]], n: int = 8, height: int = 150) -> list[str]:
+    """Thumbnails for the kept frames in a trajectory's frame-index span, read
+    from the raw video at each record's source_frame_idx."""
     cap = cv2.VideoCapture(str(video_path))
     out: list[str] = []
     try:
-        if not cap.isOpened():
+        if not cap.isOpened() or not recs:
             return out
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
-        count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        span = max(0.0, end_s - start_s)
-        for i in range(n):
-            t = start_s + (span * i / max(1, n - 1))
-            fidx = min(max(0, int(round(t * fps))), max(0, count - 1))
+        picks = recs if len(recs) <= n else [recs[int(i * (len(recs) - 1) / (n - 1))] for i in range(n)]
+        for r in picks:
+            fidx = int(r.get("source_frame_idx", -1))
+            if fidx < 0:
+                continue
             cap.set(cv2.CAP_PROP_POS_FRAMES, fidx)
             ok, frame = cap.read()
             if not ok or frame is None:
@@ -46,7 +48,7 @@ def _thumbs(video_path: Path, start_s: float, end_s: float, n: int = 8, height: 
             ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
             if ok:
                 b64 = base64.b64encode(buf.tobytes()).decode("ascii")
-                out.append(f'<img title="t={t:.1f}s" src="data:image/jpeg;base64,{b64}">')
+                out.append(f'<img title="frame {int(r.get("global_frame_idx", -1))}" src="data:image/jpeg;base64,{b64}">')
     finally:
         cap.release()
     return out
@@ -62,19 +64,19 @@ def _metabadge(traj: dict[str, Any]) -> str:
     return " ".join(bits)
 
 
-def _traj_card(idx: int, traj: dict[str, Any], video_path: Path, transcript) -> str:
-    s, e = traj["start_time_s"], traj["end_time_s"]
-    fi = traj.get("start_frame_idx"); fj = traj.get("end_frame_idx")
-    frag = f" · frames {fi}–{fj}" if fi is not None and fj is not None else ""
-    thumbs = "".join(_thumbs(video_path, s, e))
+def _traj_card(idx: int, traj: dict[str, Any], video_path: Path, transcript,
+               frame_records: list[dict[str, Any]]) -> str:
+    fi = int(traj.get("start_frame_idx", 0)); fj = int(traj.get("end_frame_idx", 0))
+    recs = records_in_index_span(frame_records, fi, fj)
+    thumbs = "".join(_thumbs(video_path, recs))
     variants = "".join(f"<li>{html.escape(v)}</li>" for v in traj.get("instruction_variants", []))
-    tslice = html.escape(transcript.render(s, e, max_text_chars=800))
+    tslice = html.escape(transcript.render(fi, fj, max_text_chars=800))
     # Color cue only: actively-working spans carry the user's own actions; idle
     # spans (agent/build running) usually drop out downstream as all-NO_OP.
     vclass = "verified" if traj.get("user_state") == "actively_working" else "unverified"
     return f"""
     <div class="card {vclass}">
-      <div class="hd">#{idx} &nbsp; {s:.1f}–{e:.1f}s ({e-s:.0f}s){frag}
+      <div class="hd">#{idx} &nbsp; frames {fi}–{fj} ({len(recs)} kept)
         &nbsp; {_metabadge(traj)}</div>
       <div class="instr">{html.escape(traj.get('instruction',''))}</div>
       <ul class="variants">{variants}</ul>
@@ -97,9 +99,10 @@ def _clip_section(clip_dir: Path) -> str:
     manifest = read_jsonl(clip_dir / "stage_00" / "manifest.jsonl")
     row = manifest[0]
     video_path = Path(row["video_path"])
-    transcript = build_transcript(Path(row["keylog_path"]))
+    frame_records = read_jsonl(clip_dir / "stage_01" / "frame_records.jsonl")
+    transcript = build_transcript(Path(row["keylog_path"]), frame_records=frame_records)
 
-    cards = "".join(_traj_card(i, t, video_path, transcript)
+    cards = "".join(_traj_card(i, t, video_path, transcript, frame_records)
                     for i, t in enumerate(data.get("trajectories", [])))
     rej = stage02 / "rejected.jsonl"
     n_rej = len(read_jsonl(rej)) if rej.exists() else 0

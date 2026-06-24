@@ -13,16 +13,18 @@ pipeline's failure: every instruction started "In the <app>, ...").
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import re
 from pathlib import Path
 from typing import Any
 
-import cv2
-
 from annotation_pipeline import prompts
 from annotation_pipeline.common import read_jsonl
+from annotation_pipeline.frames_render import (
+    records_in_index_span,
+    render_frames,
+    select_naming_frames,
+)
 from annotation_pipeline.keylog_transcript import build_transcript
 from annotation_pipeline.labeler import Labeler
 
@@ -35,42 +37,27 @@ BANNED_OPENINGS = re.compile(
 )
 
 
-def judge_prompt(instruction: str, s: float, e: float, transcript_text: str) -> str:
+def judge_prompt(instruction: str, start_frame: int, end_frame: int, transcript_text: str) -> str:
     return prompts.render(
         "judge",
         instruction=repr(instruction),
-        start_s=f"{s:.1f}", end_s=f"{e:.1f}", transcript_text=transcript_text,
+        start_frame=start_frame, end_frame=end_frame, transcript_text=transcript_text,
     )
 
 
-def sample_frame_urls(video_path: Path, s: float, e: float, n: int = 10, height: int = 540) -> tuple[list[str], list[str]]:
-    """Return (data-url images, per-frame `original_t=..s` text labels) — clean
-    frames; the time is interleaved as text, not burned in."""
-    cap = cv2.VideoCapture(str(video_path))
-    urls: list[str] = []
-    labels: list[str] = []
-    try:
-        if not cap.isOpened():
-            return urls, labels
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
-        count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        span = max(0.0, e - s)
-        for i in range(n):
-            t = s + (span * i / max(1, n - 1))
-            cap.set(cv2.CAP_PROP_POS_FRAMES, min(max(0, int(round(t * fps))), max(0, count - 1)))
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                continue
-            if frame.shape[0] != height:
-                sc = height / frame.shape[0]
-                frame = cv2.resize(frame, (max(2, int(frame.shape[1] * sc)), height), interpolation=cv2.INTER_AREA)
-            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-            if ok:
-                urls.append("data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii"))
-                labels.append(f"original_t={t:.1f}s")
-    finally:
-        cap.release()
-    return urls, labels
+def judge_frames(frame_records: list[dict[str, Any]], start_frame: int, end_frame: int,
+                 video_by_segment: dict[str, Path], out_dir: Path,
+                 n: int = 10, height: int = 540) -> tuple[list[Path], list[str]]:
+    """Render up to ``n`` kept frames in the trajectory's frame-index span,
+    labelled `frame <N>` (same anchor the annotation passes use)."""
+    recs = records_in_index_span(frame_records, start_frame, end_frame)
+    if not recs:
+        return [], []
+    sel = select_naming_frames(recs, n)
+    imgs = render_frames(sel, out_dir, jpeg_quality=80,
+                         video_by_segment=video_by_segment, target_height=height)
+    labels = [f"frame {int(r['global_frame_idx'])}" for r in sel]
+    return imgs, labels
 
 
 AXES = ["achieves", "monotonic", "boundary_tight", "grounded", "user_prompt_register"]
@@ -108,26 +95,28 @@ def judge_run(run_dir: Path, no_cache: bool = False) -> dict[str, Any]:
         if not manifest:
             continue
         row = manifest[0]
-        video_path = Path(row["video_path"])
-        transcript = build_transcript(Path(row["keylog_path"]))
+        video_by_segment = {str(row["segment_id"]): Path(row["video_path"])}
+        frame_records = read_jsonl(clip_dir / "stage_01" / "frame_records.jsonl")
+        transcript = build_transcript(Path(row["keylog_path"]), frame_records=frame_records)
         cache_dir = stage02 / "judge_cache"
         results = []
         for i, t in enumerate(json.loads(traj_path.read_text()).get("trajectories", [])):
-            s, e = t["start_time_s"], t["end_time_s"]
+            s, e = int(t["start_frame_idx"]), int(t["end_frame_idx"])
             all_instructions.append(t.get("instruction", ""))
-            urls, labels = sample_frame_urls(video_path, s, e)
+            imgs, labels = judge_frames(frame_records, s, e, video_by_segment,
+                                        cache_dir / "frames" / f"judge_{i:04d}")
             try:
                 verdict = lab.call_json(
                     JUDGE_SYSTEM,
                     judge_prompt(t.get("instruction", ""), s, e, transcript.render(s, e, max_text_chars=800)),
-                    images=urls, image_labels=labels, cache_path=cache_dir / f"judge_{i:04d}.txt", no_cache=no_cache,
+                    images=imgs, image_labels=labels, cache_path=cache_dir / f"judge_{i:04d}.txt", no_cache=no_cache,
                 )
             except Exception as exc:  # noqa: BLE001
                 verdict = {"error": str(exc)}
             passed = all(bool(verdict.get(a)) for a in PASS_AXES)
             n_total += 1
             n_pass += int(passed)
-            results.append({"idx": i, "start_time_s": s, "end_time_s": e,
+            results.append({"idx": i, "start_frame_idx": s, "end_frame_idx": e,
                             "instruction": t.get("instruction", ""), "pass": passed, "verdict": verdict})
         per_clip.append({"clip_key": clip_dir.name, "n": len(results),
                          "n_pass": sum(r["pass"] for r in results), "results": results})

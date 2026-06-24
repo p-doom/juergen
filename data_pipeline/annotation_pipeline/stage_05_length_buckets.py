@@ -209,10 +209,9 @@ def main() -> None:
                 "token_count": token_count,
                 "token_count_mode": counts["token_count_mode"],
                 "n_frames": row["n_frames"],
-                "duration_s": row["duration_s"],
                 "instruction": row["instruction"],
-                "start_time_s": row["start_time_s"],
-                "end_time_s": row["end_time_s"],
+                "start_frame_idx": row.get("start_frame_idx"),
+                "end_frame_idx": row.get("end_frame_idx"),
             }
         )
 

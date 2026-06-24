@@ -43,14 +43,15 @@ def is_generic_instruction(instruction: str) -> bool:
 
 
 def selected_frames(
-    frame_records: list[dict[str, Any]], start_s: float, end_s: float
+    frame_records: list[dict[str, Any]], spans: list[list[int]]
 ) -> list[dict[str, Any]]:
-    # End-inclusive: end_time_s comes from the overlay label of the last
-    # relevant frame, which an exclusive bound would drop.
+    # Union of inclusive frame-index spans. Stage 02 emits the trajectory's
+    # actual span-union (`frame_spans`), so frames belonging to other activities
+    # in the gaps between an interleaved goal's spans are excluded.
     return [
         record
         for record in frame_records
-        if start_s <= float(record["global_time_s"]) <= end_s + 0.25
+        if any(s <= int(record["global_frame_idx"]) <= e for s, e in spans)
     ]
 
 
@@ -100,17 +101,14 @@ def make_sample(
         )
         messages.append(assistant_text(frame["action"]))
 
-    start_s = float(frames[0]["global_time_s"])
-    end_s = float(frames[-1]["global_time_s"]) + 0.5
     suffix = f"_v{variant_idx}" if variant_idx else ""
     return {
         "sample_id": f"{recording_id}_traj{trajectory_idx:04d}{suffix}",
         "recording_id": recording_id,
         "instruction": instruction,
         "variant_idx": variant_idx,
-        "start_time_s": round(start_s, 6),
-        "end_time_s": round(end_s, 6),
-        "duration_s": round(end_s - start_s, 6),
+        "start_frame_idx": int(frames[0]["global_frame_idx"]),
+        "end_frame_idx": int(frames[-1]["global_frame_idx"]),
         "n_frames": len(frames),
         "n_non_noop": sum(1 for frame in frames if frame["action"] != "NO_OP"),
         "source_trajectory": trajectory,
@@ -123,7 +121,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frame-records", type=Path, required=True)
     parser.add_argument("--trajectories", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--min-duration-s", type=float, default=8.0)
     parser.add_argument("--min-frames", type=int, default=4)
     parser.add_argument("--pre-context-frames", type=int, default=1)
     return parser.parse_args()
@@ -140,13 +137,13 @@ def main() -> None:
     recording_id = str(frame_records[0]["recording_id"])
     samples: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    last_emitted_end_s = float("-inf")
+    last_emitted_end_idx = -1
 
     ordered = sorted(
         enumerate(trajectories),
         key=lambda kv: (
-            float(kv[1].get("start_time_s") or 0.0),
-            float(kv[1].get("end_time_s") or 0.0),
+            int(kv[1].get("start_frame_idx") or 0),
+            int(kv[1].get("end_frame_idx") or 0),
         ),
     )
     for idx, trajectory in ordered:
@@ -161,19 +158,20 @@ def main() -> None:
             reject("not_verified")
             continue
         try:
-            start_s = float(trajectory["start_time_s"])
-            end_s = float(trajectory["end_time_s"])
+            start_idx = int(trajectory["start_frame_idx"])
+            end_idx = int(trajectory["end_frame_idx"])
         except (KeyError, TypeError, ValueError):
-            reject("bad_time_bounds")
+            reject("bad_frame_bounds")
             continue
-        if end_s <= start_s or end_s - start_s < args.min_duration_s:
+        if end_idx < start_idx:
             reject("too_short")
             continue
 
-        frames = selected_frames(frame_records, start_s, end_s)
+        spans = trajectory.get("frame_spans") or [[start_idx, end_idx]]
+        frames = selected_frames(frame_records, spans)
         # Enforce non-overlap with the previously emitted sample.
         n_before_clip = len(frames)
-        frames = [f for f in frames if float(f["global_time_s"]) > last_emitted_end_s]
+        frames = [f for f in frames if int(f["global_frame_idx"]) > last_emitted_end_idx]
         if len(frames) < args.min_frames:
             reject("overlaps_previous" if n_before_clip > len(frames) else "too_few_frames")
             continue
@@ -199,7 +197,7 @@ def main() -> None:
         if emitted == 0:
             reject("generic_or_empty_instruction")
             continue
-        last_emitted_end_s = float(frames[-1]["global_time_s"])
+        last_emitted_end_idx = int(frames[-1]["global_frame_idx"])
 
     write_jsonl(output_dir / "trajectories.jsonl", samples)
     write_jsonl(output_dir / "rejected_trajectories.jsonl", rejected)
