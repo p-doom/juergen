@@ -30,6 +30,11 @@ export PYTHONPATH="$DATA_PIPELINE"
 export JUERGEN_ANNOTATION_FFMPEG_BIN="${JUERGEN_ANNOTATION_FFMPEG_BIN:-/fast/service/apps/software/FFmpeg/7.0.2-GCCcore-13.3.0/bin/ffmpeg}"
 # A compute node isn't a shared login node, so ffmpeg can use more threads.
 export JUERGEN_ANNOTATION_FFMPEG_THREADS="${JUERGEN_ANNOTATION_FFMPEG_THREADS:-8}"
+# v2 describe pass narrates ~150 frames. max_completion_tokens is RESERVED against
+# the 262K context, so keep it modest (observed output maxed ~21K) or the input
+# frames overflow the window. Frame height is 720 (config); a wide ~150-frame clip
+# can still overflow at 720p and is skipped (accepted for now).
+export LABELER_MAX_TOKENS="${LABELER_MAX_TOKENS:-32000}"
 
 # Azure creds: normally inherited via sbatch --export=ALL; fall back to bashrc.
 if [[ -z "${AZURE_OPENAI_ENDPOINT:-}" || -z "${AZURE_OPENAI_API_KEY:-}" ]]; then
@@ -47,8 +52,9 @@ code=$(curl -s -o /dev/null -m 20 -w "%{http_code}" \
   "${AZURE_OPENAI_ENDPOINT%/}/models" -H "api-key: ${AZURE_OPENAI_API_KEY:-none}" 2>/dev/null || echo "000")
 echo "azure /models reachability: HTTP $code  (200 => stage 02 will work; 000 => no egress, extraction still runs & caches to grain)"
 
-# Reasoning effort: left at the model default (Kimi-K2.6 reasons in-band; Pass 1
-# is reasoning-heavy). Set LABELER_REASONING_EFFORT or pass --reasoning-effort to override.
-# Judge is disabled for now (--no-judge): we are iterating on pass1/pass2/pass3 only.
+# Reasoning effort: left at the model default (Kimi-K2.6 reasons in-band; the
+# describe pass is reasoning-heavy). Set LABELER_REASONING_EFFORT or pass
+# --reasoning-effort to override.
+# Judge is disabled (--no-judge): we are iterating on the describe→extract prompts.
 python3 -m annotation_pipeline.run_iteration --run-name "$RUN_NAME" --no-judge "${EXTRA_ARGS[@]}"
 echo "DONE run=$RUN_NAME"

@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Interactive inspector for the redesigned (hindsight) annotation pipeline.
+"""Interactive inspector for the v2 (describe→extract, timestamp-free) pipeline.
 
 Serves a single-page dashboard over an iteration run (default
 ``annotation_pipeline/iteration_runs/<run>``). For each clip you can:
 
-  - play the RAW recording (HTTP Range streaming);
-  - step through every VLM call — Pass 1 describe+segment (one call over the
-    whole clip) and Pass 2 label (per activity) — seeing the exact frames that
-    were sent, the reconstructed prompt, and the raw cached response;
-  - review the FINAL instructions, each with its activity trajectory clip played
-    inline, plus the rejected activities and why.
+  - play the RAW recording (HTTP Range streaming) and step through the exact
+    0.5-fps frames the VLM was sent (the kept stage-01 stream);
+  - for BOTH describe variants (prose / steps) side by side: the full
+    description, the model's THINKING (reasoning), the full raw response, and
+    the prompt that was sent;
+  - the list of GOALS each variant's extract pass recovered (instruction +
+    register variants + anchor + grounding).
+
+Reads ``stage_02/stage02_result.json`` (self-contained) per clip.
 
 Run:
     cd .../data_pipeline
@@ -31,20 +34,12 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
-from annotation_pipeline.common import extract_json_object, read_jsonl
+from annotation_pipeline.common import read_jsonl
 from annotation_pipeline.image_store import (
     is_arrayrecord_image_uri,
     parse_arrayrecord_image_uri,
     read_jpeg_bytes,
 )
-from annotation_pipeline.keylog_transcript import build_transcript
-from annotation_pipeline.stage_02_annotate import (
-    activities_text,
-    pass1_prompt,
-    pass2_prompt,
-    pass3_prompt,
-)
-from annotation_pipeline.frames_render import records_in_index_span
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 DEFAULT_RUN_ROOT = PIPELINE_DIR / "iteration_runs"
@@ -69,22 +64,6 @@ def read_json(path: Path, default: Any = None) -> Any:
         return default
 
 
-def parse_response(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {"_missing": True}
-    text = path.read_text()
-    try:
-        return extract_json_object(text)
-    except Exception:  # noqa: BLE001 - show the raw text if it isn't clean JSON
-        return {"_raw": text}
-
-
-def frame_paths(directory: Path) -> list[str]:
-    if not directory.is_dir():
-        return []
-    return [str(p.resolve()) for p in sorted(directory.glob("frame_*.jpg"))]
-
-
 def list_runs() -> list[dict[str, Any]]:
     if not RUN_ROOT.is_dir():
         return []
@@ -96,7 +75,7 @@ def list_runs() -> list[dict[str, Any]]:
             (d / "judge.json").stat().st_mtime if (d / "judge.json").exists() else 0.0,
         ]
         for clip in clips:
-            for rel in ("stage_02/stage02_summary.json", "stage_02/pass1_windows.jsonl"):
+            for rel in ("stage_02/stage02_result.json", "stage_02/stage02_summary.json"):
                 p = d / "clips" / clip / rel
                 if p.exists():
                     marker_times.append(p.stat().st_mtime)
@@ -109,114 +88,16 @@ def build_clip(clip_dir: Path) -> dict[str, Any]:
     s00 = read_jsonl(clip_dir / "stage_00" / "manifest.jsonl")
     row = s00[0] if s00 else {}
     s02 = clip_dir / "stage_02"
-    cache = s02 / "cache"
     summary = read_json(s02 / "stage02_summary.json", {})
-    activities = read_jsonl(s02 / "activities.jsonl")
-    traj = read_json(s02 / "trajectories_raw.json", {}) or {}
-    rejected = read_jsonl(s02 / "rejected.jsonl")
+    result = read_json(s02 / "stage02_result.json", {}) or {}
     frame_records = read_jsonl(clip_dir / "stage_01" / "frame_records.jsonl")
 
-    transcript = None
-    keylog = row.get("keylog_path")
-    if keylog and Path(keylog).exists():
-        try:
-            transcript = build_transcript(Path(keylog), frame_records=frame_records)
-        except Exception:  # noqa: BLE001
-            transcript = None
-
-    def tr(start_frame: int | None = None, end_frame: int | None = None, n: int = 600) -> str:
-        if transcript is None:
-            return "(transcript unavailable)"
-        return transcript.render(start_frame, end_frame, max_text_chars=n)
-
-    # Pass 1 — describe+segment calls over fixed windows of the kept-frame stream.
-    pass1_windows = read_jsonl(s02 / "pass1_windows.jsonl")
-    p1_calls = []
-    if pass1_windows:
-        for row_w in pass1_windows:
-            wi = int(row_w.get("window_idx", len(p1_calls)))
-            frames = frame_paths(s02 / "pass1_frames" / f"window_{wi:04d}")
-            prompt = ""
-            try:
-                prompt = pass1_prompt(
-                    tr(int(row_w.get("start_frame_idx", 0)),
-                       int(row_w.get("end_frame_idx", 0)), 8000),
-                    len(frames),
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            cache_name = str(row_w.get("cache_name") or f"pass1_{wi:04d}")
-            p1_calls.append({
-                "window": wi,
-                "span": [row_w.get("start_frame_idx"), row_w.get("end_frame_idx")],
-                "start_frame_idx": row_w.get("start_frame_idx"),
-                "end_frame_idx": row_w.get("end_frame_idx"),
-                "n_kept_frames": row_w.get("n_kept_frames"),
-                "n_frames": len(frames),
-                "n_activities": row_w.get("n_activities"),
-                "frames": frames,
-                "prompt": prompt,
-                "response": parse_response(cache / f"{cache_name}.txt"),
-            })
-    else:
-        # Backward-compatible view for older runs before pass1 was windowed.
-        p1_frames = frame_paths(s02 / "pass1_frames")
-        p1_prompt = ""
-        try:
-            p1_prompt = pass1_prompt(tr(None, None, 8000), len(p1_frames))
-        except Exception:  # noqa: BLE001
-            pass
-        p1_calls.append({"window": 0, "span": [None, None], "n_frames": len(p1_frames),
-                         "n_activities": len(activities), "frames": p1_frames,
-                         "prompt": p1_prompt, "response": parse_response(cache / "pass1.txt")})
-    pass1 = {"n_frames": sum(c.get("n_frames", 0) for c in p1_calls),
-             "n_windows": len(p1_calls), "windows": p1_calls,
-             "n_activities": len(activities)}
-
-    # Pass 2 — one label call per activity (frames across all its spans).
-    pass2 = []
-    for ai, act in enumerate(activities):
-        tag = f"{ai:04d}"
-        frames = frame_paths(s02 / "pass2_frames" / tag)
-        spans = act.get("spans", [])
-        spans_text = "frames " + ", ".join(f"{s.get('start_frame')}–{s.get('end_frame')}" for s in spans)
-        f0 = f1 = 0
-        recs = []
-        for sp in spans:
-            recs += records_in_index_span(frame_records, sp.get("start_frame", 0), sp.get("end_frame", 0))
-        if recs:
-            recs.sort(key=lambda r: int(r["global_frame_idx"]))
-            f0 = int(recs[0]["global_frame_idx"]); f1 = int(recs[-1]["global_frame_idx"])
-        prompt = ""
-        try:
-            prompt = pass2_prompt(spans_text, act.get("description", ""), act.get("onset", "unknown"),
-                                  act.get("completion", "unknown"), tr(f0, f1, 2000), len(frames))
-        except Exception:  # noqa: BLE001
-            pass
-        pass2.append({"idx": ai, "app": act.get("app", ""), "spans": spans,
-                      "pass1_window_idx": act.get("pass1_window_idx"),
-                      "description": act.get("description", ""), "onset": act.get("onset", ""),
-                      "completion": act.get("completion", ""),
-                      "frames": frames, "prompt": prompt, "response": parse_response(cache / f"pass2_{tag}.txt")})
-
-    # Pass 3 — merge labelled activities into goals (text only).
-    pass2_labels = read_jsonl(s02 / "pass2_labels.jsonl")
-    goals = read_jsonl(s02 / "goals.jsonl")
-    p3_prompt = ""
-    try:
-        if pass2_labels:
-            p3_prompt = pass3_prompt(activities_text(pass2_labels))
-    except Exception:  # noqa: BLE001
-        pass
-    pass3 = {"prompt": p3_prompt, "response": parse_response(cache / "pass3.txt"),
-             "goals": goals, "n_labels": len(pass2_labels)}
-
-    # Kept-frame stream = exactly what stage 01 sampled (NO_OP-capped / adaptively
-    # thinned). Play it back to SEE the sampling: idle gaps show as time jumps.
+    # Kept-frame stream = exactly what stage 01 sampled (0.5 fps, NO_OP-capped).
+    # Play it back to SEE the clip; the same frames are what the VLM was sent.
     s01_summary = read_json(clip_dir / "stage_01" / "frames_actions_summary.json", {})
     kept_frames = [
         {"idx": r.get("global_frame_idx"), "action": r.get("action"),
-         # ar:// grain URIs are served by the /image endpoint as-is; loose files are resolved.
+         # ar:// grain URIs are served by /image as-is; loose files are resolved.
          "img": r["image_path"] if is_arrayrecord_image_uri(r["image_path"]) else str(Path(r["image_path"]).resolve())}
         for r in frame_records[:6000]
         if r.get("image_path")
@@ -227,24 +108,22 @@ def build_clip(clip_dir: Path) -> dict[str, Any]:
         "noop_keep_tail": s01_summary.get("noop_keep_tail"),
         "n_frames": len(frame_records),
         "n_non_noop": sum(1 for r in frame_records if r.get("action") != "NO_OP"),
-        "n_noop_dropped": s01_summary.get("n_noop_dropped") or s01_summary.get("n_noop_capped"),
+        "n_noop_dropped": s01_summary.get("n_noop_dropped"),
     }
 
     video = row.get("video_path")
     return {
         "clip_key": clip_dir.name,
-        "segment_id": row.get("segment_id"),
+        "segment_id": row.get("segment_id") or result.get("segment_id"),
         "video": str(Path(video).resolve()) if video and Path(video).exists() else None,
         "n_kept_frames": len(frame_records),
         "fps": row.get("video_fps"),
         "summary": summary,
         "sampling": sampling,
         "kept_frames": kept_frames,
-        "pass1": pass1,
-        "pass2": pass2,
-        "pass3": pass3,
-        "trajectories": traj.get("trajectories", []),
-        "rejected": rejected,
+        "n_images_sent": result.get("n_images_sent"),
+        "model": result.get("model"),
+        "variants": result.get("variants", {}),
     }
 
 
@@ -377,25 +256,47 @@ async function load(name){S.run=await api(`/api/run?name=${encodeURIComponent(na
 function renderNav(){$('nav').innerHTML=S.run.clips.map((c,i)=>{
   const s=c.summary||{};
   return `<button class="clip-btn ${i===S.clip?'active':''}" data-i="${i}">${esc(c.clip_key)}
-    <span class="sub">${s.n_pass1_activities??0} activities · ${s.n_spans??0} spans · ${c.n_kept_frames??0} frames</span></button>`;
+    <span class="sub">${c.n_kept_frames??0} frames · goals ${s.n_goals_prose??0}p/${s.n_goals_steps??0}s</span></button>`;
 }).join('');
 document.querySelectorAll('.clip-btn').forEach(b=>b.onclick=()=>{S.clip=+b.dataset.i;renderNav();renderClip();window.scrollTo(0,0);});}
 
-function jsonBlock(obj){
-  if(obj&&obj._raw!==undefined)return `<pre>${esc(obj._raw)}</pre>`;
-  if(obj&&obj._missing)return `<pre class="lab">(no cached response on disk)</pre>`;
-  return `<pre class="json">${esc(JSON.stringify(obj,null,2))}</pre>`;
+function pre(t){return `<pre>${esc(t||'')}</pre>`;}
+function prej(o){return `<pre class="json">${esc(JSON.stringify(o,null,2))}</pre>`;}
+function block(title,open,inner){return `<details ${open?'open':''}><summary>${esc(title)}</summary><div class="inner">${inner}</div></details>`;}
+function truncBadge(fr){return fr==='length'?' <span class="badge f">TRUNCATED</span>':'';}
+
+function goalsBlock(goals){
+  if(!goals||!goals.length)return '<p class="lab">no goals</p>';
+  return goals.map(g=>`<div class="card ok">
+    <div class="instr">${esc(g.instruction)}</div>
+    ${(g.instruction_variants||[]).length?`<ul class="variants">${g.instruction_variants.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:''}
+    ${g.anchor?`<div class="lab">anchor</div><div style="color:#b9c2d4;font-size:13px">${esc(g.anchor)}</div>`:''}
+    ${g.grounding?`<div class="lab">grounding</div><div style="color:#8a93a6;font-size:12px">${esc(g.grounding)}</div>`:''}
+  </div>`).join('');
 }
-function thumbs(frames){return frames&&frames.length?`<div class="thumbs">${frames.map(f=>`<a href="${img(f)}" target="_blank"><img loading="lazy" src="${img(f)}"></a>`).join('')}</div>`:'<div class="lab">no frames on disk</div>';}
-function callBlock(title,call){return `<details><summary>${esc(title)} — ${call.frames.length} frames</summary><div class="inner">
-  <div class="lab">frames sent to the model</div>${thumbs(call.frames)}
-  <details><summary>prompt</summary><div class="inner"><pre>${esc(call.prompt||'(not reconstructed)')}</pre></div></details>
-  <div class="lab">model response</div>${jsonBlock(call.response)}
-  </div></details>`;}
-function chips(obj,keys){if(!obj||typeof obj!=='object')return '';
-  return keys.map(k=>{const v=obj[k];if(v===undefined||v===null||v==='')return '';
-    const t=(k==='user_state'&&v==='actively_working')?'t':'';
-    return `<span class="badge ${t}">${esc(k)}=${esc(v)}</span>`;}).filter(Boolean).join('');}
+function describeBlock(key,d){
+  d=d||{};
+  let body=d.error?`<div class="card no">error: ${esc(d.error)}</div>`:'';
+  if(key==='steps'){const st=d.steps||[];body+=`<div class="lab">${st.length} steps</div>${prej(st)}`;}
+  else{body+=`<div class="lab">narration</div>${pre(d.description||d.content)}`;}
+  body+=block('thinking (reasoning)',false,pre(d.reasoning||'(none returned)'));
+  body+=block('full raw response',false,pre(d.content));
+  body+=block('prompt sent',false,pre(d.prompt));
+  return `<div class="lab" style="margin-top:6px">DESCRIBE${truncBadge(d.finish_reason)}</div>${body}`;
+}
+function extractBlock(e){
+  e=e||{};
+  let body=e.error?`<div class="card no">error: ${esc(e.error)}</div>`:'';
+  body+=`<div class="lab">${(e.goals||[]).length} goals</div>`+goalsBlock(e.goals);
+  body+=block('thinking (reasoning)',false,pre(e.reasoning||'(none returned)'));
+  body+=block('full raw response',false,pre(e.content));
+  body+=block('prompt sent',false,pre(e.prompt));
+  return `<div class="lab" style="margin-top:12px">EXTRACT${truncBadge(e.finish_reason)}</div>${body}`;
+}
+function variantSection(key,v){
+  if(!v)return `<p class="lab">no ${esc(key)} variant on disk</p>`;
+  return describeBlock(key,v.describe)+extractBlock(v.extract);
+}
 
 // Generic frame-player: plays the ACTUAL kept (stage-01) JPEGs a sample contains.
 let TIMERS=new Set();
@@ -422,70 +323,30 @@ function mountFramePlayer(el, frames, fps){
   play.onclick=toggle; rng.oninput=()=>{stop();show(Number(rng.value));};
   show(0);
 }
-function framesInSpan(frames, a, b){return (frames||[]).filter(f=>Number(f.idx)>=a && Number(f.idx)<=b);}
-
 function renderClip(){
   clearTimers();
   const c=S.run.clips[S.clip];if(!c){$('main').innerHTML='';return;}
   const s=c.summary||{};
   let h=`<h2>${esc(c.clip_key)} <span class="lab">${esc(c.segment_id||'')}</span></h2>
-    <div class="stat">${s.n_pass1_activities??0} activities · ${s.n_spans??0} spans (active ${s.n_active_spans??0}/idle ${s.n_idle_spans??0}) → ${s.n_trajectories??0} trajectories · ${s.n_rejected??0} rejected · ${s.n_variants_total??0} SFT samples</div>`;
+    <div class="stat">${c.n_images_sent??s.n_images_sent??0} frames sent · ${s.n_steps??0} steps ·
+      prose goals ${s.n_goals_prose??0} · steps goals ${s.n_goals_steps??0}${c.model?` · ${esc(c.model)}`:''}</div>`;
   h+= c.video?`<video controls preload="metadata" src="${vid(c.video)}"></video>`:'<p class="lab">raw video not found</p>';
 
   const sm=c.sampling||{};
-  h+=`<h2>Sampled stream — NO_OP-capped / adaptively-kept frames</h2>
+  h+=`<h2>Clip — sampled frames (what the VLM saw)</h2>
     <div class="stat">${sm.n_frames??0} kept frames (${sm.n_non_noop??0} active) · base ${sm.target_fps??'?'} fps ·
-      NO_OP keep head/tail ${sm.noop_keep_head??'?'}/${sm.noop_keep_tail??'?'} ·
-      dropped idle ${sm.n_noop_dropped??0}</div>
+      NO_OP keep head/tail ${sm.noop_keep_head??'?'}/${sm.noop_keep_tail??'?'} · dropped idle ${sm.n_noop_dropped??0}</div>
     <div class="keptplayer" id="kept-stream"></div>`;
 
-  const p1=c.pass1||{};
-  h+=`<h2>Pass 1 — Describe + Segment (${p1.n_windows??0} windows → activities) · ${p1.n_activities??0} activities</h2>`;
-  h+=(p1.windows||[]).map(w=>{
-    const frames=(w.start_frame_idx!=null)?` · frames ${w.start_frame_idx}–${w.end_frame_idx}`:'';
-    return callBlock(`pass 1 window ${w.window}${frames}`, {frames:w.frames||[],prompt:w.prompt,response:w.response});
-  }).join('');
+  const V=c.variants||{};
+  h+=`<div class="row2">
+      <div><h2>PROSE variant</h2>${variantSection('prose',V.prose)}</div>
+      <div><h2>STEPS variant</h2>${variantSection('steps',V.steps)}</div>
+    </div>`;
 
-  h+=`<h2>Pass 2 — Label (per activity → user prompt)</h2>`;
-  h+=(c.pass2||[]).map(a=>{
-    const sp=(a.spans||[]).map(s=>`${s.start_frame}–${s.end_frame} <span class="lab">${esc(s.user_state||'')}</span>`).join(' , ');
-    const win=a.pass1_window_idx!=null?` · pass1 window ${a.pass1_window_idx}`:'';
-    return `<div class="card"><div class="lab">activity ${a.idx}${win} · ${esc(a.app||'')} · spans ${sp} · onset=${esc(a.onset||'')} completion=${esc(a.completion||'')}</div>
-      <div style="color:#b9c2d4;font-size:13px;margin:4px 0">${esc(a.description||'')}</div>
-      ${callBlock('Pass 2 · label',{frames:a.frames,prompt:a.prompt,response:a.response})}</div>`;
-  }).join('') || '<p class="lab">no activities</p>';
-
-  const p3=c.pass3||{};
-  h+=`<h2>Pass 3 — Merge activities into goals (text only) · ${(p3.goals||[]).length} goals</h2>`;
-  h+=`<details><summary>pass 3 call — ${p3.n_labels??0} activities in → ${(p3.goals||[]).length} goals out</summary><div class="inner">
-      <details><summary>prompt</summary><div class="inner"><pre>${esc(p3.prompt||'')}</pre></div></details>
-      <div class="lab">model response (goals)</div>${jsonBlock(p3.response)}</div></details>`;
-  h+=(p3.goals||[]).map(g=>`<div class="card ${g.merged?'ok':''}">
-      <div class="lab">members [${(g.members||[]).join(', ')}]${g.merged?' · MERGED':''}</div>
-      <div class="instr">${esc(g.instruction)}</div>
-      ${(g.instruction_variants||[]).length?`<ul class="variants">${g.instruction_variants.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:''}
-      <div style="color:#8a93a6;font-size:12px">${esc(g.rationale||'')}</div></div>`).join('') || '<p class="lab">no goals</p>';
-
-  h+=`<h2>Final — goal trajectories + clips</h2>`;
-  h+=(c.trajectories||[]).map((t,ti)=>`<div class="card ${t.user_state==='actively_working'?'ok':'no'}">
-      <div class="lab">frames ${t.start_frame_idx}–${t.end_frame_idx}${(t.frame_spans&&t.frame_spans.length>1)?` (${t.frame_spans.length} spans)`:''}${t.merged?` · MERGED [${(t.members||[]).join(',')}]`:''} ${chips(t,['app','user_state'])}</div>
-      <div class="instr">${esc(t.instruction)}</div>
-      ${(t.instruction_variants||[]).length?`<ul class="variants">${t.instruction_variants.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:''}
-      <div class="keptplayer fp" data-start="${t.start_frame_idx}" data-end="${t.end_frame_idx}"></div>
-    </div>`).join('') || '<p class="lab">no trajectories</p>';
-
-  if((c.rejected||[]).length){
-    h+=`<h2>Rejected (${c.rejected.length})</h2>`;
-    h+=c.rejected.map(r=>{const a=r.activity||{};const lab=r.label||{};return `<div class="card no">
-      <div class="lab">${esc(r.reason||'')} · ${esc(a.app||'')}</div>
-      <div>${esc(lab.instruction|| a.description ||'(no instruction)')}</div></div>`;}).join('');
-  }
   $('main').innerHTML=h;
-  const fps=Number(c.sampling?.target_fps)||1;
+  const fps=Number(c.sampling?.target_fps)||0.5;
   mountFramePlayer($('kept-stream'), c.kept_frames||[], fps);
-  document.querySelectorAll('.fp').forEach(el=>{
-    mountFramePlayer(el, framesInSpan(c.kept_frames, Number(el.dataset.start), Number(el.dataset.end)), fps);
-  });
 }
 init().catch(e=>{$('main').innerHTML=`<pre>${esc(e.stack||e.message)}</pre>`;});
 </script></body></html>"""

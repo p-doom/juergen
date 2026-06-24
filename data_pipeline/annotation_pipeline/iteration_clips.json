@@ -17,17 +17,14 @@
       "high_activity": 14,
       "medium_activity": 9,
       "low_activity": 7
-    }
+    },
+    "excluded_users": [
+      "6d8b246e9b831d087a55e2ee1c707aa26cd2ae72ebb669198c031397037d9a14",
+      "c8e0053c-ee78-4b7c-845c-38ac2ed45ef4"
+    ],
+    "note": "two users excluded post-hoc (black-frame-only recordings that passed the bytes/s filter); replacements drawn with seed 20260625, same filters."
   },
   "clips": {
-    "seg_0522d2d7_s0004": {
-      "segment_id": "0522d2d7-0309-4393-9961-0a698b011f58_seg0004",
-      "activity_bucket": "high_activity",
-      "duration_s": 299.7,
-      "keypresses": 3195,
-      "bytes_per_s": 375632,
-      "user_id": "6d8b246e"
-    },
     "seg_0e7dc6a9_s0003": {
       "segment_id": "0e7dc6a9-9dd0-4047-bb5c-d53984257066_seg0003",
       "activity_bucket": "high_activity",
@@ -43,22 +40,6 @@
       "keypresses": 4617,
       "bytes_per_s": 375656,
       "user_id": "5b6ba8c2"
-    },
-    "seg_23d58fa5_s0001": {
-      "segment_id": "23d58fa5-543b-4d0d-a73e-592d6bcb6848_seg0001",
-      "activity_bucket": "high_activity",
-      "duration_s": 299.7,
-      "keypresses": 2158,
-      "bytes_per_s": 115736,
-      "user_id": "c8e0053c"
-    },
-    "seg_23d58fa5_s0005": {
-      "segment_id": "23d58fa5-543b-4d0d-a73e-592d6bcb6848_seg0005",
-      "activity_bucket": "high_activity",
-      "duration_s": 299.7,
-      "keypresses": 1577,
-      "bytes_per_s": 75378,
-      "user_id": "c8e0053c"
     },
     "seg_314639e1_s0001": {
       "segment_id": "314639e1-7b2a-4707-a225-0bb1b0abace3_seg0001",
@@ -99,6 +80,14 @@
       "keypresses": 7983,
       "bytes_per_s": 237482,
       "user_id": "a6daadc4"
+    },
+    "seg_65219aeb_s0005": {
+      "segment_id": "65219aeb-8707-475e-851c-7a5258e54203_seg0005",
+      "activity_bucket": "high_activity",
+      "duration_s": 298.8,
+      "keypresses": 7872,
+      "bytes_per_s": 140082,
+      "user_id": "02171b00"
     },
     "seg_65465cd4_s0000": {
       "segment_id": "65465cd4-e460-46ad-b173-fb97a606728e_seg0000",
@@ -180,6 +169,14 @@
       "bytes_per_s": 106761,
       "user_id": "3d84d339"
     },
+    "seg_9482858d_s0018": {
+      "segment_id": "9482858d-c464-4631-8296-54c2d69d603e_seg0018",
+      "activity_bucket": "medium_activity",
+      "duration_s": 299.7,
+      "keypresses": 1390,
+      "bytes_per_s": 178129,
+      "user_id": "54196854"
+    },
     "seg_988d8938_s0000": {
       "segment_id": "988d8938-45bf-4911-9f32-74a7131aa83d_seg0000",
       "activity_bucket": "low_activity",
@@ -218,6 +215,14 @@
       "duration_s": 298.8,
       "keypresses": 4826,
       "bytes_per_s": 376145,
+      "user_id": "9731b6e4"
+    },
+    "seg_b588f077_s0033": {
+      "segment_id": "b588f077-fa18-4a6b-b233-fb8c08bd4db5_seg0033",
+      "activity_bucket": "high_activity",
+      "duration_s": 298.8,
+      "keypresses": 833,
+      "bytes_per_s": 376143,
       "user_id": "9731b6e4"
     },
     "seg_c81152b5_s0005": {

@@ -7,7 +7,7 @@ can "iterate on frontier, distill to local later" without code changes:
     LABELER_MODEL      (default: Kimi-K2.6)
     LABELER_BASE_URL   (default: $AZURE_OPENAI_ENDPOINT  -> Azure /openai/v1/ surface)
     LABELER_API_KEY    (default: $AZURE_OPENAI_API_KEY)
-    LABELER_MAX_TOKENS (default: 32768; raise if a verbose model truncates)
+    LABELER_MAX_TOKENS (default: 64000; raise if a verbose model truncates)
 
 The Azure resource exposes the OpenAI-compatible ``/openai/v1/`` surface, so the
 stock ``openai`` client works with ``base_url`` set to the endpoint and the
@@ -23,6 +23,7 @@ re-spends tokens. ``call_json`` validates/repairs JSON via
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -61,10 +62,12 @@ class LabelerConfig:
     # reasoning_effort to e.g. "low"/"medium"/"high" when supported.
     temperature: float | None = None
     reasoning_effort: str | None = os.environ.get("LABELER_REASONING_EFFORT") or None
-    # Headroom for verbose "thinking" models (e.g. Kimi-K2.6 streams a long
-    # in-band chain-of-thought BEFORE the JSON); too small a cap truncates the
-    # response mid-reasoning so no JSON is ever emitted. Override via env.
-    max_completion_tokens: int = int(os.environ.get("LABELER_MAX_TOKENS") or 32768)
+    # Reservation for the answer + in-band chain-of-thought (Kimi-K2.6 returns
+    # reasoning in `reasoning_content`, which still counts against this cap).
+    # RESERVED against the model's 262K context, so it competes with the ~150
+    # input frames. Observed describe/extract usage maxed at ~21K, so 32K is
+    # ample and leaves the most room for frames. Override via env.
+    max_completion_tokens: int = int(os.environ.get("LABELER_MAX_TOKENS") or 32000)
 
     @classmethod
     def from_env(cls, **overrides: Any) -> "LabelerConfig":
@@ -73,6 +76,33 @@ class LabelerConfig:
             if v is not None:
                 setattr(cfg, k, v)
         return cfg
+
+
+@dataclass
+class LabelResult:
+    """One labeler call's output. ``content`` is the model's answer (the prose /
+    JSON); ``reasoning`` is its chain-of-thought (Kimi returns it in a separate
+    ``reasoning_content`` field — captured here so the viewer can show it).
+    ``text`` is what downstream parsing should use (content, or reasoning if the
+    model put everything there and content came back empty)."""
+
+    content: str
+    reasoning: str = ""
+    finish_reason: str = ""
+    usage: dict[str, Any] | None = None
+    model: str = ""
+
+    @property
+    def text(self) -> str:
+        return self.content if self.content.strip() else self.reasoning
+
+
+def _reasoning_path(cache_path: Path) -> Path:
+    return cache_path.with_suffix(".reasoning.txt")
+
+
+def _meta_path(cache_path: Path) -> Path:
+    return cache_path.with_suffix(".meta.json")
 
 
 def content_hash(model: str, system: str, user_text: str, image_payloads: list[str]) -> str:
@@ -105,9 +135,9 @@ class Labeler:
             max_retries=0,
         )
 
-    # -- raw text -----------------------------------------------------------
+    # -- full (content + reasoning + meta) ----------------------------------
 
-    def call_text(
+    def call_full(
         self,
         system: str,
         user_text: str,
@@ -115,26 +145,41 @@ class Labeler:
         image_labels: list[str] | None = None,
         cache_path: Path | None = None,
         no_cache: bool = False,
-    ) -> str:
+    ) -> LabelResult:
+        """One call. The answer is cached to ``cache_path`` (raw text), the
+        chain-of-thought to ``<stem>.reasoning.txt``, and finish_reason/usage to
+        ``<stem>.meta.json`` — so re-runs never re-spend tokens and the inspector
+        can show the thinking. Returns content + reasoning + meta together."""
         image_urls = [image_data_url(Path(p)) if not str(p).startswith("data:") else str(p)
                       for p in (images or [])]
 
         if cache_path and cache_path.exists() and not no_cache:
-            text = cache_path.read_text()
-            if text.strip():
-                return text
+            content = cache_path.read_text()
+            if content.strip():
+                meta = {}
+                mp = _meta_path(cache_path)
+                if mp.exists():
+                    try:
+                        meta = json.loads(mp.read_text())
+                    except Exception:  # noqa: BLE001
+                        meta = {}
+                rp = _reasoning_path(cache_path)
+                reasoning = rp.read_text() if rp.exists() else ""
+                return LabelResult(content=content, reasoning=reasoning,
+                                   finish_reason=str(meta.get("finish_reason", "")),
+                                   usage=meta.get("usage"), model=str(meta.get("model", self.config.model)))
 
-        # Interleave a text label (e.g. the frame's timestamp) before each image
-        # when provided, so time is given as text — frames stay unmodified (no
-        # burned-in overlay occluding the UI).
-        content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
+        # Interleave a text label before each image when provided (frames stay
+        # unmodified — no burned-in overlay occluding the UI). The v2 describe
+        # pass sends no labels (frame-index anchoring was dropped).
+        content_parts: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
         for i, url in enumerate(image_urls):
             if image_labels and i < len(image_labels) and image_labels[i]:
-                content.append({"type": "text", "text": image_labels[i]})
-            content.append({"type": "image_url", "image_url": {"url": url}})
+                content_parts.append({"type": "text", "text": image_labels[i]})
+            content_parts.append({"type": "image_url", "image_url": {"url": url}})
         messages = [
             {"role": "system", "content": system},
-            {"role": "user", "content": content},
+            {"role": "user", "content": content_parts},
         ]
 
         kwargs: dict[str, Any] = {
@@ -151,16 +196,27 @@ class Labeler:
         for attempt in range(self.config.retries + 1):
             try:
                 resp = self._client.chat.completions.create(**kwargs)
-                msg = resp.choices[0].message
-                text = (msg.content or "").strip()
-                if not text:
-                    text = (getattr(msg, "reasoning_content", None) or "").strip()
-                if not text:
+                choice = resp.choices[0]
+                msg = choice.message
+                content = (msg.content or "").strip()
+                reasoning = (getattr(msg, "reasoning_content", None) or "").strip()
+                if not content and not reasoning:
                     raise RuntimeError("empty completion")
+                finish_reason = str(getattr(choice, "finish_reason", "") or "")
+                usage = getattr(resp, "usage", None)
+                usage_d = usage.model_dump() if hasattr(usage, "model_dump") else (dict(usage) if usage else None)
+                if finish_reason == "length":
+                    print(f"  [labeler] WARNING: response hit max_completion_tokens "
+                          f"({self.config.max_completion_tokens}); raise LABELER_MAX_TOKENS "
+                          f"({cache_path.name if cache_path else 'call'}).")
                 if cache_path:
                     cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    cache_path.write_text(text)
-                return text
+                    cache_path.write_text(content or reasoning)
+                    _reasoning_path(cache_path).write_text(reasoning)
+                    _meta_path(cache_path).write_text(json.dumps(
+                        {"finish_reason": finish_reason, "usage": usage_d, "model": self.config.model}, indent=2))
+                return LabelResult(content=content, reasoning=reasoning, finish_reason=finish_reason,
+                                   usage=usage_d, model=self.config.model)
             except Exception as exc:  # noqa: BLE001 - retry transient/4xx-param errors
                 last_err = f"{type(exc).__name__}: {exc}"
                 # On the first failure, retry once without optional params in
@@ -170,6 +226,20 @@ class Labeler:
                 if attempt < self.config.retries:
                     time.sleep(1.5 * (attempt + 1))
         raise RuntimeError(f"labeler call failed after retries: {last_err}")
+
+    # -- raw text -----------------------------------------------------------
+
+    def call_text(
+        self,
+        system: str,
+        user_text: str,
+        images: list[Path | str] | None = None,
+        image_labels: list[str] | None = None,
+        cache_path: Path | None = None,
+        no_cache: bool = False,
+    ) -> str:
+        return self.call_full(system, user_text, images=images, image_labels=image_labels,
+                              cache_path=cache_path, no_cache=no_cache).text
 
     # -- json ---------------------------------------------------------------
 
@@ -182,15 +252,30 @@ class Labeler:
         cache_path: Path | None = None,
         no_cache: bool = False,
     ) -> dict[str, Any]:
-        # If a cached response exists but is unparseable, re-call once.
+        return self.call_json_full(system, user_text, images=images, image_labels=image_labels,
+                                   cache_path=cache_path, no_cache=no_cache)[0]
+
+    def call_json_full(
+        self,
+        system: str,
+        user_text: str,
+        images: list[Path | str] | None = None,
+        image_labels: list[str] | None = None,
+        cache_path: Path | None = None,
+        no_cache: bool = False,
+    ) -> tuple[dict[str, Any], LabelResult]:
+        """Like ``call_json`` but also returns the full LabelResult (reasoning,
+        raw content, meta). Re-calls once if a cached response is unparseable."""
         if cache_path and cache_path.exists() and not no_cache:
             try:
-                return extract_json_object(cache_path.read_text())
-            except Exception:  # noqa: BLE001
+                res = self.call_full(system, user_text, images=images, image_labels=image_labels,
+                                     cache_path=cache_path, no_cache=False)
+                return extract_json_object(res.text), res
+            except Exception:  # noqa: BLE001 - cached text not parseable -> re-call
                 no_cache = True
-        text = self.call_text(system, user_text, images=images, image_labels=image_labels,
-                              cache_path=cache_path, no_cache=no_cache)
-        return extract_json_object(text)
+        res = self.call_full(system, user_text, images=images, image_labels=image_labels,
+                            cache_path=cache_path, no_cache=no_cache)
+        return extract_json_object(res.text), res
 
 
 def smoke_test() -> None:

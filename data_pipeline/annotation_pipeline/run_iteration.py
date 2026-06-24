@@ -166,14 +166,24 @@ def main() -> None:
     (run_dir / "run_summary.json").write_text(json.dumps(rows, indent=2) + "\n")
     print(f"\nWrote run summary: {run_dir/'run_summary.json'}")
 
+    # review_report / judge predate the v2 (describe→extract) stage-02 output and
+    # will likely not match its schema — keep them opt-in-by-default but never let
+    # a mismatch fail the run; the v2 inspection path is visualize_run.py.
     if not args.no_review:
-        run_module("review_report", ["--run-dir", str(run_dir)])
+        try:
+            run_module("review_report", ["--run-dir", str(run_dir)])
+        except subprocess.CalledProcessError as exc:
+            print(f"[review_report skipped: {exc}]")
     if not args.no_judge:
         judge_args = ["--run-dir", str(run_dir)]
         if args.refresh or args.force:
             judge_args.append("--no-cache")  # sample set changed; re-judge fresh
-        run_module("judge", judge_args)
-    print(f"\nDone. Open {run_dir/'review.html'}")
+        try:
+            run_module("judge", judge_args)
+        except subprocess.CalledProcessError as exc:
+            print(f"[judge skipped: {exc}]")
+    print(f"\nDone. Inspect with: PYTHONPATH=. python3 -m annotation_pipeline.visualize_run "
+          f"--run-root {args.out_root}")
 
 
 if __name__ == "__main__":

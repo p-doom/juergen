@@ -1,156 +1,148 @@
-# Prompts for the hindsight annotation pipeline (stage_02_annotate.py) and the
-# independent quality judge (judge.py). Edit these to iterate on annotation
-# quality without touching Python.
+# Prompts for the v2 (timestamp-free) hindsight annotation pipeline
+# (stage_02_annotate.py) and the independent quality judge (judge.py).
 #
 # Templating: ${name} placeholders are filled via string.Template.safe_substitute
 # in annotation_pipeline.prompts.render(). Numbers are pre-formatted by the caller
-# (e.g. ${n_frames} already reads "42"); literal { } (JSON examples) are passed
-# through untouched. After editing a pass's prompt, re-run only that pass with
-#   run_iteration ... --refresh <pass>   (passes: pass1, pass2)
+# (e.g. ${n_frames} already reads "150"); literal { } (JSON examples) pass through
+# untouched. After editing a prompt, re-run only the affected call with
+#   run_iteration ... --refresh <name>
+# where <name> is a cache prefix: describe_prose, describe_steps,
+# extract_from_prose, extract_from_steps (or just 'describe' / 'extract').
 #
-# Stage 02 is a clean TWO-PASS design:
-#   pass1 — describe + segment one recording into activities, anchored on FRAME
-#           INDEX (each frame is labelled `frame <N>`; wall-clock time is no
-#           longer exact after sampling/NO_OP-filtering, but the index is).
-#   pass2 — per activity, write the user-prompt instruction (hindsight) it would
-#           have taken to produce that activity, plus register variants.
+# Stage 02 v2 is TWO passes, vision-only (no keylog), no frame-index anchoring:
+#   A. DESCRIBE — feed the whole ~5-min clip (frames @0.5fps) and get a faithful,
+#      fine-grained, factual log of what happens. Run in TWO variants we compare
+#      downstream: `describe_prose` (free narration) and `describe_steps`
+#      (structured step list). Both share the `system` framing.
+#   B. EXTRACT — feed that account + the frames again and recover the
+#      instruction(s) a person would type to a computer-use agent. One prompt
+#      (`extract` + `extract_system`); run once per describe variant.
 
-# Shared system framing for both stage-02 passes.
+# Shared system framing for the DESCRIBE pass (both variants).
 system: |-
-  You are building supervised fine-tuning data for a computer-use agent. Each training example pairs an INSTRUCTION (what a human types to tell the agent what to do) with the screen-and-action TRAJECTORY the human actually performed. Your job is to recover, in hindsight, the instruction that would have produced the observed behavior — NOT to describe the recording.
+  You are an expert observer building supervised fine-tuning data for a computer-use agent — a model that controls a real computer (keyboard, mouse, screen) to carry out tasks a person asks of it in natural language. Each finished example pairs an INSTRUCTION (what a person types to ask the agent to do something) with the on-screen TRAJECTORY a human actually performed. You are the first step: watch one human screen recording and produce a faithful, fine-grained, factual log of everything that happens.
 
-  You are given, for one screen recording:
-    - ordered video frames; each frame is immediately preceded by a text line giving its integer index as `frame <N>` (the index is provided as text, not drawn on the image). Frames are sampled, so the indices shown may skip values — always refer to the indices actually shown, never invent intermediate ones;
-    - an INPUT TRANSCRIPT reconstructed from the keylog: the literal text the user typed (Backspace already applied; may be approximate for non-US keyboard layouts or arrow-key edits — read through obvious layout typos like y/z swaps or bracket-for-umlaut), keyboard shortcuts (chords), mouse click/scroll bursts, and the focused application. Mouse positions are not in the transcript — read clicks from the frames. (The transcript carries its own approximate `[t s]` wall-clock stamps for ordering; map them to the nearest `frame <N>` you can see.)
+  YOUR EVIDENCE IS THE SCREEN, AND ONLY THE SCREEN. You are given an ordered sequence of frames sampled from one recording at roughly one frame every two seconds. There is no keylog, no audio, no metadata, no timestamps — what is visible in the frames is the entire ground truth. If something is not visible, it did not happen as far as you are concerned. Never use knowledge of how an app "usually" behaves to assert something you cannot actually see.
 
-  THE SCREENSHOTS ARE YOUR PRIMARY EVIDENCE. Base every observation on what is visibly happening in the frames. The transcript is a SECONDARY aid: use it only to read the exact characters/keys behind something you can already SEE on screen (e.g. to transcribe the exact text in a chat box you can see filling, or a command you can see at a prompt). It is accurate for what was typed, but it does NOT by itself establish that an activity happened or was visible. NEVER narrate or report an activity from the transcript alone — if you cannot see it in the frames, do not claim it occurred. In particular, if the screen is black / blank / not rendering (a capture failure), there is NO observable activity no matter what the keylog contains — report nothing for those frames. Report only what the frames support; never invent file names, values, or results you cannot see.
+  DESCRIBE, DO NOT INTERPRET. Report what is observably done and what visibly changes — never the user's goal, intent, plan, or what they are "trying to" achieve, and never summarize a stretch of work as a task. A later step recovers intent from your log together with the frames; your job is to hand it clean, complete, trustworthy facts, not guesses. (Capturing the OUTCOME a stretch of work reaches IS factual and required — "the file is saved", "the command prints an error", "the message posts into the thread" — that is an observed end-state, not an inferred goal.)
 
-# PASS 1 — describe + segment the recording into activities (frame-index spans).
-# fields: transcript_text, n_frames
-pass1: |-
-  You are describing, in detail, WHAT HAPPENS in one screen recording of a person doing digital work, and OVER WHICH FRAMES. Segment it into spans of activity and report, for each, a concrete factual account of the actions and on-screen events — NOT the user's goal or intent. This pass defines BOUNDARIES and DESCRIPTIONS only; downstream, the frames within each boundary plus its description will be used to infer user instructions, so attribution must be grounded and conservative.
+  GROUNDING — the rules that matter most:
+  - Frames are ~2s apart, so state can jump between consecutive frames. Describe the before and after of a jump; never fabricate the intermediate steps you could not see.
+  - On-screen text is NOT evidence that the user typed it. Before attributing text to the user, require visible evidence they produced it: the text growing across consecutive frames, or a user-authored artifact you can read (a command at a shell prompt, a message they posted into a thread, a value in a field they filled). Text that appears all at once — suggestions / autocomplete / ghost text, autofilled fields, output streamed by a program or assistant — is NOT user input. When you cannot tell the source, say so; never default to "the user typed it."
+  - Treating something as submitted / sent / run is a strong claim. Make it only when you can see the committing action or its effect: the input clears, a message posts, a command starts executing, a spinner or stream begins. Text merely sitting in a box is unsent.
+  - Distinguish the human from the machine. When on-screen change is produced by a running process — an assistant streaming a reply, a build or command running, a page loading — and not by visible user input, that is the process acting, not the user.
+  - Black, blank, or not-rendering frames are a capture failure: report nothing for them, however much seems to be implied.
+  - Never invent file names, values, results, or the name of any product, site, or tool you cannot actually read on screen.
 
-  INPUT: an ordered sequence of frames from a single recording. Each frame is immediately preceded by a text line giving its integer index as `frame <N>`. Below the frames is an INPUT TRANSCRIPT reconstructed from the keylog — use it ONLY to transcribe/confirm the exact text behind activity you can SEE in the frames; it is supplementary, never a substitute for visible evidence, and on its own it never establishes that an activity occurred. Report every boundary as a frame index `N` taken from the labels actually shown (never a timestamp, never an index you did not see).
+  DO ALL REASONING FIRST, THEN ANSWER. Think through the frames however you need to, but your final message must be ONLY the narration or JSON the task asks for — no preamble, no commentary, no markdown fences.
 
-  SCREEN IS PRIMARY: describe only activity that is VISIBLE in the frames. If the frames are black / blank / not rendering (a capture failure), there is no observable activity — emit NO activities for them, regardless of what the keylog shows. Do not reconstruct a session from the transcript alone.
+# DESCRIBE variant 1 — free-form narration. fields: n_frames
+describe_prose: |-
+  Narrate, in detail and in chronological order, everything that happens in this screen recording — every meaningful thing the user does and every meaningful thing that happens on screen as a result. Write it as flowing prose that walks the recording from start to finish. This narration is the sole foundation a later step uses to recover the instruction the user would have given an agent, so it must be detailed, concrete, and faithful. You only DESCRIBE: never state a goal or intent, and never summarize a stretch as a task.
 
-  ACTIVE vs not: include spans where either (a) the user is actively doing something that changes state or shows progress — typing, editing, clicking through UI, running a command, submitting to an AI agent, deliberately scrolling/reading specific content — OR (b) the user is idle/waiting while an invoked command/agent/build visibly runs or streams output on its own. Both are recorded, but they MUST be distinguished per span (see USER STATE below). EXCLUDE (assign to no span): a black / blank / not-rendering screen (capture failure) EVEN IF the keylog shows keystrokes or clicks, a screen with nothing running, aimless scrolling, app-switching with nothing done, momentary glances, accidental clicks — anything where neither the user nor an invoked process is VISIBLY doing anything.
+  Move through the frames in order, following the action wherever it goes. Spend words in proportion to what happens: dwell where the user does something concrete, move quickly over stretches where little changes, and say nothing about black/blank/not-rendering frames or idle stretches where neither the user nor any process is doing anything. Be exhaustive about concrete actions — do not gloss "runs a few commands"; describe each one. Frames are ~2s apart, so state can jump between them; describe the before and after of a jump, and never invent the steps you could not see.
 
-  USER STATE (tag EVERY span): decide, from the visible evidence, whether the user is actively working or merely idling while a process runs, and emit one of:
-    - "actively_working" — the user is generating the on-screen changes themselves, backed by keystroke/click evidence (keylog or frame-by-frame input progress): typing, editing, clicking through UI, issuing commands, deliberately scrolling/reading specific content. On-screen change ALONE does not qualify; if the change is produced by a process and there is no user-input evidence, the span is idle_waiting, not actively_working.
-    - "idle_waiting" — the user is NOT inputting; the on-screen progress is driven by an invoked process (agent reasoning/streaming, build/test running, long command executing, page loading) while the user waits or merely watches. No meaningful user input occurs during this span. Text, output, or UI changes produced BY THE RUNNING PROCESS during this span are NOT user input and do not make the span actively_working. A stretch where only an agent/command/build is running and outputting — with no keystroke or click evidence from the user — is idle_waiting for its entire duration, however much text appears on screen.
-  A single activity will often switch between these (e.g. the user types a prompt = actively_working, then waits while the agent streams = idle_waiting); split it into separate spans at the transition and tag each accordingly. If a span has both genuine user input AND a process running concurrently, tag it "actively_working".
+  As you narrate, hold to these disciplines:
+  - Name the app / window / page / file in focus, and say when focus changes.
+  - Whenever you mention any text — a command, a search query, a chat or agent prompt, a message, a field value — quote it VERBATIM and, in the same breath, say where it came from: typed by the user, an autocomplete / ghost-text suggestion, an autofilled value, output streamed by a program or assistant, or already on screen with an origin you cannot see. If you cannot tell, say so. Pull verbatim text from persistent artifacts too — a command left at the prompt, a message already posted in a thread. This quoted text is the highest-value content in the narration.
+  - Keep the human and the machine distinct: be explicit about when the USER produces a change (typing, clicking, scrolling, issuing a command) versus when a RUNNING PROCESS does (an assistant streaming a reply, a build or command running, a page loading) while the user waits.
+  - Only call something submitted / sent / run when you can see the committing action or its effect — the input clears, a message posts, a command starts, a stream begins. Otherwise describe the text as sitting unsent.
+  - State the OUTCOMES things reach — a file saved, a command's printed output, a message posted, a value changed; these are facts and matter downstream. But never name the user's goal or what they are "trying to" do.
+  - Never invent file names, values, results, or product / site / tool names you cannot actually read.
 
-  DESCRIBE, DON'T INTERPRET: for each activity write a detailed, concrete, present-tense account of the observable activity: which app/window/page is in focus, the specific UI elements involved, the exact text the user types (quote it from the transcript), the clicks/scrolls/commands they perform, and what visibly changes or appears on screen as a result (output printed, diff/edit appears, page loads, a value changes, a message sends). Narrate the sequence of actions step by step. Do NOT state or guess the user's goal, intent, plan, or what they are "trying to" achieve, and do NOT summarize it as a task — only report what is seen and done.
+  ${n_frames} frames attached, in order.
 
-  ATTRIBUTION OF ON-SCREEN TEXT — DO NOT ASSUME THE USER TYPED IT:
-  Text appearing on screen is NOT evidence that the user entered it. Before attributing any text to the user, require positive evidence that the user produced it — i.e. a keylog entry, or visible per-character/keystroke progress across consecutive frames consistent with typing. If you only see text that is already present, or that appears between frames with no corresponding keystroke evidence, you MUST NOT claim the user typed it.
+  Write the narration as plain chronological prose (paragraphs are fine). Do not add headings, JSON, or any commentary before or after — just the account itself.
 
-  Specifically distinguish, and never conflate, these sources of on-screen text:
-    - USER-ENTERED: backed by keylog or frame-by-frame keystroke progress.
-    - AUTOCOMPLETE / SUGGESTION / GHOST TEXT: text that appears all at once as a suggestion (often greyed, inline, or in a dropdown) without keystrokes. This is NOT user input unless you can see the user explicitly accept it (e.g. a Tab/Enter keylog event that commits the suggestion).
-    - AUTOFILL: form/field values populated by the browser or app, not typed.
-    - PROCESS OUTPUT: text emitted by an agent, command, build, or page load.
-  Describe text by its observed source. If you cannot determine the source, say the text "appears" without asserting who or what produced it — do NOT default to the user.
+# DESCRIBE variant 2 — structured step list. fields: n_frames
+describe_steps: |-
+  Produce a fine-grained, chronological log of what happens in this screen recording — every meaningful thing the user does, and every meaningful thing that happens on screen as a result — as an ordered list of steps. This log is the sole foundation a later step uses to recover the instruction the user would have given an agent, so make it detailed, faithful, and grounded. You only DESCRIBE: never state a goal or intent.
 
-  SUBMISSION REQUIRES EVIDENCE — BE PRECISE, DO NOT ASSUME:
-  Treating something as submitted/sent/run is a strong claim; make it only when the evidence is clear, and do not assume submission just because text is present, a field is filled, or a process later appears to run. Before stating that the user submitted, sent, ran, or "entered" anything (pressed Enter, clicked Send/Run, etc.), require explicit evidence of the committing action itself: a keylog Enter/click event, or a visible state change consistent with submission (the input box clears, a message posts into the thread, a command begins executing, a spinner or stream starts). Text merely sitting in an input field is NOT a submission. If you do not see the committing action or its resulting state change, describe the text as present/unsent and do NOT claim it was submitted — say what is actually visible rather than inferring the submit.
+  Walk the frames in order. Start a NEW step whenever the action changes, the focused app/window/page changes, the actor changes (user vs. a running process), or a distinct on-screen result appears. Do NOT emit one step per frame on static stretches, and do NOT collapse two distinct actions into one. Skip stretches where nothing meaningful happens (idle with no process running, aimless cursor drift, momentary glances) and skip black/blank/not-rendering frames entirely. A 5-minute clip typically yields on the order of tens of steps.
 
-  INTERLEAVED ACTIVITY: the user often alternates between several things — works in one place, switches elsewhere, then returns. Treat each distinct line of activity as ONE entry that may have MULTIPLE non-contiguous spans, and attribute every span to the line of activity it continues (same app/document/content being worked on). Do NOT merge two clearly different lines of activity into one entry, and do NOT split one continuing line into separate entries just because the user stepped away and came back — collect its spans together. (Splitting a single line into separate SPANS for an actively_working → idle_waiting transition is expected and does not make it a separate entry.)
+  For each step, fill:
+  - "context": the app / window / page / file in focus (e.g. "VS Code — train.py", "Chrome — Gmail compose", "iTerm — zsh"). Use only what you can read; if unsure, describe it plainly ("a dark code editor").
+  - "actor": "user" if the change is produced by visible user input (typing, clicking, scrolling, issuing a command); "process" if produced by a running program/assistant/page-load while the user is not inputting; "unclear" only when you genuinely cannot tell (use sparingly; explain in note).
+  - "action": a concrete, present-tense account of what is done or what happens — the specific UI elements, clicks, scrolls, commands, edits, or process activity. Be specific and observable.
+  - "result": what visibly changes on screen as a consequence (output prints, a diff/edit appears, a page loads, a message posts, a value changes). "" if nothing visibly changes.
+  - "text": when the step involves a command, search query, chat/agent prompt, or message that you can READ on screen, copy it VERBATIM here, exactly as shown — including from a persistent rendered artifact (a command left at the prompt, a message already posted in a thread). "" otherwise.
+  - "text_source": where the text in "text" came from — "user_typed" (seen typed, or a user-authored command/message/field value), "autocomplete" (suggestion/ghost text appearing without typing), "autofill" (populated by the app/browser), "process_output" (emitted by a program/assistant), "preexisting" (already on screen, origin unseen), "unknown" (cannot tell), or "none" (no notable text).
+  - "note": optional — uncertainty, ambiguity, a jump you are inferring across, or anything that does not fit the fields above. "" if not needed.
 
-  MEANINGFUL-ACTIVITY GATE: only record a span (and only create an entry) for a stretch where there is a meaningful amount of activity — roughly a few frames or more — whether that is active user interaction OR a process visibly running while the user waits. Ignore momentary switches, brief glances, and transient detours with no real activity. EXCEPTION: a short user-input action that initiates a longer process (e.g. a couple of frames of typing/clicking that submits a prompt or starts a command, followed by a long run) is NEVER gated out — it is the most important moment to capture; record it as its own actively_working span even if brief.
+  Keep the whole log strictly factual and in chronological order. Do not group steps into tasks, do not label goals, and do not deduplicate distinct repetitions of an action — record what actually occurs.
 
-  BOUNDARIES: each span starts at the first action (or, for idle_waiting, the first frame where the process is running with the user not inputting) and ends when the user stops, switches away, finishes, or the user-state changes; keep spans tight — exclude leading idle and trailing unrelated activity. Use the frame indices `N` shown as the span endpoints. An activity ends at its last goal-advancing action: once the user has submitted/sent/finished it and moves on to UNRELATED navigation, scrolling, pane-switching, or a different task, those later frames are NOT part of this activity — assign them to their own activity or to no span. Do not stretch an activity to cover idle/unrelated frames just because they are adjacent in time.
+  ${n_frames} frames attached, in order.
 
-  ONSET & COMPLETION (per activity, from the visible evidence at the CLIP EDGES only — judge across all of the activity's spans, and remember a mid-clip switch to another activity is NOT truncation; do NOT infer the user's goal):
-    - onset:
-        "already_in_progress_at_start" — the activity is clearly underway in the very first attached frame (e.g. text already partly entered, a command already running, a file already open mid-edit), i.e. it began before the clip. NOTE: if the first frames show a process already running/outputting with NO observed user input that triggered it, use this value — the triggering action (e.g. the prompt/command) was not captured in the clip.
-        "began_in_clip" — you can see it start within the clip;
-        "unknown" — you cannot tell.
-    - completion:
-        "completed_in_clip" — a clear end-state/result is visible (change applied or saved, command output finished, response fully rendered);
-        "unfinished_at_clip_end" — the last attached frame still shows it in progress (still typing, still streaming, command still running) and the clip ends before it resolves;
-        "no_clear_completion" — the activity has no definite end event (e.g. browsing/reading);
-        "unknown" — you cannot tell.
-
-  INPUT TRANSCRIPT for this recording:
-  ${transcript_text}
-
-  ${n_frames} frames attached.
-
-  Return ONLY this JSON, no commentary:
+  Return ONLY this JSON:
   {
-    "activities": [
+    "steps": [
       {
-        "id": 1,
-        "app": "<primary app / context, e.g. 'VS Code', 'Chrome — Gmail', 'Terminal'>",
-        "spans": [
-          {
-            "start_frame": <integer frame index>,
-            "end_frame": <integer frame index>,
-            "user_state": "actively_working" | "idle_waiting"
-          }
-        ],
-        "description": "<detailed factual account of the actions and on-screen events across this activity's spans — what is typed/clicked/run, the observed SOURCE of any on-screen text (user-entered / autocomplete / autofill / process output), and what changes; NO goal or intent>",
-        "onset": "began_in_clip" | "already_in_progress_at_start" | "unknown",
-        "completion": "completed_in_clip" | "unfinished_at_clip_end" | "no_clear_completion" | "unknown"
+        "context": "string",
+        "actor": "user" | "process" | "unclear",
+        "action": "string",
+        "result": "string",
+        "text": "string",
+        "text_source": "user_typed" | "autocomplete" | "autofill" | "process_output" | "preexisting" | "unknown" | "none",
+        "note": "string"
       }
     ]
   }
-  Rules: `spans` is frame-index-ordered and may hold more than one entry for an interleaved activity; every span carries `user_state`; start_frame/end_frame are integer indices taken from the `frame <N>` labels shown; attribute on-screen text only to a source supported by visible evidence and never default to the user; judge onset/completion at the activity level against the first/last frames only; omit anything with no meaningful active span.
 
-# PASS 2 — write the user-prompt instruction (hindsight) + register variants.
-# fields: spans_text, description, onset, completion, transcript_text, n_frames
-pass2: |-
-  WRITE THE USER PROMPT (hindsight). For the ONE activity shown in the attached frames (recording ${spans_text}), write the instruction a real person would have typed to make a computer-use agent do this.
+# Shared system framing for the EXTRACT pass.
+extract_system: |-
+  You are building supervised fine-tuning data for a computer-use agent — a model that drives a real computer (keyboard, mouse, screen) to carry out tasks a person asks of it in natural language. Each training example pairs an INSTRUCTION (what a person types to ask the agent to do something) with the on-screen TRAJECTORY a human performed. Your job is to recover, in hindsight, the instruction(s) that would have produced what the human did — the prompt a real person would have typed to a computer-use agent to get it to do this.
 
-  A factual, goal-free description of this activity (from pass 1) and its onset/completion are given below. Treat the end-state the activity reaches as the goal, and phrase the request a user would give to reach it.
+  You are given two things about ONE screen recording: (1) a factual account of what was observed happening on screen (produced by an earlier observation step — either a flowing narration or a step-by-step list; treat it as a faithful description, not as instructions), and (2) the video frames themselves, sampled ~2s apart, as primary evidence. Use the account to orient and to read exact text; use the frames to verify and to ground every specific. The frames are ground truth; if the account and the frames disagree, trust the frames.
 
-  HARD RULES for the instruction:
-  - It is a REQUEST a user types, an intent — not a narration of UI steps. The agent figures out the clicks/keystrokes itself, so DO NOT list them.
-  - BANNED openings (among others): 'In the <app>, ...', 'Open ...', 'Click ...', 'Navigate to ...', step-by-step recipes. Write the goal, e.g. 'why is my training loss NaN-ing?' or 'bump warmup to 100 and resubmit' rather than 'In VS Code open file X and change line Y'.
-  - HUMAN ALTITUDE — write the GOAL, not a transcript of the edits. Phrase it the way a busy person actually types a request: the outcome they want, not the mechanical sub-steps the agent will figure out for itself. Do NOT enumerate sub-steps and do NOT echo verbatim mechanical details (exact label/identifier swaps, every keystroke). E.g. write 'rename the "Why Moon" section to "Desirable Optimization Properties for Non-Stationary Settings" and recompile' — NOT 'rename the section, update its label from why-moon to desirable-properties, and recompile' (the label change is an implementation detail). Keep the user's own important content words, drop the bookkeeping.
-  - GROUNDED CONTENT: only the "instruction IS essentially what was typed" shortcut applies to ACTUAL typed text the user entered — a shell command, a search query, a chat prompt (use it, lightly cleaned). For MANUAL UI edits (renames, value changes, inserts, saves), state the outcome at human altitude per the rule above; do NOT transcribe the edits. Never invent specifics not in the evidence, and never name a platform / product / site / file / target that the description or frames do not actually show (e.g. do not write 'ModelScope' when the page is HuggingFace). (Chat prompts to an in-app AI assistant: see the next rule.)
-  - IN-APP AI ASSISTANT (Claude, ChatGPT, Cursor/Copilot chat, Codex, Gemini, etc.): the agent you are writing the instruction FOR is a COMPUTER-USE agent that drives the keyboard and mouse — an in-app assistant is just another application it operates, NOT the agent itself. So when the user types a prompt to such an assistant, do NOT make the instruction the bare prompt (that reads as if you were prompting the LLM directly, and leaves out the actual action of operating the app). Instead, frame the instruction as DELEGATING to that assistant, naming it concretely: 'ask Claude to ...', 'have ChatGPT ...', 'get Cursor to ...'. Carry the user's actual question/content (from the transcript) inside that frame. (Naming the assistant here IS the goal, not a banned 'In the <app>' UI-recipe opening.) If the user then waits for the assistant to answer, that waiting is the correct behavior for the goal — do NOT mention waiting; the goal is still just 'ask <assistant> <...>'.
-  - It must be a CLEAR, ACTIONABLE request with a definite goal. A vague aside or status musing — e.g. 'hm did that work?', 'i believe something completed?', 'yo i believe something completed? or failed?' — is NOT a task even if typed into a chat box; if that is all the activity contains, return an empty instruction "".
-  - It must be issuable from the FIRST frame's state alone. If the activity is already in progress at the start, or the actual edit happens somewhere not yet visible (deep in a file, another pane), state the goal at the level the user would phrase it seeing the first frame (what they want changed or achieved), NOT by referencing specific code identifiers, line numbers, or content not visible yet.
+  Recover INTENT, but stay grounded: infer what the user wanted done from what they actually did and the end-state they reached, and never invent a file, value, result, product, site, or tool the evidence does not show. If the evidence does not support a confident, concrete instruction, do not manufacture one.
 
-  Then give 2 PARAPHRASE VARIANTS at DIFFERENT registers so the data is not homogeneous: e.g. one terse/high-level ('fix the NaN loss') and one more specific ('increase warmup steps and rerun the debug job'); for an in-app-assistant task, e.g. one near-verbatim ('ask Claude: <the user's actual question>') and one abstracted ('get Claude to explain the caching and sanity-check my h_end=h_0 idea') — all faithful to the same goal, keeping the 'ask <assistant>' frame where applicable, all still user-prompt style (never recipes).
+  DO ALL REASONING FIRST, THEN ANSWER. Your final message must be ONLY the JSON the task specifies — no preamble, no commentary, no markdown fences.
 
-  Factual description (from pass 1): ${description}
-  Onset: ${onset}; completion: ${completion}.
+# EXTRACT — recover instruction(s). fields: description, n_frames
+extract: |-
+  Recover the INSTRUCTION(S) — the prompt(s) a real person would type to a computer-use agent to make it do what the human did in this recording. The recording may contain ONE goal or SEVERAL distinct ones; produce one instruction per distinct goal.
 
-  INPUT TRANSCRIPT for this activity:
-  ${transcript_text}
+  Read the observation account and the frames, identify each distinct line of work, treat the end-state it reaches as its goal, and write the request that would produce it.
 
-  ${n_frames} frames attached (first and last included).
+  GROUND EVERY GOAL IN OBSERVED USER INITIATION — THE MOST IMPORTANT RULE. Emit a goal ONLY when you can SEE the user initiate it within these frames: typing the prompt / command / query, or doing the committing action (Enter / Send / click) that launches it. If a line of work was already underway when the clip began and you never see the user author the request — the frames only show an assistant's reply / recap / verification streaming or already on screen, a command's output, a results file, a page already loaded — then there is NO goal to recover, EVEN IF that on-screen output reveals what was asked. NEVER reconstruct an instruction from process output, an agent's recap, or an answer: the answer revealing the question is NOT evidence the user typed it here. The content of a goal must come from text the USER is seen to author, not from what a process emitted. If across the whole clip the user only watches, reads, or scrolls through output that something else produced, return an empty goals list ("goals": []).
 
-  Return ONLY JSON:
-  { "instruction": "string", "instruction_variants": ["string", "string"], "grounding": "one sentence of evidence" }
+  WHAT COUNTS AS ONE GOAL (segmentation):
+  - One goal = one coherent intent a person would express in a single request. If you can only describe a span by joining two different asks with "and" (or by listing separate tasks), it is more than one goal — split it.
+  - Keep separate: work in different projects / files / apps, or work that reaches distinct outcomes / artifacts. A request to an assistant or command PLUS the user waiting for it is ONE goal (the wait is part of it) — but ONLY if you SAW the user submit that request in-clip; watching a reply whose prompt you never saw is NOT a goal (see the initiation rule above). Diagnostic looking / scrolling / reading clearly in service of a request the user DID issue folds into that request's goal.
+  - Omit entirely: idle stretches, aimless navigation, vague musings, and any stretch where the user only watches or reads output produced by something else with no user-authored request visible.
 
-# PASS 3 — merge activities into goals (TEXT ONLY, no frames).
-# fields: activities_text
-pass3: |-
-  GROUP ACTIVITIES INTO GOALS. Below is a list of ACTIVITIES from ONE screen recording. Each was independently described (a factual account of what was observed) and assigned a candidate user-prompt instruction. Your job is to decide which of these activities are really parts of the SAME underlying user goal — and should be merged into one — versus which are separate goals. Work from the descriptions and instructions only (no frames here).
+  HOW TO WRITE EACH INSTRUCTION:
+  - It is a REQUEST / intent a user types — NOT a narration of UI steps. The agent works out the clicks and keystrokes itself, so do not list them. Banned openings: "Open …", "Click …", "Navigate to …", "In the <app>, …", and step-by-step recipes.
+  - HUMAN ALTITUDE: state the OUTCOME the user wants, the way a busy person actually types a request — not the mechanical sub-steps. e.g. "why is my training loss NaN-ing?" or "bump warmup to 100 and resubmit", not "open train.py and change line 42".
+  - GROUNDED CONTENT: for text the user actually typed — a shell command, a search query, a chat prompt — the instruction can be essentially what they typed, lightly cleaned. For manual UI edits (renames, value changes, inserts), state the outcome at human altitude; do not transcribe the edits. Never name a platform / site / file / target the evidence does not actually show.
+  - TRUE SCOPE — match the user's ACTUAL action, never inflate from what is already on screen. The scope of the instruction must be what the USER did, not the ambient state. If they selected ONE item among many that were already selected, the goal is that one action — NOT "compare all 25 runs". If they hovered over or glanced at a chart, that is not "review all the metrics". Never assert a selection, comparison, aggregation, or sweep ("all", "every", "compare", "review all") the user did not actually perform; if the user only touched a subset, the goal covers that subset.
+  - IN-APP AI ASSISTANT — COMMON IN THIS DATA, GET IT RIGHT. The agent you are writing for is a COMPUTER-USE agent that drives the keyboard and mouse; an in-app AI assistant (Claude / Claude Code, ChatGPT, Cursor or Copilot chat, Codex, Gemini, any chat or agent panel) is just another app it OPERATES — not the agent itself, and not something the CUA should answer or do the work of. Whenever the user types into such an assistant — a question, a request, or an agentic task — the instruction MUST be framed as DELEGATING to it BY NAME: "ask Claude …", "have Cursor …", "get ChatGPT to …", "ask Claude Code to …", carrying the user's actual content inside that frame. NEVER emit the bare prompt (as if you were talking to the assistant directly), and NEVER reword it as the CUA doing the task itself. Example: the user types "how does OpenAI tool-calling work?" into Claude → the instruction is "ask Claude how OpenAI's tool-calling works" — NOT "how does OpenAI's tool-calling work?" (bare prompt) and NOT "explain how tool-calling works" (CUA doing it). Do not mention the waiting. REPLY vs. ASK: if the assistant had just asked the user a question, requested a decision, or suggested an action (e.g. "test it in the browser") and the user's message answers or follows up on that, frame it as REPLYING — "reply to Claude that …", "tell Claude …", "follow up with Claude: …" — NOT "ask Claude to …"; use "ask …" only when the user opens a fresh request. This delegation frame must survive into the variants too.
+  - Phrase it as a request issuable BEFORE the work, from the state the user started in — what they want achieved, not specifics that only became visible after the work was done.
+  - If a span is not an actionable task (a vague aside, a status musing like "hm did that work?"), do not emit a goal for it.
 
-  BE CONSERVATIVE. Default to NOT merging — most activities are their own goal. Only merge when the result is genuinely ONE intent. Apply this LITMUS: could the whole group be stated as a SINGLE request a person would type, with no "and" joining two different asks and no listing of separate tasks? If you can only describe the group by enumerating distinct things ("do X AND ask the agent to do Y"), it is NOT one goal — keep them separate.
+  Then give 2 PARAPHRASE VARIANTS per goal at DIFFERENT registers (e.g. one terse / high-level, one more specific), faithful to the same goal, keeping any "ask <assistant>" frame, all in user-prompt style (never recipes).
 
-  MERGE only when ALL hold:
-    - SAME context: same project / document / app / target. Never merge activities in different projects, files, or apps (e.g. inspecting one project's outputs and a different project's outputs are SEPARATE goals).
-    - ONE intent: the activities serve a single objective. Canonical valid merges: (a) a request to an assistant/command + the user WAITING for it (active span then idle span) — one goal, wait included; (b) diagnostic looking/scrolling/reading that is clearly IN SERVICE of a request (e.g. inspecting the broken outputs, then asking the agent to fix them) — fold the looking into that request's goal; (c) the same task resumed after a short detour.
-  Do NOT merge two activities that EACH reach their own distinct outcome/artifact (e.g. manually creating a file is one outcome; asking an agent to re-architect the model is another — keep separate even if back-to-back). Do NOT merge across an app/project switch. When unsure, keep separate.
+  For each goal also give a short ANCHOR — the verbatim command / prompt / message that initiates it, or a brief phrase locating it in the recording — so the goal can later be tied back to its frames. And one sentence of GROUNDING: the evidence the instruction rests on.
 
-  For each resulting GOAL, list the member activity indices and write ONE instruction capturing it, following the same rules as the per-activity instructions: a user-typed REQUEST / intent at HUMAN ALTITUDE (the outcome, not sub-steps; not a UI recipe; never 'In the <app>/Open/Click/Navigate'); for a goal that delegates to an in-app AI assistant, frame it as 'ask <assistant> to …' and carry the content; never name a platform/target the evidence does not show. The instruction must be ONE coherent intent — if you find yourself writing "X and <unrelated Y>", you should not have merged. Give 2 register variants. Every activity must belong to exactly one goal; most goals will have a single member.
+  OBSERVATION ACCOUNT:
+  ${description}
 
-  ACTIVITIES:
-  ${activities_text}
+  ${n_frames} frames attached, in order.
 
-  Return ONLY JSON:
-  { "goals": [ { "members": [<activity index>, ...], "instruction": "string", "instruction_variants": ["string", "string"], "rationale": "one sentence: why these are one goal (or why kept separate)" } ] }
+  Return ONLY this JSON:
+  {
+    "goals": [
+      {
+        "instruction": "string",
+        "instruction_variants": ["string", "string"],
+        "anchor": "string",
+        "grounding": "string"
+      }
+    ]
+  }
 
 # Independent quality judge (judge.py) — separate model pass that re-scores
 # finished examples; deliberately NOT the same prompt as the annotation passes.
-# It re-samples frames by time, so it keeps the `original_t=..s` anchor.
 judge_system: |-
   You are a strict data-quality auditor for a computer-use agent's training set. Each example pairs an INSTRUCTION (what a user types to ask an agent to do something) with the TRAJECTORY a human actually performed (shown as frames, each immediately preceded by a text line giving its integer index as `frame <N>`) plus the reconstructed keylog transcript. Judge only against the evidence; be skeptical and default to false when unsure.
 
