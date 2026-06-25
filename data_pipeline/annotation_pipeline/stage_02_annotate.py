@@ -37,8 +37,7 @@ from annotation_pipeline import config, prompts
 from annotation_pipeline.common import ensure_dir, read_jsonl, write_json, write_jsonl
 from annotation_pipeline.labeler import Labeler, LabelerConfig, LabelResult
 from annotation_pipeline.frames_render import (
-    load_vlm_video_sources,
-    render_frames,
+    frames_to_data_urls,
     select_naming_frames,
 )
 
@@ -114,7 +113,8 @@ def refresh_cache(output_dir: Path, prefixes: list[str]) -> int:
 # ---------------------------------------------------------------------------
 
 
-def clean_goals(parsed: dict[str, Any]) -> list[dict[str, Any]]:
+def clean_goals(parsed: dict[str, Any], frame_lo: int | None = None,
+                frame_hi: int | None = None) -> list[dict[str, Any]]:
     goals: list[dict[str, Any]] = []
     for g in (parsed.get("goals", []) if isinstance(parsed, dict) else []):
         if not isinstance(g, dict):
@@ -122,11 +122,25 @@ def clean_goals(parsed: dict[str, Any]) -> list[dict[str, Any]]:
         instr = str(g.get("instruction", "")).strip()
         if not instr:
             continue
+        # Frame boundaries the model reports against the interleaved `frame <N>`
+        # labels (extract only). Clamp to the indices actually sent; None if absent.
+        sf = ef = None
+        try:
+            sf, ef = int(g["start_frame"]), int(g["end_frame"])
+            if ef < sf:
+                sf, ef = ef, sf
+            if frame_lo is not None and frame_hi is not None:
+                sf = max(frame_lo, min(sf, frame_hi))
+                ef = max(frame_lo, min(ef, frame_hi))
+        except (KeyError, TypeError, ValueError):
+            sf = ef = None
         goals.append({
             "instruction": instr,
             "instruction_variants": [str(v).strip() for v in g.get("instruction_variants", []) if str(v).strip()],
             "anchor": str(g.get("anchor", "")).strip(),
             "grounding": str(g.get("grounding", "")).strip(),
+            "start_frame": sf,
+            "end_frame": ef,
         })
     return goals
 
@@ -158,16 +172,19 @@ def run_describe_steps(lab: Labeler, imgs: list[Path], n: int, output_dir: Path,
 
 
 def run_extract(lab: Labeler, description: str, imgs: list[Path], n: int, cache_name: str,
-                output_dir: Path, no_cache: bool) -> dict[str, Any]:
+                output_dir: Path, no_cache: bool, image_labels: list[str] | None = None,
+                frame_lo: int | None = None, frame_hi: int | None = None) -> dict[str, Any]:
     if not description.strip():
         return {"prompt": "", "goals": [], "error": "empty_description"}
     prompt = extract_prompt(description, n)
     out: dict[str, Any] = {"prompt": prompt}
     try:
-        parsed, res = lab.call_json_full(EXTRACT_SYSTEM, prompt, images=imgs,
+        # Frame index labels are interleaved before each image (extract only) so
+        # the model can report each goal's start_frame/end_frame.
+        parsed, res = lab.call_json_full(EXTRACT_SYSTEM, prompt, images=imgs, image_labels=image_labels,
                                          cache_path=_cache(output_dir, cache_name), no_cache=no_cache)
         out.update({"reasoning": res.reasoning, "content": res.content, "finish_reason": res.finish_reason,
-                    "usage": res.usage, "goals": clean_goals(parsed)})
+                    "usage": res.usage, "goals": clean_goals(parsed, frame_lo, frame_hi)})
     except Exception as exc:  # noqa: BLE001
         out.update({"error": f"{type(exc).__name__}: {exc}", "goals": []})
     return out
@@ -182,7 +199,8 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--frame-records", type=Path, required=True)
     p.add_argument("--manifest", type=Path, required=True,
-                   help="stage 00 manifest (to render VLM frames from the raw MP4)")
+                   help="stage 00 manifest (kept for provenance; frames now come "
+                        "from the stage-01 array_record, not the raw MP4)")
     p.add_argument("--output-dir", type=Path, required=True)
     # Accepted for run_iteration compatibility; unused in v2 (vision-only).
     p.add_argument("--keylog", type=Path, default=None, help="(ignored in v2 — no keylog)")
@@ -220,16 +238,21 @@ def main() -> None:
 
     cfg = LabelerConfig.from_env(model=args.model, base_url=args.base_url, reasoning_effort=args.reasoning_effort)
     lab = Labeler(cfg)
-    vlm_video_by_segment = load_vlm_video_sources(args.manifest)
 
-    # Frames for the whole clip, rendered once and reused by all four calls.
+    # Frames for the whole clip come straight from the stage-01 array_record
+    # (each record's ar:// image_path) as in-memory data URLs — no re-render, no
+    # loose jpegs on disk. Downscales only if vlm_frame_height < the stored height.
     sent = frame_records
     if args.image_max and args.image_max > 0 and len(frame_records) > args.image_max:
         sent = select_naming_frames(frame_records, args.image_max)
-    imgs = render_frames(sent, output_dir / "frames", jpeg_quality=args.jpeg_quality,
-                         video_by_segment=vlm_video_by_segment, target_height=args.vlm_frame_height)
+    imgs = frames_to_data_urls(sent, target_height=args.vlm_frame_height, jpeg_quality=args.jpeg_quality)
     n = len(imgs)
     sent_frame_indices = [int(r["global_frame_idx"]) for r in sent]
+    # Frame-index labels interleaved before each image in the EXTRACT call only,
+    # so goals can carry start_frame/end_frame. Describe stays label-free.
+    frame_labels = [f"frame {i}" for i in sent_frame_indices]
+    frame_lo = min(sent_frame_indices) if sent_frame_indices else None
+    frame_hi = max(sent_frame_indices) if sent_frame_indices else None
     print(f"  v2 annotate: {n} frames "
           f"({'all kept' if n == len(frame_records) else f'sub-sampled from {len(frame_records)}'})")
 
@@ -242,9 +265,9 @@ def main() -> None:
     # Pass B — extract on each variant's account, concurrently.
     with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as ex:
         f_ep = ex.submit(run_extract, lab, describe["prose"]["description"], imgs, n,
-                         "extract_from_prose", output_dir, args.no_cache)
+                         "extract_from_prose", output_dir, args.no_cache, frame_labels, frame_lo, frame_hi)
         f_es = ex.submit(run_extract, lab, describe["steps"]["description"], imgs, n,
-                         "extract_from_steps", output_dir, args.no_cache)
+                         "extract_from_steps", output_dir, args.no_cache, frame_labels, frame_lo, frame_hi)
         extract = {"prose": f_ep.result(), "steps": f_es.result()}
 
     # ---- write outputs ----

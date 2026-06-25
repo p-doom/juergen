@@ -2,7 +2,7 @@
 #SBATCH --job-name=annotation_iter
 #SBATCH --partition=standard
 #SBATCH --account=hfmi_synergyunit
-#SBATCH --qos=normal
+#SBATCH --qos=low
 #SBATCH --gres=gpu:0
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

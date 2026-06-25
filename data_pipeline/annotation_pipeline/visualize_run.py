@@ -265,14 +265,20 @@ function prej(o){return `<pre class="json">${esc(JSON.stringify(o,null,2))}</pre
 function block(title,open,inner){return `<details ${open?'open':''}><summary>${esc(title)}</summary><div class="inner">${inner}</div></details>`;}
 function truncBadge(fr){return fr==='length'?' <span class="badge f">TRUNCATED</span>':'';}
 
+function framesInSpan(frames,a,b){return (frames||[]).filter(f=>Number(f.idx)>=a&&Number(f.idx)<=b);}
 function goalsBlock(goals){
   if(!goals||!goals.length)return '<p class="lab">no goals</p>';
-  return goals.map(g=>`<div class="card ok">
+  return goals.map(g=>{
+    const hasSpan = g.start_frame!=null && g.end_frame!=null;
+    return `<div class="card ok">
     <div class="instr">${esc(g.instruction)}</div>
     ${(g.instruction_variants||[]).length?`<ul class="variants">${g.instruction_variants.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:''}
+    ${hasSpan?`<div class="lab">goal trajectory · frames ${g.start_frame}–${g.end_frame}</div>
+       <div class="keptplayer goalfp" data-start="${g.start_frame}" data-end="${g.end_frame}"></div>`
+      :'<div class="lab">no frame span returned</div>'}
     ${g.anchor?`<div class="lab">anchor</div><div style="color:#b9c2d4;font-size:13px">${esc(g.anchor)}</div>`:''}
     ${g.grounding?`<div class="lab">grounding</div><div style="color:#8a93a6;font-size:12px">${esc(g.grounding)}</div>`:''}
-  </div>`).join('');
+  </div>`;}).join('');
 }
 function describeBlock(key,d){
   d=d||{};
@@ -347,6 +353,10 @@ function renderClip(){
   $('main').innerHTML=h;
   const fps=Number(c.sampling?.target_fps)||0.5;
   mountFramePlayer($('kept-stream'), c.kept_frames||[], fps);
+  // Per-goal trajectory players, scoped to each goal's [start_frame,end_frame].
+  document.querySelectorAll('.goalfp').forEach(el=>{
+    mountFramePlayer(el, framesInSpan(c.kept_frames, Number(el.dataset.start), Number(el.dataset.end)), 3);
+  });
 }
 init().catch(e=>{$('main').innerHTML=`<pre>${esc(e.stack||e.message)}</pre>`;});
 </script></body></html>"""

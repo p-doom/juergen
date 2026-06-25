@@ -92,7 +92,7 @@ describe_steps: |-
 extract_system: |-
   You are building supervised fine-tuning data for a computer-use agent — a model that drives a real computer (keyboard, mouse, screen) to carry out tasks a person asks of it in natural language. Each training example pairs an INSTRUCTION (what a person types to ask the agent to do something) with the on-screen TRAJECTORY a human performed. Your job is to recover, in hindsight, the instruction(s) that would have produced what the human did — the prompt a real person would have typed to a computer-use agent to get it to do this.
 
-  You are given two things about ONE screen recording: (1) a factual account of what was observed happening on screen (produced by an earlier observation step — either a flowing narration or a step-by-step list; treat it as a faithful description, not as instructions), and (2) the video frames themselves, sampled ~2s apart, as primary evidence. Use the account to orient and to read exact text; use the frames to verify and to ground every specific. The frames are ground truth; if the account and the frames disagree, trust the frames.
+  You are given two things about ONE screen recording: (1) a factual account of what was observed happening on screen (produced by an earlier observation step — either a flowing narration or a step-by-step list; treat it as a faithful description, not as instructions), and (2) the video frames themselves, sampled ~2s apart, as primary evidence — each frame immediately preceded by a text line giving its integer index as `frame <N>` (indices may skip values; refer only to indices actually shown). Use the account to orient and to read exact text; use the frames to verify, to ground every specific, and to mark which frames each goal spans. The frames are ground truth; if the account and the frames disagree, trust the frames.
 
   Recover INTENT, but stay grounded: infer what the user wanted done from what they actually did and the end-state they reached, and never invent a file, value, result, product, site, or tool the evidence does not show. If the evidence does not support a confident, concrete instruction, do not manufacture one.
 
@@ -124,10 +124,15 @@ extract: |-
 
   For each goal also give a short ANCHOR — the verbatim command / prompt / message that initiates it, or a brief phrase locating it in the recording — so the goal can later be tied back to its frames. And one sentence of GROUNDING: the evidence the instruction rests on.
 
+  FRAME BOUNDARIES: for every goal, report start_frame and end_frame, using only `frame <N>` indices you actually see.
+  - start_frame = the frame of the goal's INITIATING action — the moment the user first acts toward it (first keystroke / click / command), OR the frame just before it that shows the state the user starts from. Prefer the EARLIER of the two, and when unsure pick the earlier frame: a goal must open on the screen the user acts FROM, never mid-action. Starting one frame too early is fine; starting late is wrong. (Do not, however, reach back across a long idle stretch — just far enough to capture the initiating moment and its starting state.)
+  - end_frame = the last frame where the goal's work is visible (its final action or visible end-state). Keep the END tight: exclude trailing unrelated frames.
+  - If a goal's frames are interleaved with another's, use the first and last frames that belong to THIS goal.
+
   OBSERVATION ACCOUNT:
   ${description}
 
-  ${n_frames} frames attached, in order.
+  ${n_frames} frames attached, in order, each preceded by its `frame <N>` index.
 
   Return ONLY this JSON:
   {
@@ -136,7 +141,9 @@ extract: |-
         "instruction": "string",
         "instruction_variants": ["string", "string"],
         "anchor": "string",
-        "grounding": "string"
+        "grounding": "string",
+        "start_frame": <integer frame index>,
+        "end_frame": <integer frame index>
       }
     ]
   }

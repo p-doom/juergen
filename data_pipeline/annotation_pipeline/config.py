@@ -16,7 +16,10 @@ import shutil
 # thinned by the NO_OP head/tail keep below.
 DEFAULT_TARGET_FPS = 0.5
 DEFAULT_TARGET_HEIGHT = 720          # training frame height (stage 01)
-DEFAULT_JPEG_QUALITY = 95
+# q80 is what we annotated with successfully; stage 02 now feeds the VLM these
+# same stored frames (no re-render), so this quality serves both training and
+# annotation.
+DEFAULT_JPEG_QUALITY = 80
 # In each maximal run of consecutive NO_OP frames keep the first HEAD and the
 # last TAIL, drop the middle — so a wait's start AND end (e.g. an agent
 # finishing) stay visible without the whole idle stretch.
@@ -24,11 +27,13 @@ DEFAULT_NOOP_KEEP_HEAD = 2
 DEFAULT_NOOP_KEEP_TAIL = 2
 
 # --- Stage 02: VLM annotation ----------------------------------------------
-# Frames rendered for the labeler. At 720p a wide ~150-frame clip can overflow
-# the model's 262K context (input + LABELER_MAX_TOKENS completion) — that one
-# clip fails and is skipped; the rest run. Accepted for now to keep frame
-# fidelity. See LABELER_MAX_TOKENS in labeler.py.
-DEFAULT_VLM_FRAME_HEIGHT = 720       # height of frames rendered for the labeler
+# Frames fed to the labeler come straight from the stage-01 array_record (no
+# re-render). At 720p a wide ~150-frame clip can overflow the model's 262K
+# context (input + LABELER_MAX_TOKENS completion) — that one clip fails and is
+# skipped; the rest run. Set VLM_FRAME_HEIGHT below the stored height to rescue
+# it: stage 02 then downscales the stored frames in memory (still no jpegs on
+# disk). See LABELER_MAX_TOKENS in labeler.py.
+DEFAULT_VLM_FRAME_HEIGHT = 720       # height fed to the labeler (<= stored height)
 DEFAULT_NAME_IMAGE_MAX = 24          # frames per label / verify request
 
 # --- Stage 04/05: token accounting -----------------------------------------

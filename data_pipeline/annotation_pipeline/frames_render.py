@@ -94,6 +94,53 @@ def render_frames(
 # ---------------------------------------------------------------------------
 
 
+def frames_to_data_urls(
+    records: list[dict[str, Any]],
+    target_height: int = 0,
+    jpeg_quality: int = 80,
+) -> list[str]:
+    """In-memory ``data:image/jpeg`` URLs for the labeler, read straight from
+    each record's stored JPEG (the stage-01 ``ar://`` array_record URI, or a
+    plain file path for legacy runs) — no frames written to disk.
+
+    Bytes are passed through verbatim unless ``target_height`` is set below the
+    stored frame height, in which case every frame is decoded, downscaled and
+    re-encoded at ``jpeg_quality`` (the overflow-clip rescue knob). All frames in
+    a segment share one render, so the stored height is probed once.
+    """
+    import base64  # noqa: PLC0415
+
+    import numpy as np  # noqa: PLC0415
+
+    from annotation_pipeline.image_store import read_jpeg_bytes  # noqa: PLC0415
+
+    if not records:
+        return []
+
+    refs = [r["image_path"] for r in records]
+    resize = False
+    if target_height and target_height > 0:
+        probe = cv2.imdecode(np.frombuffer(read_jpeg_bytes(refs[0]), np.uint8), cv2.IMREAD_COLOR)
+        if probe is None:
+            raise RuntimeError(f"could not decode stored frame: {refs[0]}")
+        resize = probe.shape[0] > target_height
+
+    urls: list[str] = []
+    for ref in refs:
+        raw = read_jpeg_bytes(ref)
+        if resize:
+            img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+            if img is None:
+                raise RuntimeError(f"could not decode stored frame: {ref}")
+            img = resize_to_height(img, target_height)
+            ok, enc = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
+            if not ok:
+                raise RuntimeError(f"could not re-encode frame: {ref}")
+            raw = enc.tobytes()
+        urls.append("data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii"))
+    return urls
+
+
 def evenly(pool: list[Any], k: int) -> list[Any]:
     if k <= 0 or not pool:
         return []
