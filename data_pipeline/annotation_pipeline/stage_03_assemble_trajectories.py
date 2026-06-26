@@ -55,21 +55,6 @@ def selected_frames(
     ]
 
 
-def trim_to_action_span(
-    frames: list[dict[str, Any]], pre_context_frames: int
-) -> tuple[list[dict[str, Any]], str | None]:
-    non_noop_positions = [idx for idx, record in enumerate(frames) if record["action"] != "NO_OP"]
-    if not non_noop_positions:
-        return [], "all_noop"
-
-    start = max(0, non_noop_positions[0] - pre_context_frames)
-    end = non_noop_positions[-1]
-    frames = frames[start : end + 1]
-    if not frames:
-        return [], "empty_after_trim"
-    return frames, None
-
-
 def instruction_variants(trajectory: dict[str, Any]) -> list[str]:
     """Primary instruction plus any register paraphrases, de-duplicated.
 
@@ -88,6 +73,7 @@ def instruction_variants(trajectory: dict[str, Any]) -> list[str]:
 
 def make_sample(
     recording_id: str,
+    clip_id: str,
     trajectory_idx: int,
     trajectory: dict[str, Any],
     frames: list[dict[str, Any]],
@@ -102,13 +88,24 @@ def make_sample(
         messages.append(assistant_text(frame["action"]))
 
     suffix = f"_v{variant_idx}" if variant_idx else ""
+    first, last = frames[0], frames[-1]
     return {
-        "sample_id": f"{recording_id}_traj{trajectory_idx:04d}{suffix}",
+        # clip_id is a separate field and stage 04 prefixes it onto the final
+        # sample_id, so keep this one clip-relative to avoid doubling it.
+        "sample_id": f"traj{trajectory_idx:04d}{suffix}",
         "recording_id": recording_id,
+        "clip_id": clip_id,
         "instruction": instruction,
         "variant_idx": variant_idx,
-        "start_frame_idx": int(frames[0]["global_frame_idx"]),
-        "end_frame_idx": int(frames[-1]["global_frame_idx"]),
+        # WHERE-IN-CLIP: frame_idx is the sampled-stream index; the time/source
+        # spans locate the goal in the actual recording (seconds into the segment
+        # and original video frame numbers — seekable with video_path + fps).
+        "start_frame_idx": int(first["global_frame_idx"]),
+        "end_frame_idx": int(last["global_frame_idx"]),
+        "start_time_s": first.get("global_time_s"),
+        "end_time_s": last.get("global_time_s"),
+        "source_frame_start": first.get("source_frame_idx"),
+        "source_frame_end": last.get("source_frame_idx"),
         "n_frames": len(frames),
         "n_non_noop": sum(1 for frame in frames if frame["action"] != "NO_OP"),
         "source_trajectory": trajectory,
@@ -121,30 +118,39 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frame-records", type=Path, required=True)
     parser.add_argument("--trajectories", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--min-frames", type=int, default=4)
-    parser.add_argument("--pre-context-frames", type=int, default=1)
+    parser.add_argument("--min-frames", type=int, default=1,
+                        help="Drop goals shorter than this many frames. Default 1 "
+                             "keeps tight short goals; stage 02 already bounds them.")
+    parser.add_argument("--include-variants", action="store_true",
+                        help="Emit one sample per instruction paraphrase (3x). Default "
+                             "emits one sample from the main instruction only.")
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    output_dir = ensure_dir(args.output_dir)
-    frame_records = read_jsonl(args.frame_records)
-    trajectories, annotation_source = load_trajectories(args.trajectories)
-    if not frame_records:
-        raise RuntimeError(f"No frame records: {args.frame_records}")
+def assemble_samples(
+    frame_records: list[dict[str, Any]],
+    trajectories: list[dict[str, Any]],
+    *,
+    min_frames: int = 1,
+    include_variants: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Turn one segment's frame_records + goal trajectories into SFT samples.
 
+    Stage 02 already emits tight, non-overlapping, frame-accurate bounds (start =
+    first keystroke, end = true end-state) and stage 01 already thinned NO_OPs, so
+    this just slices [start_frame_idx, end_frame_idx] and assembles image->action
+    turns — no NO_OP re-trim, no overlap clipping, no large min-frames floor.
+    Returns (samples, rejected). Reused by both the CLI and the dataset driver."""
     recording_id = str(frame_records[0]["recording_id"])
+    # clip_id groups all samples of one segment (stage 04 uses it for sample ids
+    # and clip-level splits); windows of a split segment share the parent's id
+    # because the driver feeds the parent's full frame_records here.
+    clip_id = str(frame_records[0].get("segment_id") or recording_id)
     samples: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    last_emitted_end_idx = -1
-
     ordered = sorted(
         enumerate(trajectories),
-        key=lambda kv: (
-            int(kv[1].get("start_frame_idx") or 0),
-            int(kv[1].get("end_frame_idx") or 0),
-        ),
+        key=lambda kv: (int(kv[1].get("start_frame_idx") or 0), int(kv[1].get("end_frame_idx") or 0)),
     )
     for idx, trajectory in ordered:
         def reject(reason: str) -> None:
@@ -153,9 +159,6 @@ def main() -> None:
         instruction = str(trajectory.get("instruction") or "").strip()
         if is_generic_instruction(instruction):
             reject("generic_or_empty_instruction")
-            continue
-        if "verified" in trajectory and not trajectory.get("verified"):
-            reject("not_verified")
             continue
         try:
             start_idx = int(trajectory["start_frame_idx"])
@@ -169,35 +172,36 @@ def main() -> None:
 
         spans = trajectory.get("frame_spans") or [[start_idx, end_idx]]
         frames = selected_frames(frame_records, spans)
-        # Enforce non-overlap with the previously emitted sample.
-        n_before_clip = len(frames)
-        frames = [f for f in frames if int(f["global_frame_idx"]) > last_emitted_end_idx]
-        if len(frames) < args.min_frames:
-            reject("overlaps_previous" if n_before_clip > len(frames) else "too_few_frames")
+        if len(frames) < min_frames:
+            reject("too_few_frames")
             continue
-        frames, reject_reason = trim_to_action_span(
-            frames,
-            pre_context_frames=args.pre_context_frames,
-        )
-        if reject_reason:
-            reject(reject_reason)
-            continue
-        if len(frames) < args.min_frames:
-            reject("too_few_frames_after_trim")
-            continue
-        # Fan out the interval's user-prompt variants into one sample each over
-        # the same frames/actions. Non-overlap is keyed on the interval (updated
-        # once below), so same-span variants are not dropped as overlapping.
+        # Emit the main instruction (default) or fan out every paraphrase into its
+        # own sample over the same frames/actions when include_variants is set.
+        phrasings = instruction_variants(trajectory) if include_variants else [instruction]
         emitted = 0
-        for variant in instruction_variants(trajectory):
+        for variant in phrasings:
             if is_generic_instruction(variant):
                 continue
-            samples.append(make_sample(recording_id, idx, trajectory, frames, variant, emitted))
+            samples.append(make_sample(recording_id, clip_id, idx, trajectory, frames, variant, emitted))
             emitted += 1
         if emitted == 0:
             reject("generic_or_empty_instruction")
-            continue
-        last_emitted_end_idx = int(frames[-1]["global_frame_idx"])
+    return samples, rejected
+
+
+def main() -> None:
+    args = parse_args()
+    output_dir = ensure_dir(args.output_dir)
+    frame_records = read_jsonl(args.frame_records)
+    trajectories, annotation_source = load_trajectories(args.trajectories)
+    if not frame_records:
+        raise RuntimeError(f"No frame records: {args.frame_records}")
+
+    recording_id = str(frame_records[0]["recording_id"])
+    samples, rejected = assemble_samples(
+        frame_records, trajectories,
+        min_frames=args.min_frames, include_variants=args.include_variants,
+    )
 
     write_jsonl(output_dir / "trajectories.jsonl", samples)
     write_jsonl(output_dir / "rejected_trajectories.jsonl", rejected)

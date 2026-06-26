@@ -163,11 +163,23 @@ class Labeler:
                         meta = json.loads(mp.read_text())
                     except Exception:  # noqa: BLE001
                         meta = {}
-                rp = _reasoning_path(cache_path)
-                reasoning = rp.read_text() if rp.exists() else ""
-                return LabelResult(content=content, reasoning=reasoning,
-                                   finish_reason=str(meta.get("finish_reason", "")),
-                                   usage=meta.get("usage"), model=str(meta.get("model", self.config.model)))
+                cached_model = str(meta.get("model", "")) if meta else ""
+                # Safety net: the cache path has no model in its key, so a cached
+                # response from a DIFFERENT model would otherwise be served
+                # silently (e.g. K2.6 answers returned for a K2.5 run). Refuse it
+                # and re-call. Keep separate run dirs per model so this never even
+                # triggers; this just makes a mix-up loud instead of wrong.
+                if cached_model and cached_model != self.config.model:
+                    print(f"  [labeler] cache model mismatch "
+                          f"({cached_model!r} != {self.config.model!r}); re-calling "
+                          f"({cache_path.name}).")
+                else:
+                    rp = _reasoning_path(cache_path)
+                    reasoning = rp.read_text() if rp.exists() else ""
+                    return LabelResult(content=content, reasoning=reasoning,
+                                       finish_reason=str(meta.get("finish_reason", "")),
+                                       usage=meta.get("usage"),
+                                       model=str(meta.get("model", self.config.model)))
 
         # Interleave a text label before each image when provided (frames stay
         # unmodified — no burned-in overlay occluding the UI). The v2 describe

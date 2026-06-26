@@ -6,11 +6,10 @@ Serves a single-page dashboard over an iteration run (default
 
   - play the RAW recording (HTTP Range streaming) and step through the exact
     0.5-fps frames the VLM was sent (the kept stage-01 stream);
-  - for BOTH describe variants (prose / steps) side by side: the full
-    description, the model's THINKING (reasoning), the full raw response, and
-    the prompt that was sent;
-  - the list of GOALS each variant's extract pass recovered (instruction +
-    register variants + anchor + grounding).
+  - the describe pass: the full narration, the model's THINKING (reasoning),
+    the full raw response, and the prompt that was sent;
+  - the list of GOALS the extract pass recovered (instruction + register
+    variants + anchor + grounding + start/end frame).
 
 Reads ``stage_02/stage02_result.json`` (self-contained) per clip.
 
@@ -256,12 +255,11 @@ async function load(name){S.run=await api(`/api/run?name=${encodeURIComponent(na
 function renderNav(){$('nav').innerHTML=S.run.clips.map((c,i)=>{
   const s=c.summary||{};
   return `<button class="clip-btn ${i===S.clip?'active':''}" data-i="${i}">${esc(c.clip_key)}
-    <span class="sub">${c.n_kept_frames??0} frames · goals ${s.n_goals_prose??0}p/${s.n_goals_steps??0}s</span></button>`;
+    <span class="sub">${c.n_kept_frames??0} frames · goals ${s.n_goals_prose??0}</span></button>`;
 }).join('');
 document.querySelectorAll('.clip-btn').forEach(b=>b.onclick=()=>{S.clip=+b.dataset.i;renderNav();renderClip();window.scrollTo(0,0);});}
 
 function pre(t){return `<pre>${esc(t||'')}</pre>`;}
-function prej(o){return `<pre class="json">${esc(JSON.stringify(o,null,2))}</pre>`;}
 function block(title,open,inner){return `<details ${open?'open':''}><summary>${esc(title)}</summary><div class="inner">${inner}</div></details>`;}
 function truncBadge(fr){return fr==='length'?' <span class="badge f">TRUNCATED</span>':'';}
 
@@ -280,11 +278,10 @@ function goalsBlock(goals){
     ${g.grounding?`<div class="lab">grounding</div><div style="color:#8a93a6;font-size:12px">${esc(g.grounding)}</div>`:''}
   </div>`;}).join('');
 }
-function describeBlock(key,d){
+function describeBlock(d){
   d=d||{};
   let body=d.error?`<div class="card no">error: ${esc(d.error)}</div>`:'';
-  if(key==='steps'){const st=d.steps||[];body+=`<div class="lab">${st.length} steps</div>${prej(st)}`;}
-  else{body+=`<div class="lab">narration</div>${pre(d.description||d.content)}`;}
+  body+=`<div class="lab">narration</div>${pre(d.description||d.content)}`;
   body+=block('thinking (reasoning)',false,pre(d.reasoning||'(none returned)'));
   body+=block('full raw response',false,pre(d.content));
   body+=block('prompt sent',false,pre(d.prompt));
@@ -299,9 +296,9 @@ function extractBlock(e){
   body+=block('prompt sent',false,pre(e.prompt));
   return `<div class="lab" style="margin-top:12px">EXTRACT${truncBadge(e.finish_reason)}</div>${body}`;
 }
-function variantSection(key,v){
-  if(!v)return `<p class="lab">no ${esc(key)} variant on disk</p>`;
-  return describeBlock(key,v.describe)+extractBlock(v.extract);
+function variantSection(v){
+  if(!v)return `<p class="lab">no annotation on disk</p>`;
+  return describeBlock(v.describe)+extractBlock(v.extract);
 }
 
 // Generic frame-player: plays the ACTUAL kept (stage-01) JPEGs a sample contains.
@@ -334,8 +331,8 @@ function renderClip(){
   const c=S.run.clips[S.clip];if(!c){$('main').innerHTML='';return;}
   const s=c.summary||{};
   let h=`<h2>${esc(c.clip_key)} <span class="lab">${esc(c.segment_id||'')}</span></h2>
-    <div class="stat">${c.n_images_sent??s.n_images_sent??0} frames sent · ${s.n_steps??0} steps ·
-      prose goals ${s.n_goals_prose??0} · steps goals ${s.n_goals_steps??0}${c.model?` · ${esc(c.model)}`:''}</div>`;
+    <div class="stat">${c.n_images_sent??s.n_images_sent??0} frames sent ·
+      goals ${s.n_goals_prose??0}${c.model?` · ${esc(c.model)}`:''}</div>`;
   h+= c.video?`<video controls preload="metadata" src="${vid(c.video)}"></video>`:'<p class="lab">raw video not found</p>';
 
   const sm=c.sampling||{};
@@ -345,10 +342,7 @@ function renderClip(){
     <div class="keptplayer" id="kept-stream"></div>`;
 
   const V=c.variants||{};
-  h+=`<div class="row2">
-      <div><h2>PROSE variant</h2>${variantSection('prose',V.prose)}</div>
-      <div><h2>STEPS variant</h2>${variantSection('steps',V.steps)}</div>
-    </div>`;
+  h+=`<div><h2>Describe → Extract</h2>${variantSection(V.prose)}</div>`;
 
   $('main').innerHTML=h;
   const fps=Number(c.sampling?.target_fps)||0.5;

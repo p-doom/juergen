@@ -22,9 +22,10 @@ DEFAULT_TARGET_HEIGHT = 720          # training frame height (stage 01)
 DEFAULT_JPEG_QUALITY = 80
 # In each maximal run of consecutive NO_OP frames keep the first HEAD and the
 # last TAIL, drop the middle — so a wait's start AND end (e.g. an agent
-# finishing) stay visible without the whole idle stretch.
-DEFAULT_NOOP_KEEP_HEAD = 2
-DEFAULT_NOOP_KEEP_TAIL = 2
+# finishing) stay visible without the whole idle stretch. Set both to 0 (via the
+# run-time override) to drop NO_OPs entirely.
+DEFAULT_NOOP_KEEP_HEAD = 1
+DEFAULT_NOOP_KEEP_TAIL = 1
 
 # --- Stage 02: VLM annotation ----------------------------------------------
 # Frames fed to the labeler come straight from the stage-01 array_record (no

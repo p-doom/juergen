@@ -141,6 +141,124 @@ def frames_to_data_urls(
     return urls
 
 
+def est_frame_tokens(ref: str) -> int:
+    """Vision tokens for one stored frame: ceil(h/28)*ceil(w/28) (verified within
+    ~2% of real prompt_tokens). Used to budget how many frames fit one context."""
+    import numpy as np  # noqa: PLC0415
+
+    from annotation_pipeline.image_store import read_jpeg_bytes  # noqa: PLC0415
+
+    img = cv2.imdecode(np.frombuffer(read_jpeg_bytes(ref), np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        raise RuntimeError(f"could not decode frame for token estimate: {ref}")
+    import math  # noqa: PLC0415
+
+    h, w = img.shape[:2]
+    return math.ceil(h / 28) * math.ceil(w / 28)
+
+
+def frame_activity(action: str | None) -> str:
+    """Classify a frame by its stage-01 action label: "idle" (NO_OP), "type" (the
+    user is mid keyboard-burst), or "other" (mouse / click / scroll / no events).
+    NOTE: a lone "idle"/NO_OP frame is NOT a reliable activity boundary — people
+    pause for a frame mid-typing — so segmentation keys on SUBMISSIONS and real
+    time-gaps (see _is_submission / plan_windows), using this only to avoid
+    cutting between two "type" frames."""
+    if not action or action == "NO_OP":
+        return "idle"
+    # Action strings look like "<dx> <dy> <scroll> ; <key events>" — keyboard
+    # events (+KeyA, -Return, +Backspace, +Space, +Digit3, +NumpadEnter, …) only
+    # appear after the ";". Their presence means the user is typing this frame.
+    tail = action.split(";", 1)[1] if ";" in action else action
+    if any(tok in tail for tok in ("Key", "Return", "Backspace", "Space", "Enter", "Digit", "Num", "Minus", "Slash", "Period", "Comma")):
+        return "type"
+    return "other"
+
+
+def _is_submission(action: str | None) -> bool:
+    """True if this frame commits a typed command / prompt / message — a Return or
+    Enter keypress. These are the real boundaries BETWEEN activities in continuous
+    work (where idle gaps don't exist): the action just finished, so the next
+    frame is a clean place to cut."""
+    return bool(action) and ("Return" in action or "Enter" in action)
+
+
+def _best_cut(lo: int, hi: int, ideal: int, actions: list[str | None],
+              times: list[float] | None, big_gap_s: float) -> int:
+    """Pick the cut index in [lo, hi] (window splits BEFORE this frame) that is
+    least likely to slice through an in-progress action, preferring one nearest
+    `ideal`. Cost: a submission just happened, or a genuine time-gap precedes the
+    frame = 0 (ideal boundary); neither side typing = 1; one side typing = 2; both
+    sides typing (mid-burst) = 3."""
+    best, best_key = ideal, None
+    for i in range(lo, hi + 1):
+        a_prev, a_cur = frame_activity(actions[i - 1]), frame_activity(actions[i])
+        gap = (times[i] - times[i - 1]) if times else 0.0
+        if _is_submission(actions[i - 1]) or gap >= big_gap_s:
+            cost = 0                              # just submitted, or a real pause
+        elif a_prev != "type" and a_cur != "type":
+            cost = 1
+        elif a_prev != "type" or a_cur != "type":
+            cost = 2
+        else:
+            cost = 3                              # both sides typing — mid-burst
+        key = (cost, abs(i - ideal))
+        if best_key is None or key < best_key:
+            best_key, best = key, i
+    return best
+
+
+def plan_windows(n: int, max_frames: int, overlap: int = 0, *,
+                 actions: list[str | None] | None = None,
+                 times: list[float] | None = None,
+                 slack: int = 0, big_gap_s: float = 6.0) -> list[tuple[int, int]]:
+    """Partition [0, n) into windows, each <= max_frames, with `overlap` shared
+    frames at each interior boundary (0 = hard cut). Returns (lo, hi) half-open
+    spans. A split happens ONLY when needed (n > max_frames); otherwise one window.
+
+    When `actions` (per-frame stage-01 labels, len == n) and `slack` > 0 are given,
+    each interior boundary is snapped within ±slack to the nearest SUBMISSION
+    (Return/Enter) or genuine time-gap — never inside an unsubmitted typing burst —
+    so one action (and its goal) is not split across two windows. Each candidate
+    is clamped so every window still fits max_frames."""
+    import math  # noqa: PLC0415
+
+    if n <= 0:
+        return []
+    if n <= max_frames:                           # split only if needed
+        return [(0, n)]
+    snap = bool(actions) and slack > 0
+    n_win = math.ceil(n / max_frames)             # fewest windows that fit budget
+    boundaries: list[int] = []
+    prev = 0
+    for k in range(1, n_win):
+        ideal = round(k * n / n_win)
+        # Feasible range keeping the left window and all remaining windows <= max_frames.
+        lo = max(prev + 1, n - (n_win - k) * max_frames)
+        hi = min(prev + max_frames, n - 1)
+        if snap:
+            lo = max(lo, ideal - slack)
+            hi = min(hi, ideal + slack)
+            if lo > hi:                            # snap range infeasible — forced cut
+                p = min(max(ideal, prev + 1), prev + max_frames, n - 1)
+            else:
+                p = _best_cut(lo, hi, min(max(ideal, lo), hi), actions, times, big_gap_s)
+        else:
+            p = min(max(ideal, prev + 1), prev + max_frames, n - 1)
+        boundaries.append(p)
+        prev = p
+    bounds = [0, *boundaries, n]
+    wins: list[tuple[int, int]] = []
+    for i in range(len(bounds) - 1):
+        lo, hi = bounds[i], bounds[i + 1]
+        if lo >= hi:
+            continue
+        lo = max(0, lo - (overlap if i > 0 else 0))
+        hi = min(n, hi + (overlap if i < len(bounds) - 2 else 0))
+        wins.append((lo, hi))
+    return wins
+
+
 def evenly(pool: list[Any], k: int) -> list[Any]:
     if k <= 0 or not pool:
         return []

@@ -374,6 +374,10 @@ def build_canonical_sft(
             "n_frames": record.get("n_frames"),
             "start_frame_idx": record.get("start_frame_idx"),
             "end_frame_idx": record.get("end_frame_idx"),
+            "start_time_s": record.get("start_time_s"),
+            "end_time_s": record.get("end_time_s"),
+            "source_frame_start": record.get("source_frame_start"),
+            "source_frame_end": record.get("source_frame_end"),
         }
         for record in records
     ]

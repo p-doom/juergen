@@ -21,5 +21,13 @@ draft/
 annotation_pipeline/__pycache__/
 annotation_pipeline/logs/
 annotation_pipeline/outputs/
+annotation_pipeline/dataset_runs/
 annotation_pipeline/clips_dataset.json
 annotation_pipeline/discovery_report.json
+
+# Generated dataset manifests + black-active scan/exclusion outputs (regenerable;
+# large — the crowd-cast manifest alone is ~22 MB). Iteration byproducts.
+manifest*.jsonl
+*.scan.jsonl
+blackactive.*.jsonl
+exclude.*_black_active.jsonl
