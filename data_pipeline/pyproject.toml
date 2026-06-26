@@ -32,10 +32,8 @@ dependencies = [
     "opencv-python-headless>=4.10.0.84",  # annotation_pipeline video probing/frame rendering; matches sglang workspace pin
     "datasets>=3.0",               # prep_{finevision,smoltalk2,tulu3_persona_if} + preprocess_smoltalk_prompts HF loaders
     # tokenizer for prompt-length filtering in preprocess_smoltalk_prompts.py
-    # (Qwen3-VL-2B chat template). Pinned to the version already resolved by
-    # the juergen workspace/sglang side, so data_pipeline and eval share one
-    # uv lock without a nested annotation environment.
-    "transformers==5.3.0",
+    # (Qwen3-VL-2B chat template).
+    "transformers>=4.45",
     # transformers' chat-template renderer pulls jinja2 lazily; needed so
     # apply_chat_template doesn't ImportError on first call.
     "jinja2>=3.1",

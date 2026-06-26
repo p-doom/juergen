@@ -11,7 +11,9 @@ Output layout (under --output_dir):
     {train,val,test}/
       chat.jsonl                        # concatenated per-segment lines
       <segment_id>/
-        frames/frame_<N>.jpg            # frames at target fps/height
+        frames/frame_<N>.jpg            # default file-backed frame store
+        images.array_record             # optional ArrayRecord JPEG store
+        frame_manifest.jsonl            # optional per-frame ArrayRecord index
         chat_line.json                  # one structured-message record
         meta.json                       # per-segment audit counts
 
@@ -23,6 +25,8 @@ Action string format (event-stream, lossless to recorder):
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import multiprocessing as mp
 import re
@@ -38,6 +42,7 @@ from absl import app, flags
 from PIL import Image
 
 from _manifest import write_manifest
+from image_store import make_arrayrecord_image_uri
 
 FLAGS = flags.FLAGS
 
@@ -53,6 +58,14 @@ flags.DEFINE_string(
 flags.DEFINE_integer("target_fps", None, "Frame extraction fps.", required=True)
 flags.DEFINE_integer("target_height", None, "Frame height in px.", required=True)
 flags.DEFINE_integer("jpeg_quality", None, "JPEG quality 1-100.", required=True)
+flags.DEFINE_enum(
+    "image_store_format",
+    "files",
+    ["files", "arrayrecord"],
+    "How extracted JPEGs are stored. 'files' writes frames/frame_*.jpg; "
+    "'arrayrecord' writes one per-segment images.array_record and references "
+    "records as ar:///abs/path/images.array_record#idx.",
+)
 flags.DEFINE_float("train_ratio", None, "", required=True)
 flags.DEFINE_float("val_ratio", None, "", required=True)
 flags.DEFINE_integer("seed", None, "Shuffle seed for splits.", required=True)
@@ -374,18 +387,14 @@ def _probe_resolution(video_path: Path) -> tuple[int, int]:
     return int(m.group(1)), int(m.group(2))
 
 
-def _extract_frames(
-    video_path: Path,
-    out_dir: Path,
-    target_fps: int,
-    target_height: int,
-    jpeg_quality: int,
-) -> tuple[int, int]:
+def _target_width(video_path: Path, target_height: int) -> int:
     in_width, in_height = _probe_resolution(video_path)
     out_width = round(target_height * in_width / in_height)
-    out_width += out_width % 2  # ensure even
+    return out_width + out_width % 2  # ensure even
 
-    cmd = [
+
+def _rawvideo_cmd(video_path: Path, target_fps: int, target_height: int, out_width: int) -> list[str]:
+    return [
         _FFMPEG_BIN,
         "-nostdin",
         "-loglevel",
@@ -400,6 +409,15 @@ def _extract_frames(
         "rgb24",
         "-",
     ]
+
+
+def _extract_raw_frames(
+    video_path: Path,
+    target_fps: int,
+    target_height: int,
+) -> tuple[np.ndarray, int]:
+    out_width = _target_width(video_path, target_height)
+    cmd = _rawvideo_cmd(video_path, target_fps, target_height, out_width)
     proc = subprocess.run(cmd, capture_output=True, check=False)
     if proc.returncode != 0:
         raise RuntimeError(
@@ -410,8 +428,50 @@ def _extract_frames(
     frame_size = target_height * out_width * 3
     n_frames = len(out) // frame_size
     if n_frames == 0:
-        return 0, out_width
+        return np.empty((0, target_height, out_width, 3), dtype=np.uint8), out_width
+    if len(out) % frame_size != 0:
+        raise RuntimeError(
+            f"ffmpeg produced a partial trailing frame for {video_path}: "
+            f"{len(out)} bytes is not divisible by frame_size={frame_size}"
+        )
     frames = np.frombuffer(out, np.uint8).reshape(n_frames, target_height, out_width, 3)
+    return frames, out_width
+
+
+def _encode_jpeg_bytes(frame: np.ndarray | bytes, width: int, height: int, jpeg_quality: int) -> bytes:
+    buf = io.BytesIO()
+    if isinstance(frame, bytes):
+        Image.frombytes("RGB", (width, height), frame).save(
+            buf, format="JPEG", quality=jpeg_quality
+        )
+    else:
+        Image.fromarray(frame).save(buf, format="JPEG", quality=jpeg_quality)
+    return buf.getvalue()
+
+
+def _read_exact(stream, n: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = n
+    while remaining > 0:
+        chunk = stream.read(remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _extract_frames_to_files(
+    video_path: Path,
+    out_dir: Path,
+    target_fps: int,
+    target_height: int,
+    jpeg_quality: int,
+) -> tuple[int, int, list[str], dict[str, Any]]:
+    frames, out_width = _extract_raw_frames(video_path, target_fps, target_height)
+    n_frames = int(frames.shape[0])
+    if n_frames == 0:
+        return 0, out_width, [], {"format": "files"}
     out_dir.mkdir(parents=True, exist_ok=True)
     for fi in range(n_frames):
         Image.fromarray(frames[fi]).save(
@@ -419,7 +479,121 @@ def _extract_frames(
             format="JPEG",
             quality=jpeg_quality,
         )
-    return n_frames, out_width
+    image_refs = [str(out_dir / f"frame_{fi:06d}.jpg") for fi in range(n_frames)]
+    return n_frames, out_width, image_refs, {"format": "files", "frames_dir": str(out_dir)}
+
+
+def _extract_frames_to_arrayrecord(
+    video_path: Path,
+    segment_dir: Path,
+    target_fps: int,
+    target_height: int,
+    jpeg_quality: int,
+) -> tuple[int, int, list[str], dict[str, Any]]:
+    from array_record.python.array_record_module import ArrayRecordWriter  # noqa: PLC0415
+
+    out_width = _target_width(video_path, target_height)
+    frame_size = target_height * out_width * 3
+    cmd = _rawvideo_cmd(video_path, target_fps, target_height, out_width)
+
+    segment_dir.mkdir(parents=True, exist_ok=True)
+    shard_path = segment_dir / "images.array_record"
+    manifest_path = segment_dir / "frame_manifest.jsonl"
+    image_refs: list[str] = []
+    total_jpeg_bytes = 0
+
+    writer = ArrayRecordWriter(str(shard_path), "group_size:1")
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert proc.stdout is not None
+    assert proc.stderr is not None
+    partial_frame_bytes = 0
+    try:
+        with manifest_path.open("w") as manifest_f:
+            while True:
+                frame = _read_exact(proc.stdout, frame_size)
+                if not frame:
+                    break
+                if len(frame) != frame_size:
+                    partial_frame_bytes = len(frame)
+                    break
+                fi = len(image_refs)
+                jpeg = _encode_jpeg_bytes(frame, out_width, target_height, jpeg_quality)
+                writer.write(jpeg)
+                uri = make_arrayrecord_image_uri(shard_path, fi)
+                image_refs.append(uri)
+                total_jpeg_bytes += len(jpeg)
+                manifest_f.write(
+                    json.dumps(
+                        {
+                            "frame_idx": fi,
+                            "image": uri,
+                            "shard_path": str(shard_path),
+                            "record_index": fi,
+                            "jpeg_bytes": len(jpeg),
+                            "sha256": hashlib.sha256(jpeg).hexdigest(),
+                        }
+                    )
+                    + "\n"
+                )
+    finally:
+        proc.stdout.close()
+        writer.close()
+
+    stderr = proc.stderr.read().decode(errors="replace")
+    proc.stderr.close()
+    rc = proc.wait()
+    if rc != 0:
+        raise RuntimeError(
+            f"ffmpeg failed (rc={rc}) for {video_path}: {stderr[:500]}"
+        )
+    if partial_frame_bytes:
+        raise RuntimeError(
+            f"ffmpeg produced a partial trailing frame for {video_path}: "
+            f"{partial_frame_bytes} bytes read, expected frame_size={frame_size}"
+        )
+    n_frames = len(image_refs)
+    if n_frames == 0:
+        return 0, out_width, [], {"format": "arrayrecord"}
+
+    return (
+        n_frames,
+        out_width,
+        image_refs,
+        {
+            "format": "arrayrecord",
+            "shard_path": str(shard_path),
+            "manifest_path": str(manifest_path),
+            "num_records": n_frames,
+            "total_jpeg_bytes": total_jpeg_bytes,
+        },
+    )
+
+
+def _extract_frames(
+    video_path: Path,
+    segment_dir: Path,
+    target_fps: int,
+    target_height: int,
+    jpeg_quality: int,
+    image_store_format: str,
+) -> tuple[int, int, list[str], dict[str, Any]]:
+    if image_store_format == "files":
+        return _extract_frames_to_files(
+            video_path,
+            segment_dir / "frames",
+            target_fps,
+            target_height,
+            jpeg_quality,
+        )
+    if image_store_format == "arrayrecord":
+        return _extract_frames_to_arrayrecord(
+            video_path,
+            segment_dir,
+            target_fps,
+            target_height,
+            jpeg_quality,
+        )
+    raise ValueError(f"unsupported image_store_format={image_store_format!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -427,20 +601,23 @@ def _extract_frames(
 # ---------------------------------------------------------------------------
 
 
-def _build_messages(frames_dir: Path, n_frames: int, action_strings: list[str]) -> list[dict]:
+def _build_messages(image_refs: list[str], action_strings: list[str]) -> list[dict]:
+    assert len(image_refs) == len(action_strings), (
+        f"image/action count mismatch: {len(image_refs)} images vs "
+        f"{len(action_strings)} actions"
+    )
     messages: list[dict] = []
-    for fi in range(n_frames):
-        frame_path = str(frames_dir / f"frame_{fi:06d}.jpg")
+    for image_ref, action in zip(image_refs, action_strings, strict=True):
         messages.append(
             {
                 "role": "user",
-                "content": [{"type": "image", "image": frame_path}],
+                "content": [{"type": "image", "image": image_ref}],
             }
         )
         messages.append(
             {
                 "role": "assistant",
-                "content": [{"type": "text", "text": action_strings[fi]}],
+                "content": [{"type": "text", "text": action}],
             }
         )
     return messages
@@ -453,11 +630,11 @@ def _process_segment(args: dict) -> dict:
     target_fps = args["target_fps"]
     target_height = args["target_height"]
     jpeg_quality = args["jpeg_quality"]
+    image_store_format = args["image_store_format"]
 
     segment_id = video_path.stem
     contributor_hash = video_path.parent.parent.name  # <hash>/recordings/foo.mp4
     segment_dir = output_root / split / segment_id
-    frames_dir = segment_dir / "frames"
     summary = {
         "segment_id": segment_id,
         "contributor_hash": contributor_hash,
@@ -465,11 +642,17 @@ def _process_segment(args: dict) -> dict:
         "video_path": str(video_path),
         "n_frames": 0,
         "skip_reason": "",
+        "image_store_format": image_store_format,
     }
 
     try:
-        n_frames, out_width = _extract_frames(
-            video_path, frames_dir, target_fps, target_height, jpeg_quality
+        n_frames, out_width, image_refs, image_store = _extract_frames(
+            video_path,
+            segment_dir,
+            target_fps,
+            target_height,
+            jpeg_quality,
+            image_store_format,
         )
     except Exception as e:
         summary["skip_reason"] = f"frame_extraction_failed: {e}"
@@ -487,7 +670,7 @@ def _process_segment(args: dict) -> dict:
 
     per_frame, stats = _aggregate_events(keylog_path, n_frames, target_fps)
     action_strings = [_format_action(ev) for ev in per_frame]
-    messages = _build_messages(frames_dir, n_frames, action_strings)
+    messages = _build_messages(image_refs, action_strings)
     n_no_op = sum(1 for s in action_strings if s == "NO_OP")
 
     meta = {
@@ -501,6 +684,7 @@ def _process_segment(args: dict) -> dict:
         "frame_width": out_width,
         "target_fps": target_fps,
         "n_no_op": n_no_op,
+        "image_store": image_store,
         "stats": {
             "n_events": stats.n_events,
             "n_keypress": stats.n_keypress,
@@ -532,6 +716,8 @@ def _process_segment(args: dict) -> dict:
             "n_no_op": n_no_op,
             "n_context_changed": stats.n_context_changed,
             "n_held_at_end": stats.n_held_at_end,
+            "image_store_format": image_store_format,
+            "image_store": image_store,
         }
     )
     return summary
@@ -598,6 +784,7 @@ def main(_):
                     "target_fps": FLAGS.target_fps,
                     "target_height": FLAGS.target_height,
                     "jpeg_quality": FLAGS.jpeg_quality,
+                    "image_store_format": FLAGS.image_store_format,
                 }
             )
 
@@ -631,6 +818,7 @@ def main(_):
             "target_fps": FLAGS.target_fps,
             "target_height": FLAGS.target_height,
             "jpeg_quality": FLAGS.jpeg_quality,
+            "image_store_format": FLAGS.image_store_format,
             "train_ratio": FLAGS.train_ratio,
             "val_ratio": FLAGS.val_ratio,
             "test_ratio": test_ratio,
@@ -643,6 +831,10 @@ def main(_):
             "n_segments_processed": len(summaries) - len(failed),
             "n_segments_failed": len(failed),
             "total_frames": total_frames,
+            "image_store_format": FLAGS.image_store_format,
+            "total_jpeg_bytes": sum(
+                int((s.get("image_store") or {}).get("total_jpeg_bytes", 0)) for s in summaries
+            ),
             "split_counts": {
                 split: sum(1 for s in summaries if s["split"] == split and not s["skip_reason"])
                 for split in ("train", "val", "test")

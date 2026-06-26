@@ -13,7 +13,7 @@ Consumed by [`pmanager`][pmanager]/[`labctl`][labctl] recipes that inject params
 
 | Stage | Script | Role |
 | --- | --- | --- |
-| A | `stage_a_prepare.py` | S3 sync → per-segment JPEG frames at target fps/height + per-frame action strings + per-split `chat.jsonl`. |
+| A | `stage_a_prepare.py` | S3 sync → per-segment JPEG frames at target fps/height + per-frame action strings + per-split `chat.jsonl`. Pass `--image_store_format=arrayrecord` to store each segment's JPEGs as records in `images.array_record` and emit `ar:///...#idx` image refs instead of `frames/frame_*.jpg` files. |
 | B | `stage_b_run_length_cap.py` | Cap NO_OP runs (`k = round(k_seconds · target_fps)`). Rewrites `chat_line.json` only — frames are referenced in place. |
 | C | `stage_c_grain_payload.py` | Compile per-split `chat.jsonl` → Grain ArrayRecord shards. Wraps `omegalax/scripts/compile_sft_dataset.py` (one subprocess per split, in omegalax's uv venv). |
 | D | `stage_d_chunk_index.py` | Build the offline chunk index from the Grain payload. Wraps `omegalax/scripts/build_sft_chunk_index.py`. |
