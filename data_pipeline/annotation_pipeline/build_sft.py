@@ -42,6 +42,9 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--run-dir", type=Path, required=True,
                    help="A dataset_runs/<run> dir (contains <model>/clips and _frames).")
+    p.add_argument("--frames-root", type=Path, default=None,
+                   help="Shared stage-01 _frames/ dir. Default <run-dir>/_frames. Point at a "
+                        "separate frames-phase output when stage 01 ran as its own labctl stage.")
     p.add_argument("--out", type=Path, required=True, help="Output dir for the SFT artifact.")
     p.add_argument("--min-frames", type=int, default=1)
     p.add_argument("--include-variants", action="store_true",
@@ -51,13 +54,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--buckets", action="store_true",
                    help="Also run stage 05 length-bucketing (needs trainee tokenizer; compute node).")
+    p.add_argument("--assemble-only", action="store_true",
+                   help="Stop after writing stage_03_assemble/ (the aggregated trajectories.jsonl); "
+                        "skip stage 04 canonicalization. Lets a downstream step run stage 04 "
+                        "independently (e.g. with its own system prompt / terminal policy).")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     run_dir = args.run_dir.resolve()
-    frames_root = run_dir / "_frames"
+    frames_root = args.frames_root.resolve() if args.frames_root else run_dir / "_frames"
     out = ensure_dir(args.out)
 
     # Gather every annotated unit across all model dirs, grouped by parent segment.
@@ -116,6 +123,10 @@ def main() -> None:
     })
     print(f"[build_sft] {n_parents} parent segments -> {len(all_samples)} samples "
           f"({len(all_rejected)} rejected). stage_03 -> {s3dir}", flush=True)
+
+    if args.assemble_only:
+        print("[build_sft] --assemble-only: stopping after stage_03_assemble.", flush=True)
+        return
 
     # Stage 04: canonical, portable SFT artifact (ar:// frame URIs pass through).
     canonical = out / "canonical"

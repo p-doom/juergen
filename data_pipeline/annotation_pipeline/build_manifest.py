@@ -95,6 +95,10 @@ def parse_args() -> argparse.Namespace:
                    help="include segments with no keylog (collapse to ~4 frames; off by default)")
     p.add_argument("--keep-bad-video", action="store_true",
                    help="include segments whose video failed to probe (off by default)")
+    p.add_argument("--limit", type=int, default=None,
+                   help="Probe at most this many videos (smoke runs). Applied after --shuffle-seed.")
+    p.add_argument("--shuffle-seed", type=int, default=None,
+                   help="Deterministically shuffle the video list before --limit (else sorted order).")
     return p.parse_args()
 
 
@@ -105,6 +109,14 @@ def main() -> None:
     print(f"found {len(videos)} mp4 under {root}/uploads", file=sys.stderr)
     if not videos:
         raise SystemExit("no videos found")
+
+    if args.shuffle_seed is not None:
+        import random
+        random.Random(args.shuffle_seed).shuffle(videos)
+    if args.limit is not None:
+        videos = videos[: args.limit]
+        print(f"  limited to {len(videos)} videos (limit={args.limit}, seed={args.shuffle_seed})",
+              file=sys.stderr)
 
     rows: list[dict[str, Any]] = []
     n_bad_name = n_no_keylog = n_bad_video = 0

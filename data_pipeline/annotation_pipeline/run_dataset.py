@@ -181,20 +181,32 @@ def process_segment(row: dict[str, Any], frames_root: Path, run_dirs: dict[Any, 
                     gov: TpmGovernor, ffmpeg_sem: threading.Semaphore,
                     variants: list[str], args: argparse.Namespace) -> dict[str, Any]:
     seg = str(row["segment_id"])
-
-    # stage 01 ONCE (model-agnostic) -> shared array_record + full frame_records.
-    frames_dir = ensure_dir(frames_root / "clips" / seg)
-    manifest_path = ensure_dir(frames_dir / "stage_00") / "manifest.jsonl"
-    write_jsonl(manifest_path, [row])
+    frames_dir = frames_root / "clips" / seg
+    manifest_path = frames_dir / "stage_00" / "manifest.jsonl"
     frame_records = frames_dir / "stage_01" / "frame_records.jsonl"
-    if args.force_frames or not frame_records.exists():
-        with ffmpeg_sem:
-            s1 = ["--manifest", str(manifest_path), "--output-dir", str(frames_dir / "stage_01"),
-                  "--noop-keep-head", str(args.noop_keep_head), "--noop-keep-tail", str(args.noop_keep_tail)]
-            if args.target_fps is not None:
-                s1 += ["--target-fps", str(args.target_fps)]
-            run_module("stage_01_frames_actions", s1, model=None)
 
+    # stage 01 (model-agnostic) -> shared array_record + full frame_records.
+    # Skipped under --phase annotate (frames are read from an earlier stage).
+    if args.phase in ("frames", "all"):
+        ensure_dir(frames_dir / "stage_00")
+        write_jsonl(manifest_path, [row])
+        if args.force_frames or not frame_records.exists():
+            with ffmpeg_sem:
+                s1 = ["--manifest", str(manifest_path), "--output-dir", str(frames_dir / "stage_01"),
+                      "--noop-keep-head", str(args.noop_keep_head), "--noop-keep-tail", str(args.noop_keep_tail)]
+                if args.target_fps is not None:
+                    s1 += ["--target-fps", str(args.target_fps)]
+                run_module("stage_01_frames_actions", s1, model=None)
+        if args.phase == "frames":
+            recs0 = read_jsonl(frame_records) if frame_records.exists() else []
+            return {"n_frames": len(recs0), "n_windows": 0, "units": [],
+                    "n_goals_prose": 0, "phase": "frames"}
+
+    # stage 02 (annotate): reads the shared frames. Under --phase annotate they
+    # were produced by an earlier frames stage and must already exist.
+    if not frame_records.exists():
+        return {"n_frames": 0, "n_windows": 0, "units": [], "n_goals_prose": 0,
+                "skipped": "no_frames"}
     recs = read_jsonl(frame_records)
     n = len(recs)
     if n == 0:
@@ -322,6 +334,13 @@ def parse_args() -> argparse.Namespace:
                    help="NO_OP frames kept at the tail of each idle run.")
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--shuffle-seed", type=int, default=None)
+    p.add_argument("--phase", choices=("frames", "annotate", "all"), default="all",
+                   help="frames: render stage-01 frames only (CPU/ffmpeg, no models/API). "
+                        "annotate: stage-02 only, reading frames from --frames-root (they must "
+                        "already exist). all: both, interleaved (default).")
+    p.add_argument("--frames-root", type=Path, default=None,
+                   help="Where the shared stage-01 _frames/ lives. Default <out-root>/<run-name>/_frames. "
+                        "Point at a prior frames-phase output to run --phase annotate as a separate stage.")
     p.add_argument("--force", action="store_true")
     p.add_argument("--force-frames", action="store_true")
     return p.parse_args()
@@ -342,8 +361,9 @@ def main() -> None:
         raise SystemExit("no rows to process")
 
     run_root = ensure_dir(args.out_root / args.run_name)
-    frames_root = ensure_dir(run_root / "_frames")
-    run_dirs = {m: ensure_dir(run_root / model_slug(m)) for m in models}
+    frames_root = ensure_dir(args.frames_root) if args.frames_root else ensure_dir(run_root / "_frames")
+    # Model annotation dirs are only needed for the annotate/all phases.
+    run_dirs = {} if args.phase == "frames" else {m: ensure_dir(run_root / model_slug(m)) for m in models}
     progress_path = run_root / "progress.jsonl"
     done_ids = {str(r.get("segment_id")) for r in read_jsonl(progress_path)} if progress_path.exists() else set()
     todo = [r for r in rows if str(r["segment_id"]) not in done_ids]
@@ -351,7 +371,9 @@ def main() -> None:
     gov = TpmGovernor(models, args.target_tpm, args.init_call_s,
                       window_s=args.tpm_window_s, start_limit=args.start_limit, max_limit=args.max_limit)
     ffmpeg_sem = threading.Semaphore(max(1, args.ffmpeg_concurrency))
-    print(f"[run_dataset] run={args.run_name} models={[m or 'env' for m in models]} variants={variants} | "
+    print(f"[run_dataset] run={args.run_name} phase={args.phase} "
+          f"models={[m or 'env' for m in models]} variants={variants} | "
+          f"frames_root={frames_root} | "
           f"{len(rows)} rows, {len(done_ids)} done, {len(todo)} to do | "
           f"target_tpm={args.target_tpm:,.0f}/model max_workers={args.max_workers}")
 

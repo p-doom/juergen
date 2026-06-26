@@ -6,8 +6,13 @@ computer-use SFT data. Each sample is `(instruction, trajectory)` where the
 **trajectory** is the screen→action sequence the human performed. We recover the
 prompt in **hindsight** (label the goal the trajectory actually achieved).
 
-Labeler: any OpenAI-compatible VLM, selected by env (default Azure `gpt-5.5`);
-repoint to a local model to distill. No sglang / no GPU needed for annotation.
+Labeler: any OpenAI-compatible VLM, selected by env (`LABELER_MODEL`, default
+`Kimi-K2.6`). The full-dataset driver (`run_dataset.py`) annotates with
+**Kimi-K2.6 + Kimi-K2.5 in parallel** (`--models Kimi-K2.6,Kimi-K2.5`), both
+served off the same Azure `mihir-4710` `/openai/v1/` surface and passed by name;
+a closed-loop TPM governor routes each window-unit to whichever model has the
+most headroom (per-model run dirs, so caches never cross models). Repoint to a
+local model to distill. No sglang / no GPU needed for annotation.
 
 ## Pipeline
 
