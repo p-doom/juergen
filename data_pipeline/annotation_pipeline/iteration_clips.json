@@ -1,0 +1,269 @@
+{
+  "_comment": "30 randomly sampled ~5-min segments for the v2 (timestamp-free) annotation approach: feed each full clip to the VLM, describe activity at fine granularity, then extract high-quality CUA-agent instructions from description+frames. Sampled (seed=20260624) from crowd-cast-2026-05-19-raw-segments-intrasegment-v0 with filters: duration 270-330s, non-idle activity bucket, and bytes_per_s>=40000 (excludes black/blank captures, which cluster at ~9.6k B/s, and near-static screens). Per-user cap of 3 across 15 users; activity mix 14 high / 9 medium / 7 low. App/content unknown (not in manifest) \u2014 inspect via viewers. run_iteration.py filters the dataset manifest for these segment_ids.",
+  "dataset_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/datasets/franz.srambical/crowd-cast-2026-05-19-raw-segments-intrasegment-v0",
+  "manifest": "manifest.selected_segments.jsonl",
+  "sampling": {
+    "seed": 20260624,
+    "duration_s": [
+      270,
+      330
+    ],
+    "min_bytes_per_s": 40000,
+    "exclude_activity": [
+      "idle_or_near_idle"
+    ],
+    "per_user_cap": 3,
+    "activity_targets": {
+      "high_activity": 14,
+      "medium_activity": 9,
+      "low_activity": 7
+    },
+    "excluded_users": [
+      "6d8b246e9b831d087a55e2ee1c707aa26cd2ae72ebb669198c031397037d9a14",
+      "c8e0053c-ee78-4b7c-845c-38ac2ed45ef4"
+    ],
+    "note": "two users excluded post-hoc (black-frame-only recordings that passed the bytes/s filter); replacements drawn with seed 20260625, same filters."
+  },
+  "clips": {
+    "seg_0e7dc6a9_s0003": {
+      "segment_id": "0e7dc6a9-9dd0-4047-bb5c-d53984257066_seg0003",
+      "activity_bucket": "high_activity",
+      "duration_s": 299.6,
+      "keypresses": 3153,
+      "bytes_per_s": 375672,
+      "user_id": "6c4ff6f4"
+    },
+    "seg_1d7c27d8_s0003": {
+      "segment_id": "1d7c27d8-b1c7-4de9-9b15-4174c4aa94e0_seg0003",
+      "activity_bucket": "high_activity",
+      "duration_s": 299.6,
+      "keypresses": 4617,
+      "bytes_per_s": 375656,
+      "user_id": "5b6ba8c2"
+    },
+    "seg_314639e1_s0001": {
+      "segment_id": "314639e1-7b2a-4707-a225-0bb1b0abace3_seg0001",
+      "activity_bucket": "medium_activity",
+      "duration_s": 299.6,
+      "keypresses": 407,
+      "bytes_per_s": 204834,
+      "user_id": "c7e945bf"
+    },
+    "seg_32053730_s0013": {
+      "segment_id": "32053730-2c14-4dc8-8848-d4c626462e83_seg0013",
+      "activity_bucket": "high_activity",
+      "duration_s": 299.7,
+      "keypresses": 5223,
+      "bytes_per_s": 375727,
+      "user_id": "a0235d31"
+    },
+    "seg_3512c4fb_s0003": {
+      "segment_id": "3512c4fb-1030-4dc1-bf90-a1a11c8357d2_seg0003",
+      "activity_bucket": "high_activity",
+      "duration_s": 299.6,
+      "keypresses": 1994,
+      "bytes_per_s": 186326,
+      "user_id": "c7e945bf"
+    },
+    "seg_4de2bcbc_s0005": {
+      "segment_id": "4de2bcbc-a4ca-43fe-a24a-722584e9b801_seg0005",
+      "activity_bucket": "high_activity",
+      "duration_s": 299.6,
+      "keypresses": 6817,
+      "bytes_per_s": 323345,
+      "user_id": "87776db2"
+    },
+    "seg_5100e5e9_s0000": {
+      "segment_id": "5100e5e9-c078-450c-8d81-ba56ba591ec8_seg0000",
+      "activity_bucket": "high_activity",
+      "duration_s": 300.0,
+      "keypresses": 7983,
+      "bytes_per_s": 237482,
+      "user_id": "a6daadc4"
+    },
+    "seg_65219aeb_s0005": {
+      "segment_id": "65219aeb-8707-475e-851c-7a5258e54203_seg0005",
+      "activity_bucket": "high_activity",
+      "duration_s": 298.8,
+      "keypresses": 7872,
+      "bytes_per_s": 140082,
+      "user_id": "02171b00"
+    },
+    "seg_65465cd4_s0000": {
+      "segment_id": "65465cd4-e460-46ad-b173-fb97a606728e_seg0000",
+      "activity_bucket": "medium_activity",
+      "duration_s": 300.0,
+      "keypresses": 2923,
+      "bytes_per_s": 91277,
+      "user_id": "a6daadc4"
+    },
+    "seg_656d156c_s0001": {
+      "segment_id": "656d156c-9af2-488b-90c6-8859c1ee252b_seg0001",
+      "activity_bucket": "high_activity",
+      "duration_s": 318.6,
+      "keypresses": 2315,
+      "bytes_per_s": 72704,
+      "user_id": "0baf39e9"
+    },
+    "seg_684ef7d0_s0025": {
+      "segment_id": "684ef7d0-4c43-4db8-9b55-411e76aa28f4_seg0025",
+      "activity_bucket": "low_activity",
+      "duration_s": 298.8,
+      "keypresses": 95,
+      "bytes_per_s": 376146,
+      "user_id": "9731b6e4"
+    },
+    "seg_68675b1a_s0004": {
+      "segment_id": "68675b1a-b2f7-4364-ab7d-d4463fafc270_seg0004",
+      "activity_bucket": "high_activity",
+      "duration_s": 299.7,
+      "keypresses": 1712,
+      "bytes_per_s": 156131,
+      "user_id": "fc6c1fe5"
+    },
+    "seg_73f780f9_s0007": {
+      "segment_id": "73f780f9-5d48-4f43-9a1b-0b3d5bb66671_seg0007",
+      "activity_bucket": "low_activity",
+      "duration_s": 298.8,
+      "keypresses": 134,
+      "bytes_per_s": 155991,
+      "user_id": "d502e700"
+    },
+    "seg_744185d5_s0001": {
+      "segment_id": "744185d5-01a3-497a-bb59-d1d7cec2ddca_seg0001",
+      "activity_bucket": "medium_activity",
+      "duration_s": 299.7,
+      "keypresses": 744,
+      "bytes_per_s": 264624,
+      "user_id": "c7e945bf"
+    },
+    "seg_75dc1c30_s0006": {
+      "segment_id": "75dc1c30-a2d2-4a13-a9ec-8982a6dad491_seg0006",
+      "activity_bucket": "medium_activity",
+      "duration_s": 299.6,
+      "keypresses": 1428,
+      "bytes_per_s": 181734,
+      "user_id": "a6daadc4"
+    },
+    "seg_7a4d85b0_s0004": {
+      "segment_id": "7a4d85b0-3d0b-4d97-9c4d-81f02aa42546_seg0004",
+      "activity_bucket": "medium_activity",
+      "duration_s": 299.7,
+      "keypresses": 915,
+      "bytes_per_s": 94888,
+      "user_id": "54196854"
+    },
+    "seg_8d2fe370_s0000": {
+      "segment_id": "8d2fe370-8e62-4830-b47f-de959bb839a8_seg0000",
+      "activity_bucket": "high_activity",
+      "duration_s": 300.0,
+      "keypresses": 1356,
+      "bytes_per_s": 375658,
+      "user_id": "b351c41b"
+    },
+    "seg_90af2d85_s0000": {
+      "segment_id": "90af2d85-c4c3-4beb-951e-ce783d8a232c_seg0000",
+      "activity_bucket": "medium_activity",
+      "duration_s": 300.0,
+      "keypresses": 269,
+      "bytes_per_s": 106761,
+      "user_id": "3d84d339"
+    },
+    "seg_9482858d_s0018": {
+      "segment_id": "9482858d-c464-4631-8296-54c2d69d603e_seg0018",
+      "activity_bucket": "medium_activity",
+      "duration_s": 299.7,
+      "keypresses": 1390,
+      "bytes_per_s": 178129,
+      "user_id": "54196854"
+    },
+    "seg_988d8938_s0000": {
+      "segment_id": "988d8938-45bf-4911-9f32-74a7131aa83d_seg0000",
+      "activity_bucket": "low_activity",
+      "duration_s": 326.9,
+      "keypresses": 970,
+      "bytes_per_s": 375703,
+      "user_id": "5b6ba8c2"
+    },
+    "seg_99fbf93c_s0020": {
+      "segment_id": "99fbf93c-3b91-4e46-965c-bbaf501308ce_seg0020",
+      "activity_bucket": "high_activity",
+      "duration_s": 299.7,
+      "keypresses": 4589,
+      "bytes_per_s": 375656,
+      "user_id": "b351c41b"
+    },
+    "seg_9eeab818_s0004": {
+      "segment_id": "9eeab818-ab04-4f61-859d-75eb68b32ebd_seg0004",
+      "activity_bucket": "low_activity",
+      "duration_s": 299.7,
+      "keypresses": 125,
+      "bytes_per_s": 192012,
+      "user_id": "87776db2"
+    },
+    "seg_a543e5c5_s0001": {
+      "segment_id": "a543e5c5-d591-43aa-bd60-b1d5cbebcfbd_seg0001",
+      "activity_bucket": "medium_activity",
+      "duration_s": 299.7,
+      "keypresses": 770,
+      "bytes_per_s": 146241,
+      "user_id": "54196854"
+    },
+    "seg_b588f077_s0015": {
+      "segment_id": "b588f077-fa18-4a6b-b233-fb8c08bd4db5_seg0015",
+      "activity_bucket": "high_activity",
+      "duration_s": 298.8,
+      "keypresses": 4826,
+      "bytes_per_s": 376145,
+      "user_id": "9731b6e4"
+    },
+    "seg_b588f077_s0033": {
+      "segment_id": "b588f077-fa18-4a6b-b233-fb8c08bd4db5_seg0033",
+      "activity_bucket": "high_activity",
+      "duration_s": 298.8,
+      "keypresses": 833,
+      "bytes_per_s": 376143,
+      "user_id": "9731b6e4"
+    },
+    "seg_c81152b5_s0005": {
+      "segment_id": "c81152b5-7105-47a9-a985-85ffdc4c840a_seg0005",
+      "activity_bucket": "medium_activity",
+      "duration_s": 299.7,
+      "keypresses": 1222,
+      "bytes_per_s": 163544,
+      "user_id": "3d84d339"
+    },
+    "seg_e6962bc9_s0002": {
+      "segment_id": "e6962bc9-da61-4d5e-9b76-3807cb089a79_seg0002",
+      "activity_bucket": "medium_activity",
+      "duration_s": 275.2,
+      "keypresses": 1938,
+      "bytes_per_s": 108194,
+      "user_id": "87776db2"
+    },
+    "seg_f08d2c48_s0001": {
+      "segment_id": "f08d2c48-bc67-4713-bef8-259496bd83f2_seg0001",
+      "activity_bucket": "low_activity",
+      "duration_s": 298.9,
+      "keypresses": 110,
+      "bytes_per_s": 376154,
+      "user_id": "a0235d31"
+    },
+    "seg_f698ec98_s0002": {
+      "segment_id": "f698ec98-fa8f-4311-8640-ac8547cfc41d_seg0002",
+      "activity_bucket": "low_activity",
+      "duration_s": 298.9,
+      "keypresses": 203,
+      "bytes_per_s": 376148,
+      "user_id": "a0235d31"
+    },
+    "seg_fdc9d235_s0000": {
+      "segment_id": "fdc9d235-eaa7-4012-8b49-640ee9e9c00e_seg0000",
+      "activity_bucket": "low_activity",
+      "duration_s": 300.0,
+      "keypresses": 64,
+      "bytes_per_s": 375659,
+      "user_id": "5b6ba8c2"
+    }
+  }
+}
