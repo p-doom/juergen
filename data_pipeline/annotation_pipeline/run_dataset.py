@@ -341,6 +341,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--frames-root", type=Path, default=None,
                    help="Where the shared stage-01 _frames/ lives. Default <out-root>/<run-name>/_frames. "
                         "Point at a prior frames-phase output to run --phase annotate as a separate stage.")
+    p.add_argument("--shard", default=None,
+                   help="'i/N': process only segments with (index mod N == i). For multi-node "
+                        "fan-out (one srun task per shard); disjoint subsets, per-shard progress file.")
     p.add_argument("--force", action="store_true")
     p.add_argument("--force-frames", action="store_true")
     return p.parse_args()
@@ -357,6 +360,20 @@ def main() -> None:
         random.Random(args.shuffle_seed).shuffle(rows)
     if args.limit is not None:
         rows = rows[: args.limit]
+    # Multi-node fan-out: --shard "i/N" keeps only rows whose index mod N == i, so
+    # N independent workers (e.g. srun tasks) cover disjoint segment subsets. Each
+    # segment writes to its own clips/<seg>/ dir, so shards never collide; only the
+    # progress file is made shard-specific to avoid concurrent-append races.
+    shard_tag = ""
+    if args.shard:
+        try:
+            si, sn = (int(x) for x in args.shard.split("/"))
+        except ValueError as exc:
+            raise SystemExit(f"--shard must be 'i/N', got {args.shard!r}") from exc
+        if not (sn > 0 and 0 <= si < sn):
+            raise SystemExit(f"--shard out of range: {args.shard}")
+        rows = [r for idx, r in enumerate(rows) if idx % sn == si]
+        shard_tag = f".shard{si}_of_{sn}"
     if not rows:
         raise SystemExit("no rows to process")
 
@@ -364,7 +381,7 @@ def main() -> None:
     frames_root = ensure_dir(args.frames_root) if args.frames_root else ensure_dir(run_root / "_frames")
     # Model annotation dirs are only needed for the annotate/all phases.
     run_dirs = {} if args.phase == "frames" else {m: ensure_dir(run_root / model_slug(m)) for m in models}
-    progress_path = run_root / "progress.jsonl"
+    progress_path = run_root / f"progress{shard_tag}.jsonl"
     done_ids = {str(r.get("segment_id")) for r in read_jsonl(progress_path)} if progress_path.exists() else set()
     todo = [r for r in rows if str(r["segment_id"]) not in done_ids]
 
