@@ -1,0 +1,684 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>crowd-cast goal annotator</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#0c0d10;color:#e6e6e6;
+  font-family:-apple-system,system-ui,Segoe UI,sans-serif;overflow:hidden}
+#app{display:grid;grid-template-columns:300px 1fr;grid-template-rows:1fr auto;height:100vh}
+#side{grid-row:1/3;border-right:1px solid #23252b;overflow-y:auto;background:#101216}
+#stage{position:relative;background:#000;overflow:hidden}
+#vid,#vid2{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+/* double-buffer: active pane on top, prefetch pane invisible but still buffering */
+#stage video.act{z-index:1;opacity:1}
+#stage video.pre{z-index:0;opacity:0;pointer-events:none}
+#hud{position:absolute;top:0;left:0;right:0;padding:7px 12px;z-index:3;display:flex;gap:16px;
+  align-items:baseline;font-size:13px;background:linear-gradient(#000b,#0000);pointer-events:none}
+#hud .clock{font-size:17px;font-weight:700;color:#fff}
+#hud .app{color:#7fd1ff;font-weight:600}
+#hud .pos{color:#9aa}
+#hud .align{font-size:11px;padding:1px 7px;border-radius:9px}
+#hud .align.ok{background:#1e3a1e;color:#9f9}
+#hud .align.warn{background:#4a3a1a;color:#fc9}
+#hud .align.raw{background:#4a1f1f;color:#f99}
+#hud .save{margin-left:auto;color:#6f6}
+#pending{position:absolute;top:34px;left:12px;z-index:3;font-size:13px;color:#ffd27f;
+  background:#000a;padding:3px 8px;border-radius:4px;display:none}
+#gapnote{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2;color:#667;
+  font-size:14px;display:none;text-align:center}
+/* a veil over the whole video while it isn't decoded yet, so a loading-black is
+   visually unmistakable from a genuine UNCAPTURED black frame (faithful inspection) */
+#loading{position:absolute;inset:0;z-index:2;display:none;pointer-events:none;
+  align-items:center;justify-content:center;background:rgba(8,10,14,0.6);
+  color:#bfe3ff;font-size:14px;letter-spacing:.3px}
+/* small immediate decoding indicator (top-left, stacked below #pending) -- instant
+   feedback on every seek without the full veil */
+#decchip{position:absolute;top:58px;left:12px;z-index:6;display:none;pointer-events:none;
+  font-size:11px;color:#bfe3ff;background:#000a;padding:2px 8px;border-radius:10px}
+#bot{grid-column:2;background:#0e1015;border-top:1px solid #23252b;padding:6px 10px;
+  display:grid;grid-template-columns:1fr 360px;gap:12px;align-items:stretch}
+#tlwrap{display:flex;flex-direction:column;gap:4px;min-width:0}
+#timeline{width:100%;height:64px;background:#08090c;border:1px solid #20232a;border-radius:4px;cursor:pointer;display:block}
+#tlmeta{font-size:11px;color:#7a818c;display:flex;gap:14px;flex-wrap:wrap}
+#tlmeta b{color:#9fb6d8;font-weight:600}
+#kl{font-size:12px;color:#cfd3da}
+#kbd{display:flex;flex-direction:column;gap:3px;margin:3px 0}
+.krow{display:flex;gap:3px;justify-content:center}
+.key{min-width:22px;height:22px;padding:0 5px;border:1px solid #2c2f37;border-radius:4px;
+  display:flex;align-items:center;justify-content:center;font-size:10px;color:#8b909a;background:#15171c}
+.key.lit{background:#2f6df6;border-color:#5b8cff;color:#fff;box-shadow:0 0 6px #2f6df6}
+.key.held{background:#b8860b;border-color:#e0b020;color:#fff}
+.key.wide{min-width:48px}.key.xwide{min-width:90px}
+#mouse{display:flex;gap:10px;align-items:center;font-size:11px;margin-top:3px;color:#9aa}
+#mousepad{border:1px solid #20232a;border-radius:4px;background:#0a0b0e;flex:0 0 auto}
+#mstats{display:flex;flex-direction:column;gap:2px}
+#mstats .r{display:flex;gap:8px;align-items:center}
+.mbtn{padding:1px 7px;border:1px solid #2c2f37;border-radius:4px;color:#8b909a}
+.mbtn.lit{background:#2f6df6;color:#fff;border-color:#5b8cff}
+#ticker{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:#8b909a;margin-top:4px;
+  height:30px;overflow:hidden;line-height:1.45}
+#goalhead{padding:9px 11px;font-size:12px;color:#9aa;border-bottom:1px solid #23252b;
+  position:sticky;top:0;background:#101216;z-index:2;display:flex;justify-content:space-between}
+.goal{padding:7px 11px;border-bottom:1px solid #181b21;cursor:pointer;font-size:12px}
+.goal:hover{background:#15181e}
+.goal.sel{background:#1b2740;border-left:3px solid #2f6df6}
+.goal .t{color:#7a818c;font-size:10.5px}
+.goal .h{font-size:9.5px;padding:0 5px;border-radius:7px;margin-left:5px}
+.h.short{background:#2a4d2a;color:#9f9}.h.long{background:#4d3a2a;color:#fc9}.h.event{background:#3a2a4d;color:#d9f}
+.goal .txt{color:#e6e6e6;margin-top:2px}
+#editor{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:9;width:560px;
+  background:#161922;border:1px solid #3a3f4a;border-radius:8px;padding:14px;display:none;box-shadow:0 12px 40px #000c}
+#editor h3{margin:0 0 8px;font-size:13px;color:#bcd}
+#editor textarea{width:100%;height:64px;background:#0c0d10;color:#fff;border:1px solid #2c2f37;
+  border-radius:5px;padding:7px;font-size:14px;resize:vertical}
+#editor .row{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:12px;color:#9aa}
+#editor .seg{display:flex;gap:0}
+#editor .seg button{background:#15171c;color:#8b909a;border:1px solid #2c2f37;padding:4px 10px;cursor:pointer;font-size:12px}
+#editor .seg button.on{background:#2f6df6;color:#fff;border-color:#5b8cff}
+#editor .span{margin-left:auto;color:#7a818c;font-size:11px}
+#help{position:absolute;right:12px;bottom:90px;z-index:9;background:#0e1015f2;border:1px solid #2c2f37;
+  border-radius:8px;padding:12px 16px;font-size:12px;line-height:1.7;display:none;max-width:400px}
+#help b{color:#7fd1ff}
+kbd{background:#22252c;border:1px solid #3a3f4a;border-radius:3px;padding:0 4px;font-size:11px}
+#toast{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);z-index:10;background:#222e;
+  padding:5px 12px;border-radius:5px;font-size:12px;opacity:0;transition:opacity .2s}
+#gate{position:fixed;inset:0;z-index:50;background:#0c0d10;color:#ff8a8a;display:none;
+  align-items:center;justify-content:center;text-align:center;font-size:19px;line-height:1.6;padding:40px}
+#gate code{background:#22252c;padding:1px 6px;border-radius:3px;font-size:13px;color:#cde}
+/* extracted-goal overlay (read-only): sidebar hierarchy + goal-timeline canvas */
+#ovlist{border-bottom:1px solid #23252b}
+.ovog{padding:8px 9px 4px;font-size:11px}
+.ovtask{padding:4px 9px 5px 14px;font-size:11px;cursor:pointer;border-bottom:1px solid #15171c}
+.ovtask:hover{background:#15181e}
+.ovtask.sel{background:#1b2740;border-left:3px solid #2f6df6}
+.ovtask .id{color:#7a818c;font-weight:600;margin-right:4px}
+.ovtask .m{color:#7a818c;font-size:9.5px;margin-top:1px}
+.ovmicro{padding:1px 6px 6px 18px;background:#0f1218;border-bottom:1px solid #15171c}
+.ovmg{padding:3px 6px;font-size:10.5px;color:#c2c8d2;cursor:pointer;border-radius:3px;display:flex;gap:6px;align-items:baseline}
+.ovmg:hover{background:#1b2230}
+.ovmg .t{color:#6f7782;flex:0 0 auto;font-variant-numeric:tabular-nums}
+.ovmg .x{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+#goaltlwrap{max-height:40vh;overflow-y:auto;border:1px solid #20232a;border-radius:4px;background:#08090c}
+#goaltl{display:block;width:100%;cursor:pointer}
+#gleg{font-size:10px;color:#7a818c;display:flex;gap:12px;flex-wrap:wrap;margin-top:2px}
+#gleg .sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:3px;vertical-align:middle}
+</style>
+
+<div id="gate"></div>
+<div id="app">
+  <div id="side">
+    <div id="goalhead"><span id="gcount">extracted goals</span><span><kbd>?</kbd> help</span></div>
+    <div id="ovlist"></div>
+    <div id="glist"></div>
+  </div>
+  <div id="stage">
+    <video id="vid" class="act" preload="auto" playsinline></video>
+    <video id="vid2" class="pre" preload="auto" playsinline muted></video>
+    <div id="loading">⏳ decoding frame — not yet the real image…</div>
+    <div id="decchip">⏳ decoding…</div>
+    <div id="gapnote"></div>
+    <div id="hud">
+      <span class="clock" id="clock">--:--:--</span>
+      <span class="app" id="app_ctx"></span>
+      <span class="align" id="align"></span>
+      <span class="pos" id="pos"></span>
+      <span class="save" id="save">saved</span>
+    </div>
+    <div id="pending"></div>
+    <div id="editor">
+      <h3 id="ed_title">new goal</h3>
+      <textarea id="ed_text" placeholder="goal / instruction someone could have given at the start of this span…"></textarea>
+      <div class="row">
+        <div class="seg" id="ed_horizon">
+          <button data-h="short" class="on">short (S)</button>
+          <button data-h="long">long (L)</button>
+          <button data-h="event">event (V)</button>
+        </div>
+        <span class="span" id="ed_span"></span>
+      </div>
+      <div class="row" style="color:#7a818c"><kbd>Enter</kbd> save · <kbd>Esc</kbd> cancel · <kbd>Tab</kbd> cycle horizon</div>
+    </div>
+    <div id="help"></div>
+    <div id="toast"></div>
+  </div>
+  <div id="bot">
+    <div id="tlwrap">
+      <div id="goaltlwrap"><canvas id="goaltl"></canvas></div>
+      <div id="gleg"></div>
+      <canvas id="timeline"></canvas>
+      <div id="tlmeta"><span id="tl_l"></span><span id="tl_speed"></span>
+        <span id="tl_skip">idle-skip off</span>
+        <span>lanes: <b style="color:#e0a050">long</b> · <b style="color:#4caf50">short</b> · <b style="color:#b070e0">event</b></span>
+        <span>click timeline to seek</span></div>
+    </div>
+    <div id="kl">
+      <div id="kbd"></div>
+      <div id="mouse"><canvas id="mousepad" width="132" height="96"></canvas><div id="mstats"></div></div>
+      <div id="ticker"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API="";
+let DAY, SEGS=[], GOALS=[];
+let OVERLAY=null, LANES=[], selTask=null;          // read-only extracted-goal overlay
+const GTL={LEFTW:170, HEAD:18, ROW:16};            // goal-timeline gutter / header / row px
+let curSeg=0, pendingSeek=null, wantPlay=false;
+let pendingStart=null, selGoal=null;
+let speed=1, idleSkip=false, skipDir=1;   // skipDir: +1 forward / -1 backward no-op skipping
+let seeking=false;   // true while a seek is decoding -> overlay holds the displayed frame
+let corrected=true;  // apply keylog<->video realignment (idle-pause collapse correction)
+let ALIGN={};        // alignment.json segments, keyed by seg idx (for badge + timeline markers)
+const SPEEDS=[0.5,1,2,4,8,16];
+const klCache={};
+let vid=document.getElementById("vid");          // ACTIVE pane (reassigned on swap)
+let preVid=document.getElementById("vid2");      // hidden pane prefetching the next segment
+let preSeg=-1;                                   // segment currently loaded in preVid
+const dayStartMs=()=>new Date(DAY.day_start_utc).getTime();
+const dayEnd=()=>{const s=SEGS[SEGS.length-1];return s.t_day+s.duration_s;};
+const curDayT=()=> (SEGS[curSeg]?SEGS[curSeg].t_day:0) + (vid.currentTime||0);
+
+// ---------- keyboard layout (rdev-style names) ----------
+const KROWS=[
+ [["Escape","esc","wide"],["Num1","1"],["Num2","2"],["Num3","3"],["Num4","4"],["Num5","5"],["Num6","6"],["Num7","7"],["Num8","8"],["Num9","9"],["Num0","0"],["Minus","-"],["Equal","="],["Backspace","⌫","wide"]],
+ [["Tab","tab","wide"],["KeyQ","Q"],["KeyW","W"],["KeyE","E"],["KeyR","R"],["KeyT","T"],["KeyY","Y"],["KeyU","U"],["KeyI","I"],["KeyO","O"],["KeyP","P"],["LeftBracket","["],["RightBracket","]"],["BackSlash","\\"]],
+ [["CapsLock","caps","wide"],["KeyA","A"],["KeyS","S"],["KeyD","D"],["KeyF","F"],["KeyG","G"],["KeyH","H"],["KeyJ","J"],["KeyK","K"],["KeyL","L"],["SemiColon",";"],["Quote","'"],["Return","⏎","wide"]],
+ [["ShiftLeft","shift","wide"],["KeyZ","Z"],["KeyX","X"],["KeyC","C"],["KeyV","V"],["KeyB","B"],["KeyN","N"],["KeyM","M"],["Comma",","],["Dot","."],["Slash","/"],["ShiftRight","shift","wide"]],
+ [["ControlLeft","ctrl"],["Alt","opt"],["MetaLeft","cmd","wide"],["Space"," ","xwide"],["MetaRight","cmd","wide"],["AltGr","opt"],["LeftArrow","←"],["UpArrow","↑"],["DownArrow","↓"],["RightArrow","→"]],
+];
+const keyEls={};
+function buildKbd(){const k=document.getElementById("kbd");k.innerHTML="";
+  for(const row of KROWS){const r=document.createElement("div");r.className="krow";
+    for(const [name,label,cls] of row){const e=document.createElement("div");e.className="key"+(cls?" "+cls:"");
+      e.textContent=label;(keyEls[name]=keyEls[name]||[]).push(e);r.appendChild(e);}
+    k.appendChild(r);}}
+
+// ---------- init ----------
+async function init(){
+  DAY=await (await fetch(API+"/api/day")).json();
+  SEGS=DAY.segments; GOALS=await (await fetch(API+"/api/goals")).json();
+  try{ OVERLAY=await (await fetch(API+"/api/overlay")).json(); }catch(e){ OVERLAY=null; }
+  if(OVERLAY && !OVERLAY.overarching_goals) OVERLAY=null;
+  buildLanes();
+  // GATE: the keylog is only trustworthy with the realignment map. Refuse to
+  // start the viewer if it's unavailable (server auto-builds it; this catches a
+  // build failure) so you never annotate on un-realigned keylog.
+  let alignResp={};
+  try{ alignResp=await (await fetch(API+"/api/alignment")).json(); }catch(e){ alignResp={ok:false,error:"could not reach /api/alignment"}; }
+  ALIGN=alignResp.segments||{};
+  if(!alignResp.ok){
+    const g=document.getElementById("gate");
+    g.style.display="flex";
+    g.innerHTML="<div>⛔ Keylog alignment unavailable — viewer disabled<br>"+
+      "<span style='font-size:13px;color:#bbb'>"+escapeHtml(alignResp.error||"")+
+      "<br>Run <code>uv run annotator.py align --data_dir &lt;DATA&gt;</code>. Without it the keylog would be misaligned to the video.</span></div>";
+    return;   // do NOT initialize playback / annotation
+  }
+  buildKbd(); buildHelp(); setupEditor();
+  window.addEventListener("resize",()=>{drawTimeline();drawGoalTimeline();});
+  document.getElementById("timeline").addEventListener("click",onTimelineClick);
+  document.getElementById("goaltl").addEventListener("click",onGoalTlClick);
+  // The overlay (keylog/clock/mouse path) must track the DISPLAYED frame, not the
+  // seek target: setting currentTime updates the property instantly while the frame
+  // only repaints after decode (slow over the tunnel). So we freeze the overlay
+  // while a seek is in flight and refresh it only when a real frame is ready.
+  // Show-delay: only reveal the veil if a seek/buffer hasn't resolved within ~350ms.
+  // Quick skip-seeks (cached, tens of ms) never flash it; only genuinely slow loads
+  // (where a black frame would otherwise be ambiguous vs a real UNCAPTURED frame) show.
+  let loadTimer=null;
+  const setLoading=on=>{
+    const el=document.getElementById("loading"), chip=document.getElementById("decchip");
+    if(on){ chip.style.display="block";   // small top-left indicator -> instant feedback, every seek
+            if(loadTimer==null && el.style.display!=="flex") loadTimer=setTimeout(()=>{el.style.display="flex"; loadTimer=null;}, 350); }
+    else { if(loadTimer!=null){ clearTimeout(loadTimer); loadTimer=null; } el.style.display="none"; chip.style.display="none"; }
+  };
+  // Wire media events to BOTH panes; the guard ensures only the ACTIVE pane (vid)
+  // drives the UI -- the hidden prefetch pane's own load/decode events are ignored.
+  function wire(v){
+    v.addEventListener("loadedmetadata",e=>{ if(e.target===vid) onLoadedMeta(); });
+    v.addEventListener("ended",e=>{ if(e.target===vid) onEnded(); });
+    v.addEventListener("error",e=>{ if(e.target===vid) onVideoError(); });
+    v.addEventListener("seeking",e=>{ if(e.target!==vid) return; seeking=true; setLoading(true); });
+    v.addEventListener("seeked",e=>{ if(e.target!==vid) return; seeking=false; setLoading(false); tick(); });
+    v.addEventListener("loadeddata",e=>{ if(e.target!==vid) return; setLoading(false); tick(); });
+    for(const ev of ["waiting","stalled","loadstart"]) v.addEventListener(ev,e=>{ if(e.target===vid) setLoading(true); });
+    for(const ev of ["canplay","playing"]) v.addEventListener(ev,e=>{ if(e.target===vid) setLoading(false); });
+  }
+  wire(vid); wire(preVid);
+  document.addEventListener("keydown",onKey);
+  renderGoals();
+  renderOverlayList(); drawGoalTimeline();
+  loadSeg(0,0,false);
+  requestAnimationFrame(loop);
+}
+function fmtClock(t_day){return new Date(dayStartMs()+t_day*1000).toLocaleTimeString("en-GB",{timeZone:DAY.tz,hour12:false});}
+function fmtDur(s){s=Math.max(0,s);const m=Math.floor(s/60),ss=Math.round(s%60);return m+":"+String(ss).padStart(2,"0");}
+
+// ---------- segment loading / seeking ----------
+function segAt(T){for(let k=0;k<SEGS.length;k++){const s=SEGS[k];if(T>=s.t_day&&T<s.t_day+s.duration_s)return k;}return -1;}
+function nextSegFrom(T){for(let k=0;k<SEGS.length;k++)if(SEGS[k].t_day>=T)return k;return SEGS.length-1;}
+function prevSegFrom(T){for(let k=SEGS.length-1;k>=0;k--)if(SEGS[k].t_day<T)return k;return 0;}
+function loadSeg(n,seekT,autoplay){
+  n=Math.max(0,Math.min(SEGS.length-1,n));
+  // Fast path: the next segment is already prefetched in the hidden pane -> swap to
+  // it (its bytes are already downloaded over the tunnel) instead of re-fetching.
+  if(n===preSeg && preVid.error===null && preVid.src){ swapToPre(n,seekT,autoplay); }
+  else{
+    curSeg=n; pendingSeek=seekT||0; wantPlay=autoplay;
+    vid.src=API+"/video?seg="+n+"&fs=1"; vid.playbackRate=speed; vid.load();  // faststart: moov-first, fast seek
+    document.getElementById("gapnote").style.display="none";
+    fetchKeylog(n);
+  }
+  prefetchAdjacent(n);                               // warm the neighbour in the travel direction
+}
+function swapToPre(n,seekT,autoplay){
+  const old=vid;
+  old.pause();
+  old.classList.remove("act"); old.classList.add("pre");
+  preVid.classList.remove("pre"); preVid.classList.add("act");
+  vid=preVid; preVid=old; preSeg=-1;                 // preVid (old active) is now free to reprefetch
+  seeking=false;
+  curSeg=n; pendingSeek=seekT||0; wantPlay=autoplay; vid.playbackRate=speed;
+  document.getElementById("gapnote").style.display="none";
+  fetchKeylog(n);
+  if(vid.readyState>=1) onLoadedMeta();              // metadata already loaded while prefetching
+  // else its own loadedmetadata fires -> onLoadedMeta (target now === vid)
+}
+function prefetchAdjacent(n){
+  // prefetch the neighbour in the current travel direction (skipDir): +1 forward,
+  // -1 backward. Forward lands at the next segment's START (the bytes preload fetches
+  // first -> very effective); backward lands near the previous segment's END (fetched
+  // last -> only fully effective once it finishes, but revisits hit the HTTP cache).
+  const m=n+(skipDir<0?-1:1);
+  if(m<0 || m>=SEGS.length){ preSeg=-1; return; }
+  if(preSeg===m) return;                             // already prefetching it
+  preSeg=m;
+  try{ preVid.src=API+"/video?seg="+m+"&fs=1"; preVid.playbackRate=speed; preVid.load(); }catch(e){}
+  fetchKeylog(m);                                    // warm keylog too so idle-skip isn't blocked at the boundary
+}
+function onLoadedMeta(){
+  if(pendingSeek!=null){ try{vid.currentTime=Math.min(pendingSeek,Math.max(0,vid.duration-0.05));}catch(e){} pendingSeek=null; }
+  if(wantPlay){ vid.play().catch(()=>{}); }
+  vid.playbackRate=speed;   // overlay refreshes on loadeddata/seeked (frame ready), not here
+}
+function onEnded(){ if(curSeg<SEGS.length-1){ const gap=SEGS[curSeg+1].gap_before_s; loadSeg(curSeg+1,0,true); if(gap>120) flashGap(gap);} else vid.pause(); }
+function onVideoError(){
+  // Surface the error in place; do NOT auto-advance (if decoding is broken for
+  // every segment, cascading just races through the whole day and floods logs).
+  vid.pause();
+  const e=vid.error, n=document.getElementById("gapnote");
+  n.innerHTML="⚠ seg "+curSeg+" failed to decode (MediaError "+(e?e.code:"?")+
+    ") — your browser can't decode this HEVC stream. Try Safari, or transcode.";
+  n.style.display="block";
+}
+function flashGap(g){const n=document.getElementById("gapnote");n.textContent="⏭ skipped "+fmtDur(g)+" gap (recorder off)";n.style.display="block";setTimeout(()=>n.style.display="none",1500);}
+function seekDay(T){
+  T=Math.max(0,Math.min(dayEnd()-0.05,T));
+  let s=segAt(T);
+  if(s<0){                          // T fell in a recorder-off gap: snap by direction
+    if(T < curDayT()){ s=prevSegFrom(T); T=SEGS[s].t_day+SEGS[s].duration_s-0.1; }  // backward -> prev segment's end
+    else { s=nextSegFrom(T); T=SEGS[s].t_day; }                                     // forward -> next segment's start
+  }
+  const off=T-SEGS[s].t_day;
+  if(s===curSeg && vid.readyState>=1){ vid.currentTime=Math.min(off,Math.max(0,vid.duration-0.05)); }
+  else loadSeg(s,off,!vid.paused);
+  // no tick() here: the overlay updates on 'seeked'/'loadeddata' so it can't run
+  // ahead of the still-decoding frame (which looked like keylog/video misalignment).
+}
+function stepT(dt){ skipDir=dt<0?-1:1; seekDay(curDayT()+dt); }  // step sign drives no-op skip direction
+
+// ---------- main loop (overlay + timeline @ rAF, throttled keylog) ----------
+let lastKlT=-1;
+function loop(){ if(!vid.paused) skipDir=1; if(idleSkip && !seeking) maybeSkipIdle(); if(!vid.paused && !seeking) tick(); requestAnimationFrame(loop); }
+function tick(){
+  const T=curDayT();
+  document.getElementById("clock").textContent=fmtClock(T);
+  document.getElementById("pos").textContent="seg "+curSeg+" · t+"+fmtDur(vid.currentTime||0)+" · "+(vid.paused?"paused":"▶");
+  const t=vid.currentTime||0;
+  if(Math.abs(t-lastKlT)>0.08){ lastKlT=t; renderKeylog(curSeg,t); }
+  alignBadge();
+  drawTimeline();
+  drawGoalTimeline();
+  updatePending();
+}
+
+// ---------- keylog ----------
+function fetchKeylog(seg){
+  const c=klCache[seg];
+  if(c) return Promise.resolve(c);                       // resolved object OR in-flight promise
+  const p=fetch(API+"/api/keylog?seg="+seg+"&corrected="+(corrected?1:0))
+            .then(r=>r.json()).then(j=>{klCache[seg]=j;return j;});
+  klCache[seg]=p; return p;                              // store promise; replaced by object on resolve
+}
+function alignBadge(){
+  const b=document.getElementById("align"); const a=ALIGN[curSeg];
+  if(!a||!a.n_pauses){ b.textContent=""; b.className="align"; return; }
+  if(!corrected){ b.textContent="⏸×"+a.n_pauses+" RAW (keylog +"+Math.round(a.overhang_s)+"s off)"; b.className="align raw"; return; }
+  if(a.status==="needs_review"){ b.textContent="⏸×"+a.n_pauses+" ⚠ NEEDS REVIEW (leading idle unverified)"; b.className="align warn"; }
+  else if(a.status==="UNDER"){ b.textContent="⏸×"+a.n_pauses+" ⚠ UNDER-collapsed Δ"+Math.round(Math.abs(a.residual_s))+"s"; b.className="align warn"; }
+  else{ b.textContent="⏸×"+a.n_pauses+" realigned ✓"; b.className="align ok"; }
+}
+function maybeSkipIdle(){
+  // Skip ANY gap with no keylog activity to the nearest event in skipDir (+1 fwd / -1
+  // back). MouseMove counts as activity (not idle). Land exactly on the event. Active
+  // whenever the toggle is on -- playing OR paused (playback forces fwd). The on-activity
+  // guard (an event within ~1 frame, either side) stops us once we're on an event, so a
+  // backward step doesn't get yanked forward and a forward one doesn't chain (no runaway).
+  const kl=klCache[curSeg]; if(!kl||kl.then||!kl.events) return;
+  const t=vid.currentTime;
+  let prevEv=null, nextEv=null;
+  for(const [ts] of kl.events){            // sorted; events are ALL types incl MouseMove
+    if(ts>t){ nextEv=ts; break; }
+    prevEv=ts;                             // last event at-or-before t
+  }
+  if((prevEv!==null && t-prevEv<0.05) || (nextEv!==null && nextEv-t<0.05)) return;  // on activity
+  if(skipDir<0){
+    if(prevEv===null) return;              // no earlier activity in this segment (cross via step+seekDay)
+    try{ vid.currentTime=prevEv; }catch(e){} // skip the gap backward, land exactly on the event
+  } else {
+    if(nextEv===null){ if(!vid.paused && curSeg<SEGS.length-1) onEnded(); return; }  // no seg-jump while paused
+    try{ vid.currentTime=nextEv; }catch(e){} // skip the gap forward, land exactly on the event
+  }
+}
+async function renderKeylog(seg,t){
+  const KL=await fetchKeylog(seg); if(!KL||!KL.events) return;
+  const t0=t-0.4, WM=2.5;                          // WM = mouse-trajectory window (s)
+  const held=new Set(),litWin=new Set(),mb=new Set(); let app="",scroll=0,moves=0,clicks=0;
+  const recent=[], winMoves=[], winClicks=[];
+  for(const [ts,name,args] of KL.events){
+    if(ts>t) break;
+    if(name==="ContextChanged") app=args[0];
+    else if(name==="KeyPress"){ held.add(args[1]); if(ts>t0) litWin.add(args[1]); }
+    else if(name==="KeyRelease") held.delete(args[1]);
+    else if(name==="MousePress"){ mb.add(args[0]); if(ts>t0) clicks++; if(ts>t-WM) winClicks.push([ts,args[0]]); }
+    else if(name==="MouseRelease") mb.delete(args[0]);
+    else if(name==="MouseScroll"){ if(ts>t0) scroll+=args[1]; }
+    else if(name==="MouseMove"){ if(ts>t0) moves++; if(ts>t-WM) winMoves.push([ts,args[0],args[1]]); }
+    if(ts>t0 && name!=="MouseMove") recent.push([ts,name,args]);
+  }
+  // held = key down per the keylog (KeyPress with no KeyRelease yet). If a release
+  // is missing from the recording, the key stays lit -- that reflects the data.
+  for(const els of Object.values(keyEls)) for(const e of els) e.className=e.className.replace(/ (lit|held)/g,"");
+  for(const k of held)(keyEls[k]||[]).forEach(e=>e.classList.add("held"));
+  for(const k of litWin)(keyEls[k]||[]).forEach(e=>{e.classList.remove("held");e.classList.add("lit");});
+  document.getElementById("app_ctx").textContent=app?appShort(app):"";
+  const dist=drawMouse(winMoves,winClicks,t,WM);
+  document.getElementById("mstats").innerHTML=
+    '<div class="r"><span class="mbtn'+(mb.has("Left")?" lit":"")+'">L</span>'+
+    '<span class="mbtn'+(mb.has("Right")?" lit":"")+'">R</span>'+
+    '<span>scroll '+(scroll>0?"▲":scroll<0?"▼":"·")+(scroll?" "+Math.abs(scroll):"")+'</span></div>'+
+    '<div class="r"><span>↔ '+Math.round(dist)+'px/'+WM+'s</span><span>·</span><span>'+clicks+' click</span></div>';
+  document.getElementById("ticker").innerHTML=recent.slice(-6).map(([ts,name,a])=>{
+    let s=name;
+    if(name.startsWith("Key")) s=(name==="KeyPress"?"↓":"↑")+(a[1]||"");
+    else if(name.startsWith("Mouse")) s=name.replace("Mouse","")+" "+JSON.stringify(a);
+    else if(name==="ContextChanged") s="→ "+appShort(a[0]);
+    return '<span style="color:#666">'+ts.toFixed(2)+'</span> '+s;
+  }).join("<br>")||'<span style="color:#555">(no key/click events near here)</span>';
+}
+function appShort(b){if(!b)return"";const m={"com.mitchellh.ghostty":"ghostty","org.mozilla.firefox":"firefox","com.todesktop.230313mzl4w4u92":"Cursor","com.microsoft.VSCode":"VSCode","dev.zed.Zed":"Zed","com.apple.Safari":"Safari","com.google.Chrome":"Chrome","com.apple.calculator":"Calculator","com.anthropic.claudefordesktop":"Claude","com.apple.finder":"Finder","UNCAPTURED":"⬛ UNCAPTURED"};return m[b]||b.split(".").pop();}
+
+// Mouse data is relative deltas (no absolute cursor pos), so we draw the integrated
+// motion PATH over the last WM seconds: cumulative-sum deltas -> polyline, auto-fit
+// to the pad (uniform scale, so a horizontal sweep stays horizontal), recency as
+// brightness, clicks ringed, current position the white dot. Returns path length px.
+const mousepad=document.getElementById("mousepad");
+function drawMouse(moves, clicks, t, WM){
+  const c=mousepad, W=c.width, H=c.height, g=c.getContext("2d");
+  g.clearRect(0,0,W,H);
+  // integrate deltas to a path of [x,y,ts]
+  let x=0,y=0,len=0; const pts=[[0,0, moves.length?moves[0][0]:t]];
+  for(const [ts,dx,dy] of moves){ x+=dx; y+=dy; len+=Math.hypot(dx,dy); pts.push([x,y,ts]); }
+  if(pts.length<2){ g.fillStyle="#3a3f4a"; g.beginPath(); g.arc(W/2,H/2,3,0,7); g.fill(); return 0; }
+  let mnx=1e9,mxx=-1e9,mny=1e9,mxy=-1e9;
+  for(const p of pts){ mnx=Math.min(mnx,p[0]);mxx=Math.max(mxx,p[0]);mny=Math.min(mny,p[1]);mxy=Math.max(mxy,p[1]); }
+  const pad=10, bw=Math.max(1,mxx-mnx), bh=Math.max(1,mxy-mny);
+  const sc=Math.min((W-2*pad)/bw,(H-2*pad)/bh);
+  const ox=(W-bw*sc)/2-mnx*sc, oy=(H-bh*sc)/2-mny*sc;
+  const PX=p=>[ox+p[0]*sc, oy+p[1]*sc];
+  const t0=pts[0][2], span=Math.max(0.001,t-t0);
+  g.lineCap="round";
+  for(let k=1;k<pts.length;k++){
+    const a=Math.max(0.12,(pts[k][2]-t0)/span);
+    g.strokeStyle="rgba(127,209,255,"+a.toFixed(2)+")"; g.lineWidth=1.6;
+    const A=PX(pts[k-1]),B=PX(pts[k]);
+    g.beginPath(); g.moveTo(A[0],A[1]); g.lineTo(B[0],B[1]); g.stroke();
+  }
+  for(const [cts] of clicks){            // click marker at its path position
+    let best=pts[0]; for(const p of pts){ if(p[2]<=cts) best=p; else break; }
+    const P=PX(best); g.strokeStyle="#ff5555"; g.lineWidth=1.5;
+    g.beginPath(); g.arc(P[0],P[1],4,0,7); g.stroke();
+  }
+  const E=PX(pts[pts.length-1]); g.fillStyle="#fff"; g.beginPath(); g.arc(E[0],E[1],2.8,0,7); g.fill();
+  return len;
+}
+
+// ---------- timeline ----------
+function onTimelineClick(e){skipDir=1;const c=e.target,r=c.getBoundingClientRect();seekDay(dayEnd()*(e.clientX-r.left)/r.width);}
+function drawTimeline(){
+  const c=document.getElementById("timeline"),W=c.clientWidth,H=c.clientHeight;c.width=W;c.height=H;
+  const g=c.getContext("2d");g.clearRect(0,0,W,H);const D=dayEnd(),X=t=>t/D*W;
+  for(const s of SEGS){const dens=Math.min(1,(s.n_events/Math.max(1,s.duration_s))/40);
+    g.fillStyle="rgb("+(20+dens*40|0)+","+(30+dens*90|0)+","+(45+dens*150|0)+")";
+    g.fillRect(X(s.t_day),14,Math.max(1,X(s.duration_s)),H-28);}
+  for(const s of SEGS) if(s.gap_before_s>120){g.fillStyle="#000";g.fillRect(X(s.t_day)-1,8,2,H-16);}
+  g.fillStyle="#5a626e";g.font="9px system-ui";
+  for(let h=0;h<=D;h+=3600){g.fillRect(X(h),0,1,6);g.fillText(fmtClock(h).slice(0,5),X(h)+2,9);}
+  // goals: three horizon lanes (long on top, short below, events as ticks at the
+  // bottom) so a long goal and the short goals nested inside it are visually distinct.
+  // (Within one lane, same-horizon overlaps still share the strip.)
+  const GY={long:H-14, short:H-10, event:H-5};   // y-top of each lane in the bottom band
+  for(const go of GOALS){const sel=go.id===selGoal, y=GY[go.horizon]!=null?GY[go.horizon]:H-10;
+    if(go.horizon==="event"){ g.fillStyle=sel?"#fff":"#b070e0"; g.fillRect(X(go.t_start)-1,y,2,4); }
+    else{ g.fillStyle=sel?"#fff":(go.horizon==="long"?"#e0a050":"#4caf50");
+          g.fillRect(X(go.t_start),y,Math.max(2,X(Math.max(go.t_end-go.t_start,2))),3); } }
+  if(pendingStart!=null){g.fillStyle="#ffd27f";g.fillRect(X(pendingStart)-1,H-14,2,14);}
+  // idle-pause splice markers: where the keylog was collapsed onto the video (corrected mode)
+  if(corrected) for(let k=0;k<SEGS.length;k++){ const a=ALIGN[k]; if(!a||!a.splices) continue;
+    for(const sp of a.splices){ g.fillStyle=a.closed?"#caa030":"#a05030";
+      g.fillRect(X(SEGS[k].t_day+sp.vp)-1,0,2,11); } }
+  g.fillStyle="#ff4040";g.fillRect(X(curDayT())-1,0,2,H);
+  document.getElementById("tl_l").innerHTML="<b>"+DAY.user.slice(0,8)+"</b> · "+DAY.date+" · "+fmtClock(0).slice(0,5)+"–"+fmtClock(D).slice(0,5)+" "+DAY.tz;
+  document.getElementById("tl_speed").innerHTML=(vid.paused?"paused":"▶")+" <b>"+speed+"×</b>";
+  document.getElementById("tl_skip").textContent=idleSkip?"idle-skip ON":"idle-skip off";
+}
+
+// ---------- extracted-goal overlay (read-only) ----------
+function buildLanes(){
+  LANES=[];
+  if(!OVERLAY) return;
+  for(const og of (OVERLAY.overarching_goals||[]))      { LANES.push({head:1,title:og.title,color:og.color}); for(const t of og.tasks) LANES.push({color:og.color,t:t}); }
+  for(const e of (OVERLAY.extra||[]))                    { LANES.push({head:1,title:e.title,color:e.color}); for(const t of e.tasks) LANES.push({color:e.color,t:t,muted:1}); }
+  // legend
+  const leg=document.getElementById("gleg");
+  if(leg) leg.innerHTML=(OVERLAY.overarching_goals||[]).map(o=>'<span><span class="sw" style="background:'+o.color+'"></span>'+escapeHtml(o.title)+'</span>').join("")
+    +'<span>click a lane/row → jump · '+(OVERLAY.overarching_goals||[]).reduce((n,o)=>n+o.tasks.length,0)+' tasks</span>';
+}
+function gtX(t,W){const D=dayEnd();return GTL.LEFTW+t/D*(W-GTL.LEFTW);}
+function clipW(s,maxpx,g){s=s||"";if(g.measureText(s).width<=maxpx)return s;while(s.length&&g.measureText(s+"…").width>maxpx)s=s.slice(0,-1);return s+"…";}
+function drawGoalTimeline(){
+  if(!OVERLAY||!LANES.length) return;
+  const wrap=document.getElementById("goaltlwrap"), c=document.getElementById("goaltl");
+  const W=Math.max(50, wrap.clientWidth), H=GTL.HEAD+LANES.length*GTL.ROW;
+  c.width=W; c.height=H; c.style.height=H+"px";
+  const g=c.getContext("2d"); g.clearRect(0,0,W,H); const D=dayEnd();
+  g.font="9px system-ui";
+  for(let h=0;h<=D;h+=3600){const x=gtX(h,W); g.fillStyle="#171a21"; g.fillRect(x,GTL.HEAD,1,H-GTL.HEAD);
+    g.fillStyle="#5a626e"; g.fillText(fmtClock(h).slice(0,5),x+2,10);}
+  LANES.forEach((L,i)=>{
+    const y=GTL.HEAD+i*GTL.ROW;
+    if(L.head){
+      g.fillStyle=L.color; g.globalAlpha=0.15; g.fillRect(0,y,W,GTL.ROW); g.globalAlpha=1;
+      g.fillStyle=L.color; g.font="bold 10px system-ui"; g.fillText("◆ "+L.title,4,y+12);
+    } else {
+      const t=L.t, sel=(selTask===t.id);
+      if(sel){ g.fillStyle="#1b2740"; g.fillRect(0,y,W,GTL.ROW); }
+      g.fillStyle=sel?"#fff":"#aeb4bf"; g.font=(sel?"bold ":"")+"9px system-ui";
+      g.fillText(t.id+"  "+clipW(t.title,GTL.LEFTW-34,g),6,y+11);
+      g.globalAlpha=L.muted?0.4:0.9; g.fillStyle=L.color;
+      for(const iv of t.intervals){const x0=gtX(iv.t_start,W),x1=gtX(iv.t_end,W); g.fillRect(x0,y+GTL.ROW-6,Math.max(2,x1-x0),5);}
+      g.globalAlpha=1;
+    }
+  });
+  g.fillStyle="#20232a"; g.fillRect(GTL.LEFTW,0,1,H);                 // gutter divider
+  const px=gtX(curDayT(),W); g.fillStyle="#ff4040"; g.fillRect(px-1,0,2,H);  // playhead
+}
+function onGoalTlClick(e){
+  const c=e.target, r=c.getBoundingClientRect(), x=e.clientX-r.left, y=e.clientY-r.top;
+  const i=Math.floor((y-GTL.HEAD)/GTL.ROW);
+  if(i>=0 && i<LANES.length && LANES[i].t){
+    selTask=LANES[i].t.id;
+    if(x<GTL.LEFTW){ const iv=LANES[i].t.intervals[0]; if(iv){skipDir=1;seekDay(iv.t_start);} }   // gutter click → jump to task start
+    else { skipDir=1; seekDay(dayEnd()*Math.max(0,(x-GTL.LEFTW)/(c.width-GTL.LEFTW))); }            // plot click → seek to time
+    renderOverlayList();
+  } else if(x>=GTL.LEFTW){ skipDir=1; seekDay(dayEnd()*(x-GTL.LEFTW)/(c.width-GTL.LEFTW)); }
+  drawGoalTimeline();
+}
+function renderOverlayList(){
+  const el=document.getElementById("ovlist"); if(!el) return; el.innerHTML="";
+  if(!OVERLAY) return;
+  const groups=(OVERLAY.overarching_goals||[]).concat(OVERLAY.extra||[]);
+  for(const og of groups){
+    const h=document.createElement("div"); h.className="ovog"; h.style.borderLeft="3px solid "+og.color;
+    h.innerHTML="<b style='color:"+og.color+"'>◆ "+escapeHtml(og.title)+"</b>"; el.appendChild(h);
+    for(const t of og.tasks){
+      const d=document.createElement("div"); d.className="ovtask"+(selTask===t.id?" sel":"");
+      d.innerHTML="<span class='id'>"+t.id+"</span>"+escapeHtml(t.title)+
+        "<div class='m'>"+fmtClock(t.t_start).slice(0,5)+"–"+fmtClock(t.t_end).slice(0,5)+
+        " · "+t.n_leaves+" parts"+(t.n_runs?" · "+t.n_runs+" runs":"")+(t.status?" · "+escapeHtml(t.status):"")+"</div>";
+      d.onclick=()=>{selTask=t.id; skipDir=1; if(t.intervals[0]) seekDay(t.intervals[0].t_start); renderOverlayList(); drawGoalTimeline();};
+      el.appendChild(d);
+      if(selTask===t.id){            // drill-down: list this task's micro-goals in the sidebar (not the timeline)
+        const sub=document.createElement("div"); sub.className="ovmicro";
+        for(const iv of t.intervals){
+          const lbl=iv.instruction||("[seg"+iv.seg+" part]");
+          const m=document.createElement("div"); m.className="ovmg"; m.title=lbl;
+          m.innerHTML="<span class='t'>"+fmtClock(iv.t_start).slice(0,5)+"</span><span class='x'>"+escapeHtml(lbl)+"</span>";
+          m.onclick=(e)=>{e.stopPropagation(); skipDir=1; seekDay(iv.t_start);};
+          sub.appendChild(m);
+        }
+        el.appendChild(sub);
+      }
+    }
+  }
+}
+
+// ---------- goals ----------
+function toast(t){const e=document.getElementById("toast");e.textContent=t;e.style.opacity=1;setTimeout(()=>e.style.opacity=0,1100);}
+function setSave(s){const e=document.getElementById("save");e.textContent=s;e.style.color=s==="saved"?"#6f6":"#fc6";}
+function renderGoals(){
+  GOALS.sort((a,b)=>a.t_start-b.t_start);
+  const L=document.getElementById("glist");L.innerHTML="";
+  document.getElementById("gcount").textContent=GOALS.length+" goals";
+  for(const go of GOALS){const d=document.createElement("div");d.className="goal"+(go.id===selGoal?" sel":"");
+    d.innerHTML='<div class="t">'+fmtClock(go.t_start).slice(0,8)+
+      (go.horizon!=="event"?" – "+fmtClock(go.t_end).slice(0,8)+" ("+fmtDur(go.t_end-go.t_start)+")":"")+
+      '<span class="h '+go.horizon+'">'+go.horizon+'</span></div><div class="txt">'+escapeHtml(go.text||"")+'</div>';
+    d.onclick=()=>{skipDir=1;selGoal=go.id;seekDay(go.t_start);renderGoals();};L.appendChild(d);}
+}
+function escapeHtml(s){return (s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+async function saveGoal(g){setSave("saving…");
+  const r=await (await fetch(API+"/api/goals",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(g)})).json();
+  g.id=r.id;GOALS=GOALS.filter(x=>x.id!==g.id);GOALS.push(g);setSave("saved");renderGoals();drawTimeline();}
+async function deleteGoal(id){await fetch(API+"/api/goals/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
+  GOALS=GOALS.filter(x=>x.id!==id);if(selGoal===id)selGoal=null;renderGoals();drawTimeline();toast("deleted");}
+async function setGoalBound(which){            // re-anchor selected goal's start/end to the playhead
+  const g=GOALS.find(x=>x.id===selGoal);
+  if(!g){toast("select a goal first (n/p or click)");return;}
+  const t=curDayT();
+  if(which==="start") g.t_start=t; else g.t_end=t;
+  if(g.t_start>g.t_end){const a=Math.min(g.t_start,g.t_end),b=Math.max(g.t_start,g.t_end);g.t_start=a;g.t_end=b;}
+  if(g.horizon==="event"&&g.t_start!==g.t_end) g.horizon="short";   // an event with a span is no longer instant
+  g.start_utc=new Date(dayStartMs()+g.t_start*1000).toISOString();
+  g.end_utc=new Date(dayStartMs()+g.t_end*1000).toISOString();
+  await saveGoal(g);
+  toast((which==="start"?"start":"end")+" set @ "+fmtClock(t).slice(0,8));
+}
+
+// ---------- editor ----------
+let edHorizon="short",edEditing=null,edStart=null,edEnd=null;
+function setupEditor(){document.querySelectorAll("#ed_horizon button").forEach(b=>b.onclick=()=>setHorizon(b.dataset.h));}
+function setHorizon(h){edHorizon=h;document.querySelectorAll("#ed_horizon button").forEach(b=>b.classList.toggle("on",b.dataset.h===h));}
+function openEditor(start,end,existing){
+  edStart=start;edEnd=end;edEditing=existing;
+  const ta=document.getElementById("ed_text");ta.value=existing?existing.text:"";
+  setHorizon(existing?existing.horizon:(start===end?"event":"short"));
+  document.getElementById("ed_title").textContent=existing?"edit goal":"new goal";
+  document.getElementById("ed_span").textContent=fmtClock(start).slice(0,8)+(end!==start?" – "+fmtClock(end).slice(0,8)+"  ("+fmtDur(end-start)+")":"  (instant)");
+  document.getElementById("editor").style.display="block";setTimeout(()=>ta.focus(),0);
+  if(!vid.paused) vid.pause();
+}
+function closeEditor(){document.getElementById("editor").style.display="none";document.getElementById("ed_text").blur();}
+function isEditorOpen(){return document.getElementById("editor").style.display==="block";}
+async function commitEditor(){
+  const text=document.getElementById("ed_text").value.trim();if(!text){closeEditor();return;}
+  const g=edEditing?{...edEditing}:{created_t:curDayT()};
+  g.t_start=edStart;g.t_end=edEnd;g.horizon=edHorizon;g.text=text;
+  g.start_utc=new Date(dayStartMs()+edStart*1000).toISOString();
+  g.end_utc=new Date(dayStartMs()+edEnd*1000).toISOString();
+  g.seg_idx=curSeg;g.app=document.getElementById("app_ctx").textContent;
+  await saveGoal(g);selGoal=g.id;pendingStart=null;closeEditor();updatePending();toast("saved");
+}
+function updatePending(){const p=document.getElementById("pending");
+  if(pendingStart!=null){p.style.display="block";p.textContent="● goal start @ "+fmtClock(pendingStart).slice(0,8)+" — press ] at the end";}
+  else p.style.display="none";}
+
+// ---------- keys ----------
+function setSpeed(d){let idx=SPEEDS.indexOf(speed);idx=Math.max(0,Math.min(SPEEDS.length-1,idx+d));speed=SPEEDS[idx];vid.playbackRate=speed;drawTimeline();}
+function stepSeg(d){skipDir=d<0?-1:1;const n=Math.max(0,Math.min(SEGS.length-1,curSeg+d));loadSeg(n,0,!vid.paused);}
+function jumpGoal(d){if(!GOALS.length)return;GOALS.sort((a,b)=>a.t_start-b.t_start);
+  let idx=GOALS.findIndex(g=>g.id===selGoal);idx=idx<0?(d>0?0:GOALS.length-1):Math.max(0,Math.min(GOALS.length-1,idx+d));
+  skipDir=1;selGoal=GOALS[idx].id;seekDay(GOALS[idx].t_start);renderGoals();}
+function onKey(e){
+  if(isEditorOpen()){
+    if(e.key==="Escape"){closeEditor();e.preventDefault();}
+    else if(e.key==="Enter"&&!e.shiftKey){commitEditor();e.preventDefault();}
+    else if(e.key==="Tab"){const o=["short","long","event"];setHorizon(o[(o.indexOf(edHorizon)+1)%3]);e.preventDefault();}
+    return;}
+  switch(e.key){
+    case "ArrowRight":case "l":stepT(e.shiftKey?5:0.5);e.preventDefault();break;
+    case "ArrowLeft":case "h":stepT(e.shiftKey?-5:-0.5);e.preventDefault();break;
+    case "ArrowUp":stepT(60);e.preventDefault();break;
+    case "ArrowDown":stepT(-60);e.preventDefault();break;
+    case ".":stepT(1/30);break;
+    case ",":stepT(-1/30);break;
+    case "J":stepSeg(1);break;
+    case "K":stepSeg(-1);break;
+    case " ":if(vid.paused)vid.play();else vid.pause();drawTimeline();e.preventDefault();break;
+    case "+":case "=":setSpeed(1);break;
+    case "-":setSpeed(-1);break;
+    case "a":idleSkip=!idleSkip;drawTimeline();toast("idle-skip "+(idleSkip?"on":"off"));break;
+    case "c":corrected=!corrected;klCache={};lastKlT=-1;renderKeylog(curSeg,vid.currentTime||0);alignBadge();drawTimeline();
+      toast("keylog realignment "+(corrected?"ON":"OFF — raw"));break;
+    case "Home":skipDir=1;seekDay(0);break;
+    case "End":skipDir=-1;seekDay(dayEnd());break;   // land on the last activity, not yanked off the end
+    case "[":pendingStart=curDayT();updatePending();drawTimeline();toast("start marked");break;
+    case "]":if(pendingStart==null){toast("press [ first");break;}
+      openEditor(Math.min(pendingStart,curDayT()),Math.max(pendingStart,curDayT()),null);break;
+    case "i":openEditor(curDayT(),curDayT(),null);break;
+    case "n":jumpGoal(1);break;
+    case "p":jumpGoal(-1);break;
+    case "e":{const g=GOALS.find(x=>x.id===selGoal);if(g)openEditor(g.t_start,g.t_end,g);else toast("select a goal (n/p)");break;}
+    case "{":setGoalBound("start");break;     // re-anchor selected goal start to playhead
+    case "}":setGoalBound("end");break;       // re-anchor selected goal end to playhead
+    case "x":if(selGoal!=null)deleteGoal(selGoal);break;
+    case "Escape":pendingStart=null;updatePending();drawTimeline();break;
+    case "?":{const h=document.getElementById("help");h.style.display=h.style.display==="block"?"none":"block";break;}
+  }
+}
+function buildHelp(){document.getElementById("help").innerHTML=
+  "<b>navigate</b><br>"+
+  "<kbd>Space</kbd> play/pause · <kbd>+</kbd>/<kbd>−</kbd> speed (0.5–16×) · <kbd>a</kbd> idle-skip<br>"+
+  "<kbd>→</kbd>/<kbd>←</kbd> ±0.5s · <kbd>⇧→</kbd>/<kbd>⇧←</kbd> ±5s · <kbd>.</kbd>/<kbd>,</kbd> ±1 frame<br>"+
+  "<kbd>↑</kbd>/<kbd>↓</kbd> ±1 min · <kbd>J</kbd>/<kbd>K</kbd> next/prev segment · <kbd>Home</kbd>/<kbd>End</kbd> · click timeline<br>"+
+  "<kbd>c</kbd> keylog realignment on/off (idle-pause fix; badge top-bar, ticks on timeline)<br><br>"+
+  "<b>annotate</b><br>"+
+  "<kbd>[</kbd> mark start · <kbd>]</kbd> mark end + write · <kbd>i</kbd> instant/event goal<br>"+
+  "<kbd>n</kbd>/<kbd>p</kbd> select goal · <kbd>e</kbd> edit text/horizon · <kbd>x</kbd> delete · <kbd>Esc</kbd> cancel<br>"+
+  "selected goal: <kbd>{</kbd> set start = playhead · <kbd>}</kbd> set end = playhead (re-anchor times)<br>"+
+  "editor: <kbd>Enter</kbd> save · <kbd>Tab</kbd> horizon<br><br>"+
+  "<b>horizons</b>: short = one-breath sub-task · long = multi-segment goal · event = a moment<br>"+
+  "goals autosave to disk on every edit.";}
+init();
+</script>

@@ -1837,6 +1837,12 @@ wheels = [
 name = "juergen"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "av" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "av", specifier = ">=16.1.0" }]
 
 [[package]]
 name = "langdetect"

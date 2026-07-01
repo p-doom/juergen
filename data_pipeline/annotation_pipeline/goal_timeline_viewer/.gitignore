@@ -1,0 +1,10 @@
+# Per-day viewer data (day.json, overlays, alignment, faststart mp4 caches) — GBs, regenerable.
+data/
+
+# Viewer/serve logs.
+viewer_*.log
+*.log
+
+# Caches.
+__pycache__/
+*.pyc
