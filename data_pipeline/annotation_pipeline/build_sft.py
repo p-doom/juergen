@@ -49,6 +49,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--min-frames", type=int, default=1)
     p.add_argument("--include-variants", action="store_true",
                    help="Emit one sample per instruction paraphrase (3x) instead of main only.")
+    p.add_argument("--require-plan", action="store_true",
+                   help="Reject goals without a usable stage-02b plan (run-dir must be a "
+                        "stage_02b_plans output) instead of emitting plan-less first turns.")
     p.add_argument("--split-group", default="recording_id", choices=("recording_id", "clip_id"))
     p.add_argument("--val-frac", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=0)
@@ -98,7 +101,8 @@ def main() -> None:
         trajectories = [t for _wi, trajs in sorted(parts) for t in trajs]
         samples, rejected = assemble_samples(
             frame_records, trajectories,
-            min_frames=args.min_frames, include_variants=args.include_variants)
+            min_frames=args.min_frames, include_variants=args.include_variants,
+            require_plan=args.require_plan)
 
         man = frames_root / "clips" / parent / "stage_00" / "manifest.jsonl"
         row = (read_jsonl(man) or [{}])[0] if man.exists() else {}

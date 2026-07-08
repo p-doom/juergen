@@ -49,12 +49,17 @@ BUCKET_LIMITS = {
     "256k": 262_144,
 }
 
-# SFT system prompt: the computer-use agent's action format.
+# SFT system prompt: the plan-aware computer-use format contract. The first
+# assistant turn is `<plan prose>\n<first action>` (stage 02b + stage 03);
+# every later turn is a pure action. Keep byte-identical with
+# hindsight_fold/scripts/assemble_sft.py's SYSTEM_PROMPT so both pipelines
+# train one format.
 SYSTEM_PROMPT = (
-    "You operate a desktop computer. The first user turn shows the initial "
-    "screen and the user's goal; subsequent user turns show the current screen. "
-    "Reply with the next action toward that goal as `<dx> <dy> <scroll>` "
-    "optionally followed by ` ; +KEY -KEY` events, or `NO_OP` if no action."
+    "You operate a desktop computer. The first user turn shows the initial screen and the user's "
+    "goal. Before acting, briefly state your plan for achieving the goal in one or two sentences, "
+    "then give the first action on the same turn. On every later turn, reply with only the next "
+    "action toward the goal as `<dx> <dy> <scroll>` optionally followed by ` ; +KEY -KEY` events, "
+    "or `NO_OP` if no action."
 )
 
 

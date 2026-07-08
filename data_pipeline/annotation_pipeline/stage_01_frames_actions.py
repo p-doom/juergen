@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 01: extract 2fps frames and align next-window action bins."""
+"""Stage 01: extract frames (default 0.5 fps) and align per-bin action strings."""
 
 from __future__ import annotations
 

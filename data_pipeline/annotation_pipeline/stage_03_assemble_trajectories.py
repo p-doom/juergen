@@ -79,17 +79,23 @@ def make_sample(
     frames: list[dict[str, Any]],
     instruction: str,
     variant_idx: int = 0,
+    plan: str = "",
 ) -> dict[str, Any]:
+    # Reason-before-action: the plan prose (stage 02b) prefixes the FIRST
+    # assistant turn only — `<plan>\n<first action>` — matching the fold
+    # pipeline's assemble_sft byte format. Later turns stay pure actions.
     messages = []
     for idx, frame in enumerate(frames):
         messages.append(
             user_image(frame["image_path"], instruction if idx == 0 else None)
         )
-        messages.append(assistant_text(frame["action"]))
+        first_turn_text = f"{plan}\n{frame['action']}" if (idx == 0 and plan) else frame["action"]
+        messages.append(assistant_text(first_turn_text))
 
     suffix = f"_v{variant_idx}" if variant_idx else ""
     first, last = frames[0], frames[-1]
     return {
+        "plan": plan,
         # clip_id is a separate field and stage 04 prefixes it onto the final
         # sample_id, so keep this one clip-relative to avoid doubling it.
         "sample_id": f"traj{trajectory_idx:04d}{suffix}",
@@ -124,7 +130,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-variants", action="store_true",
                         help="Emit one sample per instruction paraphrase (3x). Default "
                              "emits one sample from the main instruction only.")
+    parser.add_argument("--require-plan", action="store_true",
+                        help="Reject goals without a usable stage-02b plan instead of "
+                             "emitting a plan-less first turn.")
     return parser.parse_args()
+
+
+# Plans carrying these stage-02b quality flags are unusable as training prose;
+# the sample falls back to a plan-less first turn (or is rejected under
+# require_plan). "too_long"/"not_first_person" flags are kept — still valid.
+DROP_PLAN_FLAGS = frozenset({"empty", "restates_instruction"})
+
+
+def usable_plan(trajectory: dict[str, Any]) -> str:
+    plan = str(trajectory.get("plan") or "").strip()
+    if set(trajectory.get("plan_flags") or []) & DROP_PLAN_FLAGS:
+        return ""
+    return plan
 
 
 def assemble_samples(
@@ -133,6 +155,7 @@ def assemble_samples(
     *,
     min_frames: int = 1,
     include_variants: bool = False,
+    require_plan: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Turn one segment's frame_records + goal trajectories into SFT samples.
 
@@ -175,14 +198,21 @@ def assemble_samples(
         if len(frames) < min_frames:
             reject("too_few_frames")
             continue
+        plan = usable_plan(trajectory)
+        if require_plan and not plan:
+            reject("missing_plan")
+            continue
         # Emit the main instruction (default) or fan out every paraphrase into its
         # own sample over the same frames/actions when include_variants is set.
+        # Variants share the goal's one plan (it adds situation/method, not
+        # phrasing, so it composes with any paraphrase).
         phrasings = instruction_variants(trajectory) if include_variants else [instruction]
         emitted = 0
         for variant in phrasings:
             if is_generic_instruction(variant):
                 continue
-            samples.append(make_sample(recording_id, clip_id, idx, trajectory, frames, variant, emitted))
+            samples.append(make_sample(recording_id, clip_id, idx, trajectory, frames, variant,
+                                       emitted, plan=plan))
             emitted += 1
         if emitted == 0:
             reject("generic_or_empty_instruction")
@@ -201,6 +231,7 @@ def main() -> None:
     samples, rejected = assemble_samples(
         frame_records, trajectories,
         min_frames=args.min_frames, include_variants=args.include_variants,
+        require_plan=args.require_plan,
     )
 
     write_jsonl(output_dir / "trajectories.jsonl", samples)
