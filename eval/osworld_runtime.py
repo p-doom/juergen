@@ -39,6 +39,98 @@ def _pil_to_data_url(img: Image.Image, *, quality: int = 85) -> str:
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
 
 
+def append_turn(
+    recent_frames: list[Image.Image],
+    recent_actions: list[str],
+    frame: Image.Image,
+    action_text: str,
+    *,
+    n_history_frames: int,
+) -> None:
+    """Append one completed turn to the rolling history, then block-evict.
+
+    A "turn" is ``(frame, action_text)`` where ``action_text`` is the action the
+    model produced *from the previous* current frame; ``frame`` is the resulting
+    new screen. The invariant maintained is
+    ``len(recent_actions) == len(recent_frames) - 1`` — every frame except the
+    latest has an action that followed it.
+
+    Eviction is StreamingLLM-style *block* eviction rather than slide-by-one:
+    once the window exceeds ``n_history_frames`` we keep only the newest
+    ``n_history_frames // 2`` frames (and their aligned actions). This preserves
+    sglang's RadixAttention prefix cache — while the window grows the prompt is
+    append-only (full cache reuse) and only the ~``N/2`` frames retained on a
+    slide are re-prefilled, roughly once every ``N/2`` steps. Slide-by-one would
+    instead invalidate the whole window on every step past ``N``.
+    """
+    recent_actions.append(action_text)
+    recent_frames.append(frame)
+    if len(recent_frames) > n_history_frames:
+        keep = max(1, n_history_frames // 2)
+        recent_frames[:] = recent_frames[-keep:]
+        # Actions align to every frame but the latest.
+        recent_actions[:] = recent_actions[-(len(recent_frames) - 1):] if len(recent_frames) > 1 else []
+
+
+def _interleave_messages(
+    system_prompt: str,
+    instruction: str | None,
+    image_parts: list[Any],
+    recent_actions: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Assemble the interleaved chat message list from per-frame ``image_parts``.
+
+    Shared by ``_call_model`` (parts are base64 ``image_url`` dicts) and
+    ``build_loggable_messages`` (parts are ``<image …>`` placeholders), so the
+    persisted prompt trace is structurally identical to the payload actually
+    sent — only the image representation differs. ``image_parts[i]`` is the
+    representation of ``recent_frames[i]``; ``recent_actions[i]`` is the action
+    that followed it (``len(recent_actions) == len(image_parts) - 1``).
+    """
+    recent_actions = recent_actions or []
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    for i, part in enumerate(image_parts):
+        content: list[Any] = []
+        if i == 0 and instruction:
+            content.append({"type": "text", "text": instruction})
+        content.append(part)
+        messages.append({"role": "user", "content": content})
+        if i < len(recent_actions):
+            messages.append({"role": "assistant", "content": recent_actions[i]})
+    return messages
+
+
+def window_frame_labels(step: int, n_frames: int) -> list[str]:
+    """PNG filenames for the ``n_frames`` in the window at the start of ``step``.
+
+    The window is always a contiguous tail of the saved frames ending at the
+    latest screenshot (``step_000.png`` is the initial frame; ``step_{k}.png`` is
+    the post-action screenshot of step ``k``). At step ``S`` with ``L`` frames in
+    the window the current frame is ``step_{S-1}.png``, so the ids are
+    ``[S-L .. S-1]``. Used to label images in the persisted prompt trace.
+    """
+    base = step - n_frames
+    return [f"step_{base + i:03d}.png" for i in range(n_frames)]
+
+
+def build_loggable_messages(
+    *,
+    system_prompt: str,
+    instruction: str | None,
+    recent_actions: list[str] | None,
+    frame_labels: list[str],
+) -> list[dict[str, Any]]:
+    """The message list as sent, but with each image replaced by ``<image name>``.
+
+    Suitable for writing a small, human-readable ``prompt_NNN.json`` sidecar that
+    lets you audit exactly what the model saw each step (turn sequence, verbatim
+    text, instruction placement, eviction window) without duplicating base64
+    image bytes — the referenced ``step_NNN.png`` files already hold the pixels.
+    """
+    parts = [{"type": "image", "image": f"<image {lbl}>"} for lbl in frame_labels]
+    return _interleave_messages(system_prompt, instruction, parts, recent_actions)
+
+
 def _call_model(
     *,
     sglang_url: str,
@@ -47,34 +139,45 @@ def _call_model(
     system_prompt: str,
     instruction: str | None,
     recent_frames: list[Image.Image],
+    recent_actions: list[str] | None = None,
     max_tokens: int,
     temperature: float,
     request_timeout_s: float = 120.0,
 ) -> str:
-    """One chat-completion call: system + user(turn1-instruction? + frames).
+    """One chat-completion call, interleaving frames and the model's prior actions.
 
-    The user-message shape mirrors the BC training convention:
-      - turn 1 contains the natural-language goal (when ``instruction`` is set).
-      - subsequent turns send only the most recent N frames.
-    History of the model's own assistant tokens is intentionally NOT
-    interleaved into the conversation here — this matches what
-    freeroll.py has been doing in practice. The trade-off is documented
-    in the grounding-eval design discussion.
+    Builds a training-shaped conversation: each frame is its own ``user`` turn and
+    the action the model took after a frame is fed back as the following
+    ``assistant`` turn, mirroring the BC training convention
+    (``user(image) -> assistant(action)``, one screen per turn). The last frame is
+    the current screen and has no action yet::
+
+        [ system,
+          user[instruction? + frame_0], assistant[action_0],
+          user[frame_1],                assistant[action_1],
+          ...
+          user[frame_{N-1}] ]          # current screen, awaiting the next action
+
+    ``recent_actions[i]`` is the action taken after ``recent_frames[i]``, so
+    ``len(recent_actions) == len(recent_frames) - 1`` (see ``append_turn``). When
+    it is empty (e.g. ``n_history_frames == 1``) the list collapses to
+    ``[system, user[instruction? + frame]]`` — the legacy single-frame shape.
+
+    ``instruction`` rides the first (earliest in-window) user turn only. Callers
+    pass it every step to keep the goal in context (``persist_instruction``), or
+    only on step 1 to match the training distribution.
     """
-    user_content: list[dict[str, Any]] = []
-    if instruction:
-        user_content.append({"type": "text", "text": instruction})
-    for f in recent_frames:
-        user_content.append({"type": "image_url", "image_url": {"url": _pil_to_data_url(f)}})
+    image_parts = [
+        {"type": "image_url", "image_url": {"url": _pil_to_data_url(f)}}
+        for f in recent_frames
+    ]
+    messages = _interleave_messages(system_prompt, instruction, image_parts, recent_actions)
     r = requests.post(
         sglang_url.rstrip("/") + "/chat/completions",
         headers={"Authorization": f"Bearer {api_key}"},
         json={
             "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
+            "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
         },

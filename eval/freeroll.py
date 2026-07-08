@@ -40,7 +40,8 @@ from osworld_vm_client import OSWorldClient  # noqa: E402
 from osworld_system_prompts import SYSTEM_PROMPTS  # noqa: E402
 from osworld_runtime import (  # noqa: E402
     _DEFAULT_QCOW2, _DEFAULT_QEMU_BIN, _EVAL_DIR,
-    _call_model, _pil_to_data_url, _wait_for,
+    _call_model, _pil_to_data_url, _wait_for, append_turn,
+    build_loggable_messages, window_frame_labels,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -129,6 +130,7 @@ def _run_rollout(
     instruction: str | None,
     system_prompt: str,
     n_history_frames: int,
+    persist_instruction: bool,
     max_tokens: int,
     temperature: float,
     save_frames: bool,
@@ -142,6 +144,7 @@ def _run_rollout(
     if save_frames:
         steps_dir.mkdir(exist_ok=True)
     traj_path = output_dir / "trajectory.jsonl"
+    conv_path = output_dir / "conversation.jsonl"
     gif_path = output_dir / "rollout.gif"
 
     client = OSWorldClient(osworld_url)
@@ -155,13 +158,14 @@ def _run_rollout(
     if save_frames:
         frame.save(steps_dir / "step_000.png")
     recent_frames: list[Image.Image] = [frame]
+    recent_actions: list[str] = []
 
     t_start = time.time()
     steps: list[StepLog] = []
     stop_reason = "max_steps"
     parse_errors = 0
 
-    with traj_path.open("w") as traj_f:
+    with traj_path.open("w") as traj_f, conv_path.open("w") as conv_f:
         traj_f.write(json.dumps({
             "step_num": 0, "action": "<reset>", "response": "<reset>",
             "reward": 0.0, "done": False, "info": {},
@@ -170,18 +174,50 @@ def _run_rollout(
 
         for step in range(1, max_steps + 1):
             t0 = time.time()
+            instr_used = instruction if (step == 1 or persist_instruction) else None
+            # The exact interleaved message list sent to the model this step,
+            # with each frame replaced by a <image step_NNN.png> placeholder
+            # (see build_loggable_messages). Built once and reused for both the
+            # per-step prompt sidecar and the conversation.jsonl transcript.
+            frame_labels = window_frame_labels(step, len(recent_frames))
+            loggable_messages = build_loggable_messages(
+                system_prompt=system_prompt, instruction=instr_used,
+                recent_actions=recent_actions,
+                frame_labels=frame_labels,
+            )
+            if save_frames:
+                (steps_dir / f"prompt_{step:03d}.json").write_text(
+                    json.dumps(loggable_messages, indent=2))
             try:
                 action_text = _call_model(
                     sglang_url=sglang_url, api_key=api_key, model=model,
                     system_prompt=system_prompt,
-                    instruction=instruction if step == 1 else None,
+                    instruction=instr_used,
                     recent_frames=recent_frames,
+                    recent_actions=recent_actions,
                     max_tokens=max_tokens, temperature=temperature,
                 )
             except Exception as e:
                 _LOGGER.error("step %d: model call failed: %s", step, e)
                 stop_reason = "model_error"
                 break
+
+            # Log the full conversation as sent (prompt + this step's reply),
+            # unconditionally — independent of --no_frames. Covers the terminate,
+            # normal-action, and stop-on-click paths below with a single write.
+            conv_f.write(json.dumps({
+                "step": step,
+                "messages": loggable_messages,
+                "response": action_text,
+            }) + "\n")
+            conv_f.flush()
+
+            # Surface the model's per-step reply in stdout (the .lab log), keyed
+            # by step and the current (latest in-window) frame it acted on.
+            _LOGGER.info(
+                "step %d | current frame %s | response=%r",
+                step, frame_labels[-1], action_text,
+            )
 
             computer_use_status = _computer_use_terminate_status(action_text)
             if _is_terminate(action_text) or computer_use_status is not None:
@@ -201,9 +237,8 @@ def _run_rollout(
                 frames_for_gif.append(frame.copy())
                 if save_frames:
                     frame.save(steps_dir / f"step_{step:03d}.png")
-                recent_frames.append(frame)
-                if len(recent_frames) > n_history_frames:
-                    recent_frames = recent_frames[-n_history_frames:]
+                append_turn(recent_frames, recent_actions, frame, action_text,
+                            n_history_frames=n_history_frames)
 
                 step_log = StepLog(
                     step=step,
@@ -283,9 +318,8 @@ def _run_rollout(
             frames_for_gif.append(frame.copy())
             if save_frames:
                 frame.save(steps_dir / f"step_{step:03d}.png")
-            recent_frames.append(frame)
-            if len(recent_frames) > n_history_frames:
-                recent_frames = recent_frames[-n_history_frames:]
+            append_turn(recent_frames, recent_actions, frame, action_text,
+                        n_history_frames=n_history_frames)
 
             step_log = StepLog(
                 step=step, action_text=action_text, parsed=parsed,
@@ -331,6 +365,7 @@ def _run_rollout(
         "instruction": instruction,
         "system_prompt": system_prompt,
         "n_history_frames": n_history_frames,
+        "persist_instruction": persist_instruction,
         "max_tokens": max_tokens,
         "temperature": temperature,
         "desktop_setup": desktop_setup,
@@ -338,6 +373,7 @@ def _run_rollout(
         "settle_stable_timeout_s": settle_stable_timeout_s,
         "settle_poll_s": settle_poll_s,
         "traj_path": str(traj_path),
+        "conversation_path": str(conv_path),
         "gif_path": str(gif_path),
     }
 
@@ -419,17 +455,24 @@ def main() -> int:
     p.add_argument("--system_prompt_id", default="training_v1")
     p.add_argument("--max_tokens", type=int, default=64)
     p.add_argument("--temperature", type=float, default=0.0)
-    p.add_argument("--n_history_frames", type=int, default=1)
+    p.add_argument("--n_history_frames", type=int, default=16)
+    p.add_argument(
+        "--persist_instruction", action=argparse.BooleanOptionalAction, default=True,
+        help="Re-anchor the natural-language goal on the earliest in-window user "
+             "turn every step so it stays in context after the first frame is "
+             "evicted. On by default; --no-persist_instruction reverts to "
+             "goal-on-step-1 (the training/legacy behaviour).",
+    )
     p.add_argument("--no_frames", action="store_true")
     p.add_argument("--stop_on_click", action="store_true")
     p.add_argument(
-        "--settle_s", type=float, default=0.0,
+        "--settle_s", type=float, default=0.3,
         help="Fixed delay (seconds) after dispatching an action before the "
              "post-action screenshot, giving the UI time to repaint. 0 keeps "
              "the legacy zero-wait behaviour.",
     )
     p.add_argument(
-        "--settle_stable_timeout_s", type=float, default=0.0,
+        "--settle_stable_timeout_s", type=float, default=2.0,
         help="If >0, after --settle_s poll the framebuffer (every "
              "--settle_poll_s) until two consecutive frames are identical or "
              "this timeout elapses, then use the last frame. Adapts the wait "
@@ -556,6 +599,7 @@ def main() -> int:
                 instruction=instruction,
                 system_prompt=SYSTEM_PROMPTS[args.system_prompt_id],
                 n_history_frames=args.n_history_frames,
+                persist_instruction=args.persist_instruction,
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
                 save_frames=not args.no_frames,

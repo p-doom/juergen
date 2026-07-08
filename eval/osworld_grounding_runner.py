@@ -60,7 +60,8 @@ from osworld_vm_client import OSWorldClient
 from osworld_system_prompts import SYSTEM_PROMPTS
 from osworld_runtime import (
     _DEFAULT_QCOW2, _DEFAULT_QEMU_BIN, _EVAL_DIR,
-    _call_model, _wait_for,
+    _call_model, _wait_for, append_turn,
+    build_loggable_messages, window_frame_labels,
 )
 
 # OSWorld imports — SetupController + task JSONs. Importing the module has
@@ -352,6 +353,7 @@ def _run_grounding_rollout(
     system_prompt: str,
     max_steps: int,
     n_history_frames: int,
+    persist_instruction: bool,
     max_tokens: int,
     temperature: float,
     output_dir: Path,
@@ -383,6 +385,7 @@ def _run_grounding_rollout(
     if save_frames:
         frame.save(steps_dir / "step_000.png")
     recent_frames: list[Image.Image] = [frame]
+    recent_actions: list[str] = []
 
     t_start = time.time()
     steps: list[StepLog] = []
@@ -404,12 +407,21 @@ def _run_grounding_rollout(
 
         for step in range(1, max_steps + 1):
             t0 = time.time()
+            instr_used = target.instruction if (step == 1 or persist_instruction) else None
+            if save_frames:
+                (steps_dir / f"prompt_{step:03d}.json").write_text(json.dumps(
+                    build_loggable_messages(
+                        system_prompt=system_prompt, instruction=instr_used,
+                        recent_actions=recent_actions,
+                        frame_labels=window_frame_labels(step, len(recent_frames)),
+                    ), indent=2))
             try:
                 action_text = _call_model(
                     sglang_url=sglang_url, api_key=api_key, model=model,
                     system_prompt=system_prompt,
-                    instruction=target.instruction if step == 1 else None,
+                    instruction=instr_used,
                     recent_frames=recent_frames,
+                    recent_actions=recent_actions,
                     max_tokens=max_tokens, temperature=temperature,
                 )
             except Exception as e:
@@ -440,9 +452,8 @@ def _run_grounding_rollout(
 
             if save_frames:
                 frame.save(steps_dir / f"step_{step:03d}.png")
-            recent_frames.append(frame)
-            if len(recent_frames) > n_history_frames:
-                recent_frames = recent_frames[-n_history_frames:]
+            append_turn(recent_frames, recent_actions, frame, action_text,
+                        n_history_frames=n_history_frames)
 
             hit = in_bbox(cursor_after, target.bbox)
             if hit and reach_frame < 0:
@@ -476,6 +487,7 @@ def _run_grounding_rollout(
         "model": model,
         "system_prompt": system_prompt,
         "n_history_frames": n_history_frames,
+        "persist_instruction": persist_instruction,
         "max_tokens": max_tokens,
         "temperature": temperature,
         "max_steps": max_steps,
@@ -597,7 +609,13 @@ def main() -> int:
     p.add_argument("--system_prompt_id", default="training_v1")
     p.add_argument("--max_tokens", type=int, default=64)
     p.add_argument("--temperature", type=float, default=0.0)
-    p.add_argument("--n_history_frames", type=int, default=4)
+    p.add_argument("--n_history_frames", type=int, default=16)
+    p.add_argument(
+        "--persist_instruction", action=argparse.BooleanOptionalAction, default=True,
+        help="Re-anchor the goal on the earliest in-window user turn every step "
+             "so it stays in context after the first frame is evicted. On by "
+             "default; --no-persist_instruction reverts to goal-on-step-1.",
+    )
     p.add_argument("--no_frames", action="store_true",
                    help="Skip saving per-step PNGs (saves disk).")
     p.add_argument("--sglang_port", type=int, default=30000)
@@ -758,6 +776,7 @@ def main() -> int:
                     system_prompt=SYSTEM_PROMPTS[args.system_prompt_id],
                     max_steps=args.max_steps,
                     n_history_frames=args.n_history_frames,
+                    persist_instruction=args.persist_instruction,
                     max_tokens=args.max_tokens,
                     temperature=args.temperature,
                     output_dir=rollout_dir,
