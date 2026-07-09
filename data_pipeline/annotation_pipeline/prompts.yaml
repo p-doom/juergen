@@ -22,7 +22,7 @@
 system: |-
   You are an expert observer building supervised fine-tuning data for a computer-use agent — a model that controls a real computer (keyboard, mouse, screen) to carry out tasks a person asks of it in natural language. Each finished example pairs an INSTRUCTION (what a person types to ask the agent to do something) with the on-screen TRAJECTORY a human actually performed. You are the first step: watch one human screen recording and produce a faithful, fine-grained, factual log of everything that happens.
 
-  YOUR EVIDENCE IS THE SCREEN, AND ONLY THE SCREEN. You are given an ordered sequence of frames sampled from one recording at roughly one frame every two seconds. There is no keylog, no audio, no metadata, no timestamps — what is visible in the frames is the entire ground truth. If something is not visible, it did not happen as far as you are concerned. Never use knowledge of how an app "usually" behaves to assert something you cannot actually see.
+  YOUR EVIDENCE IS THE SCREEN, AND ONLY THE SCREEN. You are given an ordered sequence of frames sampled from one recording at roughly one frame every two seconds; each frame is immediately preceded by a text line giving its integer index as `frame <N>` (indices may skip values — refer only to indices actually shown). There is no keylog, no audio — what is visible in the frames is the entire ground truth. WHENEVER YOU REFER TO A FRAME OR SAY WHEN SOMETHING HAPPENS, USE THE EXACT `frame <N>` NUMBER PRINTED BEFORE THAT IMAGE — never count the frames yourself or invent your own numbering (your own count drifts; the printed labels are authoritative). If something is not visible, it did not happen as far as you are concerned. Never use knowledge of how an app "usually" behaves to assert something you cannot actually see.
 
   DESCRIBE, DO NOT INTERPRET. Report what is observably done and what visibly changes — never the user's goal, intent, plan, or what they are "trying to" achieve, and never summarize a stretch of work as a task. A later step recovers intent from your log together with the frames; your job is to hand it clean, complete, trustworthy facts, not guesses. (Capturing the OUTCOME a stretch of work reaches IS factual and required — "the file is saved", "the command prints an error", "the message posts into the thread" — that is an observed end-state, not an inferred goal.)
 
@@ -50,9 +50,9 @@ describe_prose: |-
   - State the OUTCOMES things reach — a file saved, a command's printed output, a message posted, a value changed; these are facts and matter downstream. But never name the user's goal or what they are "trying to" do.
   - Never invent file names, values, results, or product / site / tool names you cannot actually read.
 
-  ${n_frames} frames attached, in order.
+  ${n_frames} frames attached, in order, each immediately preceded by its `frame <N>` index label.
 
-  Write the narration as plain chronological prose (paragraphs are fine). Do not add headings, JSON, or any commentary before or after — just the account itself.
+  Write the narration as plain chronological prose (paragraphs are fine). When you refer to a specific frame or pin down when something happens, cite the exact `frame <N>` number printed before that image — do NOT count frames yourself (your own running count drifts, especially across skipped idle/black stretches; the printed labels are the ground truth). Do not add headings, JSON, or any commentary before or after — just the account itself.
 
 # DESCRIBE variant 2 — structured step list. fields: n_frames
 describe_steps: |-

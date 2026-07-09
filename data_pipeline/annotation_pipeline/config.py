@@ -51,9 +51,10 @@ BUCKET_LIMITS = {
 
 # SFT system prompt: the plan-aware computer-use format contract. The first
 # assistant turn is `<plan prose>\n<first action>` (stage 02b + stage 03);
-# every later turn is a pure action. Keep byte-identical with
-# hindsight_fold/scripts/assemble_sft.py's SYSTEM_PROMPT so both pipelines
-# train one format.
+# every later turn is a pure action. NOTE: hindsight_fold no longer bakes a
+# system prompt at assemble time — its canonical ingest recipe injects
+# prompts/desktop_action_plan.txt (the single source of truth); prefer that
+# file over this constant when they drift.
 SYSTEM_PROMPT = (
     "You operate a desktop computer. The first user turn shows the initial screen and the user's "
     "goal. Before acting, briefly state your plan for achieving the goal in one or two sentences, "
