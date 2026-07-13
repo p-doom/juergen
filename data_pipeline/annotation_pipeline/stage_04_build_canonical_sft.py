@@ -17,7 +17,8 @@ from annotation_pipeline.image_store import is_arrayrecord_image_uri
 
 VALID_IMAGE_PATH_MODES = ("absolute", "preserve")
 VALID_SPLIT_GROUPS = ("recording_id", "clip_id")
-VALID_TERMINAL_MODES = ("none", "replace_final_assistant", "append_assistant")
+VALID_TERMINAL_MODES = ("none", "replace_final_assistant", "append_to_final_assistant",
+                        "append_assistant")  # append_assistant DEPRECATED (OOD)
 
 
 def ensure_empty_dir(path: Path, *, overwrite: bool) -> Path:
@@ -128,7 +129,23 @@ def apply_terminal_policy(
     if not terminal_token:
         raise ValueError("terminal_token is required when terminal_mode is not 'none'")
     terminal_message = {"role": "assistant", "content": text_content(terminal_token)}
+    if terminal_mode == "append_to_final_assistant":
+        # Correct terminal policy: ride the token at the END of the final action's own turn
+        # ("<action>\n<TERMINATE>"). Keeps user/assistant alternation — at inference the model
+        # always sees an observation between its outputs, so a STANDALONE terminal assistant
+        # turn (append_assistant) trains an out-of-distribution state.
+        for idx in range(len(messages) - 1, -1, -1):
+            if messages[idx].get("role") == "assistant":
+                parts = messages[idx].get("content") or []
+                for c in reversed(parts):
+                    if c.get("type") == "text":
+                        c["text"] = f"{c['text']}\n{terminal_token}"
+                        return
+                messages[idx]["content"] = list(parts) + text_content(terminal_token)
+                return
+        raise ValueError("no assistant turn found")
     if terminal_mode == "append_assistant":
+        # DEPRECATED (OOD): creates assistant->assistant adjacency; use append_to_final_assistant.
         messages.append(terminal_message)
         return
     if terminal_mode == "replace_final_assistant":
