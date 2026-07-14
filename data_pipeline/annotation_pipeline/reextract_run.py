@@ -38,7 +38,7 @@ def _run_module(module: str, args: list[str], *, model: str | None) -> subproces
 
 def reextract_unit(unit_dir: Path, vlm_height: int) -> tuple[str, str]:
     unit_id = unit_dir.name
-    observations = unit_dir / "stage_02_annotation_view" / "observations.jsonl"
+    observations = unit_dir / "stage_02_view" / "observations.jsonl"
     annotation_dir = unit_dir / "stage_03_annotation"
     annotation_path = annotation_dir / "annotation.json"
     boundary_dir = unit_dir / "stage_04_boundaries"

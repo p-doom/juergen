@@ -10,9 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from annotation_pipeline import config
 from annotation_pipeline.common import ensure_dir, read_jsonl, write_json, write_jsonl
-from annotation_pipeline.stage_02_observation_view import materialize_observation_view
 from annotation_pipeline.stage_05_assemble_trajectories import assemble_trajectories
 from annotation_pipeline.stage_06_project_sft import ensure_empty_dir, project_sft
 
@@ -25,13 +23,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--modalities-root", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--min-observations", type=int, default=1)
-    parser.add_argument("--training-fps", type=float, default=config.DEFAULT_TRAINING_FPS)
-    parser.add_argument(
-        "--training-idle-keep-head", type=int, default=config.DEFAULT_IDLE_KEEP_HEAD
-    )
-    parser.add_argument(
-        "--training-idle-keep-tail", type=int, default=config.DEFAULT_IDLE_KEEP_TAIL
-    )
     parser.add_argument("--include-variants", action="store_true")
     parser.add_argument(
         "--split-group", choices=("recording_id", "clip_id"), default="recording_id"
@@ -119,20 +110,12 @@ def main() -> None:
 
     all_trajectories: list[dict[str, Any]] = []
     all_rejected: list[dict[str, Any]] = []
-    training_views_stage = ensure_empty_dir(output_root / "stage_02_training_views", overwrite=True)
-    training_views_root = ensure_dir(training_views_stage / "clips")
+    source_observation_views: dict[str, str] = {}
     for parent, parts in sorted(by_parent.items()):
-        base_dir = modalities_root / "clips" / parent / "stage_01_base"
-        training_view_dir = training_views_root / parent
-        materialize_observation_view(
-            base_dir=base_dir,
-            output_dir=training_view_dir,
-            view_name="training",
-            observation_fps=args.training_fps,
-            idle_keep_head=args.training_idle_keep_head,
-            idle_keep_tail=args.training_idle_keep_tail,
+        observations_path = (
+            modalities_root / "clips" / parent / "stage_02_view" / "observations.jsonl"
         )
-        observations_path = training_view_dir / "observations.jsonl"
+        source_observation_views[parent] = str(observations_path)
         observations = read_jsonl(observations_path)
         if not observations:
             print(f"skip {parent}: no observations", file=sys.stderr)
@@ -164,10 +147,7 @@ def main() -> None:
             "stage": "structured_trajectory_assembly",
             "schema_version": 1,
             "source_run_dir": str(run_dir),
-            "source_training_views": str(training_views_root.parent),
-            "training_fps": args.training_fps,
-            "training_idle_keep_head": args.training_idle_keep_head,
-            "training_idle_keep_tail": args.training_idle_keep_tail,
+            "source_observation_views": source_observation_views,
             "n_parents": len(by_parent),
             "n_trajectories": len(all_trajectories),
             "n_rejected": len(all_rejected),

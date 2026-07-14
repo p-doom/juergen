@@ -96,13 +96,11 @@ def build_clip(clip_dir: Path) -> dict[str, Any]:
     s00 = read_jsonl(parent_root / "stage_00" / "manifest.jsonl")
     row = s00[0] if s00 else {}
     summary = read_json(annotation_dir / "manifest.json", {}) or {}
-    observations = read_jsonl(clip_dir / "stage_02_annotation_view" / "observations.jsonl")
+    observations = read_jsonl(clip_dir / "stage_02_view" / "observations.jsonl")
     boundaries = read_jsonl(clip_dir / "stage_04_boundaries" / "goals.jsonl")
     boundary_manifest = read_json(clip_dir / "stage_04_boundaries" / "manifest.json", {}) or {}
 
-    view_manifest = (
-        read_json(parent_root / "stage_02_views" / "annotation" / "manifest.json", {}) or {}
-    )
+    view_manifest = read_json(parent_root / "stage_02_view" / "manifest.json", {}) or {}
     kept_frames = [
         {
             "idx": record.get("global_frame_idx"),

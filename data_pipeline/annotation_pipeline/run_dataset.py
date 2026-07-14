@@ -219,8 +219,8 @@ def process_segment(
     segment_dir = modalities_root / "clips" / seg
     manifest_path = segment_dir / "stage_00" / "manifest.jsonl"
     base_dir = segment_dir / "stage_01_base"
-    annotation_view_dir = segment_dir / "stage_02_views" / "annotation"
-    observations_path = annotation_view_dir / "observations.jsonl"
+    view_dir = segment_dir / "stage_02_view"
+    observations_path = view_dir / "observations.jsonl"
 
     if args.phase in ("prepare", "all"):
         ensure_dir(segment_dir / "stage_00")
@@ -243,11 +243,9 @@ def process_segment(
                     "--base-dir",
                     str(base_dir),
                     "--output-dir",
-                    str(annotation_view_dir),
-                    "--view-name",
-                    "annotation",
+                    str(view_dir),
                     "--observation-fps",
-                    str(args.annotation_fps),
+                    str(args.observation_fps),
                     "--idle-keep-head",
                     str(args.idle_keep_head),
                     "--idle-keep-tail",
@@ -328,7 +326,7 @@ def process_segment(
         actual: int | None = None
         try:
             udir = ensure_dir(run_dirs[model] / "clips" / uid)
-            unit_view = ensure_dir(udir / "stage_02_annotation_view")
+            unit_view = ensure_dir(udir / "stage_02_view")
             unit_observations = unit_view / "observations.jsonl"
             write_jsonl(unit_observations, sub)
             write_json(
@@ -336,7 +334,6 @@ def process_segment(
                 {
                     "stage": "observation_view_subset",
                     "schema_version": 1,
-                    "view_name": "annotation",
                     "source_observation_view": str(observations_path),
                     "parent_segment_id": seg,
                     "window_index": wi,
@@ -518,7 +515,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-frames-per-window", type=int, default=0)
     p.add_argument("--reasoning-effort", default=None)
     p.add_argument("--base-fps", type=float, default=config.DEFAULT_BASE_FPS)
-    p.add_argument("--annotation-fps", type=float, default=config.DEFAULT_ANNOTATION_FPS)
+    p.add_argument("--observation-fps", type=float, default=config.DEFAULT_OBSERVATION_FPS)
     p.add_argument("--idle-keep-head", type=int, default=config.DEFAULT_IDLE_KEEP_HEAD)
     p.add_argument("--idle-keep-tail", type=int, default=config.DEFAULT_IDLE_KEEP_TAIL)
     p.add_argument(

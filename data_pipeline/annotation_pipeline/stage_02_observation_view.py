@@ -138,10 +138,6 @@ def build_observation_view(
                 {
                     "interval_start_s": round(start_s, 6),
                     "interval_end_s": round(end_s, 6),
-                    "interval_start_global_s": round(float(frame["global_time_s"]), 6),
-                    "interval_end_global_s": round(
-                        float(frame["global_time_s"]) + (end_s - start_s), 6
-                    ),
                     "events": executable,
                     "action_bin": action_bin_to_dict(action_bin),
                     "activity": activity,
@@ -177,13 +173,10 @@ def materialize_observation_view(
     *,
     base_dir: Path,
     output_dir: Path,
-    view_name: str,
     observation_fps: float,
     idle_keep_head: int,
     idle_keep_tail: int,
 ) -> dict[str, Any]:
-    if not view_name.strip():
-        raise ValueError("view_name must not be empty")
     base_manifest = _read_json(base_dir / "manifest.json")
     if base_manifest.get("stage") != "base_modalities":
         raise ValueError(f"Not a base-modalities artifact: {base_dir}")
@@ -205,7 +198,6 @@ def materialize_observation_view(
     manifest = {
         "stage": "observation_view",
         "schema_version": 1,
-        "view_name": view_name,
         "source_base_dir": str(base_dir.resolve()),
         "base_fps": base_fps,
         "observation_fps": observation_fps,
@@ -223,7 +215,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--view-name", required=True)
     parser.add_argument("--observation-fps", type=float, required=True)
     parser.add_argument("--idle-keep-head", type=int, default=config.DEFAULT_IDLE_KEEP_HEAD)
     parser.add_argument("--idle-keep-tail", type=int, default=config.DEFAULT_IDLE_KEEP_TAIL)
@@ -235,7 +226,6 @@ def main() -> None:
     manifest = materialize_observation_view(
         base_dir=args.base_dir,
         output_dir=args.output_dir,
-        view_name=args.view_name,
         observation_fps=args.observation_fps,
         idle_keep_head=args.idle_keep_head,
         idle_keep_tail=args.idle_keep_tail,

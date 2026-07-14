@@ -18,8 +18,7 @@ DEFAULT_TARGET_HEIGHT = 720
 # annotation.
 DEFAULT_JPEG_QUALITY = 80
 # --- Stage 02: observation view --------------------------------------------
-DEFAULT_ANNOTATION_FPS = 0.5
-DEFAULT_TRAINING_FPS = 0.5
+DEFAULT_OBSERVATION_FPS = 0.5
 # In each maximal idle run keep the first HEAD and last TAIL observations.
 DEFAULT_IDLE_KEEP_HEAD = 1
 DEFAULT_IDLE_KEEP_TAIL = 1

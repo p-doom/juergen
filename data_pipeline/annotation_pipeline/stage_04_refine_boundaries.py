@@ -38,17 +38,6 @@ def _snap_typed_goal_starts(
             goal["end_frame_idx"] = goal["start_frame_idx"]
 
 
-def _attach_time_bounds(goals: list[dict[str, Any]], observations: list[dict[str, Any]]) -> None:
-    by_frame = {int(item["global_frame_idx"]): item for item in observations}
-    for goal in goals:
-        start_idx = int(goal["start_frame_idx"])
-        end_idx = int(goal["end_frame_idx"])
-        if start_idx not in by_frame or end_idx not in by_frame:
-            raise ValueError(f"Goal boundary is outside the annotation view: {start_idx}-{end_idx}")
-        goal["start_time_s"] = float(by_frame[start_idx]["interval_start_global_s"])
-        goal["end_time_s"] = float(by_frame[end_idx]["interval_end_global_s"])
-
-
 def _enforce_nonoverlap(goals: list[dict[str, Any]], observations: list[dict[str, Any]]) -> None:
     frame_indices = sorted(int(item["global_frame_idx"]) for item in observations)
     goals.sort(key=lambda item: (int(item["start_frame_idx"]), int(item["end_frame_idx"])))
@@ -91,7 +80,6 @@ def refine_boundaries(
     if policy == "keylog_refined":
         _snap_typed_goal_starts(goals, observations)
     _enforce_nonoverlap(goals, observations)
-    _attach_time_bounds(goals, observations)
     for goal_idx, goal in enumerate(goals):
         goal["goal_idx"] = goal_idx
         goal["boundary_policy"] = policy

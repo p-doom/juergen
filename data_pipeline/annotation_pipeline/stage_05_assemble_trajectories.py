@@ -11,14 +11,9 @@ from annotation_pipeline.common import ensure_dir, read_jsonl, write_json, write
 
 
 def _selected_observations(
-    observations: list[dict[str, Any]], start_time_s: float, end_time_s: float
+    observations: list[dict[str, Any]], start_idx: int, end_idx: int
 ) -> list[dict[str, Any]]:
-    return [
-        item
-        for item in observations
-        if float(item["interval_end_global_s"]) > start_time_s
-        and float(item["interval_start_global_s"]) < end_time_s
-    ]
+    return [item for item in observations if start_idx <= int(item["global_frame_idx"]) <= end_idx]
 
 
 def assemble_trajectories(
@@ -35,9 +30,7 @@ def assemble_trajectories(
     recording_ids = {str(item["recording_id"]) for item in observations}
     if len(segment_ids) != 1 or len(recording_ids) != 1:
         raise ValueError("observations must belong to exactly one segment and recording")
-    ordered_observations = sorted(
-        observations, key=lambda item: float(item["interval_start_global_s"])
-    )
+    ordered_observations = sorted(observations, key=lambda item: int(item["global_frame_idx"]))
     recording_id = recording_ids.pop()
     clip_id = segment_ids.pop()
     trajectories: list[dict[str, Any]] = []
@@ -50,15 +43,10 @@ def assemble_trajectories(
         goal_idx = int(goal["goal_idx"])
         start_idx = int(goal["start_frame_idx"])
         end_idx = int(goal["end_frame_idx"])
-        start_time_s = float(goal["start_time_s"])
-        end_time_s = float(goal["end_time_s"])
         if end_idx < start_idx:
             rejected.append({"goal_idx": goal_idx, "reason": "bad_frame_bounds", "goal": goal})
             continue
-        if end_time_s <= start_time_s:
-            rejected.append({"goal_idx": goal_idx, "reason": "bad_time_bounds", "goal": goal})
-            continue
-        selected = _selected_observations(ordered_observations, start_time_s, end_time_s)
+        selected = _selected_observations(ordered_observations, start_idx, end_idx)
         if len(selected) < min_observations:
             rejected.append({"goal_idx": goal_idx, "reason": "too_few_observations", "goal": goal})
             continue
@@ -70,8 +58,6 @@ def assemble_trajectories(
                 "local_frame_idx": int(item["local_frame_idx"]),
                 "local_time_s": float(item["local_time_s"]),
                 "global_time_s": float(item["global_time_s"]),
-                "interval_start_global_s": float(item["interval_start_global_s"]),
-                "interval_end_global_s": float(item["interval_end_global_s"]),
                 "source_frame_idx": int(item["source_frame_idx"]),
                 "image_path": str(item["image_path"]),
                 "events": list(item["events"]),
@@ -92,8 +78,8 @@ def assemble_trajectories(
                 "boundary_policy": str(goal["boundary_policy"]),
                 "start_frame_idx": int(first["global_frame_idx"]),
                 "end_frame_idx": int(last["global_frame_idx"]),
-                "start_time_s": float(first["interval_start_global_s"]),
-                "end_time_s": float(last["interval_end_global_s"]),
+                "start_time_s": float(first["global_time_s"]),
+                "end_time_s": float(last["global_time_s"]),
                 "source_frame_start": int(first["source_frame_idx"]),
                 "source_frame_end": int(last["source_frame_idx"]),
                 "n_observations": len(steps),

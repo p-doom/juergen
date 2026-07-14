@@ -77,7 +77,7 @@ class ObservationViewTest(unittest.TestCase):
         self.assertEqual(observations[1]["action_bin"]["events"], [["-", "KeyA"]])
         self.assertNotIn("action", observations[0])
 
-    def test_materializes_a_named_view_from_base_modalities(self) -> None:
+    def test_materializes_an_observation_view_from_base_modalities(self) -> None:
         self.assertTrue(hasattr(stage_02_observation_view, "materialize_observation_view"))
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -97,13 +97,12 @@ class ObservationViewTest(unittest.TestCase):
             manifest = stage_02_observation_view.materialize_observation_view(
                 base_dir=base,
                 output_dir=root / "view",
-                view_name="training",
                 observation_fps=1.0,
                 idle_keep_head=10,
                 idle_keep_tail=10,
             )
 
-            self.assertEqual(manifest["view_name"], "training")
+            self.assertNotIn("view_name", manifest)
             self.assertEqual(manifest["observation_fps"], 1.0)
             self.assertTrue((root / "view" / "observations.jsonl").is_file())
 
