@@ -1147,7 +1147,10 @@ function show(i){
   }
 }
 function step(d){ show(cur+d); }
-function nextActive(d){ let i=cur+d; while(i>=0&&i<FR.length){ if(!FR[i].is_noop){show(i);return;} i+=d; } }
+// Active on the currently-selected clock: aligned action when the HUD toggle is
+// on 'aligned' (and aligned actions exist), else the raw binning.
+function frameActive(f){ return (CLOCK==='aligned' && f.action_aln!=null) ? f.action_aln!=='NO_OP' : !f.is_noop; }
+function nextActive(d){ let i=cur+d; while(i>=0&&i<FR.length){ if(frameActive(FR[i])){show(i);return;} i+=d; } }
 function togglePlay(){
   playing=!playing;
   $('#play').textContent=playing?'⏸ pause':'▶ play';
