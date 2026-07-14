@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Interactive inspector for the v2 (describe→extract, timestamp-free) pipeline.
+"""Interactive inspector for Stage-03 annotations and Stage-04 boundaries.
 
-Serves a single-page dashboard over an iteration run (default
-``annotation_pipeline/iteration_runs/<run>``). For each clip you can:
+Point ``--run-root`` at one dataset run; each model directory containing a
+``clips/`` directory appears as a selectable run. For each annotation unit you
+can:
 
   - play the RAW recording (HTTP Range streaming) and step through the exact
-    0.5-fps frames the VLM was sent (the kept stage-01 stream);
+    frames in the Stage-02 observation view sent to the VLM;
   - the describe pass: the full narration, the model's THINKING (reasoning),
     the full raw response, and the prompt that was sent;
   - the list of GOALS the extract pass recovered (instruction + register
     variants + anchor + grounding + start/end frame).
 
-Reads ``stage_02/stage02_result.json`` (self-contained) per clip.
+Reads the strict Stage-02, Stage-03, and Stage-04 artifacts per unit.
 
 Run:
     cd .../data_pipeline
@@ -28,12 +29,13 @@ import re
 import socketserver
 import urllib.parse
 import webbrowser
+from contextlib import suppress
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
-from annotation_pipeline.common import read_jsonl
+from annotation_pipeline.common import action_bin_from_dict, format_action, read_jsonl
 from annotation_pipeline.image_store import (
     is_arrayrecord_image_uri,
     parse_arrayrecord_image_uri,
@@ -70,11 +72,13 @@ def list_runs() -> list[dict[str, Any]]:
     for d in (p for p in RUN_ROOT.iterdir() if (p / "clips").is_dir()):
         clips = sorted(c.name for c in (d / "clips").iterdir() if c.is_dir())
         marker_times = [
-            (d / "run_summary.json").stat().st_mtime if (d / "run_summary.json").exists() else 0.0,
-            (d / "judge.json").stat().st_mtime if (d / "judge.json").exists() else 0.0,
+            (d / "run_summary.json").stat().st_mtime if (d / "run_summary.json").exists() else 0.0
         ]
         for clip in clips:
-            for rel in ("stage_02/stage02_result.json", "stage_02/stage02_summary.json"):
+            for rel in (
+                "stage_03_annotation/annotation.json",
+                "stage_04_boundaries/manifest.json",
+            ):
                 p = d / "clips" / clip / rel
                 if p.exists():
                     marker_times.append(p.stat().st_mtime)
@@ -84,67 +88,83 @@ def list_runs() -> list[dict[str, Any]]:
 
 
 def build_clip(clip_dir: Path) -> dict[str, Any]:
-    s00 = read_jsonl(clip_dir / "stage_00" / "manifest.jsonl")
+    annotation_dir = clip_dir / "stage_03_annotation"
+    annotation = read_json(annotation_dir / "annotation.json", {}) or {}
+    parent_segment_id = str(annotation.get("parent_segment_id") or "")
+    modalities_root = clip_dir.parents[2] / "_modalities"
+    parent_root = modalities_root / "clips" / parent_segment_id
+    s00 = read_jsonl(parent_root / "stage_00" / "manifest.jsonl")
     row = s00[0] if s00 else {}
-    s02 = clip_dir / "stage_02"
-    summary = read_json(s02 / "stage02_summary.json", {})
-    result = read_json(s02 / "stage02_result.json", {}) or {}
-    frame_records = read_jsonl(clip_dir / "stage_01" / "frame_records.jsonl")
+    summary = read_json(annotation_dir / "manifest.json", {}) or {}
+    observations = read_jsonl(clip_dir / "stage_02_annotation_view" / "observations.jsonl")
+    boundaries = read_jsonl(clip_dir / "stage_04_boundaries" / "goals.jsonl")
+    boundary_manifest = read_json(clip_dir / "stage_04_boundaries" / "manifest.json", {}) or {}
 
-    # Kept-frame stream = exactly what stage 01 sampled (0.5 fps, NO_OP-capped).
-    # Play it back to SEE the clip; the same frames are what the VLM was sent.
-    s01_summary = read_json(clip_dir / "stage_01" / "frames_actions_summary.json", {})
+    view_manifest = (
+        read_json(parent_root / "stage_02_views" / "annotation" / "manifest.json", {}) or {}
+    )
     kept_frames = [
-        {"idx": r.get("global_frame_idx"), "action": r.get("action"),
-         # ar:// grain URIs are served by /image as-is; loose files are resolved.
-         "img": r["image_path"] if is_arrayrecord_image_uri(r["image_path"]) else str(Path(r["image_path"]).resolve())}
-        for r in frame_records[:6000]
-        if r.get("image_path")
+        {
+            "idx": record.get("global_frame_idx"),
+            "action": format_action(action_bin_from_dict(record["action_bin"])),
+            "img": record["image_path"]
+            if is_arrayrecord_image_uri(record["image_path"])
+            else str(Path(record["image_path"]).resolve()),
+        }
+        for record in observations[:6000]
+        if record.get("image_path")
     ]
     sampling = {
-        "target_fps": s01_summary.get("target_fps"),
-        "noop_keep_head": s01_summary.get("noop_keep_head"),
-        "noop_keep_tail": s01_summary.get("noop_keep_tail"),
-        "n_frames": len(frame_records),
-        "n_non_noop": sum(1 for r in frame_records if r.get("action") != "NO_OP"),
-        "n_noop_dropped": s01_summary.get("n_noop_dropped"),
+        "observation_fps": view_manifest.get("observation_fps"),
+        "idle_keep_head": view_manifest.get("idle_keep_head"),
+        "idle_keep_tail": view_manifest.get("idle_keep_tail"),
+        "n_frames": len(observations),
+        "n_non_noop": sum(1 for record in observations if not record["is_noop"]),
+        "n_idle_dropped": sum(
+            int(item.get("n_idle_dropped", 0))
+            for item in view_manifest.get("per_segment", [])
+            if item.get("segment_id") == parent_segment_id
+        ),
     }
+
+    variants = json.loads(json.dumps(annotation.get("variants", {})))
+    extract = variants.get("prose", {}).get("extract")
+    if isinstance(extract, dict):
+        extract["goals"] = [
+            {
+                **goal,
+                "start_frame": goal["start_frame_idx"],
+                "end_frame": goal["end_frame_idx"],
+            }
+            for goal in boundaries
+        ]
+    summary["n_goals_prose"] = len(boundaries)
+    summary["boundary_policy"] = boundary_manifest.get("policy")
 
     video = row.get("video_path")
     return {
         "clip_key": clip_dir.name,
-        "segment_id": row.get("segment_id") or result.get("segment_id"),
+        "segment_id": annotation.get("segment_id") or row.get("segment_id"),
         "video": str(Path(video).resolve()) if video and Path(video).exists() else None,
-        "n_kept_frames": len(frame_records),
+        "n_kept_frames": len(observations),
         "fps": row.get("video_fps"),
         "summary": summary,
         "sampling": sampling,
         "kept_frames": kept_frames,
-        "n_images_sent": result.get("n_images_sent"),
-        "model": result.get("model"),
-        "variants": result.get("variants", {}),
+        "n_images_sent": annotation.get("n_images_sent"),
+        "model": annotation.get("model"),
+        "variants": variants,
     }
 
 
 def build_run(name: str) -> dict[str, Any]:
     run_dir = RUN_ROOT / name
     clips_root = run_dir / "clips"
-    clip_keys = sorted(c.name for c in clips_root.iterdir() if c.is_dir()) if clips_root.is_dir() else []
-    judge_path = run_dir / "judge.json"
-    judge = read_json(judge_path, {})
-    if judge and judge_path.exists():
-        # Do not show stale judge numbers after regenerating trajectories without
-        # re-running the judge.
-        judge_mtime = judge_path.stat().st_mtime
-        for key in clip_keys:
-            traj_path = clips_root / key / "stage_02" / "trajectories_raw.json"
-            if traj_path.exists() and traj_path.stat().st_mtime > judge_mtime:
-                judge = {}
-                break
+    clip_keys = (
+        sorted(c.name for c in clips_root.iterdir() if c.is_dir()) if clips_root.is_dir() else []
+    )
     return {
         "run": name,
-        "judge": {"pass_rate": judge.get("pass_rate"), "n_pass": judge.get("n_pass"),
-                  "n_examples": judge.get("n_examples"), "diversity": judge.get("diversity")},
         "clips": [build_clip(clips_root / k) for k in clip_keys],
     }
 
@@ -271,7 +291,7 @@ function goalsBlock(goals){
     return `<div class="card ok">
     <div class="instr">${esc(g.instruction)}</div>
     ${(g.instruction_variants||[]).length?`<ul class="variants">${g.instruction_variants.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`:''}
-    ${hasSpan?`<div class="lab">goal trajectory · frames ${g.start_frame}–${g.end_frame}</div>
+    ${hasSpan?`<div class="lab">goal trajectory · frames ${g.start_frame}-${g.end_frame}</div>
        <div class="keptplayer goalfp" data-start="${g.start_frame}" data-end="${g.end_frame}"></div>`
       :'<div class="lab">no frame span returned</div>'}
     ${g.anchor?`<div class="lab">anchor</div><div style="color:#b9c2d4;font-size:13px">${esc(g.anchor)}</div>`:''}
@@ -301,7 +321,7 @@ function variantSection(v){
   return describeBlock(v.describe)+extractBlock(v.extract);
 }
 
-// Generic frame-player: plays the ACTUAL kept (stage-01) JPEGs a sample contains.
+// Generic frame-player for the Stage-02 observation view.
 let TIMERS=new Set();
 function clearTimers(){for(const t of TIMERS)clearInterval(t);TIMERS.clear();}
 function mountFramePlayer(el, frames, fps){
@@ -336,16 +356,16 @@ function renderClip(){
   h+= c.video?`<video controls preload="metadata" src="${vid(c.video)}"></video>`:'<p class="lab">raw video not found</p>';
 
   const sm=c.sampling||{};
-  h+=`<h2>Clip — sampled frames (what the VLM saw)</h2>
-    <div class="stat">${sm.n_frames??0} kept frames (${sm.n_non_noop??0} active) · base ${sm.target_fps??'?'} fps ·
-      NO_OP keep head/tail ${sm.noop_keep_head??'?'}/${sm.noop_keep_tail??'?'} · dropped idle ${sm.n_noop_dropped??0}</div>
+  h+=`<h2>Clip — observation view (what the VLM saw)</h2>
+    <div class="stat">${sm.n_frames??0} observations (${sm.n_non_noop??0} active) · ${sm.observation_fps??'?'} fps ·
+      idle keep head/tail ${sm.idle_keep_head??'?'}/${sm.idle_keep_tail??'?'} · dropped idle ${sm.n_idle_dropped??0}</div>
     <div class="keptplayer" id="kept-stream"></div>`;
 
   const V=c.variants||{};
   h+=`<div><h2>Describe → Extract</h2>${variantSection(V.prose)}</div>`;
 
   $('main').innerHTML=h;
-  const fps=Number(c.sampling?.target_fps)||0.5;
+  const fps=Number(c.sampling?.observation_fps)||0.5;
   mountFramePlayer($('kept-stream'), c.kept_frames||[], fps);
   // Per-goal trajectory players, scoped to each goal's [start_frame,end_frame].
   document.querySelectorAll('.goalfp').forEach(el=>{
@@ -404,7 +424,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(path.read_bytes())
 
-    def do_GET(self) -> None:  # noqa: N802 - stdlib API
+    def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path, query = parsed.path, urllib.parse.parse_qs(parsed.query)
         try:
@@ -421,12 +441,15 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/run":
                 name = query.get("name", [""])[0]
                 if not re.match(r"^[A-Za-z0-9_.-]+$", name):
-                    self._json({"error": "bad run name"}, HTTPStatus.BAD_REQUEST); return
+                    self._json({"error": "bad run name"}, HTTPStatus.BAD_REQUEST)
+                    return
                 self._json(build_run(name))
             elif path == "/image" and is_arrayrecord_image_uri(query.get("path", [""])[0]):
                 data = grain_jpeg(query.get("path", [""])[0])
                 if data is None:
-                    self.send_response(HTTPStatus.NOT_FOUND); self.end_headers(); return
+                    self.send_response(HTTPStatus.NOT_FOUND)
+                    self.end_headers()
+                    return
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "image/jpeg")
                 self.send_header("Content-Length", str(len(data)))
@@ -435,18 +458,21 @@ class Handler(BaseHTTPRequestHandler):
             elif path in ("/image", "/video"):
                 media = safe_media(query.get("path", [""])[0])
                 if media is None:
-                    self.send_response(HTTPStatus.NOT_FOUND); self.end_headers(); return
+                    self.send_response(HTTPStatus.NOT_FOUND)
+                    self.end_headers()
+                    return
                 ctype = mimetypes.guess_type(media.name)[0] or "application/octet-stream"
                 self._serve_file(media, ctype)
             else:
                 self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         except BrokenPipeError:
             pass
-        except Exception as exc:  # noqa: BLE001 - report in-browser
-            try:
-                self._json({"error": type(exc).__name__, "message": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
-            except Exception:  # noqa: BLE001
-                pass
+        except Exception as exc:
+            with suppress(Exception):
+                self._json(
+                    {"error": type(exc).__name__, "message": str(exc)},
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
 
     def log_message(self, *_a: Any) -> None:  # quiet
         pass
@@ -458,7 +484,7 @@ class Server(socketserver.ThreadingTCPServer):
 
 
 def main() -> None:
-    global RUN_ROOT
+    global RUN_ROOT  # noqa: PLW0603
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
@@ -469,7 +495,9 @@ def main() -> None:
     with Server((args.host, args.port), Handler) as httpd:
         url = f"http://{args.host}:{args.port}/"
         print(f"Annotation run inspector on {url}  (run-root: {RUN_ROOT})")
-        print("If on a remote node: ssh -L {0}:127.0.0.1:{0} <host>  then open the URL.".format(args.port))
+        print(
+            f"If on a remote node: ssh -L {args.port}:127.0.0.1:{args.port} <host>  then open the URL."
+        )
         if args.open:
             webbrowser.open(url)
         httpd.serve_forever()

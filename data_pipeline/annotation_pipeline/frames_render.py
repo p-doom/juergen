@@ -1,19 +1,11 @@
 #!/usr/bin/env python3
-"""Frame sampling + rendering for the VLM annotator (stage 02).
-
-Frames are rendered straight from the raw MP4 at the kept records' source frame
-indices, clean (no burned-in overlay — timestamps are passed as interleaved text
-in the request). Window/interval frame selection is activity-biased.
-"""
+"""Stored-frame loading and window selection for the Stage-03 annotator."""
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import cv2
-
-from annotation_pipeline.common import ensure_dir, read_jsonl
 
 
 def resize_to_height(frame: Any, height: int) -> Any:
@@ -23,70 +15,6 @@ def resize_to_height(frame: Any, height: int) -> Any:
     width = max(2, round((frame.shape[1] * scale) / 2) * 2)
     interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC
     return cv2.resize(frame, (width, height), interpolation=interp)
-
-
-def load_vlm_video_sources(manifest_path: Path) -> dict[str, Path]:
-    """{segment_id -> raw MP4 path} from a stage-00 manifest."""
-    sources: dict[str, Path] = {}
-    for row in read_jsonl(manifest_path):
-        seg = str(row.get("segment_id", ""))
-        vid = row.get("video_path")
-        if seg and vid:
-            sources[seg] = Path(vid)
-    if not sources:
-        raise RuntimeError(f"No video sources in manifest: {manifest_path}")
-    return sources
-
-
-def read_record_frame(
-    record: dict[str, Any],
-    video_by_segment: dict[str, Path],
-    captures: dict[str, cv2.VideoCapture],
-) -> Any:
-    segment_id = str(record.get("segment_id", ""))
-    video_path = video_by_segment.get(segment_id)
-    if video_path is None:
-        raise RuntimeError(f"No raw video source for segment_id={segment_id!r}")
-    cap = captures.get(segment_id)
-    if cap is None:
-        cap = cv2.VideoCapture(str(video_path))
-        if not cap.isOpened():
-            raise RuntimeError(f"could not open raw video: {video_path}")
-        captures[segment_id] = cap
-    idx = int(record.get("source_frame_idx", -1))
-    if idx < 0:
-        raise RuntimeError(f"Invalid source_frame_idx on frame record: {record}")
-    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-    ok, frame = cap.read()
-    if not ok or frame is None:
-        raise RuntimeError(f"could not read frame {idx} from {video_path}")
-    return frame
-
-
-def render_frames(
-    records: list[dict[str, Any]],
-    output_dir: Path,
-    jpeg_quality: int,
-    video_by_segment: dict[str, Path],
-    target_height: int,
-) -> list[Path]:
-    ensure_dir(output_dir)
-    for old_frame in output_dir.glob("frame_*.jpg"):
-        old_frame.unlink()
-    image_paths: list[Path] = []
-    captures: dict[str, cv2.VideoCapture] = {}
-    try:
-        for out_idx, record in enumerate(records):
-            frame = resize_to_height(
-                read_record_frame(record, video_by_segment, captures), target_height
-            )
-            image_path = output_dir / f"frame_{out_idx:06d}.jpg"
-            cv2.imwrite(str(image_path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
-            image_paths.append(image_path)
-    finally:
-        for cap in captures.values():
-            cap.release()
-    return image_paths
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +29,7 @@ def frames_to_data_urls(
 ) -> list[str]:
     """In-memory ``data:image/jpeg`` URLs for the labeler, read straight from
     each record's stored JPEG (the stage-01 ``ar://`` array_record URI, or a
-    plain file path for legacy runs) — no frames written to disk.
+    stored image reference) — no frames written to disk.
 
     Bytes are passed through verbatim unless ``target_height`` is set below the
     stored frame height, in which case every frame is decoded, downscaled and
@@ -157,34 +85,14 @@ def est_frame_tokens(ref: str) -> int:
     return math.ceil(h / 28) * math.ceil(w / 28)
 
 
-def frame_activity(action: str | None) -> str:
-    """Classify a frame by its stage-01 action label: "idle" (NO_OP), "type" (the
-    user is mid keyboard-burst), or "other" (mouse / click / scroll / no events).
-    NOTE: a lone "idle"/NO_OP frame is NOT a reliable activity boundary — people
-    pause for a frame mid-typing — so segmentation keys on SUBMISSIONS and real
-    time-gaps (see _is_submission / plan_windows), using this only to avoid
-    cutting between two "type" frames."""
-    if not action or action == "NO_OP":
-        return "idle"
-    # Action strings look like "<dx> <dy> <scroll> ; <key events>" — keyboard
-    # events (+KeyA, -Return, +Backspace, +Space, +Digit3, +NumpadEnter, …) only
-    # appear after the ";". Their presence means the user is typing this frame.
-    tail = action.split(";", 1)[1] if ";" in action else action
-    if any(tok in tail for tok in ("Key", "Return", "Backspace", "Space", "Enter", "Digit", "Num", "Minus", "Slash", "Period", "Comma")):
-        return "type"
-    return "other"
-
-
-def _is_submission(action: str | None) -> bool:
-    """True if this frame commits a typed command / prompt / message — a Return or
-    Enter keypress. These are the real boundaries BETWEEN activities in continuous
-    work (where idle gaps don't exist): the action just finished, so the next
-    frame is a clean place to cut."""
-    return bool(action) and ("Return" in action or "Enter" in action)
-
-
-def _best_cut(lo: int, hi: int, ideal: int, actions: list[str | None],
-              times: list[float] | None, big_gap_s: float) -> int:
+def _best_cut(
+    lo: int,
+    hi: int,
+    ideal: int,
+    observations: list[dict[str, Any]],
+    times: list[float] | None,
+    big_gap_s: float,
+) -> int:
     """Pick the cut index in [lo, hi] (window splits BEFORE this frame) that is
     least likely to slice through an in-progress action, preferring one nearest
     `ideal`. Cost: a submission just happened, or a genuine time-gap precedes the
@@ -192,31 +100,38 @@ def _best_cut(lo: int, hi: int, ideal: int, actions: list[str | None],
     sides typing (mid-burst) = 3."""
     best, best_key = ideal, None
     for i in range(lo, hi + 1):
-        a_prev, a_cur = frame_activity(actions[i - 1]), frame_activity(actions[i])
+        a_prev = str(observations[i - 1]["activity"])
+        a_cur = str(observations[i]["activity"])
         gap = (times[i] - times[i - 1]) if times else 0.0
-        if _is_submission(actions[i - 1]) or gap >= big_gap_s:
-            cost = 0                              # just submitted, or a real pause
+        if observations[i - 1]["has_submission"] or gap >= big_gap_s:
+            cost = 0  # just submitted, or a real pause
         elif a_prev != "type" and a_cur != "type":
             cost = 1
         elif a_prev != "type" or a_cur != "type":
             cost = 2
         else:
-            cost = 3                              # both sides typing — mid-burst
+            cost = 3  # both sides typing — mid-burst
         key = (cost, abs(i - ideal))
         if best_key is None or key < best_key:
             best_key, best = key, i
     return best
 
 
-def plan_windows(n: int, max_frames: int, overlap: int = 0, *,
-                 actions: list[str | None] | None = None,
-                 times: list[float] | None = None,
-                 slack: int = 0, big_gap_s: float = 6.0) -> list[tuple[int, int]]:
+def plan_windows(
+    n: int,
+    max_frames: int,
+    overlap: int = 0,
+    *,
+    observations: list[dict[str, Any]] | None = None,
+    times: list[float] | None = None,
+    slack: int = 0,
+    big_gap_s: float = 6.0,
+) -> list[tuple[int, int]]:
     """Partition [0, n) into windows, each <= max_frames, with `overlap` shared
     frames at each interior boundary (0 = hard cut). Returns (lo, hi) half-open
     spans. A split happens ONLY when needed (n > max_frames); otherwise one window.
 
-    When `actions` (per-frame stage-01 labels, len == n) and `slack` > 0 are given,
+    When Stage-02 `observations` (len == n) and `slack` > 0 are given,
     each interior boundary is snapped within ±slack to the nearest SUBMISSION
     (Return/Enter) or genuine time-gap — never inside an unsubmitted typing burst —
     so one action (and its goal) is not split across two windows. Each candidate
@@ -225,10 +140,10 @@ def plan_windows(n: int, max_frames: int, overlap: int = 0, *,
 
     if n <= 0:
         return []
-    if n <= max_frames:                           # split only if needed
+    if n <= max_frames:  # split only if needed
         return [(0, n)]
-    snap = bool(actions) and slack > 0
-    n_win = math.ceil(n / max_frames)             # fewest windows that fit budget
+    snap = bool(observations) and slack > 0
+    n_win = math.ceil(n / max_frames)  # fewest windows that fit budget
     boundaries: list[int] = []
     prev = 0
     for k in range(1, n_win):
@@ -239,10 +154,18 @@ def plan_windows(n: int, max_frames: int, overlap: int = 0, *,
         if snap:
             lo = max(lo, ideal - slack)
             hi = min(hi, ideal + slack)
-            if lo > hi:                            # snap range infeasible — forced cut
+            if lo > hi:  # snap range infeasible — forced cut
                 p = min(max(ideal, prev + 1), prev + max_frames, n - 1)
             else:
-                p = _best_cut(lo, hi, min(max(ideal, lo), hi), actions, times, big_gap_s)
+                assert observations is not None
+                p = _best_cut(
+                    lo,
+                    hi,
+                    min(max(ideal, lo), hi),
+                    observations,
+                    times,
+                    big_gap_s,
+                )
         else:
             p = min(max(ideal, prev + 1), prev + max_frames, n - 1)
         boundaries.append(p)
@@ -268,22 +191,6 @@ def evenly(pool: list[Any], k: int) -> list[Any]:
     return [pool[min(len(pool) - 1, int(i * step))] for i in range(k)]
 
 
-def records_in_index_span(
-    records: list[dict[str, Any]], start_idx: int, end_idx: int
-) -> list[dict[str, Any]]:
-    """Kept records whose ``global_frame_idx`` falls in the inclusive span.
-
-    Pass 1 returns activity boundaries as frame indices (stable across sampling/
-    NO_OP-filtering, unlike wall-clock time). This maps such a span back onto the
-    full kept-frame stream so Pass 2 sees every frame in it, not just the sparse
-    subset Pass 1 was shown. Returned in ``global_frame_idx`` order.
-    """
-    lo, hi = (start_idx, end_idx) if start_idx <= end_idx else (end_idx, start_idx)
-    out = [r for r in records if lo <= int(r["global_frame_idx"]) <= hi]
-    out.sort(key=lambda r: int(r["global_frame_idx"]))
-    return out
-
-
 def select_naming_frames(frames: list[dict[str, Any]], max_images: int) -> list[dict[str, Any]]:
     """Always first/last, prefer active frames in between."""
     n = len(frames)
@@ -291,7 +198,7 @@ def select_naming_frames(frames: list[dict[str, Any]], max_images: int) -> list[
         return frames
     picks: set[int] = {0, n - 1}
     budget = max_images - len(picks)
-    non_noop = [i for i in range(1, n - 1) if frames[i]["action"] != "NO_OP"]
+    non_noop = [i for i in range(1, n - 1) if not frames[i]["is_noop"]]
     picks |= set(evenly(non_noop, budget))
     remaining = max_images - len(picks)
     if remaining > 0:

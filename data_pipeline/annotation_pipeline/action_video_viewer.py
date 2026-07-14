@@ -25,12 +25,12 @@ from pathlib import Path
 from typing import Any
 
 from annotation_pipeline.common import (
-    aggregate_actions,
+    bin_event_records,
     ceil_frames,
     format_action,
     keylog_summary,
+    normalize_keylog_events,
 )
-
 
 VIDEO = Path()
 KEYLOG = Path()
@@ -343,8 +343,8 @@ INDEX = r"""<!doctype html>
 
 def read_first_jsonl(path: Path) -> dict[str, Any]:
     with path.open() as f:
-        for line in f:
-            line = line.strip()
+        for raw_line in f:
+            line = raw_line.strip()
             if line:
                 value = json.loads(line)
                 if not isinstance(value, dict):
@@ -393,7 +393,7 @@ def parse_range(header: str | None, size: int) -> tuple[int, int] | None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         if self.path == "/" or self.path.startswith("/?"):
             self.send_bytes(INDEX.encode("utf-8"), "text/html; charset=utf-8")
         elif self.path == "/meta":
@@ -469,11 +469,13 @@ class Server(socketserver.ThreadingTCPServer):
 
 
 def main() -> None:
-    global ACTIONS, CLIP_NAME, KEYLOG, KEYLOG_DURATION_S, TARGET_FPS
-    global VIDEO, VIDEO_DURATION_S, VIDEO_FPS
+    global ACTIONS, CLIP_NAME, KEYLOG, KEYLOG_DURATION_S, TARGET_FPS  # noqa: PLW0603
+    global VIDEO, VIDEO_DURATION_S, VIDEO_FPS  # noqa: PLW0603
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--clip-dir", type=Path, help="Clip dir containing stage_00/manifest.jsonl.")
+    parser.add_argument(
+        "--clip-dir", type=Path, help="Clip dir containing stage_00/manifest.jsonl."
+    )
     parser.add_argument("--video", type=Path)
     parser.add_argument("--keylog", type=Path)
     parser.add_argument("--video_duration_s", "--duration", dest="video_duration_s", type=float)
@@ -510,7 +512,14 @@ def main() -> None:
     )
     action_duration_s = max(VIDEO_DURATION_S, KEYLOG_DURATION_S)
     n_bins = ceil_frames(action_duration_s, TARGET_FPS)
-    bins, stats = aggregate_actions(KEYLOG, n_bins, TARGET_FPS)
+    events, stats = normalize_keylog_events(
+        KEYLOG,
+        recording_id="viewer",
+        segment_id="viewer",
+        segment_idx=0,
+        segment_offset_s=0.0,
+    )
+    bins = bin_event_records(events, n_bins=n_bins, fps=TARGET_FPS)
     ACTIONS = [format_action(action_bin) for action_bin in bins]
     CLIP_NAME = (
         str(row.get("segment_id") or row.get("clip_id") or args.clip_dir.name)

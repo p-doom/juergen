@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 00b (realign): recover the keylog->video time-map and emit corrected keylogs.
+"""Stage 00 (optional realignment): correct keylog timestamps to video time.
 
 Slots into the annotation pipeline between `discover` (build_manifest -> clip
 manifest) and `frames` (stage_01). Reads the discover clip manifest, groups
@@ -13,8 +13,8 @@ segments by recording, threads idle pauses across segment boundaries, and:
 
 Stage 01 then reads this manifest unchanged: bucketing the corrected keylog by
 raw timestamp == bucketing the raw keylog by corrected video time, so actions
-land on the right frames with no change to the frames/annotate/assemble/canonical
-code. The realignment math lives in ``realign_lib`` (spec-faithful: per-segment
+land on the right Stage-01 event timeline. The realignment math lives in
+``realign_lib`` (spec-faithful: per-segment
 naive vs cross-segment global, overhang-refined leading collapse, 5-status
 taxonomy). Cross-segment threading needs *every* segment of a recording, so
 siblings are enumerated from the source uploads tree, not just manifest rows.
@@ -22,7 +22,7 @@ siblings are enumerated from the source uploads tree, not just manifest rows.
 Source keylogs/mp4s are read-only; corrected keylogs go to the output artifact.
 
 Outputs (under --output-dir):
-  clips_manifest.jsonl         realigned manifest (frames stage consumes this).
+  clips_manifest.jsonl         realigned manifest (Stage 01 consumes this).
   corrected_keylogs/<sid>.msgpack   video-PTS keylogs for corrected segments.
   alignment.jsonl              per-segment map + spec-v2 status certificate.
   realign_summary.json         status counts + params.

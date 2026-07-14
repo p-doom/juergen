@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
-"""Re-run ONLY the extract pass over an existing dataset_run, in place.
+"""Re-run Stage 03 extraction and Stage 04 refinement for an annotation run.
 
-Used to validate a change to the EXTRACT prompt without re-paying for describe:
-for every clip dir already under <run>/<model>/clips/<uid>, invalidate just the
-extract cache (`--refresh extract_from_prose`) and re-run stage_02 with
-`--variants prose`. The cached describe_prose response is reused (its prompt is
-unchanged), each clip stays on its original model, and window provenance is
-preserved from the clip's window.json. Frames come from the clip's own
-stage_01/frame_records.jsonl, so no ffmpeg/stage-01 work happens.
-
-  PYTHONPATH=. python3 -m annotation_pipeline.reextract_run \
-      --run-dir annotation_pipeline/dataset_runs/qc30 --concurrency 8
+The Stage-02 observation view and cached Stage-03 describe response are reused;
+Stages 00-02 are never regenerated.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -26,64 +19,112 @@ PIPELINE_DIR = Path(__file__).resolve().parent
 DATA_PIPELINE_DIR = PIPELINE_DIR.parent
 
 
-def reextract_clip(clip: Path, frames_root: Path, vlm_height: int) -> tuple[str, str]:
-    uid = clip.name
-    model = clip.parent.parent.name  # <run>/<model>/clips/<uid>
-    fr = clip / "stage_01" / "frame_records.jsonl"
-    stage02 = clip / "stage_02"
-    res = stage02 / "stage02_result.json"
-    if not fr.exists() or not res.exists():
-        return uid, "skip (no frames/result)"
-    d = json.loads(res.read_text())
-    parent = d.get("parent_segment_id") or d.get("segment_id") or uid
-    wi, nw = int(d.get("window_index", 0)), int(d.get("n_windows", 1))
-    manifest = frames_root / "clips" / parent / "stage_00" / "manifest.jsonl"
-    wjson = clip / "window.json"
-    tail_buf = int(json.loads(wjson.read_text()).get("tail_buffer", 0)) if wjson.exists() else 0
-
-    args = ["--frame-records", str(fr), "--manifest", str(manifest),
-            "--output-dir", str(stage02),
-            "--vlm-frame-height", str(vlm_height),
-            "--parent-segment-id", parent, "--window-index", str(wi), "--n-windows", str(nw),
-            "--tail-buffer", str(tail_buf), "--model", model]
-    # REEX_REFRESH="" re-applies only the deterministic post-processing
-    # (clean_goals + snap_goal_starts) on the CACHED model response — no tokens.
-    refresh = os.environ.get("REEX_REFRESH", "extract_from_prose")
-    if refresh:
-        args += ["--refresh", refresh]
+def _run_module(module: str, args: list[str], *, model: str | None) -> subprocess.CompletedProcess:
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(DATA_PIPELINE_DIR) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    env["LABELER_MODEL"] = model
-    cmd = [sys.executable, "-m", "annotation_pipeline.stage_02_annotate", *args]
-    p = subprocess.run(cmd, env=env, cwd=str(DATA_PIPELINE_DIR),
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    if p.returncode != 0:
-        return uid, f"FAIL rc={p.returncode}: {p.stderr.decode('utf-8','replace')[-300:]}"
-    summ = json.loads((stage02 / "stage02_summary.json").read_text())
-    return uid, f"ok [{model}] goals={summ.get('n_goals_prose')}"
+    env["PYTHONPATH"] = str(DATA_PIPELINE_DIR) + (
+        os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
+    )
+    if model:
+        env["LABELER_MODEL"] = model
+    return subprocess.run(
+        [sys.executable, "-m", f"annotation_pipeline.{module}", *args],
+        env=env,
+        cwd=str(DATA_PIPELINE_DIR),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def reextract_unit(unit_dir: Path, vlm_height: int) -> tuple[str, str]:
+    unit_id = unit_dir.name
+    observations = unit_dir / "stage_02_annotation_view" / "observations.jsonl"
+    annotation_dir = unit_dir / "stage_03_annotation"
+    annotation_path = annotation_dir / "annotation.json"
+    boundary_dir = unit_dir / "stage_04_boundaries"
+    boundary_manifest_path = boundary_dir / "manifest.json"
+    required = (observations, annotation_path, boundary_manifest_path)
+    if any(not path.exists() for path in required):
+        return unit_id, "skip (incomplete Stage 02-04 unit)"
+
+    annotation = json.loads(annotation_path.read_text())
+    boundary_manifest = json.loads(boundary_manifest_path.read_text())
+    model = str(annotation["model"])
+    parent = str(annotation["parent_segment_id"])
+    stage03_args = [
+        "--observations",
+        str(observations),
+        "--output-dir",
+        str(annotation_dir),
+        "--vlm-frame-height",
+        str(vlm_height),
+        "--parent-segment-id",
+        parent,
+        "--window-index",
+        str(annotation["window_index"]),
+        "--n-windows",
+        str(annotation["n_windows"]),
+        "--tail-buffer",
+        str(annotation["tail_buffer"]),
+        "--model",
+        model,
+        "--refresh",
+        "extract_from_prose",
+    ]
+    result = _run_module("stage_03_annotate", stage03_args, model=model)
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", "replace")[-300:]
+        return unit_id, f"FAIL Stage 03 rc={result.returncode}: {detail}"
+
+    result = _run_module(
+        "stage_04_refine_boundaries",
+        [
+            "--annotation-dir",
+            str(annotation_dir),
+            "--observations",
+            str(observations),
+            "--output-dir",
+            str(boundary_dir),
+            "--policy",
+            str(boundary_manifest["policy"]),
+        ],
+        model=None,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", "replace")[-300:]
+        return unit_id, f"FAIL Stage 04 rc={result.returncode}: {detail}"
+
+    summary = json.loads((annotation_dir / "manifest.json").read_text())
+    return unit_id, f"ok [{model}] goals={summary['n_goals_prose']}"
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--run-dir", type=Path, required=True)
-    ap.add_argument("--concurrency", type=int, default=8)
-    ap.add_argument("--vlm-frame-height", type=int, default=720)
-    a = ap.parse_args()
-    run_dir = a.run_dir.resolve()
-    frames_root = run_dir / "_frames"
-    # Model dirs are those with a clips/ subdir; skip _frames and any output dirs.
-    clips = sorted(c for m in run_dir.iterdir()
-                   if m.is_dir() and m.name != "_frames" and (m / "clips").is_dir()
-                   for c in (m / "clips").iterdir() if c.is_dir()) if run_dir.is_dir() else []
-    print(f"[reextract] {len(clips)} clips under {run_dir} | concurrency={a.concurrency}", flush=True)
-    done = 0
-    with ThreadPoolExecutor(max_workers=max(1, a.concurrency)) as ex:
-        futs = {ex.submit(reextract_clip, c, frames_root, a.vlm_frame_height): c for c in clips}
-        for f in as_completed(futs):
-            uid, msg = f.result()
-            done += 1
-            print(f"  [{done}/{len(clips)}] {uid}: {msg}", flush=True)
-    print("[reextract] done", flush=True)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument("--vlm-frame-height", type=int, default=720)
+    args = parser.parse_args()
+
+    run_dir = args.run_dir.resolve()
+    model_dirs = [
+        path
+        for path in run_dir.iterdir()
+        if path.is_dir() and path.name != "_modalities" and (path / "clips").is_dir()
+    ]
+    units = sorted(
+        unit
+        for model_dir in model_dirs
+        for unit in (model_dir / "clips").iterdir()
+        if unit.is_dir()
+    )
+    print(f"[reextract] {len(units)} units under {run_dir}", flush=True)
+    with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as executor:
+        futures = {
+            executor.submit(reextract_unit, unit, args.vlm_frame_height): unit for unit in units
+        }
+        for done, future in enumerate(as_completed(futures), start=1):
+            unit_id, message = future.result()
+            print(f"  [{done}/{len(units)}] {unit_id}: {message}", flush=True)
 
 
 if __name__ == "__main__":

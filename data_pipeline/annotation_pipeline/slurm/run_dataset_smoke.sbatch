@@ -14,8 +14,8 @@
 
 # CPU-only concurrency-ramp smoke test for the full-dataset driver (run_dataset),
 # so the login node is never hit with ffmpeg. Builds the 2026-06-18 manifest if
-# missing, probes both model names, then ramps --clip-concurrency over ~50 clips
-# (tokens spent once). Submit from a login shell so AZURE_OPENAI_* propagate:
+# missing, probes both model names, then lets the TPM governor schedule the run.
+# Submit from a login shell so AZURE_OPENAI_* propagate:
 #   sbatch annotation_pipeline/slurm/run_dataset_smoke.sbatch
 
 set -eo pipefail
@@ -47,7 +47,7 @@ echo "host=$(hostname)  run=$RUN_NAME  want_models=$WANT_MODELS  limit=${LIMIT:-
 "$JUERGEN_ANNOTATION_FFMPEG_BIN" -version 2>/dev/null | head -1 || echo "WARN: ffmpeg not runnable"
 python3 -c "from array_record.python.array_record_module import ArrayRecordWriter; print('array_record OK')" || echo "WARN: array_record missing"
 
-# Azure reachability (compute nodes may lack egress -> stage 02 would all fail).
+# Azure reachability (compute nodes may lack egress -> Stage 03 would fail).
 code=$(curl -s -o /dev/null -m 20 -w "%{http_code}" \
   "${AZURE_OPENAI_ENDPOINT%/}/models" -H "api-key: ${AZURE_OPENAI_API_KEY:-none}" 2>/dev/null || echo "000")
 echo "azure /models reachability: HTTP $code"
@@ -93,6 +93,6 @@ python3 -m annotation_pipeline.run_dataset \
   --out-root annotation_pipeline/dataset_runs \
   --target-tpm "$TARGET_TPM" --max-workers "$MAX_WORKERS" --init-call-s "$INIT_CALL_S" \
   --shuffle-seed "$SEED" ${LIMIT:+--limit "$LIMIT"} \
-  ${SMOKE_NOOP_KEEP_HEAD:+--noop-keep-head "$SMOKE_NOOP_KEEP_HEAD"} \
-  ${SMOKE_NOOP_KEEP_TAIL:+--noop-keep-tail "$SMOKE_NOOP_KEEP_TAIL"}
+  ${SMOKE_IDLE_KEEP_HEAD:+--idle-keep-head "$SMOKE_IDLE_KEEP_HEAD"} \
+  ${SMOKE_IDLE_KEEP_TAIL:+--idle-keep-tail "$SMOKE_IDLE_KEEP_TAIL"}
 echo "DONE run=$RUN_NAME"

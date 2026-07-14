@@ -3,7 +3,7 @@
 
 Samples the raw video at ``--target-fps`` (the pipeline's bin rate, default 1 fps)
 and pairs each sampled frame with the keylog action bin for that second (the exact
-``aggregate_actions``/``format_action`` stage 01 uses). Step with the LEFT/RIGHT
+the same normalized-event projection used by the pipeline. Step with the LEFT/RIGHT
 arrow keys; the current frame index, time, and action string are shown.
 
     cd .../data_pipeline
@@ -23,7 +23,12 @@ from pathlib import Path
 
 import cv2
 
-from annotation_pipeline.common import aggregate_actions, ceil_frames, format_action
+from annotation_pipeline.common import (
+    bin_event_records,
+    ceil_frames,
+    format_action,
+    normalize_keylog_events,
+)
 
 VIDEO = Path()
 VIDEO_FPS = 30.0
@@ -86,24 +91,30 @@ init();
 
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(parsed.query)
         if parsed.path == "/":
             body = INDEX.encode()
             self._send(body, "text/html; charset=utf-8")
         elif parsed.path == "/meta":
-            self._send(json.dumps({"n": len(ACTIONS), "target_fps": TARGET_FPS,
-                                   "actions": ACTIONS}).encode(),
-                       "application/json")
+            self._send(
+                json.dumps(
+                    {"n": len(ACTIONS), "target_fps": TARGET_FPS, "actions": ACTIONS}
+                ).encode(),
+                "application/json",
+            )
         elif parsed.path == "/f":
             i = int(q.get("i", ["0"])[0])
             data = self._render(i)
             if data is None:
-                self.send_response(HTTPStatus.NOT_FOUND); self.end_headers(); return
+                self.send_response(HTTPStatus.NOT_FOUND)
+                self.end_headers()
+                return
             self._send(data, "image/jpeg")
         else:
-            self.send_response(HTTPStatus.NOT_FOUND); self.end_headers()
+            self.send_response(HTTPStatus.NOT_FOUND)
+            self.end_headers()
 
     def _render(self, i: int) -> bytes | None:
         cap = cv2.VideoCapture(str(VIDEO))
@@ -118,7 +129,9 @@ class Handler(BaseHTTPRequestHandler):
                 return None
             if frame.shape[0] != HEIGHT:
                 sc = HEIGHT / frame.shape[0]
-                frame = cv2.resize(frame, (max(2, int(frame.shape[1] * sc)), HEIGHT), interpolation=cv2.INTER_AREA)
+                frame = cv2.resize(
+                    frame, (max(2, int(frame.shape[1] * sc)), HEIGHT), interpolation=cv2.INTER_AREA
+                )
             ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             return buf.tobytes() if ok else None
         finally:
@@ -142,7 +155,7 @@ class Server(socketserver.ThreadingTCPServer):
 
 
 def main() -> None:
-    global VIDEO, VIDEO_FPS, TARGET_FPS, ACTIONS
+    global VIDEO, VIDEO_FPS, TARGET_FPS, ACTIONS  # noqa: PLW0603
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--video", type=Path, required=True)
     ap.add_argument("--keylog", type=Path, required=True)
@@ -157,11 +170,20 @@ def main() -> None:
     VIDEO_FPS = args.video_fps
     TARGET_FPS = args.target_fps
     n_bins = ceil_frames(args.duration, args.target_fps)
-    bins, _ = aggregate_actions(args.keylog, n_bins, args.target_fps)
+    events, _ = normalize_keylog_events(
+        args.keylog,
+        recording_id="viewer",
+        segment_id="viewer",
+        segment_idx=0,
+        segment_offset_s=0.0,
+    )
+    bins = bin_event_records(events, n_bins=n_bins, fps=args.target_fps)
     ACTIONS = [format_action(b) for b in bins]
     n_active = sum(1 for a in ACTIONS if a != "NO_OP")
-    print(f"frame stepper: {len(ACTIONS)} bins @ {args.target_fps}fps ({n_active} active) "
-          f"over {args.duration:.0f}s of {VIDEO.name}")
+    print(
+        f"frame stepper: {len(ACTIONS)} bins @ {args.target_fps}fps ({n_active} active) "
+        f"over {args.duration:.0f}s of {VIDEO.name}"
+    )
 
     with Server((args.host, args.port), Handler) as httpd:
         url = f"http://{args.host}:{args.port}/"

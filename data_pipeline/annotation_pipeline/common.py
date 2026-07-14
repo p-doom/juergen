@@ -6,14 +6,13 @@ import base64
 import json
 import math
 import re
+from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import msgpack
-
-from annotation_pipeline.config import SYSTEM_PROMPT
-
 
 UNKNOWN_RE = re.compile(r"^Unknown\((-?\d+)\)$")
 MACOS_UNKNOWN_NAME_BY_CODE: dict[int, str] = {
@@ -40,6 +39,22 @@ class ActionBin:
     events: list[tuple[str, str]] = field(default_factory=list)
 
 
+ACTION_EVENT_KINDS = frozenset({"move", "scroll", "press", "release"})
+TYPING_KEY_FRAGMENTS = (
+    "Key",
+    "Return",
+    "Backspace",
+    "Space",
+    "Enter",
+    "Digit",
+    "Num",
+    "Minus",
+    "Slash",
+    "Period",
+    "Comma",
+)
+
+
 @dataclass
 class ActionStats:
     n_events: int = 0
@@ -64,8 +79,8 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return rows
     with path.open() as f:
-        for line_num, line in enumerate(f, start=1):
-            line = line.strip()
+        for line_num, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
             if not line:
                 continue
             try:
@@ -90,25 +105,6 @@ def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
 
 
-def system_message() -> dict[str, Any]:
-    return {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]}
-
-
-def image_message_content(image_path: str | Path, text: str | None = None) -> list[dict[str, Any]]:
-    content: list[dict[str, Any]] = [{"type": "image", "image": str(image_path)}]
-    if text:
-        content.append({"type": "text", "text": text})
-    return content
-
-
-def assistant_text(text: str) -> dict[str, Any]:
-    return {"role": "assistant", "content": [{"type": "text", "text": text}]}
-
-
-def user_image(image_path: str | Path, text: str | None = None) -> dict[str, Any]:
-    return {"role": "user", "content": image_message_content(image_path, text)}
-
-
 def resolve_key_name(payload: Any) -> str | None:
     if not isinstance(payload, list) or len(payload) < 2:
         return None
@@ -127,22 +123,28 @@ def resolve_button_name(payload: Any) -> str | None:
         return None
     button = payload[0]
     if isinstance(button, str):
-        return {"Left": "LMB", "Right": "RMB", "Middle": "MMB"}.get(
-            button, f"M_{button}"
-        )
+        return {"Left": "LMB", "Right": "RMB", "Middle": "MMB"}.get(button, f"M_{button}")
     if isinstance(button, dict):
         for key, value in button.items():
             return f"M_{key}_{value}"
     return None
 
 
-def merge_action_bins(earlier: ActionBin, later: ActionBin) -> ActionBin:
-    """Fold an earlier (dropped-frame) bin into the next kept bin, preserving event order."""
+def action_bin_to_dict(action_bin: ActionBin) -> dict[str, Any]:
+    return {
+        "move_dx": action_bin.move_dx,
+        "move_dy": action_bin.move_dy,
+        "scroll": action_bin.scroll,
+        "events": [[sign, name] for sign, name in action_bin.events],
+    }
+
+
+def action_bin_from_dict(value: dict[str, Any]) -> ActionBin:
     return ActionBin(
-        move_dx=earlier.move_dx + later.move_dx,
-        move_dy=earlier.move_dy + later.move_dy,
-        scroll=earlier.scroll + later.scroll,
-        events=earlier.events + later.events,
+        move_dx=float(value["move_dx"]),
+        move_dy=float(value["move_dy"]),
+        scroll=float(value["scroll"]),
+        events=[(str(item[0]), str(item[1])) for item in value["events"]],
     )
 
 
@@ -156,6 +158,15 @@ def format_action(action_bin: ActionBin) -> str:
     if action_bin.events:
         parts.append(" ".join(f"{sign}{name}" for sign, name in action_bin.events))
     return " ; ".join(parts)
+
+
+def is_noop_action_bin(action_bin: ActionBin) -> bool:
+    return (
+        round(action_bin.move_dx) == 0
+        and round(action_bin.move_dy) == 0
+        and round(action_bin.scroll) == 0
+        and not action_bin.events
+    )
 
 
 def load_keylog_entries(keylog_path: Path) -> list[Any]:
@@ -174,10 +185,8 @@ def keylog_summary(keylog_path: Path) -> dict[str, Any]:
     for entry in entries:
         if not isinstance(entry, list) or len(entry) < 2:
             continue
-        try:
+        with suppress(TypeError, ValueError):
             max_ts = max(max_ts, int(entry[0]))
-        except (TypeError, ValueError):
-            pass
         ev = entry[1]
         if isinstance(ev, list) and ev:
             event_counts[str(ev[0])] = event_counts.get(str(ev[0]), 0) + 1
@@ -190,14 +199,21 @@ def keylog_summary(keylog_path: Path) -> dict[str, Any]:
     }
 
 
-def aggregate_actions(
-    keylog_path: Path, n_bins: int, target_fps: float
-) -> tuple[list[ActionBin], ActionStats]:
-    stats = ActionStats()
-    bins = [ActionBin() for _ in range(n_bins)]
-    held: set[str] = set()
+def normalize_keylog_events(
+    keylog_path: Path,
+    *,
+    recording_id: str,
+    segment_id: str,
+    segment_idx: int,
+    segment_offset_s: float,
+) -> tuple[list[dict[str, Any]], ActionStats]:
+    """Normalize a raw keylog without binning or rendering its actions."""
 
-    for entry in load_keylog_entries(keylog_path):
+    stats = ActionStats()
+    held: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+
+    for source_event_idx, entry in enumerate(load_keylog_entries(keylog_path)):
         if not isinstance(entry, list) or len(entry) < 2:
             continue
         timestamp, event = entry[0], entry[1]
@@ -211,24 +227,30 @@ def aggregate_actions(
         event_type = str(event[0])
         payload = event[1] if len(event) > 1 else None
         stats.n_events += 1
-
-        if event_type == "ContextChanged":
-            continue
-        bucket_idx = int((timestamp_us / 1_000_000) * target_fps)
-        if bucket_idx < 0 or bucket_idx >= n_bins:
-            continue
-        action_bin = bins[bucket_idx]
+        base = {
+            "recording_id": recording_id,
+            "segment_id": segment_id,
+            "segment_idx": segment_idx,
+            "source_event_idx": source_event_idx,
+            "timestamp_us": timestamp_us,
+            "local_time_s": round(timestamp_us / 1_000_000, 6),
+            "global_time_s": round(segment_offset_s + timestamp_us / 1_000_000, 6),
+            "source_type": event_type,
+            "source_payload": payload,
+        }
 
         if event_type == "MouseMove":
             stats.n_mousemove += 1
             if isinstance(payload, list) and len(payload) >= 2:
-                action_bin.move_dx += float(payload[0])
-                action_bin.move_dy += float(payload[1])
+                normalized.append(
+                    {**base, "kind": "move", "dx": float(payload[0]), "dy": float(payload[1])}
+                )
         elif event_type == "MouseScroll":
             stats.n_scroll += 1
             if isinstance(payload, list) and len(payload) >= 2:
-                value = payload[1] if payload[1] != 0 else payload[0]
-                action_bin.scroll += float(value)
+                normalized.append(
+                    {**base, "kind": "scroll", "dx": float(payload[0]), "dy": float(payload[1])}
+                )
         elif event_type in ("KeyPress", "MousePress"):
             if event_type == "KeyPress":
                 stats.n_keypress += 1
@@ -236,8 +258,8 @@ def aggregate_actions(
             else:
                 stats.n_mousepress += 1
                 name = resolve_button_name(payload)
-            if name and name not in held:
-                action_bin.events.append(("+", name))
+            if name:
+                normalized.append({**base, "kind": "press", "key": name})
                 held.add(name)
                 stats.max_simultaneous_keys = max(stats.max_simultaneous_keys, len(held))
         elif event_type in ("KeyRelease", "MouseRelease"):
@@ -247,20 +269,90 @@ def aggregate_actions(
             else:
                 stats.n_mouserelease += 1
                 name = resolve_button_name(payload)
-            if name and name in held:
-                action_bin.events.append(("-", name))
-                held.remove(name)
-            elif name:
-                stats.n_dangling_release += 1
+            if name:
+                normalized.append({**base, "kind": "release", "key": name})
+                if name in held:
+                    held.remove(name)
+                else:
+                    stats.n_dangling_release += 1
+        elif event_type == "ContextChanged":
+            normalized.append({**base, "kind": "context"})
+        else:
+            normalized.append({**base, "kind": "unknown"})
 
     stats.n_held_at_end = len(held)
-    return bins, stats
+    normalized.sort(key=lambda item: (int(item["timestamp_us"]), int(item["source_event_idx"])))
+    return normalized, stats
+
+
+def aggregate_event_records(
+    events: Iterable[dict[str, Any]], *, held: set[str] | None = None
+) -> ActionBin:
+    """Project ordered event records into the current aggregate action semantics."""
+
+    action_bin = ActionBin()
+    if held is None:
+        held = set()
+    for event in events:
+        kind = event["kind"]
+        if kind == "move":
+            action_bin.move_dx += float(event["dx"])
+            action_bin.move_dy += float(event["dy"])
+        elif kind == "scroll":
+            dx = float(event["dx"])
+            dy = float(event["dy"])
+            action_bin.scroll += dy if dy != 0 else dx
+        elif kind == "press":
+            key = str(event["key"])
+            if key not in held:
+                action_bin.events.append(("+", key))
+                held.add(key)
+        elif kind == "release":
+            key = str(event["key"])
+            if key in held:
+                action_bin.events.append(("-", key))
+                held.remove(key)
+    return action_bin
+
+
+def bin_event_records(
+    events: Iterable[dict[str, Any]], *, n_bins: int, fps: float
+) -> list[ActionBin]:
+    grouped: list[list[dict[str, Any]]] = [[] for _ in range(n_bins)]
+    for event in events:
+        if event["kind"] not in ACTION_EVENT_KINDS:
+            continue
+        bin_idx = int(float(event["local_time_s"]) * fps)
+        if 0 <= bin_idx < n_bins:
+            grouped[bin_idx].append(event)
+    held: set[str] = set()
+    return [aggregate_event_records(items, held=held) for items in grouped]
+
+
+def event_activity(events: Iterable[dict[str, Any]]) -> str:
+    action_events = [event for event in events if event["kind"] in ACTION_EVENT_KINDS]
+    if not action_events:
+        return "idle"
+    if any(
+        event["kind"] in {"press", "release"}
+        and any(fragment in str(event["key"]) for fragment in TYPING_KEY_FRAGMENTS)
+        for event in action_events
+    ):
+        return "type"
+    return "other"
+
+
+def events_have_submission(events: Iterable[dict[str, Any]]) -> bool:
+    return any(
+        event["kind"] == "press" and ("Return" in str(event["key"]) or "Enter" in str(event["key"]))
+        for event in events
+    )
 
 
 def ceil_frames(duration_s: float, target_fps: float) -> int:
     if duration_s <= 0:
         return 0
-    return int(math.ceil(duration_s * target_fps))
+    return math.ceil(duration_s * target_fps)
 
 
 def image_data_url(path: Path) -> str:
@@ -286,7 +378,3 @@ def extract_json_object(text: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("Expected a JSON object")
     return value
-
-
-def text_token_estimate(text: str) -> int:
-    return max(1, len(text) // 4)

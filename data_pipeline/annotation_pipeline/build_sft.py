@@ -1,165 +1,199 @@
 #!/usr/bin/env python3
-"""Build an SFT dataset from a dataset_runs/<run> annotation run.
+"""Run Stage 05 structured assembly and Stage 06 SFT projection over an annotation run."""
 
-Walks <run>/<model>/clips/<uid>, groups window-units back into their PARENT
-segment, and for each parent feeds the parent's FULL frame_records (from
-<run>/_frames/clips/<parent>/stage_01) plus the concatenated goal trajectories
-(from each unit's stage_02/trajectories_raw.json) through stage 03's
-``assemble_samples`` -> SFT samples, then stage 04 (canonical artifact). Stage 05
-(length buckets) is optional (--buckets) since it needs the trainee tokenizer.
-
-Each sample carries full provenance so it traces back clip -> user -> recording:
-recording_id, segment_id (== clip_id), parent_segment_id, user_id, version,
-video_path, plus start/end_frame_idx and the source goal (anchor/grounding).
-
-  PYTHONPATH=. python3 -m annotation_pipeline.build_sft \
-      --run-dir annotation_pipeline/dataset_runs/qc30v2 \
-      --out annotation_pipeline/dataset_runs/qc30v2/sft
-"""
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from annotation_pipeline import config
 from annotation_pipeline.common import ensure_dir, read_jsonl, write_json, write_jsonl
-from annotation_pipeline.stage_03_assemble_trajectories import assemble_samples
-from annotation_pipeline.stage_04_build_canonical_sft import build_canonical_sft
+from annotation_pipeline.stage_02_observation_view import materialize_observation_view
+from annotation_pipeline.stage_05_assemble_trajectories import assemble_trajectories
+from annotation_pipeline.stage_06_project_sft import ensure_empty_dir, project_sft
 
-PIPELINE_DIR = Path(__file__).resolve().parent
-DATA_PIPELINE_DIR = PIPELINE_DIR.parent
-
-# Keys copied from the stage-00 manifest row onto every sample for traceback.
 PROVENANCE_KEYS = ("user_id", "version", "recording_id", "video_path")
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--run-dir", type=Path, required=True,
-                   help="A dataset_runs/<run> dir (contains <model>/clips and _frames).")
-    p.add_argument("--frames-root", type=Path, default=None,
-                   help="Shared stage-01 _frames/ dir. Default <run-dir>/_frames. Point at a "
-                        "separate frames-phase output when stage 01 ran as its own labctl stage.")
-    p.add_argument("--out", type=Path, required=True, help="Output dir for the SFT artifact.")
-    p.add_argument("--min-frames", type=int, default=1)
-    p.add_argument("--include-variants", action="store_true",
-                   help="Emit one sample per instruction paraphrase (3x) instead of main only.")
-    p.add_argument("--require-plan", action="store_true",
-                   help="Reject goals without a usable stage-02b plan (run-dir must be a "
-                        "stage_02b_plans output) instead of emitting plan-less first turns.")
-    p.add_argument("--split-group", default="recording_id", choices=("recording_id", "clip_id"))
-    p.add_argument("--val-frac", type=float, default=0.1)
-    p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--buckets", action="store_true",
-                   help="Also run stage 05 length-bucketing (needs trainee tokenizer; compute node).")
-    p.add_argument("--assemble-only", action="store_true",
-                   help="Stop after writing stage_03_assemble/ (the aggregated trajectories.jsonl); "
-                        "skip stage 04 canonicalization. Lets a downstream step run stage 04 "
-                        "independently (e.g. with its own system prompt / terminal policy).")
-    return p.parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument("--modalities-root", type=Path)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--min-observations", type=int, default=1)
+    parser.add_argument("--training-fps", type=float, default=config.DEFAULT_TRAINING_FPS)
+    parser.add_argument(
+        "--training-idle-keep-head", type=int, default=config.DEFAULT_IDLE_KEEP_HEAD
+    )
+    parser.add_argument(
+        "--training-idle-keep-tail", type=int, default=config.DEFAULT_IDLE_KEEP_TAIL
+    )
+    parser.add_argument("--include-variants", action="store_true")
+    parser.add_argument(
+        "--split-group", choices=("recording_id", "clip_id"), default="recording_id"
+    )
+    parser.add_argument("--val-frac", type=float, default=0.1)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--system-prompt-text")
+    parser.add_argument("--system-prompt-file", type=Path)
+    parser.add_argument("--terminal-token")
+    parser.add_argument(
+        "--terminal-mode",
+        choices=("none", "replace_final_assistant", "append_to_final_assistant"),
+        default="none",
+    )
+    parser.add_argument("--structured-only", action="store_true")
+    return parser.parse_args()
+
+
+def _annotation_units(run_dir: Path) -> list[Path]:
+    model_dirs = [
+        path
+        for path in run_dir.iterdir()
+        if path.is_dir() and path.name != "_modalities" and (path / "clips").is_dir()
+    ]
+    return [unit for model in model_dirs for unit in (model / "clips").iterdir() if unit.is_dir()]
+
+
+def merge_window_goals(
+    parts: list[tuple[int, int, list[dict[str, Any]]]],
+) -> list[dict[str, Any]]:
+    """Order window-local goals and assign parent-wide stable goal indices."""
+
+    expected_counts = {n_windows for _window_idx, n_windows, _goals in parts}
+    if len(expected_counts) != 1:
+        raise ValueError("Annotation windows disagree about n_windows")
+    n_windows = expected_counts.pop()
+    window_indices = [window_idx for window_idx, _n_windows, _goals in parts]
+    if len(window_indices) != len(set(window_indices)) or set(window_indices) != set(
+        range(n_windows)
+    ):
+        raise ValueError(
+            f"Missing annotation windows: expected 0..{n_windows - 1}, got {sorted(window_indices)}"
+        )
+
+    merged: list[dict[str, Any]] = []
+    for window_idx, _n_windows, window_goals in sorted(parts):
+        for window_goal_idx, goal in enumerate(window_goals):
+            item = dict(goal)
+            item["source_window_idx"] = window_idx
+            item["source_window_goal_idx"] = int(goal.get("goal_idx", window_goal_idx))
+            item["goal_idx"] = len(merged)
+            merged.append(item)
+    return merged
 
 
 def main() -> None:
     args = parse_args()
     run_dir = args.run_dir.resolve()
-    frames_root = args.frames_root.resolve() if args.frames_root else run_dir / "_frames"
-    out = ensure_dir(args.out)
+    modalities_root = (
+        args.modalities_root.resolve() if args.modalities_root else run_dir / "_modalities"
+    )
+    output_root = ensure_dir(args.out)
+    if args.structured_only:
+        stale_sft_dir = ensure_empty_dir(output_root / "stage_06_sft", overwrite=True)
+        stale_sft_dir.rmdir()
 
-    # Gather every annotated unit across all model dirs, grouped by parent segment.
-    # Model dirs are those with a clips/ subdir; skip _frames and any output dirs.
-    model_dirs = [m for m in run_dir.iterdir()
-                  if m.is_dir() and m.name != "_frames" and (m / "clips").is_dir()] if run_dir.is_dir() else []
-    units = [c for m in model_dirs for c in (m / "clips").iterdir() if c.is_dir()]
-    by_parent: dict[str, list[tuple[int, list[dict[str, Any]]]]] = defaultdict(list)
-    for u in units:
-        res = u / "stage_02" / "stage02_result.json"
-        traj = u / "stage_02" / "trajectories_raw.json"
-        if not (res.exists() and traj.exists()):
+    by_parent: dict[str, list[tuple[int, int, list[dict[str, Any]]]]] = defaultdict(list)
+    for unit in _annotation_units(run_dir):
+        boundary_dir = unit / "stage_04_boundaries"
+        manifest_path = boundary_dir / "manifest.json"
+        goals_path = boundary_dir / "goals.jsonl"
+        if not manifest_path.exists() or not goals_path.exists():
             continue
-        sres = json.loads(res.read_text())
-        parent = str(sres.get("parent_segment_id") or sres.get("segment_id") or u.name)
-        wi = int(sres.get("window_index", 0))
-        trajs = json.loads(traj.read_text()).get("trajectories", [])
-        by_parent[parent].append((wi, trajs))
+        manifest = json.loads(manifest_path.read_text())
+        parent = str(manifest["parent_segment_id"])
+        by_parent[parent].append(
+            (
+                int(manifest["window_index"]),
+                int(manifest["n_windows"]),
+                read_jsonl(goals_path),
+            )
+        )
+    if not by_parent:
+        raise RuntimeError(f"No completed Stage-04 boundary artifacts under {run_dir}")
 
-    all_samples: list[dict[str, Any]] = []
+    all_trajectories: list[dict[str, Any]] = []
     all_rejected: list[dict[str, Any]] = []
-    n_parents = 0
+    training_views_stage = ensure_empty_dir(output_root / "stage_02_training_views", overwrite=True)
+    training_views_root = ensure_dir(training_views_stage / "clips")
     for parent, parts in sorted(by_parent.items()):
-        fr_path = frames_root / "clips" / parent / "stage_01" / "frame_records.jsonl"
-        frame_records = read_jsonl(fr_path) if fr_path.exists() else []
-        if not frame_records:
-            print(f"  skip {parent}: no frame_records", file=sys.stderr)
+        base_dir = modalities_root / "clips" / parent / "stage_01_base"
+        training_view_dir = training_views_root / parent
+        materialize_observation_view(
+            base_dir=base_dir,
+            output_dir=training_view_dir,
+            view_name="training",
+            observation_fps=args.training_fps,
+            idle_keep_head=args.training_idle_keep_head,
+            idle_keep_tail=args.training_idle_keep_tail,
+        )
+        observations_path = training_view_dir / "observations.jsonl"
+        observations = read_jsonl(observations_path)
+        if not observations:
+            print(f"skip {parent}: no observations", file=sys.stderr)
             continue
-        # Concatenate the parent's goals in window order (windows are disjoint by
-        # construction: w0 ends at its owned cut, w1 starts after).
-        trajectories = [t for _wi, trajs in sorted(parts) for t in trajs]
-        samples, rejected = assemble_samples(
-            frame_records, trajectories,
-            min_frames=args.min_frames, include_variants=args.include_variants,
-            require_plan=args.require_plan)
-
-        man = frames_root / "clips" / parent / "stage_00" / "manifest.jsonl"
-        row = (read_jsonl(man) or [{}])[0] if man.exists() else {}
-        prov = {k: row.get(k) for k in PROVENANCE_KEYS}
-        prov["parent_segment_id"] = parent
-        for s in samples:
-            for k, v in prov.items():
-                s.setdefault(k, v)
-        all_samples.extend(samples)
+        goals = merge_window_goals(parts)
+        trajectories, rejected = assemble_trajectories(
+            observations, goals, min_observations=args.min_observations
+        )
+        manifest_rows = read_jsonl(
+            modalities_root / "clips" / parent / "stage_00" / "manifest.jsonl"
+        )
+        source = manifest_rows[0]
+        provenance = {key: source.get(key) for key in PROVENANCE_KEYS}
+        provenance["parent_segment_id"] = parent
+        for trajectory in trajectories:
+            trajectory.update(provenance)
+        for item in rejected:
+            item["parent_segment_id"] = parent
+        all_trajectories.extend(trajectories)
         all_rejected.extend(rejected)
-        n_parents += 1
 
-    # Aggregated stage-03 output where stage 04 expects it.
-    s3dir = ensure_dir(out / "stage_03_assemble")
-    write_jsonl(s3dir / "trajectories.jsonl", all_samples)
-    write_jsonl(s3dir / "rejected_trajectories.jsonl", all_rejected)
-    write_json(s3dir / "assemble_summary.json", {
-        "source_run_dir": str(run_dir), "n_parents": n_parents,
-        "n_samples": len(all_samples), "n_rejected": len(all_rejected),
-        "reject_reasons": {r: sum(1 for x in all_rejected if x["reason"] == r)
-                           for r in sorted({x["reason"] for x in all_rejected})},
-    })
-    print(f"[build_sft] {n_parents} parent segments -> {len(all_samples)} samples "
-          f"({len(all_rejected)} rejected). stage_03 -> {s3dir}", flush=True)
-
-    if args.assemble_only:
-        print("[build_sft] --assemble-only: stopping after stage_03_assemble.", flush=True)
+    structured_dir = ensure_empty_dir(output_root / "stage_05_trajectories", overwrite=True)
+    trajectories_path = structured_dir / "trajectories.jsonl"
+    write_jsonl(trajectories_path, all_trajectories)
+    write_jsonl(structured_dir / "rejected.jsonl", all_rejected)
+    write_json(
+        structured_dir / "manifest.json",
+        {
+            "stage": "structured_trajectory_assembly",
+            "schema_version": 1,
+            "source_run_dir": str(run_dir),
+            "source_training_views": str(training_views_root.parent),
+            "training_fps": args.training_fps,
+            "training_idle_keep_head": args.training_idle_keep_head,
+            "training_idle_keep_tail": args.training_idle_keep_tail,
+            "n_parents": len(by_parent),
+            "n_trajectories": len(all_trajectories),
+            "n_rejected": len(all_rejected),
+            "files": {"trajectories": "trajectories.jsonl", "rejected": "rejected.jsonl"},
+        },
+    )
+    print(f"[stage 05] wrote {len(all_trajectories)} structured trajectories")
+    if args.structured_only:
         return
 
-    # Stage 04: canonical, portable SFT artifact (ar:// frame URIs pass through).
-    canonical = out / "canonical"
-    m = build_canonical_sft(
-        run_dir=out, output_dir=canonical, split_group=args.split_group,
-        val_frac=args.val_frac, seed=args.seed, image_path_mode="absolute", overwrite=True)
-    print(f"[build_sft] stage_04 -> {canonical}: {m['n_samples']} samples "
-          f"{m['counts_by_split']} ({m['n_rejected']} rejected)", flush=True)
-
-    # Per-split chat.jsonl so <out> is a drop-in source_path for omegalax's
-    # stage_c (it reads <source>/<split>/chat.jsonl and compiles each split).
-    rows = read_jsonl(canonical / "chat.jsonl")
-    by_split: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for r in rows:
-        by_split[str(r.get("split") or "train")].append(r)
-    for split, srows in sorted(by_split.items()):
-        write_jsonl(ensure_dir(out / split) / "chat.jsonl", srows)
-    print(f"[build_sft] per-split chat.jsonl -> {out}/<split>/chat.jsonl "
-          f"{ {s: len(v) for s, v in sorted(by_split.items())} }", flush=True)
-
-    # Stage 05 (optional): exact length buckets via the trainee tokenizer.
-    if args.buckets:
-        env = dict(os.environ)
-        env["PYTHONPATH"] = str(DATA_PIPELINE_DIR) + (os.pathsep + env.get("PYTHONPATH", ""))
-        subprocess.run([sys.executable, "-m", "annotation_pipeline.stage_05_length_buckets",
-                        "--samples", str(canonical / "chat.jsonl"),
-                        "--output-dir", str(out / "buckets")],
-                       check=True, cwd=str(DATA_PIPELINE_DIR), env=env)
-        print(f"[build_sft] stage_05 -> {out / 'buckets'}", flush=True)
+    sft_dir = output_root / "stage_06_sft"
+    manifest = project_sft(
+        trajectories_path=trajectories_path,
+        output_dir=sft_dir,
+        include_variants=args.include_variants,
+        split_group=args.split_group,
+        val_frac=args.val_frac,
+        seed=args.seed,
+        image_path_mode="absolute",
+        system_prompt_text=args.system_prompt_text,
+        system_prompt_file=args.system_prompt_file,
+        terminal_token=args.terminal_token,
+        terminal_mode=args.terminal_mode,
+        overwrite=True,
+    )
+    print(f"[stage 06] wrote {manifest['n_samples']} SFT samples to {sft_dir}")
 
 
 if __name__ == "__main__":

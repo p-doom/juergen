@@ -1,187 +1,140 @@
-# Annotation pipeline — hindsight instruction annotation
+# Hindsight annotation pipeline
 
-Turns human screen recordings (MP4 + msgpack keylog) into instruction-annotated
-computer-use SFT data. Each sample is `(instruction, trajectory)` where the
-**instruction** is the prompt a user would type to make an agent do this and the
-**trajectory** is the screen→action sequence the human performed. We recover the
-prompt in **hindsight** (label the goal the trajectory actually achieved).
+This pipeline turns human screen recordings and raw input logs into structured
+computer-use trajectories, then projects those trajectories into SFT messages.
+The stages have strict contracts; outputs from the previous pipeline layout are
+not accepted.
 
-Labeler: any OpenAI-compatible VLM, selected by env (`LABELER_MODEL`, default
-`Kimi-K2.6`). The full-dataset driver (`run_dataset.py`) annotates with
-**Kimi-K2.6 + Kimi-K2.5 in parallel** (`--models Kimi-K2.6,Kimi-K2.5`), both
-served off the same Azure `mihir-4710` `/openai/v1/` surface and passed by name;
-a closed-loop TPM governor (AIMD on measured tokens/min) routes each window-unit
-to whichever model has the most headroom (per-model run dirs, so caches never
-cross models). Repoint to a local model to distill. No sglang / no GPU needed
-for annotation.
+## Stages
 
-## Pipeline
+| Stage | Entry point | Contract |
+| --- | --- | --- |
+| 00 | `stage_00_realign.py` | Optionally realign raw keylog timestamps to video time and emit a corrected segment manifest. |
+| 01 | `stage_01_base_modalities.py` | Extract frames at `base_fps` and normalize the raw keylog into one ordered, unbinned `events.jsonl` timeline. |
+| 02 | `stage_02_observation_view.py` | Create a named FPS/idle-thinning view by joining Stage-01 frames with timestamped events. Emits structured `action_bin` values but no action strings. |
+| 03 | `stage_03_annotate.py` | Run vision-only describe and goal-extraction passes over the annotation view. Emits visual goal proposals. |
+| 04 | `stage_04_refine_boundaries.py` | Apply an explicit `vision_only` or `keylog_refined` boundary policy. Emits half-open timestamp bounds that transfer across observation FPS values. |
+| 05 | `stage_05_assemble_trajectories.py` | Slice the selected training view into structured, message-format-neutral trajectories. |
+| 06 | `stage_06_project_sft.py` | Project Stage-05 trajectories into the current image/action SFT message format, split the dataset, and optionally apply prompt/terminal policy. |
 
-```
-build_manifest            walk a raw crowd-cast uploads tree, probe each MP4,
-                          pair it with its keylog → per-segment JSONL manifest
-stage_00_realign          (optional) recover the keylog→video time-map broken by
-                          the OBS pause-clock bug; emits corrected keylogs + a
-                          realigned manifest that stage 01 consumes unchanged
-stage_01_frames_actions   MP4 → 0.5fps/720p JPEG frames packed into one
-                          images.array_record (grain) per segment, + per-frame
-                          action strings binned from the keylog (~2s per frame).
-                          Idle is thinned by a NO_OP head/tail keep (first 1 +
-                          last 1 of each idle run, so a wait's start and end
-                          stay visible); dropped-frame action bins carry forward.
-stage_02_annotate         vision-only, two passes over the clip's kept frames:
-                          A describe  all frames → faithful factual prose
-                                      narration (no goals/intent)
-                          B extract   narration + the same frames (each labelled
-                                      `frame <N>`) → the instruction(s) a person
-                                      would type to a computer-use agent, each
-                                      with start_frame/end_frame bounds, register
-                                      variants, anchor + grounding
-                          then typed goals' starts are snapped back to the first
-                          keystroke of their input burst via the keylog (the
-                          vision model anchors ~1 frame late, where text renders)
-stage_02b_plans           reason-before-action prose: per window-unit, ONE cached
-                          call (narration + goals in time order + each goal's
-                          start-frame screenshot) → a 1-2 sentence first-person
-                          PLAN per goal, written from the information state at
-                          the goal's start (no outcome/clairvoyance, no
-                          restatement — situation + method). Reads a run_dataset
-                          output (read-only) and writes a mirrored tree that
-                          build_sft consumes as its --run-dir
-stage_03_assemble         goals + frame bounds → SFT rows: slice
-                          [start_frame_idx, end_frame_idx] from frame_records and
-                          emit image→action chat turns (instruction on the first
-                          user turn; a stage-02b plan prefixes the FIRST
-                          assistant turn as `<plan>\n<first action>`); rejects
-                          generic/contentless instructions, and plan-less goals
-                          under --require-plan. Default one sample per goal;
-                          --include-variants fans each paraphrase into its own
-                          sample (variants share the goal's plan)
-stage_04_build_canonical  portable canonical SFT JSONL (chat.jsonl + split/sample
-                          manifests; grouped train/val split; optional system
-                          prompt + terminal-token policy; ar:// URIs pass through)
-stage_05_length_buckets   optional token/length bucket inspector (exact via the
-                          trainee tokenizer — Qwen3-VL — on a compute node)
+`build_manifest.py` discovers source segments before Stage 00. `run_dataset.py`
+orchestrates Stages 01–04, and `build_sft.py` materializes a training view and
+runs Stages 05–06.
+
+## Independent annotation and training FPS
+
+Stage 01 should be run at the highest FPS needed by any downstream ablation.
+Stage 02 can then create multiple views without decoding the video again:
+
+- the annotation view, normally 0.5 FPS, is consumed by Stages 03–04;
+- the training view is materialized by `build_sft --training-fps ...` and is
+  consumed by Stage 05.
+
+Stage-04 goals retain their annotation-frame indices for auditability and also
+carry `[start_time_s, end_time_s)` bounds. Stage 05 uses those timestamps when
+slicing the training view, so changing training FPS does not require another
+VLM annotation pass. Both requested FPS values must divide `base_fps` exactly.
+
+Idle thinning is independently configured for annotation and training views.
+Keep those settings fixed when the intended ablation variable is FPS alone.
+
+## Action ownership
+
+Stage 01 preserves ordered raw events. Stage 02 currently projects each
+observation interval into the existing aggregate action structure:
+
+```json
+{"move_dx": 10.0, "move_dy": -2.0, "scroll": 0.0, "events": [["+", "LMB"], ["-", "LMB"]]}
 ```
 
-Frames go to the VLM **clean** (no burned-in overlay, no timestamps). The
-describe pass is label-free; only the extract pass interleaves a `frame <N>`
-text label before each image so goals can carry frame bounds. Stage 01 stores
-frames as one `images.array_record` (grain) per segment, referenced as
-`ar://…#idx`; stage 02 feeds the VLM these same stored frames (no re-render).
+Stage 05 retains both the ordered events and this structured aggregate. Only
+Stage 06 renders the current action text (`<dx> <dy> <scroll> ; ...` or
+`NO_OP`). Mouse scaling and a new action representation are intentionally not
+implemented here.
 
-Supporting modules: `config`, `common` (keylog parsing, action formatting,
-message shapes), `image_store` (grain), `frames_render` (frame data-URLs, token
-estimate `ceil(h/28)*ceil(w/28)`, window planning), `labeler` (VLM client),
-`prompts` + `prompts.yaml` (all prompt text), `qwen3_encoding` (stage 04/05
-token counts).
+## Full run
 
-## Full-dataset run
+From `data_pipeline/`:
 
 ```bash
-cd /fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline
 PYTHONPATH=. python3 -m annotation_pipeline.build_manifest \
-    --dataset-root /fast/project/HFMI_SynergyUnit/p-doom/crowd-cast/crowd-cast-2026-06-18 \
-    --out manifest.crowd-cast-2026-06-18.jsonl --workers 32
+  --dataset-root /path/to/uploads \
+  --out manifest.jsonl --workers 32
+
+# Choose base_fps high enough for every later training-FPS ablation.
 PYTHONPATH=. python3 -m annotation_pipeline.run_dataset \
-    --manifest manifest.crowd-cast-2026-06-18.jsonl \
-    --run-name full --models Kimi-K2.6,Kimi-K2.5 \
-    --target-tpm 1800000 --max-workers 64
+  --manifest manifest.jsonl \
+  --run-name full \
+  --models Kimi-K2.6,Kimi-K2.5 \
+  --base-fps 2 \
+  --annotation-fps 0.5 \
+  --target-tpm 1800000 \
+  --max-workers 64
+
 PYTHONPATH=. python3 -m annotation_pipeline.build_sft \
-    --run-dir annotation_pipeline/dataset_runs/full \
-    --out annotation_pipeline/dataset_runs/full/sft
+  --run-dir annotation_pipeline/dataset_runs/full \
+  --out annotation_pipeline/dataset_runs/full/sft_1fps \
+  --training-fps 1
 ```
 
-`run_dataset` runs stage 01 once per segment (model-agnostic) into a shared
-`<run>/_frames/` dir, then stage 02 per window-unit under `<run>/<model>/clips/`.
-A segment is split into `__wN` window-units only when it exceeds the labeler
-context budget (`--context-limit` minus completion reserve); cuts snap to a
-command submission or real time-gap (never mid typing-burst), and each non-final
-window gets a small trailing context buffer whose goals belong to the next
-window. Resumable (`progress.jsonl`; finished units are skipped), shardable for
-multi-node fan-out (`--shard i/N`), and splittable into a CPU-only frames pass
-and an API-only annotate pass (`--phase frames|annotate|all`). CPU-only slurm
-wrapper: `slurm/run_dataset_smoke.sbatch` (qos=low, keeps ffmpeg off the login
-node).
+The run layout is:
 
-`build_sft` groups window-units back into their parent segment, concatenates
-their goals in window order, feeds the parent's full frame_records through stage
-03's `assemble_samples`, then stage 04 → `<out>/canonical/` plus per-split
-`<out>/<split>/chat.jsonl` (drop-in source for omegalax stage_c). Every sample
-carries provenance (recording_id, clip_id, parent_segment_id, user_id, version,
-video_path, frame/time spans, source goal). `--buckets` adds stage 05.
+```text
+<run>/
+  _modalities/clips/<segment>/
+    stage_00/manifest.jsonl
+    stage_01_base/{frames,events}.jsonl
+    stage_02_views/annotation/observations.jsonl
+  <model>/clips/<unit>/
+    stage_02_annotation_view/observations.jsonl
+    stage_03_annotation/{annotation.json,goal_proposals.jsonl}
+    stage_04_boundaries/goals.jsonl
 
-## Iterate on prompts
+<sft-output>/
+  stage_02_training_views/clips/<segment>/observations.jsonl
+  stage_05_trajectories/trajectories.jsonl
+  stage_06_sft/{chat.jsonl,train/chat.jsonl,val/chat.jsonl}
+```
 
-Stage 02 caches every labeler response per call
-(`cache/<name>.txt` + `.reasoning.txt` + `.meta.json`), so a prompt edit
-re-spends only the changed step: pass `--refresh extract_from_prose` (or
-`describe`, `extract`) to stage 02 to invalidate just that call. To validate an
-EXTRACT prompt change over a whole existing run without re-paying for describe:
+Large segments are split into annotation window-units. Window cuts prefer
+submission boundaries or real time gaps, and each non-final window receives a
+small visual look-ahead buffer. Stage 05 merges window goals back into their
+parent segment and assigns parent-wide unique goal IDs.
+
+`run_dataset --phase prepare` performs Stages 01–02 without API calls;
+`--phase annotate` performs Stages 03–04 from prepared artifacts. Progress is
+tracked separately per phase and shard.
+
+## Boundary-policy ablation
+
+Choose the Stage-04 policy when running annotation:
+
+```bash
+PYTHONPATH=. python3 -m annotation_pipeline.run_dataset \
+  ... --boundary-policy vision_only
+```
+
+`vision_only` retains VLM bounds. `keylog_refined` moves typed-goal starts to
+the beginning of the detected typing burst. The annotation prompt and action
+representation are otherwise identical.
+
+## Prompt iteration
+
+Stage 03 caches the describe and extract responses. To rerun only extraction
+and then regenerate Stage-04 bounds:
 
 ```bash
 PYTHONPATH=. python3 -m annotation_pipeline.reextract_run \
-    --run-dir annotation_pipeline/dataset_runs/qc30 --concurrency 8
-# or: REEX_RUN_DIR=... sbatch annotation_pipeline/slurm/reextract.sbatch
+  --run-dir annotation_pipeline/dataset_runs/full \
+  --concurrency 8
 ```
 
-## Plan prose (reason-before-action)
-
-Each SFT sample's first assistant turn is `<plan>\n<first action>` — the agent
-states, in one or two first-person sentences, what it is about to do and why,
-then acts (format contract in `config.SYSTEM_PROMPT`, byte-identical with
-`hindsight_fold/scripts/assemble_sft.py`). Plans are generated by
-`stage_02b_plans` as a separate cached call AFTER goal extraction (never inside
-extract — re-extracting would re-roll already-QC'd goals), so they can be
-backfilled onto any existing annotation run:
+Inspect a model directory with:
 
 ```bash
-PYTHONPATH=. python3 -m annotation_pipeline.stage_02b_plans \
-    --run-root <annotations artifact>/<tag> --out-root <plans out>/<tag> \
-    --concurrency 16
-PYTHONPATH=. python3 -m annotation_pipeline.build_sft \
-    --run-dir <plans out>/<tag> --frames-root <frames artifact>/<tag>/_frames \
-    --out <sft out> [--require-plan]
+PYTHONPATH=. python3 -m annotation_pipeline.visualize_run \
+  --run-root annotation_pipeline/dataset_runs/full --port 8765
 ```
 
-Plans carry deterministic quality flags (`restates_instruction`, `empty`, …);
-flagged-unusable plans fall back to a plan-less first turn unless
-`--require-plan` rejects them.
-
-## Fixing misaligned actions after the fact
-
-`realign_patch_canonical.py` realigns the assistant action turns of an
-ALREADY-BUILT canonical SFT artifact in place (joins samples to
-frame_records via their `ar://` URIs, recomputes each frame's own-bin action
-from the realigned keylog, tags every sample with its alignment status; a
-plan-bearing first turn keeps its plan prefix) — no re-annotation. Use
-`stage_00_realign` instead when (re)running the pipeline from scratch on
-misaligned recordings.
-
-## Inspect
-
-```bash
-PYTHONPATH=. python3 -m annotation_pipeline.visualize_run --port 8765 \
-    [--run-root annotation_pipeline/iteration_runs]
-# ssh -L 8765:127.0.0.1:8765 <node>  then open http://127.0.0.1:8765/
-```
-
-Per clip: the raw recording (range-streamed); the kept (NO_OP-thinned) frame
-stream as a player; the describe pass (prompt, reasoning, raw response,
-narration); and the extracted goals (instruction + variants + anchor +
-grounding + frame bounds), each playable from the actual sample frames. Reads
-`stage_02/stage02_result.json` straight from the grain store.
-
-Also: `goal_timeline_viewer/` (full-recording goal-hierarchy timeline, see its
-README), `frame_stepper.py` (frame-by-frame action↔screen alignment for one
-clip), `action_video_viewer.py` (realtime video/action overlay, raw timeline).
-
-## Environment
-
-The labeler is configured by env (see `labeler.py`): `LABELER_MODEL`,
-`LABELER_BASE_URL` (defaults to `$AZURE_OPENAI_ENDPOINT`), `LABELER_API_KEY`
-(defaults to `$AZURE_OPENAI_API_KEY`), `LABELER_MAX_TOKENS`,
-`LABELER_REASONING_EFFORT`. ffmpeg via `$JUERGEN_ANNOTATION_FFMPEG_BIN` or PATH
-(`$JUERGEN_ANNOTATION_FFMPEG_THREADS` caps per-decode threads on shared nodes).
-Deps are in the `data_pipeline` `pyproject.toml` (`array-record` for grain,
-`PyYAML` for prompts, `openai`, `opencv-python-headless`, `msgpack`).
+The viewer reads the Stage-02 annotation view, Stage-03 responses, and finalized
+Stage-04 goals directly from the new artifacts.
