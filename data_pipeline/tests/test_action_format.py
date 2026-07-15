@@ -36,7 +36,7 @@ class OrderedActionFormatTest(unittest.TestCase):
         result = project_ordered_action(
             [
                 _event(0, 4.01, "move", dx=1.0, dy=0.0),
-                _event(1, 4.11, "move", dx=2.0, dy=0.0),
+                _event(1, 4.10, "move", dx=2.0, dy=0.0),
             ],
             interval_start_s=4.0,
             continuous_action_hz=10.0,
@@ -84,6 +84,14 @@ class OrderedActionFormatTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported action event kind"):
             project_ordered_action(
                 [_event(0, 0.0, "context")],
+                interval_start_s=0.0,
+                continuous_action_hz=10.0,
+            )
+
+    def test_missing_input_name_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Invalid input name"):
+            project_ordered_action(
+                [_event(0, 0.0, "press", key=None)],
                 interval_start_s=0.0,
                 continuous_action_hz=10.0,
             )

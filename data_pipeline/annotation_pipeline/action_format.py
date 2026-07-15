@@ -76,11 +76,10 @@ def _continuous_primitive(kind: str, dx: float, dy: float) -> ActionPrimitive | 
 
 
 def _input_primitive(kind: str, value: Any) -> ActionPrimitive:
-    name = str(value)
-    if not _INPUT_NAME_RE.fullmatch(name):
-        raise ValueError(f"Invalid input name: {name!r}")
+    if not isinstance(value, str) or not _INPUT_NAME_RE.fullmatch(value):
+        raise ValueError(f"Invalid input name: {value!r}")
     projected_kind: PrimitiveKind = "down" if kind == "press" else "up"
-    return ActionPrimitive(kind=projected_kind, input_name=name)
+    return ActionPrimitive(kind=projected_kind, input_name=value)
 
 
 def project_ordered_action(
@@ -115,7 +114,8 @@ def project_ordered_action(
             dy = float(event["dy"])
             if not all(math.isfinite(value) for value in (event_time_s, dx, dy)):
                 raise ValueError(f"Non-finite continuous event: {event!r}")
-            tick = math.floor((event_time_s - interval_start_s) * continuous_action_hz)
+            scaled_offset = (event_time_s - interval_start_s) * continuous_action_hz
+            tick = math.floor(scaled_offset + 1e-9)
             if pending is not None and pending[0] == tick and pending[1] == kind:
                 pending = (tick, kind, pending[2] + dx, pending[3] + dy)
             else:
