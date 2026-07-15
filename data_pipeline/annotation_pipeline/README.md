@@ -80,8 +80,8 @@ PYTHONPATH=. python3 -m annotation_pipeline.build_sft \
   --continuous-action-hz 10
 ```
 
-To generate the aggregate action-format ablation from the same Stage-05
-trajectories, rerun only Stage 06 through `build_sft.py` with:
+To generate the aggregate action-format ablation from the same observation view,
+rerun `build_sft.py` with:
 
 ```bash
 --action-schema aggregate_delta_keys_v1
