@@ -62,6 +62,15 @@ It also opens a stage-01a **frames-master** store directly (auto-detected by its
 ``segment_index.jsonl`` + ``frames/`` layout / ``juergen_annotation_frames_master``
 marker): the raw decoded frames are browsable with no sampler run, but since 01a
 is keylog-free the action HUD stays empty — run 01b to get actions.
+
+And it opens a stage-04 **conversations** dataset (auto-detected by a
+``conversations.jsonl`` / ``juergen_annotation_conversations`` marker): each
+segment's interleaved screenshot→action chat is browsed as a trajectory — the
+user-turn screenshots are the frames, the following assistant turn is that frame's
+action — so the same frame/action/HUD/timeline UI applies, plus a banner with the
+system prompt and (if goal-conditioned) the instruction. The images are ``ar://``
+refs into the same stage-01a master, so frames and the black-frame flag resolve
+just as in the 01b view.
 """
 from __future__ import annotations
 
@@ -81,7 +90,12 @@ DATA_PIPELINE_DIR = Path(__file__).resolve().parents[1]
 if str(DATA_PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(DATA_PIPELINE_DIR))
 
-from annotation_pipeline.image_store import read_jpeg_bytes  # noqa: E402
+from annotation_pipeline import config  # noqa: E402
+from annotation_pipeline.image_store import (  # noqa: E402
+    is_arrayrecord_image_uri,
+    parse_arrayrecord_image_uri,
+    read_jpeg_bytes,
+)
 from annotation_pipeline.common import (  # noqa: E402
     aggregate_actions,
     format_action,
@@ -229,6 +243,18 @@ def _is_noop(action: Any) -> bool:
     return not action or str(action).strip().upper() == "NO_OP"
 
 
+def _is_black(mean_luma: Any, frac_dark: Any) -> bool:
+    """Black-frame flag from the stage-01a luma metrics, using the sampler's
+    default thresholds (``annotation_pipeline.config``). Mirrors
+    ``sample_frames_actions._is_black`` so both views flag exactly the frames 01b
+    would drop under default settings — the master reads its own manifest, the
+    01b sample cross-references the master's. Frames without metrics (older
+    masters, decode failures) are never flagged (absence of evidence != black)."""
+    return (mean_luma is not None and mean_luma <= config.DEFAULT_BLACK_LUMA_MAX) or (
+        frac_dark is not None and frac_dark >= config.DEFAULT_BLACK_DARK_FRAC_MIN
+    )
+
+
 class Segment:
     """One trajectory: the ordered kept frames of a single ``segment_id``."""
 
@@ -255,6 +281,10 @@ class Segment:
             "recording_id": self.recording_id,
             "n_frames": len(self.frames),
             "n_non_noop": sum(1 for f in self.frames if not f["is_noop"]),
+            # ``is_black`` is filled in lazily by the dataset (cross-referenced
+            # from the master frame_manifest); absent -> 0.
+            "n_black": sum(1 for f in self.frames if f.get("is_black")),
+            "n_black_act": sum(1 for f in self.frames if f.get("is_black") and not f["is_noop"]),
             # Drop the internal image ref from the payload; the client fetches
             # frames by (segment, index) via /frame instead.
             "frames": [{k: v for k, v in f.items() if k != "ref"} for f in self.frames],
@@ -267,6 +297,9 @@ class FrameRecordsDataset:
     def __init__(self, jsonl_paths: list[Path]) -> None:
         self.segments: "OrderedDict[str, Segment]" = OrderedDict()
         self._missing_ref = 0
+        # Per-master-shard {record_index -> is_black}, read lazily from the shard's
+        # sibling frame_manifest.jsonl the first time a segment on it is viewed.
+        self._black_luts: "dict[str, dict[int, bool]]" = {}
         total = 0
         for p in jsonl_paths:
             total += self._load_file(p)
@@ -320,15 +353,202 @@ class FrameRecordsDataset:
             return None
         return seg.frames[index]["ref"]
 
+    def _black_lut(self, shard: Path) -> dict[int, bool]:
+        """``{record_index -> is_black}`` for one master shard, read once from its
+        sibling ``frame_manifest.jsonl`` (same dir as the ``images.array_record``)
+        and cached. A missing/unreadable manifest yields an empty map — nothing is
+        flagged rather than crashing the segment view."""
+        key = str(shard)
+        lut = self._black_luts.get(key)
+        if lut is not None:
+            return lut
+        lut = {}
+        manifest = shard.with_name("frame_manifest.jsonl")
+        try:
+            with manifest.open() as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    r = json.loads(line)
+                    ri = r.get("record_index")
+                    if ri is not None:
+                        lut[int(ri)] = _is_black(r.get("mean_luma"), r.get("frac_dark"))
+        except (OSError, json.JSONDecodeError):
+            lut = {}
+        self._black_luts[key] = lut
+        return lut
+
+    def _black_flag(self, ref: str | None) -> bool:
+        """Whether one kept frame is (near-)black, cross-referenced from the master
+        frame_manifest via the frame's ``ar://…#idx`` shard URI. Plain-file refs
+        (no master manifest) and non-ar refs are treated as not-black."""
+        if not ref or not is_arrayrecord_image_uri(str(ref)):
+            return False
+        try:
+            shard, idx = parse_arrayrecord_image_uri(str(ref))
+        except ValueError:
+            return False
+        return self._black_lut(shard).get(idx, False)
+
+    def _ensure_black(self, seg: Segment) -> None:
+        """Tag ``seg``'s frames with ``is_black`` once (idempotent)."""
+        if getattr(seg, "_black_done", False):
+            return
+        for f in seg.frames:
+            f["is_black"] = self._black_flag(f.get("ref"))
+        seg._black_done = True  # type: ignore[attr-defined]
+
     def segment_detail(self, segment_id: str) -> dict[str, Any] | None:
         seg = self.segments.get(segment_id)
-        return seg.detail() if seg is not None else None
+        if seg is None:
+            return None
+        self._ensure_black(seg)
+        return seg.detail()
 
     def info(self) -> dict[str, Any]:
         return {
             "n_segments": len(self.segments),
             "mode": "frame_records",
             "segments": [s.summary() for s in self.segments.values()],
+        }
+
+
+def _first_text(content: Any) -> str | None:
+    """First ``{"type":"text","text":...}`` block's text in a message ``content`` list."""
+    if isinstance(content, list):
+        for c in content:
+            if isinstance(c, dict) and c.get("type") == "text" and isinstance(c.get("text"), str):
+                return c["text"]
+    return None
+
+
+def _first_image(content: Any) -> str | None:
+    """First image ref in a message ``content`` list (``image``/``image_url``/``url``)."""
+    if isinstance(content, list):
+        for c in content:
+            if isinstance(c, dict) and c.get("type") == "image":
+                v = c.get("image") or c.get("image_url") or c.get("url")
+                if isinstance(v, str) and v:
+                    return v
+    return None
+
+
+class ConversationsDataset(FrameRecordsDataset):
+    """A stage-04 ``conversations.jsonl`` browsed as trajectories.
+
+    Each conversation (one segment's interleaved screenshot->action chat) is one
+    Segment: every ``user`` turn's screenshot is a frame, and the ``assistant``
+    turn that follows carries that frame's action string. The images are ``ar://``
+    refs into the SAME stage-01a master store the 01b sample used, so frame
+    fetching and the black-frame cross-reference are inherited unchanged from
+    ``FrameRecordsDataset``. Conversation-level context (system prompt, per-segment
+    instruction, target fps, alignment) is surfaced in the segment detail.
+
+    No per-turn timestamps exist in the chat, so each frame's time is synthesized
+    from its turn index and the conversation's ``target_fps`` (t = i / fps)."""
+
+    mode = "conversations"
+
+    def __init__(self, conversations_path: Path) -> None:
+        self.segments: "OrderedDict[str, Segment]" = OrderedDict()
+        self._missing_ref = 0
+        self._black_luts: "dict[str, dict[int, bool]]" = {}
+        n = self._load_file(conversations_path)
+        if not self.segments:
+            raise SystemExit(f"No conversations found in {conversations_path}")
+        print(
+            f"loaded {n} conversations across {len(self.segments)} segments"
+            + (f" ({self._missing_ref} turns without an image)" if self._missing_ref else ""),
+            flush=True,
+        )
+
+    def _load_file(self, path: Path) -> int:  # type: ignore[override]
+        n = 0
+        with path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                seg = self._parse_conversation(json.loads(line))
+                if seg is not None:
+                    self.segments[seg.segment_id] = seg
+                    n += 1
+        return n
+
+    def _parse_conversation(self, rec: dict[str, Any]) -> "Segment | None":
+        sid = str(rec.get("segment_id") or rec.get("conversation_id") or f"conv{len(self.segments)}")
+        seg = Segment(sid, rec.get("recording_id"))
+        # Conversation-level metadata, read back in segment_detail()/info().
+        seg.conversation_id = rec.get("conversation_id")  # type: ignore[attr-defined]
+        seg.instruction = rec.get("instruction")  # type: ignore[attr-defined]
+        seg.goal_conditioned = bool(rec.get("goal_conditioned"))  # type: ignore[attr-defined]
+        seg.target_fps = rec.get("target_fps")  # type: ignore[attr-defined]
+        seg.alignment_status = rec.get("alignment_status")  # type: ignore[attr-defined]
+        seg.split = rec.get("split")  # type: ignore[attr-defined]
+        seg.system_prompt = None  # type: ignore[attr-defined]
+        fps = float(rec.get("target_fps") or 0.0)
+        pending_ref: str | None = None
+        for m in rec.get("messages") or []:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            content = m.get("content")
+            if role == "system":
+                seg.system_prompt = _first_text(content)  # type: ignore[attr-defined]
+            elif role == "user":
+                # A goal-conditioned first turn puts the instruction text before the
+                # image; we take the image (top-level ``instruction`` already has the text).
+                pending_ref = _first_image(content)
+                if pending_ref is None:
+                    self._missing_ref += 1
+            elif role == "assistant":
+                action = _first_text(content) or ""
+                i = len(seg.frames)
+                t = (i / fps) if fps > 0 else float(i)
+                seg.frames.append({
+                    "i": i,
+                    "bin": i,
+                    "t": round(t, 3),
+                    "src": None,  # source_frame_idx isn't carried into the conversation
+                    "action": action,
+                    "is_noop": _is_noop(action),
+                    "ref": pending_ref,  # internal; stripped before it hits the client
+                })
+                pending_ref = None
+        return seg
+
+    def segment_detail(self, segment_id: str) -> dict[str, Any] | None:
+        d = super().segment_detail(segment_id)  # runs _ensure_black + Segment.detail()
+        if d is None:
+            return None
+        seg = self.segments[segment_id]
+        d.update({
+            "mode": "conversations",
+            "conversation_id": getattr(seg, "conversation_id", None),
+            "instruction": getattr(seg, "instruction", None),
+            "goal_conditioned": getattr(seg, "goal_conditioned", False),
+            "system_prompt": getattr(seg, "system_prompt", None),
+            "target_fps": getattr(seg, "target_fps", None),
+            "alignment_status": getattr(seg, "alignment_status", None),
+            "split": getattr(seg, "split", None),
+            "n_turns": len(seg.frames),
+        })
+        return d
+
+    def info(self) -> dict[str, Any]:
+        segs = list(self.segments.values())
+        return {
+            "n_segments": len(segs),
+            "mode": "conversations",
+            "goal_conditioned": any(getattr(s, "goal_conditioned", False) for s in segs),
+            "has_system_prompt": any(getattr(s, "system_prompt", None) for s in segs),
+            "target_fps": next(
+                (getattr(s, "target_fps", None) for s in segs if getattr(s, "target_fps", None)), None
+            ),
+            "segments": [
+                {**s.summary(), "instruction": getattr(s, "instruction", None)} for s in segs
+            ],
         }
 
 
@@ -451,6 +671,9 @@ class FramesMasterDataset:
                     "src": r.get("source_frame_idx"),
                     "action": "",          # filled from the keylog overlay if present
                     "is_noop": True,
+                    # (near-)black per stage-01a luma metrics + default thresholds;
+                    # what the 01b sampler drops with --drop-black-frames on.
+                    "is_black": _is_black(r.get("mean_luma"), r.get("frac_dark")),
                     "ref": r.get("image") or r.get("image_path"),
                 })
         events: list[list[Any]] = []
@@ -539,6 +762,8 @@ class FramesMasterDataset:
             "recording_id": meta.get("recording_id"),
             "n_frames": len(frames),
             "n_non_noop": sum(1 for f in frames if not f["is_noop"]),
+            "n_black": sum(1 for f in frames if f.get("is_black")),
+            "n_black_act": sum(1 for f in frames if f.get("is_black") and not f["is_noop"]),
             "has_actions": entry["has_keylog"] and any(not f["is_noop"] for f in frames),
             "master_fps": self.master_fps,
             "has_alignment": entry.get("align") is not None,
@@ -698,6 +923,7 @@ INDEX_HTML = r"""<!doctype html>
   .badge { display:inline-block; padding:0 6px; border-radius:3px; font-size:11px; }
   .badge.noop { background:#26292f; color:#8b93a1; }
   .badge.act  { background:#1e3a2a; color:#7fd6a2; }
+  .badge.black { background:#2b2440; color:#c3b3f5; }
 
   /* HUD: mouse radar + keyboard (top of the right sidebar) */
   #hud { display:flex; flex-wrap:wrap; gap:12px 14px; align-items:flex-start; justify-content:center;
@@ -733,6 +959,10 @@ INDEX_HTML = r"""<!doctype html>
   .cell { flex:none; width:9px; height:24px; border-radius:2px; background:#2a2e36; cursor:pointer; }
   .cell.act { background:#3f7d5b; }
   .cell.cut { background:#6e4a1c; box-shadow:inset 0 0 0 1px rgba(233,200,119,.55); }
+  /* black-frame flag wins the fill (defined after act/cut) — the action string stays in the tooltip. */
+  .cell.black { background:#3b2f5e; box-shadow:inset 0 0 0 1px rgba(167,139,250,.7); }
+  /* black frame that ALSO has an action: keep the violet fill, swap the border to a green glow. */
+  .cell.black.act { box-shadow:inset 0 0 0 1.5px rgba(127,214,162,.95), 0 0 5px rgba(127,214,162,.5); }
   .cell.cur { outline:2px solid #5b9dd9; outline-offset:1px; }
   #strip2wrap { flex:none; }
   #striplabels { display:flex; justify-content:space-between; align-items:baseline; }
@@ -746,6 +976,8 @@ INDEX_HTML = r"""<!doctype html>
   #modenote { display:none; padding:6px 10px; background:#3a2f14; color:#e8c877;
               font-size:11px; border-bottom:1px solid #2a2e36; }
   #modenote.show { display:block; }
+  #modenote .cnote-goal { color:#7fd6a2; font-weight:600; }
+  #modenote .cnote-sys { color:#b9a06a; }
   .phead { padding:6px 12px; border-bottom:1px solid #2a2e36; border-top:1px solid #2a2e36;
            color:#8b93a1; font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
   #typed { flex:1 1 40%; min-height:70px; overflow-y:auto; padding:10px 12px; white-space:pre-wrap; word-break:break-word;
@@ -782,7 +1014,7 @@ INDEX_HTML = r"""<!doctype html>
   <button id="next" title="→">▶</button>
   <button id="clocktoggle" title="raw vs realigned keylog for the HUD" style="display:none">keys: raw</button>
   <span id="seginfo" class="seginfo"></span>
-  <span class="hint"><kbd>←</kbd>/<kbd>→</kbd> step · <kbd>space</kbd> play · <kbd>a</kbd>/<kbd>d</kbd> prev/next active</span>
+  <span class="hint"><kbd>←</kbd>/<kbd>→</kbd> step · <kbd>space</kbd> play · <kbd>a</kbd>/<kbd>d</kbd> prev/next active · <kbd>,</kbd>/<kbd>.</kbd> prev/next black · <kbd>⇧,</kbd>/<kbd>⇧.</kbd> black w/ action</span>
 </header>
 <main>
   <div id="screen">
@@ -996,7 +1228,8 @@ async function loadDatasets(){
   const sel=$('#ds'); sel.innerHTML='';
   for(const d of info.datasets){
     const o=document.createElement('option'); o.value=d.name;
-    o.textContent=`${d.name}  (${d.mode==='frames_master'?'master/raw':'sample'})`;
+    const ml = d.mode==='frames_master'?'master/raw':d.mode==='conversations'?'conversation':'sample';
+    o.textContent=`${d.name}  (${ml})`;
     sel.appendChild(o);
   }
   DS = info.default || (info.datasets[0] && info.datasets[0].name) || null;
@@ -1016,6 +1249,9 @@ async function loadSegments(){
     note.classList.add('show');
   } else if(MODE==='frames_master'){
     note.textContent=`raw frames-master (01a), master_fps=${info.master_fps||'?'} — no keylog linked, so no actions. Pass --clips-manifest, or run the 01b sampler.`;
+    note.classList.add('show');
+  } else if(MODE==='conversations'){
+    note.textContent=`stage-04 conversations · ${info.goal_conditioned?'goal-conditioned':'goal-free'}${info.target_fps?` · ${info.target_fps} fps`:''} — each step is one screenshot→action turn (assistant reply = the frame's action). Frames resolve from the linked stage-01a master.`;
     note.classList.add('show');
   } else note.classList.remove('show');
   const sel=$('#seg'); sel.innerHTML='';
@@ -1046,9 +1282,22 @@ async function loadSegment(id){
   tg.style.display = canAlign ? '' : 'none';
   tg.textContent = 'keys: '+CLOCK; tg.classList.toggle('on', CLOCK==='aligned');
   PARSED=curActions().map(parseAction);
-  $('#seginfo').textContent = (MODE==='frames_master' && !HAS_ACTIONS)
+  $('#seginfo').textContent = ((MODE==='frames_master' && !HAS_ACTIONS)
     ? `${SEG.recording_id||'?'} · ${SEG.n_frames} raw frames`
-    : `${SEG.recording_id||'?'} · ${SEG.n_non_noop}/${SEG.n_frames} active frames`;
+    : `${SEG.recording_id||'?'} · ${SEG.n_non_noop}/${SEG.n_frames} active frames`)
+    + (SEG.n_black ? ` · ${SEG.n_black} black${SEG.n_black_act?` (${SEG.n_black_act} w/ action)`:''}` : '');
+  if(MODE==='conversations'){
+    // Per-segment banner: the system prompt + (optional) goal instruction that
+    // frame this conversation, plus its turn count / fps / alignment.
+    const note=$('#modenote');
+    let h=`<b>stage-04 conversation</b> · ${SEG.goal_conditioned?'goal-conditioned':'goal-free'}`;
+    if(SEG.target_fps) h+=` · ${SEG.target_fps} fps`;
+    if(SEG.alignment_status) h+=` · ${esc(String(SEG.alignment_status))}`;
+    h+=` · ${SEG.n_turns||FR.length} turns`;
+    if(SEG.instruction) h+=`<br><span class="cnote-goal">goal:</span> ${esc(String(SEG.instruction))}`;
+    if(SEG.system_prompt) h+=`<br><span class="cnote-sys">system:</span> ${esc(String(SEG.system_prompt))}`;
+    note.innerHTML=h; note.classList.add('show');
+  }
   $('#fn').textContent=FR.length;
   buildStrip(); buildStrip2(); buildRows(); show(0);
 }
@@ -1058,8 +1307,8 @@ function buildStrip(){
   const cuts=(ALN&&ALN.cut_ranges)?ALN.cut_ranges:[];
   const inCut=i=>{ for(const r of cuts) if(i>=r[0]&&i<r[1]) return true; return false; };
   let h='';
-  for(let i=0;i<FR.length;i++){ const f=FR[i]; const cut=inCut(i);
-    h+=`<div class="cell${f.is_noop?'':' act'}${cut?' cut':''}" data-i="${i}" title="#${i} t=${f.t}s ${cut?'[cut — collapsed idle] ':''}${esc(f.action||'NO_OP')}"></div>`; }
+  for(let i=0;i<FR.length;i++){ const f=FR[i]; const cut=inCut(i); const blk=!!f.is_black; const blkAct=blk&&!f.is_noop;
+    h+=`<div class="cell${f.is_noop?'':' act'}${cut?' cut':''}${blk?' black':''}" data-i="${i}" title="#${i} t=${f.t}s ${blkAct?'[black + action] ':(blk?'[black frame] ':'')}${cut?'[cut — collapsed idle] ':''}${esc(f.action||'NO_OP')}"></div>`; }
   $('#strip').innerHTML=h;
 }
 // Second timeline (master + alignment only): aligned keys on the video clock,
@@ -1117,7 +1366,8 @@ function show(i){
   $('#fbin').textContent=(f.bin??'–'); $('#fsrc').textContent=(f.src??'–');
   const act=(CLOCK==='aligned'&&f.action_aln!=null)?f.action_aln:f.action;
   const noop=!act||act==='NO_OP';
-  $('#fbadge').innerHTML=noop?'<span class="badge noop">NO_OP</span>':'<span class="badge act">ACTION</span>';
+  $('#fbadge').innerHTML=(noop?'<span class="badge noop">NO_OP</span>':'<span class="badge act">ACTION</span>')
+    + (f.is_black?' <span class="badge black">BLACK</span>':'');
   $('#rawaction').textContent=act||'NO_OP';
   if(HAS_ACTIONS){
     const st=stateAt(cur);
@@ -1151,6 +1401,12 @@ function step(d){ show(cur+d); }
 // on 'aligned' (and aligned actions exist), else the raw binning.
 function frameActive(f){ return (CLOCK==='aligned' && f.action_aln!=null) ? f.action_aln!=='NO_OP' : !f.is_noop; }
 function nextActive(d){ let i=cur+d; while(i>=0&&i<FR.length){ if(frameActive(FR[i])){show(i);return;} i+=d; } }
+// Jump to the prev/next (near-)black frame. Both modes carry is_black (master:
+// from its own luma metrics; 01b sample: cross-referenced from the master).
+function nextBlack(d){ let i=cur+d; while(i>=0&&i<FR.length){ if(FR[i].is_black){show(i);return;} i+=d; } }
+// Prev/next black frame that ALSO has an action (is_noop matches the strip's
+// action marking — raw binning). No-op when nothing black carries an action.
+function nextBlackAct(d){ let i=cur+d; while(i>=0&&i<FR.length){ if(FR[i].is_black&&!FR[i].is_noop){show(i);return;} i+=d; } }
 function togglePlay(){
   playing=!playing;
   $('#play').textContent=playing?'⏸ pause':'▶ play';
@@ -1179,6 +1435,10 @@ document.addEventListener('keydown',e=>{
   else if(e.key===' '){togglePlay();e.preventDefault();}
   else if(e.key==='a'){nextActive(-1);}
   else if(e.key==='d'){nextActive(1);}
+  else if(e.key===','){nextBlack(-1);}
+  else if(e.key==='.'){nextBlack(1);}
+  else if(e.key==='<'){nextBlackAct(-1);}   // shift+,
+  else if(e.key==='>'){nextBlackAct(1);}    // shift+.
   else if(e.key==='Home'){show(0);}
   else if(e.key==='End'){show(FR.length-1);}
 });
@@ -1252,8 +1512,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--dataset", required=True, nargs="+", metavar="PATH",
         help="one or more datasets, each a 01b output dir (or frame_records.jsonl "
-             "file) or a 01a frames-master store dir (segment_index.jsonl + "
-             "frames/) — auto-detected; choose between them in the UI",
+             "file), a 01a frames-master store dir (segment_index.jsonl + frames/), "
+             "or a stage-04 conversations dir (or conversations.jsonl file) — "
+             "auto-detected; choose between them in the UI",
     )
     p.add_argument(
         "--clips-manifest", default=None,
@@ -1288,10 +1549,55 @@ def looks_like_frames_master(root: Path) -> bool:
     return False
 
 
-def _build_dataset(path: Path):
-    """Build the right dataset object for a path (frames-master vs frame_records)."""
+def looks_like_conversations(root: Path) -> bool:
+    """A stage-04 conversations artifact: a ``conversations.jsonl`` file, a dir
+    holding one, or a dir whose ``manifest.json`` marks it as a conversations store."""
+    root = root.expanduser()
+    if root.is_file():
+        return root.name.endswith(".jsonl") and "conversation" in root.name.lower()
+    if not root.is_dir():
+        return False
+    if (root / "conversations.jsonl").exists():
+        return True
+    manifest = root / "manifest.json"
+    if manifest.exists():
+        try:
+            return "conversations" in json.loads(manifest.read_text()).get("artifact_type", "")
+        except (OSError, json.JSONDecodeError):
+            return False
+    return False
+
+
+def resolve_conversations_path(dataset: Path) -> Path:
+    """Locate the ``conversations.jsonl`` for a stage-04 dataset (the file itself,
+    or ``<dir>/conversations.jsonl``)."""
+    dataset = dataset.expanduser().resolve()
+    if dataset.is_file():
+        return dataset
+    candidate = dataset / "conversations.jsonl"
+    if candidate.exists():
+        return candidate
+    raise SystemExit(f"no conversations.jsonl found under {dataset}")
+
+
+def detect_mode(path: Path) -> str:
+    """Cheap mode detection shared by registration and building (no full load).
+    Frames-master and conversations are checked before the frame_records default."""
     if looks_like_frames_master(path):
+        return "frames_master"
+    if looks_like_conversations(path):
+        return "conversations"
+    return "frame_records"
+
+
+def _build_dataset(path: Path):
+    """Build the right dataset object for a path (frames-master / conversations /
+    frame_records)."""
+    mode = detect_mode(path)
+    if mode == "frames_master":
         return FramesMasterDataset(path.expanduser().resolve())
+    if mode == "conversations":
+        return ConversationsDataset(resolve_conversations_path(path))
     return FrameRecordsDataset(resolve_jsonl_paths(path))
 
 
@@ -1322,8 +1628,7 @@ def register_datasets(paths: list[str]) -> None:
         base, k = name, 2
         while name in DATASETS:
             name, k = f"{base}#{k}", k + 1
-        mode = "frames_master" if looks_like_frames_master(p) else "frame_records"
-        DATASETS[name] = {"path": p, "mode": mode, "obj": None}
+        DATASETS[name] = {"path": p, "mode": detect_mode(p), "obj": None}
 
 
 def main() -> None:

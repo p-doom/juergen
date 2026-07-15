@@ -26,6 +26,22 @@ DEFAULT_JPEG_QUALITY = 80
 # run-time override) to drop NO_OPs entirely.
 DEFAULT_NOOP_KEEP_HEAD = 1
 DEFAULT_NOOP_KEEP_TAIL = 1
+# High-level NO_OP knob for the sampler (stage 01b), overriding HEAD/TAIL when set:
+#   "none" -> keep 0 NO_OP frames (drop every idle frame)
+#   "ends" -> keep the first and last frame of each idle run (== HEAD/TAIL 1/1)
+#   "all"  -> keep every NO_OP frame (no thinning)
+# Unset (None) falls back to DEFAULT_NOOP_KEEP_HEAD/TAIL (legacy interface).
+NOOP_MODES = ("none", "ends", "all")
+
+# --- Black-frame filtering --------------------------------------------------
+# Detection (per-frame luma metrics) is computed ONCE in stage 01a and written to
+# the frame manifest; the DROP decision runs in the sampler (01b), so these
+# thresholds are tunable without re-decoding. A frame is dropped if its mean luma
+# is at/below LUMA_MAX *or* the near-black pixel fraction is at/above DARK_FRAC_MIN.
+DEFAULT_DROP_BLACK_FRAMES = True
+DEFAULT_BLACK_LUMA_MAX = 6.0         # mean luma (0-255) at/below this -> black
+DEFAULT_BLACK_DARK_FRAC_MIN = 0.999  # fraction of pixels below BLACK_DARK_CUTOFF
+BLACK_DARK_CUTOFF = 16               # a pixel is "near-black" if its luma < this
 
 # --- Stage 02: VLM annotation ----------------------------------------------
 # Frames fed to the labeler come straight from the stage-01 array_record (no

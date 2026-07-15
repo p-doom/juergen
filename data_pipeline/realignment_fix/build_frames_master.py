@@ -68,6 +68,29 @@ from annotation_pipeline.stage_01_frames_actions import (  # noqa: E402
 DEFAULT_MASTER_FPS = 4.0
 
 
+def _luma_metrics(jpeg: bytes) -> "tuple[float | None, float | None]":
+    """Black-frame detection for one JPEG, computed in a single grayscale
+    histogram pass: ``(mean_luma, frac_dark)`` where mean_luma is 0-255 and
+    frac_dark is the fraction of pixels below ``config.BLACK_DARK_CUTOFF``.
+
+    These are raw METRICS, not a boolean -- the sampler (01b) applies the
+    threshold, so it stays tunable without re-decoding. Returns ``(None, None)``
+    if the frame can't be decoded, so one bad frame never aborts the build and
+    the sampler simply won't be able to drop it (absence of evidence != black)."""
+    try:
+        import io  # noqa: PLC0415
+        from PIL import Image  # noqa: PLC0415
+
+        with Image.open(io.BytesIO(jpeg)) as im:
+            hist = im.convert("L").histogram()  # 256 luma bins
+    except Exception:  # noqa: BLE001 — detection is best-effort, never fatal
+        return None, None
+    total = sum(hist) or 1
+    mean_luma = sum(i * c for i, c in enumerate(hist)) / total
+    frac_dark = sum(hist[: config.BLACK_DARK_CUTOFF]) / total
+    return round(mean_luma, 3), round(frac_dark, 5)
+
+
 def pack_master_arrayrecord(
     frame_paths: list[Path],
     segment_frame_dir: Path,
@@ -108,6 +131,9 @@ def pack_master_arrayrecord(
                     if video_fps > 0
                     else 0
                 )
+                # Black-frame FLAG only: metrics are recorded here (the one place
+                # that holds pixels); the sampler applies the drop threshold.
+                mean_luma, frac_dark = _luma_metrics(jpeg)
                 manifest_f.write(
                     json.dumps(
                         {
@@ -118,6 +144,8 @@ def pack_master_arrayrecord(
                             "source_frame_idx": source_frame_idx,
                             "jpeg_bytes": len(jpeg),
                             "sha256": hashlib.sha256(jpeg).hexdigest(),
+                            "mean_luma": mean_luma,
+                            "frac_dark": frac_dark,
                         }
                     )
                     + "\n"
