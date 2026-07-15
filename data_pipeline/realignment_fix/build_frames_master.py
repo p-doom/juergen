@@ -205,15 +205,119 @@ def build_segment_master(task: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+ARTIFACT_MARKER = {
+    "artifact_type": "juergen_annotation_frames_master",
+    "schema_version": 1,
+    "segment_index": "segment_index.jsonl",
+}
+
+
+def write_index_jsonl(path: Path, index_rows: list[dict[str, Any]]) -> None:
+    """Write the per-segment index, one JSON row per line, sorted by segment_id."""
+    with path.open("w") as f:
+        for r in sorted(index_rows, key=lambda r: str(r["segment_id"])):
+            f.write(json.dumps(r) + "\n")
+
+
+def aggregate_summary(
+    index_rows: list[dict[str, Any]],
+    *,
+    master_fps: float,
+    target_height: int,
+    jpeg_quality: int,
+    ffmpeg_bin: str | None,
+    source_clips_manifest: str | None,
+) -> dict[str, Any]:
+    """Roll per-segment index rows up into the summary dict. Shared by the
+    single-shard decode path and the merge path so both emit the same shape."""
+    counts: Counter = Counter(str(r.get("status", "unknown")) for r in index_rows)
+    return {
+        "master_fps": master_fps,
+        "target_height": target_height,
+        "jpeg_quality": jpeg_quality,
+        "n_segments": len(index_rows),
+        "status_counts": dict(counts),
+        "n_records_total": sum(int(r.get("num_records") or 0) for r in index_rows),
+        "total_jpeg_bytes": sum(int(r.get("total_jpeg_bytes") or 0) for r in index_rows),
+        "ffmpeg_bin": ffmpeg_bin,
+        "source_clips_manifest": source_clips_manifest,
+    }
+
+
+def write_summary_and_manifest(out_dir: Path, summary: dict[str, Any]) -> None:
+    """Write the aggregate summary + the manifest.json artifact marker."""
+    write_json(out_dir / "frames_master_summary.json", summary)
+    write_json(out_dir / "manifest.json", {**ARTIFACT_MARKER, **summary})
+
+
+def run_merge(args: argparse.Namespace) -> None:
+    """Fold the per-shard segment_index.shard*_of_<N>.jsonl files (written by the
+    array-job shard tasks into a SHARED --output-dir) into the canonical
+    segment_index.jsonl, then write the summary + manifest.json marker. Scoped to
+    ``_of_<num_shards>`` so stale files from a run with a different shard count are
+    ignored, and deduped by segment_id so any accidental overlap can't double-count.
+    """
+    out_dir = args.output_dir
+    n = args.num_shards
+    if n < 2:
+        raise SystemExit("--merge requires --num-shards > 1")
+    if not out_dir.is_dir():
+        raise SystemExit(f"--merge: --output-dir does not exist: {out_dir}")
+
+    suffix = f"_of_{n:04d}"
+    shard_index_files = sorted(out_dir.glob(f"segment_index.shard*{suffix}.jsonl"))
+    if not shard_index_files:
+        raise SystemExit(
+            f"[merge] no segment_index.shard*{suffix}.jsonl under {out_dir} "
+            f"(did the shard tasks run with --num-shards {n}?)"
+        )
+    present = sorted(int(p.name.split(".shard")[1].split("_of_")[0]) for p in shard_index_files)
+    missing = sorted(set(range(n)) - set(present))
+    if missing:
+        print(f"[merge] WARNING: no shard index for shards {missing}", flush=True)
+
+    by_seg: dict[str, dict[str, Any]] = {}
+    for sf in shard_index_files:
+        for row in read_jsonl(sf):
+            by_seg[str(row["segment_id"])] = row
+    index_rows = list(by_seg.values())
+
+    # Decode scalars (ffmpeg_bin / source manifest) live in the shard summaries;
+    # fall back to the first index row for the numerics if a summary is missing.
+    shard_summaries = sorted(out_dir.glob(f"frames_master_summary.shard*{suffix}.json"))
+    scalars = json.loads(shard_summaries[0].read_text()) if shard_summaries else {}
+    first = index_rows[0] if index_rows else {}
+    summary = aggregate_summary(
+        index_rows,
+        master_fps=scalars.get("master_fps", first.get("master_fps")),
+        target_height=scalars.get("target_height", first.get("target_height")),
+        jpeg_quality=scalars.get("jpeg_quality", first.get("jpeg_quality")),
+        ffmpeg_bin=scalars.get("ffmpeg_bin"),
+        source_clips_manifest=scalars.get("source_clips_manifest"),
+    )
+    summary["num_shards"] = n
+    summary["merged_shards"] = present
+
+    write_index_jsonl(out_dir / "segment_index.jsonl", index_rows)
+    write_summary_and_manifest(out_dir, summary)
+    print(
+        f"[merge] {len(shard_index_files)} shards -> {len(index_rows)} segments, "
+        f"{summary['n_records_total']} records, {summary['total_jpeg_bytes'] / 1e9:.2f} GB "
+        f"| status={summary['status_counts']} -> {out_dir}",
+        flush=True,
+    )
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument(
         "--clips-manifest",
         type=Path,
-        required=True,
+        default=None,
         help="discover clips_manifest.jsonl (or any manifest with segment_id/"
         "video_path/video_ok/video_fps/video_duration_s rows). Keylog-free: the "
-        "decode is alignment-agnostic, so realignment is not needed here.",
+        "decode is alignment-agnostic, so realignment is not needed here. Required "
+        "for decoding; ignored in --merge mode.",
     )
     p.add_argument("--output-dir", type=Path, required=True)
     p.add_argument(
@@ -237,13 +341,49 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--limit", type=int, default=None, help="Process only the first N segments (debug).")
     p.add_argument("--force", action="store_true", help="Re-decode segments that already have a frame_manifest.jsonl.")
+    p.add_argument(
+        "--num-shards",
+        type=int,
+        default=1,
+        help="Split the manifest into N disjoint round-robin shards for parallel "
+        "jobs; this shard processes rows[shard_index::num_shards]. All shards MUST "
+        "share ONE --output-dir: per-segment frame dirs are keyed by segment_id and "
+        "so never collide. With N>1 each shard writes "
+        "segment_index.shard<I>_of_<N>.jsonl (NOT the top-level manifest.json); run "
+        "--merge afterwards to fold them into the canonical segment_index.jsonl + "
+        "manifest.json marker.",
+    )
+    p.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help="This job's shard, in [0, num_shards). Injected from "
+        "$SLURM_ARRAY_TASK_ID by the labctl [sweep].",
+    )
+    p.add_argument(
+        "--merge",
+        action="store_true",
+        help="Merge mode: fold every segment_index.shard*_of_<num_shards>.jsonl "
+        "under --output-dir into the canonical segment_index.jsonl and write the "
+        "frames_master_summary.json + manifest.json marker. Decodes nothing; only "
+        "--output-dir and --num-shards are read.",
+    )
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.merge:
+        run_merge(args)
+        return
     if args.master_fps <= 0:
         raise SystemExit("--master-fps must be > 0")
+    if args.num_shards < 1:
+        raise SystemExit("--num-shards must be >= 1")
+    if not (0 <= args.shard_index < args.num_shards):
+        raise SystemExit(f"--shard-index must be in [0, {args.num_shards}); got {args.shard_index}")
+    if args.clips_manifest is None:
+        raise SystemExit("--clips-manifest is required for decoding (only --merge omits it)")
     ffmpeg_bin = resolve_ffmpeg_bin(args.ffmpeg_bin)
 
     out_dir = ensure_dir(args.output_dir)
@@ -254,6 +394,13 @@ def main() -> None:
         raise RuntimeError(f"Empty clip manifest: {args.clips_manifest}")
     if args.limit is not None:
         rows = rows[: args.limit]
+    sharded = args.num_shards > 1
+    if sharded:
+        # Round-robin stride: disjoint AND exhaustive across shard 0..N-1, and
+        # load-balances better than contiguous blocks when long segments cluster
+        # together in the manifest. read_jsonl preserves file order, so the split
+        # is deterministic given the same clips_manifest.
+        rows = rows[args.shard_index :: args.num_shards]
 
     tasks = [
         {
@@ -270,8 +417,9 @@ def main() -> None:
 
     n_workers = args.num_workers or mp.cpu_count()
     n_workers = max(1, min(n_workers, len(tasks)))
+    shard_note = f" | shard {args.shard_index}/{args.num_shards}" if sharded else ""
     print(
-        f"[frames_master] {len(tasks)} segments | master_fps={args.master_fps} "
+        f"[frames_master] {len(tasks)} segments{shard_note} | master_fps={args.master_fps} "
         f"height={args.target_height} q={args.jpeg_quality} | workers={n_workers}",
         flush=True,
     )
@@ -303,37 +451,37 @@ def main() -> None:
             )
         bar.close()
 
-    index_rows.sort(key=lambda r: str(r["segment_id"]))
-    with (out_dir / "segment_index.jsonl").open("w") as f:
-        for r in index_rows:
-            f.write(json.dumps(r) + "\n")
-
-    summary = {
-        "master_fps": args.master_fps,
-        "target_height": args.target_height,
-        "jpeg_quality": args.jpeg_quality,
-        "n_segments": len(tasks),
-        "status_counts": dict(counts),
-        "n_records_total": n_records_total,
-        "total_jpeg_bytes": total_jpeg_bytes,
-        "ffmpeg_bin": ffmpeg_bin,
-        "source_clips_manifest": str(args.clips_manifest),
-    }
-    write_json(out_dir / "frames_master_summary.json", summary)
-    write_json(
-        out_dir / "manifest.json",
-        {
-            "artifact_type": "juergen_annotation_frames_master",
-            "schema_version": 1,
-            "segment_index": "segment_index.jsonl",
-            **summary,
-        },
+    summary = aggregate_summary(
+        index_rows,
+        master_fps=args.master_fps,
+        target_height=args.target_height,
+        jpeg_quality=args.jpeg_quality,
+        ffmpeg_bin=ffmpeg_bin,
+        source_clips_manifest=str(args.clips_manifest),
     )
-    print(
-        f"[frames_master] done: {dict(counts)} | {n_records_total} records, "
-        f"{total_jpeg_bytes / 1e9:.2f} GB -> {out_dir}",
-        flush=True,
-    )
+    if sharded:
+        # Shard task: write a uniquely-named index + summary (no collision between
+        # the N tasks sharing this dir) and DON'T touch manifest.json -- the merge
+        # step writes the marker once, after all shards succeed.
+        tag = f"shard{args.shard_index:04d}_of_{args.num_shards:04d}"
+        write_index_jsonl(out_dir / f"segment_index.{tag}.jsonl", index_rows)
+        summary["shard_index"] = args.shard_index
+        summary["num_shards"] = args.num_shards
+        write_json(out_dir / f"frames_master_summary.{tag}.json", summary)
+        print(
+            f"[frames_master] {tag} done: {dict(counts)} | {n_records_total} records, "
+            f"{total_jpeg_bytes / 1e9:.2f} GB -> {out_dir} "
+            f"(run --merge --num-shards {args.num_shards} to finalize)",
+            flush=True,
+        )
+    else:
+        write_index_jsonl(out_dir / "segment_index.jsonl", index_rows)
+        write_summary_and_manifest(out_dir, summary)
+        print(
+            f"[frames_master] done: {dict(counts)} | {n_records_total} records, "
+            f"{total_jpeg_bytes / 1e9:.2f} GB -> {out_dir}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
