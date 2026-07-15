@@ -10,6 +10,11 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from annotation_pipeline.action_format import (
+    ACTION_SCHEMAS,
+    DEFAULT_ACTION_SCHEMA,
+    DEFAULT_CONTINUOUS_ACTION_HZ,
+)
 from annotation_pipeline.common import ensure_dir, read_jsonl, write_json, write_jsonl
 from annotation_pipeline.stage_05_assemble_trajectories import assemble_trajectories
 from annotation_pipeline.stage_06_project_sft import ensure_empty_dir, project_sft
@@ -36,6 +41,16 @@ def parse_args() -> argparse.Namespace:
         "--terminal-mode",
         choices=("none", "replace_final_assistant", "append_to_final_assistant"),
         default="none",
+    )
+    parser.add_argument(
+        "--action-schema",
+        choices=ACTION_SCHEMAS,
+        default=DEFAULT_ACTION_SCHEMA,
+    )
+    parser.add_argument(
+        "--continuous-action-hz",
+        type=float,
+        default=DEFAULT_CONTINUOUS_ACTION_HZ,
     )
     parser.add_argument("--structured-only", action="store_true")
     return parser.parse_args()
@@ -171,6 +186,8 @@ def main() -> None:
         system_prompt_file=args.system_prompt_file,
         terminal_token=args.terminal_token,
         terminal_mode=args.terminal_mode,
+        action_schema=args.action_schema,
+        continuous_action_hz=args.continuous_action_hz,
         overwrite=True,
     )
     print(f"[stage 06] wrote {manifest['n_samples']} SFT samples to {sft_dir}")

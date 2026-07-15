@@ -31,9 +31,29 @@ observation interval into the existing aggregate action structure:
 ```
 
 Stage 05 retains both the ordered events and this structured aggregate. Only
-Stage 06 renders the current action text (`<dx> <dy> <scroll> ; ...` or
-`NO_OP`). Mouse scaling and a new action representation are intentionally not
-implemented here.
+Stage 06 renders action text. Its default `ordered_events_v2` schema emits an
+ordered mini-program with these primitives:
+
+```text
+move(dx,dy); scroll(dx,dy); down(INPUT); up(INPUT)
+```
+
+For example, movement on both sides of a click remains ordered:
+
+```text
+move(4,-1); down(LMB); move(6,-1); up(LMB)
+```
+
+Continuous events are accumulated on a configurable internal motor grid whose
+default is 10 Hz. The grid does not add screenshots or assistant turns, and a
+discrete transition always splits the surrounding continuous events even when
+they occur in the same motor tick. Zero-valued `move` and `scroll` primitives
+are omitted. A turn with no remaining primitives is `NO_OP`.
+
+Select the old aggregate projection explicitly with
+`--action-schema aggregate_delta_keys_v1`. Coordinate normalization,
+quantization, mouse scaling, evaluator parsing, and runtime execution of v2 are
+not implemented by this data-pipeline change.
 
 ## Full run
 
@@ -55,7 +75,16 @@ PYTHONPATH=. python3 -m annotation_pipeline.run_dataset \
 
 PYTHONPATH=. python3 -m annotation_pipeline.build_sft \
   --run-dir annotation_pipeline/dataset_runs/full \
-  --out annotation_pipeline/dataset_runs/full/sft
+  --out annotation_pipeline/dataset_runs/full/sft \
+  --action-schema ordered_events_v2 \
+  --continuous-action-hz 10
+```
+
+To generate the aggregate action-format ablation from the same Stage-05
+trajectories, rerun only Stage 06 through `build_sft.py` with:
+
+```bash
+--action-schema aggregate_delta_keys_v1
 ```
 
 The run layout is:

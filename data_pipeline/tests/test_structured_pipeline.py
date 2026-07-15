@@ -286,6 +286,10 @@ class StructuredPipelineTest(unittest.TestCase):
                 str(output_dir),
                 "--val-frac",
                 "0",
+                "--action-schema",
+                "ordered_events_v2",
+                "--continuous-action-hz",
+                "5",
             ]
             with patch("sys.argv", argv):
                 build_sft.main()
@@ -296,12 +300,15 @@ class StructuredPipelineTest(unittest.TestCase):
             manifest = json.loads(
                 (output_dir / "stage_05_trajectories" / "manifest.json").read_text()
             )
+            sft_manifest = json.loads((output_dir / "stage_06_sft" / "manifest.json").read_text())
 
         self.assertEqual(trajectory["n_observations"], 2)
         self.assertEqual(
             manifest["source_observation_views"]["seg"],
             str(view_dir / "observations.jsonl"),
         )
+        self.assertEqual(sft_manifest["action_schema"], "ordered_events_v2")
+        self.assertEqual(sft_manifest["continuous_action_hz"], 5.0)
 
 
 if __name__ == "__main__":
