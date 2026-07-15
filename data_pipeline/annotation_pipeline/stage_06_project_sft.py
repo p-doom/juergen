@@ -6,13 +6,25 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import random
 import re
 import shutil
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from annotation_pipeline.action_format import (
+    ACTION_SCHEMAS,
+    DEFAULT_ACTION_SCHEMA,
+    DEFAULT_CONTINUOUS_ACTION_HZ,
+    ORDERED_ACTION_SCHEMA,
+    ActionPrimitive,
+    HeldStateDiagnostics,
+    ProjectedAction,
+    project_ordered_action,
+    update_held_state,
+)
 from annotation_pipeline.common import action_bin_from_dict, format_action, read_jsonl
 from annotation_pipeline.image_store import is_arrayrecord_image_uri
 
@@ -126,6 +138,29 @@ def apply_terminal_policy(
     raise ValueError(f"Unknown terminal mode: {terminal_mode}")
 
 
+def _project_aggregate_action(value: dict[str, Any]) -> ProjectedAction:
+    action_bin = action_bin_from_dict(value)
+    primitives: list[ActionPrimitive] = []
+    dx = round(action_bin.move_dx)
+    dy = round(action_bin.move_dy)
+    scroll = round(action_bin.scroll)
+    if dx != 0 or dy != 0:
+        primitives.append(ActionPrimitive(kind="move", dx=dx, dy=dy))
+    if scroll != 0:
+        primitives.append(ActionPrimitive(kind="scroll", dx=0, dy=scroll))
+    primitives.extend(
+        ActionPrimitive(
+            kind="down" if sign == "+" else "up",
+            input_name=name,
+        )
+        for sign, name in action_bin.events
+    )
+    return ProjectedAction(
+        text=format_action(action_bin),
+        primitives=tuple(primitives),
+    )
+
+
 def render_messages(
     trajectory: dict[str, Any],
     *,
@@ -135,9 +170,12 @@ def render_messages(
     system_prompt: str | None,
     terminal_token: str | None,
     terminal_mode: str,
-) -> tuple[list[dict[str, Any]], list[str]]:
+    action_schema: str,
+    continuous_action_hz: float,
+) -> tuple[list[dict[str, Any]], list[str], list[ProjectedAction]]:
     messages: list[dict[str, Any]] = []
     image_paths: list[str] = []
+    projected_actions: list[ProjectedAction] = []
     for step_idx, step in enumerate(trajectory["steps"]):
         image = _image_path(str(step["image_path"]), source_dir=source_dir, mode=image_path_mode)
         image_paths.append(image)
@@ -146,14 +184,22 @@ def render_messages(
             user_content.append({"type": "text", "text": instruction})
         user_content.append({"type": "image", "image": image})
         messages.append({"role": "user", "content": user_content})
-        action = format_action(action_bin_from_dict(step["action_bin"]))
-        messages.append({"role": "assistant", "content": _text_content(action)})
+        if action_schema == ORDERED_ACTION_SCHEMA:
+            projected = project_ordered_action(
+                step["events"],
+                interval_start_s=float(step["interval_start_s"]),
+                continuous_action_hz=continuous_action_hz,
+            )
+        else:
+            projected = _project_aggregate_action(step["action_bin"])
+        projected_actions.append(projected)
+        messages.append({"role": "assistant", "content": _text_content(projected.text)})
     if not messages:
         raise ValueError("trajectory has no steps")
     apply_terminal_policy(messages, terminal_token=terminal_token, terminal_mode=terminal_mode)
     if system_prompt is not None:
         messages.insert(0, {"role": "system", "content": _text_content(system_prompt)})
-    return messages, image_paths
+    return messages, image_paths, projected_actions
 
 
 def assign_splits(
@@ -185,6 +231,8 @@ def project_sft(
     system_prompt_file: Path | None = None,
     terminal_token: str | None = None,
     terminal_mode: str = "none",
+    action_schema: str = DEFAULT_ACTION_SCHEMA,
+    continuous_action_hz: float = DEFAULT_CONTINUOUS_ACTION_HZ,
     overwrite: bool = False,
 ) -> dict[str, Any]:
     if split_group not in VALID_SPLIT_GROUPS:
@@ -193,6 +241,10 @@ def project_sft(
         raise ValueError(f"image_path_mode must be one of {VALID_IMAGE_PATH_MODES}")
     if terminal_mode not in VALID_TERMINAL_MODES:
         raise ValueError(f"terminal_mode must be one of {VALID_TERMINAL_MODES}")
+    if action_schema not in ACTION_SCHEMAS:
+        raise ValueError(f"action_schema must be one of {ACTION_SCHEMAS}")
+    if not math.isfinite(continuous_action_hz) or continuous_action_hz <= 0:
+        raise ValueError("continuous_action_hz must be finite and positive")
     system_prompt, system_prompt_source = load_system_prompt(
         system_prompt_text=system_prompt_text, system_prompt_file=system_prompt_file
     )
@@ -208,6 +260,9 @@ def project_sft(
     source_dir = trajectories_path.resolve().parent
     records: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
+    primitive_counts: Counter[str] = Counter()
+    n_no_op_turns = 0
+    state_diagnostics = HeldStateDiagnostics()
     for trajectory in read_jsonl(trajectories_path):
         for variant_idx, instruction in enumerate(
             instruction_variants(trajectory, include_variants)
@@ -225,7 +280,7 @@ def project_sft(
                 f"{trajectory['clip_id']}__{trajectory['trajectory_id']}__v{variant_idx}"
             )
             try:
-                messages, image_paths = render_messages(
+                messages, image_paths, projected_actions = render_messages(
                     trajectory,
                     instruction=instruction,
                     source_dir=source_dir,
@@ -233,7 +288,23 @@ def project_sft(
                     system_prompt=system_prompt,
                     terminal_token=terminal_token,
                     terminal_mode=terminal_mode,
+                    action_schema=action_schema,
+                    continuous_action_hz=continuous_action_hz,
                 )
+                sample_counts: Counter[str] = Counter()
+                sample_no_ops = 0
+                sample_diagnostics = HeldStateDiagnostics()
+                held: set[str] = set()
+                for projected in projected_actions:
+                    if projected.text == "NO_OP":
+                        sample_no_ops += 1
+                    sample_counts.update(primitive.kind for primitive in projected.primitives)
+                    update_held_state(
+                        projected.primitives,
+                        held=held,
+                        diagnostics=sample_diagnostics,
+                    )
+                sample_diagnostics.finish_trajectory(held)
                 record = {
                     "sample_id": sample_id,
                     "trajectory_id": trajectory["trajectory_id"],
@@ -246,7 +317,7 @@ def project_sft(
                     "start_time_s": trajectory["start_time_s"],
                     "end_time_s": trajectory["end_time_s"],
                     "n_frames": trajectory["n_observations"],
-                    "n_non_noop": trajectory["n_non_noop"],
+                    "n_non_noop": len(projected_actions) - sample_no_ops,
                     "source_goal": trajectory["source_goal"],
                     "image_paths": image_paths,
                     "messages": messages,
@@ -255,6 +326,9 @@ def project_sft(
                     {key: trajectory[key] for key in PROVENANCE_KEYS if key in trajectory}
                 )
                 records.append(record)
+                primitive_counts.update(sample_counts)
+                n_no_op_turns += sample_no_ops
+                state_diagnostics.update(sample_diagnostics)
             except Exception as exc:
                 rejected.append(
                     {
@@ -281,7 +355,15 @@ def project_sft(
         "artifact_type": "juergen_sft_view",
         "schema_version": 1,
         "source_trajectories": str(trajectories_path.resolve()),
-        "action_schema": "aggregate_delta_keys_v1",
+        "action_schema": action_schema,
+        "continuous_action_hz": (
+            continuous_action_hz if action_schema == ORDERED_ACTION_SCHEMA else None
+        ),
+        "primitive_counts": {
+            kind: primitive_counts.get(kind, 0) for kind in ("move", "scroll", "down", "up")
+        },
+        "n_no_op_turns": n_no_op_turns,
+        "state_diagnostics": state_diagnostics.to_dict(),
         "include_variants": include_variants,
         "split_group": split_group,
         "val_frac": val_frac,
@@ -314,6 +396,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--system-prompt-file", type=Path)
     parser.add_argument("--terminal-token")
     parser.add_argument("--terminal-mode", choices=VALID_TERMINAL_MODES, default="none")
+    parser.add_argument(
+        "--action-schema",
+        choices=ACTION_SCHEMAS,
+        default=DEFAULT_ACTION_SCHEMA,
+    )
+    parser.add_argument(
+        "--continuous-action-hz",
+        type=float,
+        default=DEFAULT_CONTINUOUS_ACTION_HZ,
+    )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -332,6 +424,8 @@ def main() -> None:
         system_prompt_file=args.system_prompt_file,
         terminal_token=args.terminal_token,
         terminal_mode=args.terminal_mode,
+        action_schema=args.action_schema,
+        continuous_action_hz=args.continuous_action_hz,
         overwrite=args.overwrite,
     )
     print(f"Wrote {manifest['n_samples']} SFT samples to {args.output_dir}")

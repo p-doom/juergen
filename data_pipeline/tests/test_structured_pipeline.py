@@ -12,6 +12,31 @@ from annotation_pipeline.stage_06_project_sft import project_sft
 
 def _observation(frame_idx: int, *, time_s: float | None = None, activity: str = "other") -> dict:
     time_s = float(frame_idx) if time_s is None else time_s
+    events = (
+        [
+            {
+                "source_event_idx": 0,
+                "local_time_s": time_s + 0.1,
+                "kind": "move",
+                "dx": 15.0,
+                "dy": -2.0,
+            },
+            {
+                "source_event_idx": 1,
+                "local_time_s": time_s + 0.2,
+                "kind": "press",
+                "key": "LMB",
+            },
+            {
+                "source_event_idx": 2,
+                "local_time_s": time_s + 0.3,
+                "kind": "release",
+                "key": "LMB",
+            },
+        ]
+        if frame_idx == 0
+        else []
+    )
     action_bin = {
         "move_dx": 15.0 if frame_idx == 0 else 0.0,
         "move_dy": -2.0 if frame_idx == 0 else 0.0,
@@ -30,7 +55,7 @@ def _observation(frame_idx: int, *, time_s: float | None = None, activity: str =
         "interval_start_s": time_s,
         "interval_end_s": time_s + 1.0,
         "image_path": f"ar:///tmp/images.array_record#{frame_idx}",
-        "events": [],
+        "events": events,
         "action_bin": action_bin,
         "activity": activity,
         "has_submission": False,
@@ -84,9 +109,11 @@ class StructuredPipelineTest(unittest.TestCase):
         self.assertEqual(rejected, [])
         self.assertNotIn("messages", trajectories[0])
         self.assertNotIn("action", trajectories[0]["steps"][0])
+        self.assertEqual(trajectories[0]["steps"][0]["interval_start_s"], 0.0)
+        self.assertEqual(trajectories[0]["steps"][0]["interval_end_s"], 1.0)
         self.assertEqual(trajectories[0]["steps"][0]["action_bin"]["move_dx"], 15.0)
 
-    def test_sft_projection_uses_the_current_action_format_without_plans(self) -> None:
+    def test_sft_projection_uses_ordered_v2_by_default(self) -> None:
         observations = [_observation(0), _observation(1)]
         goals = refine_boundaries([_proposal(0, 1)], observations, policy="vision_only")
         trajectories, _ = assemble_trajectories(observations, goals)
@@ -107,9 +134,96 @@ class StructuredPipelineTest(unittest.TestCase):
             for message in sample["messages"]
             if message["role"] == "assistant"
         ]
-        self.assertEqual(assistant_texts, ["15 -2 0 ; +LMB -LMB", "NO_OP"])
+        self.assertEqual(
+            assistant_texts,
+            ["move(15,-2); down(LMB); up(LMB)", "NO_OP"],
+        )
         self.assertFalse(any("plan" in text.lower() for text in assistant_texts))
+        self.assertEqual(manifest["action_schema"], "ordered_events_v2")
+        self.assertEqual(manifest["continuous_action_hz"], 10.0)
+        self.assertEqual(
+            manifest["primitive_counts"],
+            {"down": 1, "move": 1, "scroll": 0, "up": 1},
+        )
+        self.assertEqual(manifest["n_no_op_turns"], 1)
+
+    def test_sft_projection_keeps_aggregate_v1_as_explicit_ablation(self) -> None:
+        observations = [_observation(0), _observation(1)]
+        goals = refine_boundaries([_proposal(0, 1)], observations, policy="vision_only")
+        trajectories, _ = assemble_trajectories(observations, goals)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            trajectories_path = root / "trajectories.jsonl"
+            trajectories_path.write_text(json.dumps(trajectories[0]) + "\n")
+            manifest = project_sft(
+                trajectories_path=trajectories_path,
+                output_dir=root / "sft",
+                action_schema="aggregate_delta_keys_v1",
+                val_frac=0.0,
+            )
+            sample = json.loads((root / "sft" / "chat.jsonl").read_text())
+
+        assistant_texts = [
+            message["content"][0]["text"]
+            for message in sample["messages"]
+            if message["role"] == "assistant"
+        ]
+        self.assertEqual(assistant_texts, ["15 -2 0 ; +LMB -LMB", "NO_OP"])
         self.assertEqual(manifest["action_schema"], "aggregate_delta_keys_v1")
+        self.assertIsNone(manifest["continuous_action_hz"])
+
+    def test_sft_projection_reports_held_state_anomalies_without_mutating_actions(self) -> None:
+        observations = [_observation(0), _observation(1)]
+        observations[0]["events"] = [
+            {
+                "source_event_idx": 0,
+                "local_time_s": 0.1,
+                "kind": "release",
+                "key": "LMB",
+            },
+            {
+                "source_event_idx": 1,
+                "local_time_s": 0.2,
+                "kind": "press",
+                "key": "KeyA",
+            },
+            {
+                "source_event_idx": 2,
+                "local_time_s": 0.3,
+                "kind": "press",
+                "key": "KeyA",
+            },
+        ]
+        goals = refine_boundaries([_proposal(0, 1)], observations, policy="vision_only")
+        trajectories, _ = assemble_trajectories(observations, goals)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            trajectories_path = root / "trajectories.jsonl"
+            trajectories_path.write_text(json.dumps(trajectories[0]) + "\n")
+            manifest = project_sft(
+                trajectories_path=trajectories_path,
+                output_dir=root / "sft",
+                val_frac=0.0,
+            )
+            sample = json.loads((root / "sft" / "chat.jsonl").read_text())
+
+        assistant_text = next(
+            message["content"][0]["text"]
+            for message in sample["messages"]
+            if message["role"] == "assistant"
+        )
+        self.assertEqual(assistant_text, "up(LMB); down(KeyA); down(KeyA)")
+        self.assertEqual(
+            manifest["state_diagnostics"],
+            {
+                "dangling_up": 1,
+                "duplicate_down": 1,
+                "held_at_trajectory_end": 1,
+                "non_neutral_trajectory": 1,
+            },
+        )
 
     def test_window_goals_receive_unique_global_indices(self) -> None:
         first = {**_proposal(0, 1), "goal_idx": 0, "boundary_policy": "vision_only"}

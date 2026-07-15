@@ -58,6 +58,8 @@ def assemble_trajectories(
                 "local_frame_idx": int(item["local_frame_idx"]),
                 "local_time_s": float(item["local_time_s"]),
                 "global_time_s": float(item["global_time_s"]),
+                "interval_start_s": float(item["interval_start_s"]),
+                "interval_end_s": float(item["interval_end_s"]),
                 "source_frame_idx": int(item["source_frame_idx"]),
                 "image_path": str(item["image_path"]),
                 "events": list(item["events"]),
