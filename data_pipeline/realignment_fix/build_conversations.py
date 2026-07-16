@@ -43,6 +43,11 @@ Input  (--sample-dir): a stage-03 output (``sample_index.jsonl`` +
 Output (--output-dir):
   conversations.jsonl          one row per segment: {messages, + provenance}.
   conversations.train/val.jsonl split partitions (only when --val-fraction > 0).
+  <split>/chat.jsonl           per-split canonical layout (train/, val/, ...) so
+                               this dir is a drop-in source_path for the
+                               grain_payload stage (omegalax stage_c reads
+                               <source>/<split>/chat.jsonl). Same rows, same
+                               schema as conversations.jsonl -- just partitioned.
   split_manifest.jsonl         segment_id -> split (only when --val-fraction > 0).
   conversations_summary.json   aggregate stats.
   manifest.json                artifact marker.
@@ -264,6 +269,19 @@ def main() -> None:
         write_jsonl(out_dir / "conversations.val.jsonl", [r for r in records if r["split"] == "val"])
         write_jsonl(out_dir / "split_manifest.jsonl", split_manifest)
 
+    # Per-split chat.jsonl under <out>/<split>/ so this dataset is a drop-in
+    # source_path for the grain_payload stage: omegalax's stage_c reads
+    # <source>/<split>/chat.jsonl per split. The record schema already matches the
+    # canonical chat.jsonl (a "messages" list + provenance; omegalax keeps every
+    # other key as session metadata), so these are the same rows, just partitioned
+    # into the canonical layout. Mirrors annotation_pipeline/build_sft.py. Always
+    # written -- with --val-fraction 0 that is just <out>/train/chat.jsonl.
+    by_split: dict[str, list[dict[str, Any]]] = {}
+    for r in records:
+        by_split.setdefault(r["split"], []).append(r)
+    for split, srows in sorted(by_split.items()):
+        write_jsonl(ensure_dir(out_dir / split) / "chat.jsonl", srows)
+
     n_val = sum(1 for r in records if r["split"] == "val")
     summary = {
         "n_conversations": len(records),
@@ -284,6 +302,8 @@ def main() -> None:
         "artifact_type": "juergen_annotation_conversations",
         "schema_version": 1,
         "conversations": "conversations.jsonl",
+        "chat": "<split>/chat.jsonl",  # drop-in source_path for the grain_payload stage
+        "splits": sorted(by_split),
         **summary,
     })
     print(
