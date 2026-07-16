@@ -8,7 +8,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 
 import msgpack
 
@@ -191,14 +191,8 @@ def keylog_summary(keylog_path: Path) -> dict[str, Any]:
 
 
 def aggregate_actions(
-    keylog_path: Path, n_bins: int, target_fps: float,
-    timemap: Callable[[float], float] | None = None,
+    keylog_path: Path, n_bins: int, target_fps: float
 ) -> tuple[list[ActionBin], ActionStats]:
-    """Bin keylog events into ``n_bins`` per-``target_fps`` ActionBins.
-
-    ``timemap`` optionally remaps each event's timestamp (seconds) before bucketing
-    — e.g. ``realign_lib.keylog_to_video`` to bin on the realigned video clock
-    instead of the raw keylog clock. ``None`` keeps the raw clock (default)."""
     stats = ActionStats()
     bins = [ActionBin() for _ in range(n_bins)]
     held: set[str] = set()
@@ -220,10 +214,7 @@ def aggregate_actions(
 
         if event_type == "ContextChanged":
             continue
-        t_s = timestamp_us / 1_000_000
-        if timemap is not None:
-            t_s = timemap(t_s)
-        bucket_idx = int(t_s * target_fps)
+        bucket_idx = int((timestamp_us / 1_000_000) * target_fps)
         if bucket_idx < 0 or bucket_idx >= n_bins:
             continue
         action_bin = bins[bucket_idx]

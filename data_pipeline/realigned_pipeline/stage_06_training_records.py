@@ -2,13 +2,19 @@
 
 Wrapper around omegalax/scripts/build_sft_records_from_chat.py. Payload-free
 variant of stage_d_chunk_index.py: reads the stage-04 conversations dataset's
-per-split <split>/chat.jsonl directly (NO grain payload / stage 05) and writes
-self-contained inline records per split. Each record IS a training example
-(message slice with ar:// image refs preserved), not a pointer into a shared
-payload; the stage 01 master image store is unchanged.
+single <source>/chat.jsonl directly (NO grain payload) and writes self-contained
+inline records per split under <output_dir>/<split>/. Each record IS a training
+example (message slice with ar:// image refs preserved), not a pointer into a
+shared payload; the stage 01 master image store is unchanged.
+
+The recording-level train/val split is applied HERE via --val_fraction (> 0 ->
+train/ + val/; 0 -> train/ only). Because the split lives here, the stage-05
+measure cache stays split-agnostic (a single message_lengths.jsonl) and is
+reused for every split, so changing --val_fraction re-runs only this stage and
+never re-tokenizes.
 
 Reuses the measure-stage cache (--message_lengths_path) so re-running at a
-different max_length / overflow_mode never re-tokenizes.
+different max_length / overflow_mode / val_fraction never re-tokenizes.
 """
 
 from __future__ import annotations
@@ -32,13 +38,13 @@ FLAGS = flags.FLAGS
 
 # Filename of the per-message length cache written by the measure stage
 # (mirrors omegalax grain_pipeline.MESSAGE_LENGTHS_FILENAME). The measure stage
-# writes one per split under <message_lengths_path>/<split>/.
+# writes a single split-agnostic cache at <message_lengths_path>/.
 MESSAGE_LENGTHS_FILENAME = "message_lengths.jsonl"
 
 # pmanager-injected:
 flags.DEFINE_string("output_dir", None, "Inline-records output dir.", required=True)
 flags.DEFINE_string(
-    "source_path", None, "Conversations dataset root (stage 04, with <split>/chat.jsonl).",
+    "source_path", None, "Conversations dataset root (stage 04, with a single chat.jsonl).",
     required=True,
 )
 # Stage-specific:
@@ -74,16 +80,26 @@ flags.DEFINE_enum(
 flags.DEFINE_string(
     "message_lengths_path",
     None,
-    "Root of a measure-stage artifact holding per-split "
-    f"<split>/{MESSAGE_LENGTHS_FILENAME} caches. When set, each split forwards "
-    "its cache to build_sft_records_from_chat.py so the tokenizer pass is "
-    "skipped (per-message lengths are independent of max_length / overflow_mode, "
-    "so one cache serves every sequence length). Optional: omit to tokenize "
-    "in-line.",
+    "Root of a measure-stage artifact holding the split-agnostic "
+    f"<root>/{MESSAGE_LENGTHS_FILENAME}. Forwarded to build_sft_records_from_chat.py "
+    "so the tokenizer pass is skipped (per-message lengths are independent of "
+    "max_length / overflow_mode / split, so one cache serves every sequence length "
+    "and every split). Optional: omit to tokenize in-line.",
+)
+flags.DEFINE_float(
+    "val_fraction",
+    0.0,
+    "Recording-level val fraction, applied HERE (records stage) over the single "
+    "<source>/chat.jsonl: > 0 writes <out>/train/ and <out>/val/ (split by "
+    "recording_id), 0 writes <out>/train/ only. Because the split is applied here, "
+    "the measure cache stays split-agnostic and is reused when you change this value.",
 )
 
 
-def _run_split(split: str, src_chat: Path, out_split_dir: Path) -> dict:
+def _run_split(split: str, src_chat: Path, out_split_dir: Path, cache_path: Path | None) -> dict:
+    """One build_sft_records_from_chat.py invocation for one recording-level split.
+    ``--split`` makes the builder emit only that split from the single chat.jsonl;
+    ``cache_path`` is the (split-agnostic) message_lengths.jsonl to reuse."""
     out_split_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         "uv",
@@ -100,11 +116,12 @@ def _run_split(split: str, src_chat: Path, out_split_dir: Path) -> dict:
         f"--records_per_shard={FLAGS.records_per_shard}",
         f"--num_workers={FLAGS.num_workers}",
         f"--overflow_mode={FLAGS.overflow_mode}",
+        f"--val_fraction={FLAGS.val_fraction}",
+        f"--split={split}",
         "--overwrite",
     ]
-    if FLAGS.message_lengths_path:
-        split_cache = Path(FLAGS.message_lengths_path) / split / MESSAGE_LENGTHS_FILENAME
-        cmd.append(f"--message_lengths_path={split_cache}")
+    if cache_path is not None:
+        cmd.append(f"--message_lengths_path={cache_path}")
     print(f"[stage_records] {split}: {' '.join(cmd)}", flush=True)
     t0 = time.time()
     rc = subprocess.run(cmd, cwd=FLAGS.omegalax_repo, check=False).returncode
@@ -118,16 +135,22 @@ def _run_split(split: str, src_chat: Path, out_split_dir: Path) -> dict:
 def main(_) -> None:
     output_dir = Path(FLAGS.output_dir)
     source_path = Path(FLAGS.source_path)
+    lengths_root = Path(FLAGS.message_lengths_path) if FLAGS.message_lengths_path else None
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    per_split: list[dict] = []
-    for split in ("train", "val", "test"):
-        src_chat = source_path / split / "chat.jsonl"
-        if not src_chat.is_file():
-            print(f"[stage_records] no chat.jsonl for split {split}, skipping")
-            continue
-        out_split_dir = output_dir / split
-        per_split.append(_run_split(split, src_chat, out_split_dir))
+    # Stage 04 writes a single split-agnostic <source>/chat.jsonl; apply the
+    # recording-level split HERE from --val_fraction, reusing the one root cache for
+    # every split (no re-tokenization when val_fraction changes). > 0 writes
+    # <out>/train/ and <out>/val/; 0 writes <out>/train/ only.
+    src_chat = source_path / "chat.jsonl"
+    if not src_chat.is_file():
+        raise FileNotFoundError(
+            f"no chat.jsonl under {source_path} (stage 04 writes a single "
+            f"<source>/chat.jsonl)"
+        )
+    cache_path = (lengths_root / MESSAGE_LENGTHS_FILENAME) if lengths_root else None
+    splits = ("train", "val") if FLAGS.val_fraction > 0.0 else ("train",)
+    per_split = [_run_split(s, src_chat, output_dir / s, cache_path) for s in splits]
 
     write_manifest(
         output_dir,
@@ -141,6 +164,7 @@ def main(_) -> None:
             "omegalax_repo": FLAGS.omegalax_repo,
             "overflow_mode": FLAGS.overflow_mode,
             "message_lengths_path": FLAGS.message_lengths_path,
+            "val_fraction": FLAGS.val_fraction,
         },
         inputs={"source": str(source_path)},
         stats={"per_split": per_split},

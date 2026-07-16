@@ -38,17 +38,22 @@ Instruction (first user turn) is configurable:
 One conversation per segment (no windowing): a long, high-fps segment becomes a
 long conversation -- watch the trainee's context window at high --target-fps.
 
+The train/val split is NOT applied here: this stage emits a single
+split-agnostic ``chat.jsonl`` and the recording-level split is deferred to the
+records stage (stage 06, via ``--val_fraction``). That keeps this stage -- and
+the measure cache (stage 05) -- independent of the split, so changing the val
+fraction re-runs only stage 06 and never re-tokenizes.
+
 Input  (--sample-dir): a stage-03 output (``sample_index.jsonl`` +
         ``clips/<seg>/stage_01/frame_records.jsonl``).
 Output (--output-dir):
   conversations.jsonl          one row per segment: {messages, + provenance}.
-  conversations.train/val.jsonl split partitions (only when --val-fraction > 0).
-  <split>/chat.jsonl           per-split canonical layout (train/, val/, ...) so
-                               this dir is a drop-in source_path for the
-                               grain_payload stage (omegalax stage_c reads
-                               <source>/<split>/chat.jsonl). Same rows, same
-                               schema as conversations.jsonl -- just partitioned.
-  split_manifest.jsonl         segment_id -> split (only when --val-fraction > 0).
+  chat.jsonl                   the canonical layout (same rows, same schema as
+                               conversations.jsonl) -- a single split-agnostic
+                               drop-in source_path for the measure/records stages
+                               (stage 05 reads <source>/chat.jsonl, stage 06 reads
+                               it and applies the split). Carries recording_id per
+                               row so the downstream split can group by recording.
   conversations_summary.json   aggregate stats.
   manifest.json                artifact marker.
 
@@ -58,13 +63,11 @@ Run::
     uv run python realigned_pipeline/stage_04_build_conversations.py \
         --sample-dir  <stage-03 --output-dir> \
         --output-dir  <dest> \
-        [--instruction "..."] [--val-fraction 0.05]
+        [--instruction "..."]
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -175,15 +178,6 @@ def build_conversation(
     }
 
 
-def _split_of(recording_id: str | None, val_fraction: float) -> str:
-    """Deterministic recording-level train/val split (whole recording -> one side,
-    so frames from a recording never leak across the split). No RNG/seed needed."""
-    if val_fraction <= 0.0 or not recording_id:
-        return "train"
-    bucket = int(hashlib.sha1(str(recording_id).encode()).hexdigest(), 16) % 1000
-    return "val" if bucket < round(val_fraction * 1000) else "train"
-
-
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--sample-dir", type=Path, required=True,
@@ -202,16 +196,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-system-prompt", action="store_true", help="Emit no system message.")
     p.add_argument("--min-frames", type=int, default=1,
                    help="Skip segments with fewer than this many frames.")
-    p.add_argument("--val-fraction", type=float, default=0.0,
-                   help="If > 0, also write train/val partitions split by recording_id.")
     p.add_argument("--limit", type=int, default=None, help="Process only the first N segments (debug).")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    if not (0.0 <= args.val_fraction < 1.0):
-        raise SystemExit("--val-fraction must be in [0, 1)")
 
     index_path = args.sample_dir / "sample_index.jsonl"
     if not index_path.is_file():
@@ -236,7 +226,6 @@ def main() -> None:
 
     out_dir = ensure_dir(args.output_dir)
     records: list[dict[str, Any]] = []
-    split_manifest: list[dict[str, Any]] = []
     n_skipped = 0
     n_frames_total = 0
     n_turns_total = 0
@@ -251,10 +240,7 @@ def main() -> None:
         if conv is None:
             n_skipped += 1
             continue
-        conv["split"] = _split_of(conv.get("recording_id"), args.val_fraction)
         records.append(conv)
-        split_manifest.append({"segment_id": conv["segment_id"],
-                               "recording_id": conv["recording_id"], "split": conv["split"]})
         n_frames_total += conv["n_frames"]
         n_turns_total += conv["n_turns"]
         if i % 1000 == 0:
@@ -264,29 +250,10 @@ def main() -> None:
         raise SystemExit("no conversations built (all segments empty or below --min-frames)")
 
     write_jsonl(out_dir / "conversations.jsonl", records)
-    if args.val_fraction > 0.0:
-        write_jsonl(out_dir / "conversations.train.jsonl", [r for r in records if r["split"] == "train"])
-        write_jsonl(out_dir / "conversations.val.jsonl", [r for r in records if r["split"] == "val"])
-        write_jsonl(out_dir / "split_manifest.jsonl", split_manifest)
+    write_jsonl(out_dir / "chat.jsonl", records)
 
-    # Per-split chat.jsonl under <out>/<split>/ so this dataset is a drop-in
-    # source_path for the grain_payload stage: omegalax's stage_c reads
-    # <source>/<split>/chat.jsonl per split. The record schema already matches the
-    # canonical chat.jsonl (a "messages" list + provenance; omegalax keeps every
-    # other key as session metadata), so these are the same rows, just partitioned
-    # into the canonical layout. Mirrors annotation_pipeline/build_sft.py. Always
-    # written -- with --val-fraction 0 that is just <out>/train/chat.jsonl.
-    by_split: dict[str, list[dict[str, Any]]] = {}
-    for r in records:
-        by_split.setdefault(r["split"], []).append(r)
-    for split, srows in sorted(by_split.items()):
-        write_jsonl(ensure_dir(out_dir / split) / "chat.jsonl", srows)
-
-    n_val = sum(1 for r in records if r["split"] == "val")
     summary = {
         "n_conversations": len(records),
-        "n_train": len(records) - n_val,
-        "n_val": n_val,
         "n_segments_skipped": n_skipped,
         "n_frames_total": n_frames_total,
         "n_turns_total": n_turns_total,
@@ -294,7 +261,6 @@ def main() -> None:
         "instruction": args.instruction,
         "instruction_field": args.instruction_field,
         "has_system_prompt": system_prompt is not None,
-        "val_fraction": args.val_fraction,
         "sample_dir": str(args.sample_dir),
     }
     write_json(out_dir / "conversations_summary.json", summary)
@@ -302,13 +268,11 @@ def main() -> None:
         "artifact_type": "juergen_annotation_conversations",
         "schema_version": 1,
         "conversations": "conversations.jsonl",
-        "chat": "<split>/chat.jsonl",  # drop-in source_path for the grain_payload stage
-        "splits": sorted(by_split),
+        "chat": "chat.jsonl",  # split-agnostic drop-in source_path for stages 05/06
         **summary,
     })
     print(
-        f"[conversations] {len(records)} conversations "
-        f"({summary['n_train']} train / {n_val} val), {n_turns_total} turns, "
+        f"[conversations] {len(records)} conversations, {n_turns_total} turns, "
         f"{n_frames_total} frames, {n_skipped} skipped -> {out_dir}",
         flush=True,
     )
