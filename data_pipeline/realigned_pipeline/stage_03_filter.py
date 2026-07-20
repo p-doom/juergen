@@ -7,10 +7,13 @@ downstream consumer, and writes a compact survivor mask:
 
   * black:  per master record, from the stage-01 luma metrics
     (``mean_luma``/``frac_dark`` vs thresholds) — already master-resolution.
-  * idle:   the realigned keylog is bucketed into master ticks; the INTERIOR
-    of any inactive run longer than ``--idle-min-duration-s`` is dropped,
-    keeping ``--idle-keep-head-s``/``--idle-keep-tail-s`` at each end.
-    Duration-based knobs, so a 4 fps and a 15 fps master behave identically.
+  * idle:   the realigned keylog is judged per ``--idle-judgment-bin-s`` bin
+    (default: the legacy 2 s bin with the legacy rounded NO_OP predicate, see
+    ``--idle-activity``); the INTERIOR of any inactive run longer than
+    ``--idle-min-duration-s`` is dropped, keeping ``--idle-keep-head-s``/
+    ``--idle-keep-tail-s`` at each end. All knobs are in SECONDS, so a 4 fps
+    and a 15 fps master behave identically; the defaults byte-mirror the
+    pre-rewrite sampler's default thinning (noop head/tail = 1/1 @ 0.5 fps).
 
 Because the output is a mask at master resolution (not a sampled dataset),
 nothing here caps downstream fps: stage 03b annotates at k fps and stage 04
@@ -56,7 +59,9 @@ if str(DATA_PIPELINE_DIR) not in sys.path:
 from realigned_pipeline.lib import config  # noqa: E402
 from realigned_pipeline.lib.action_format import get_formatter  # noqa: E402
 from realigned_pipeline.lib.common import (  # noqa: E402
+    aggregate_actions,
     ensure_dir,
+    format_action,
     normalize_dashed_argv,
     read_jsonl,
     write_json,
@@ -119,6 +124,30 @@ def _activity_mask(keylog_path: Path | None, n_records: int, master_fps: float) 
                 active[tick] = True
         else:  # press / release
             active[tick] = True
+    return active
+
+
+def _rounded_activity_mask(
+    keylog_path: Path | None, n_records: int, master_fps: float, bin_ticks: int
+) -> list[bool]:
+    """Legacy-predicate activity at judgment-bin granularity: a bin is active
+    iff its FORMATTED action is non-NO_OP — i.e. summed deltas round to
+    nonzero, or it carries deduped key events. Runs the actual legacy binning
+    code (``aggregate_actions`` + ``format_action``), so every legacy subtlety
+    (delta rounding, scroll fallback, held-set dedup of autorepeats/dangling
+    releases) is inherited byte-for-byte. With ``--idle-min-duration-s 0`` and
+    zero head/tail this reproduces the old sampler's ``noop_mode=none`` frame
+    set exactly at the judgment fps (0 NO_OP frames)."""
+    active = [False] * n_records
+    if keylog_path is None or not keylog_path.exists():
+        return active
+    judgment_fps = master_fps / bin_ticks
+    n_bins = (n_records + bin_ticks - 1) // bin_ticks
+    bins, _ = aggregate_actions(keylog_path, n_bins, judgment_fps)
+    for b, action_bin in enumerate(bins):
+        if format_action(action_bin) != "NO_OP":
+            for t in range(b * bin_ticks, min((b + 1) * bin_ticks, n_records)):
+                active[t] = True
     return active
 
 
@@ -195,6 +224,7 @@ def _params_dict(task: dict[str, Any]) -> dict[str, Any]:
         "idle_judgment_bin_s": (
             float(task["idle_judgment_bin_s"]) if task.get("idle_judgment_bin_s") else None
         ),
+        "idle_activity": str(task.get("idle_activity") or "raw"),
     }
 
 
@@ -277,9 +307,17 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
 
         reasons = [REASON_KEPT] * n_records
         keylog = Path(mrow["keylog_path"]) if mrow.get("keylog_path") else None
-        active = _activity_mask(keylog, n_records, master_fps)
-        if params["idle_judgment_bin_s"]:
-            active = _coarsen_activity(active, round(params["idle_judgment_bin_s"] * master_fps))
+        if params["idle_activity"] == "rounded":
+            active = _rounded_activity_mask(
+                keylog, n_records, master_fps,
+                round(params["idle_judgment_bin_s"] * master_fps),
+            )
+        else:
+            active = _activity_mask(keylog, n_records, master_fps)
+            if params["idle_judgment_bin_s"]:
+                active = _coarsen_activity(
+                    active, round(params["idle_judgment_bin_s"] * master_fps)
+                )
         for start, end in _idle_interiors(
             active,
             master_fps,
@@ -367,10 +405,19 @@ def parse_args() -> argparse.Namespace:
                    help="Seconds kept at the start of each thinned idle run.")
     p.add_argument("--idle-keep-tail-s", type=float, default=config.DEFAULT_IDLE_KEEP_TAIL_S,
                    help="Seconds kept at the end of each thinned idle run.")
-    p.add_argument("--idle-judgment-bin-s", type=float, default=None,
-                   help="Judge idleness at this granularity (seconds): any activity marks the "
-                        "whole bin active. Unset = per master tick. Set to a consumer's frame "
-                        "period to reproduce that consumer's legacy NO_OP-run semantics.")
+    p.add_argument("--idle-judgment-bin-s", type=float, default=config.DEFAULT_IDLE_JUDGMENT_BIN_S,
+                   help="Judge idleness at this granularity (seconds). Default 2 s = the "
+                        "pre-rewrite sampler's default bin (1/0.5 fps). Pass 0 for per-master-"
+                        "tick judgment (raw mode only).")
+    p.add_argument("--idle-activity", choices=("raw", "rounded"),
+                   default=config.DEFAULT_IDLE_ACTIVITY,
+                   help="What counts as activity. 'rounded' (default) = the legacy NO_OP "
+                        "predicate per judgment bin — the bin's FORMATTED action is non-NO_OP "
+                        "(deltas round to nonzero, or deduped key events survive); with the "
+                        "default duration knobs this byte-mirrors the pre-rewrite sampler's "
+                        "default thinning, and with min-duration/head/tail 0 it reproduces "
+                        "noop_mode=none exactly. 'raw' = any nonzero-delta or key event "
+                        "(sub-pixel drift is activity; fps-agnostic).")
     p.add_argument("--qc-view-fps", type=float, default=None,
                    help="Also emit qc_view/<seg>.jsonl: a sampled view at this fps with derived "
                         "canonical action strings, for realignment eyeballing (must divide the "
@@ -383,6 +430,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.idle_activity == "rounded" and not args.idle_judgment_bin_s:
+        raise SystemExit("--idle-activity rounded needs --idle-judgment-bin-s "
+                         "(the granularity the legacy NO_OP predicate is evaluated at)")
 
     master_dir = args.frames_master_dir
     index_path = master_dir / "segment_index.jsonl"
@@ -423,6 +473,7 @@ def main() -> None:
             "idle_keep_head_s": args.idle_keep_head_s,
             "idle_keep_tail_s": args.idle_keep_tail_s,
             "idle_judgment_bin_s": args.idle_judgment_bin_s,
+            "idle_activity": args.idle_activity,
             "qc_view_fps": args.qc_view_fps,
             "qc_dir": str(qc_dir) if qc_dir else None,
             "force": args.force,
@@ -465,6 +516,7 @@ def main() -> None:
         "idle_keep_head_s": args.idle_keep_head_s,
         "idle_keep_tail_s": args.idle_keep_tail_s,
         "idle_judgment_bin_s": args.idle_judgment_bin_s,
+        "idle_activity": args.idle_activity,
         "qc_view_fps": args.qc_view_fps,
     }
     summary = {

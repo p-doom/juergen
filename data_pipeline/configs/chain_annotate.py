@@ -53,7 +53,12 @@ def stage_03_filter():
     cfg.entrypoint.args.frames_master_dir = MASTER_DIR
     cfg.entrypoint.args.clips_manifest = CLIPS_MANIFEST
     cfg.entrypoint.args.num_workers = 32
-    # Duration-based idle knobs (seconds; identical semantics on any master fps).
+    # Idle knobs (seconds; identical semantics on any master fps). These are
+    # the stage defaults, restated for auditability: the legacy rounded NO_OP
+    # predicate per 2 s bin, runs > 4 s thinned keeping 2 s ends — byte-
+    # mirrors the pre-rewrite sampler's default (noop head/tail 1/1 @ 0.5 fps).
+    cfg.entrypoint.args.idle_activity = "rounded"
+    cfg.entrypoint.args.idle_judgment_bin_s = 2.0
     cfg.entrypoint.args.idle_min_duration_s = 4.0
     cfg.entrypoint.args.idle_keep_head_s = 2.0
     cfg.entrypoint.args.idle_keep_tail_s = 2.0

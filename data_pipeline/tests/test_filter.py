@@ -20,6 +20,7 @@ from realigned_pipeline.stage_03_filter import (
     _coarsen_activity,
     _compress_reasons,
     _idle_interiors,
+    _rounded_activity_mask,
     filter_segment,
 )
 
@@ -74,6 +75,52 @@ class IdleLegacyEquivalenceTest(unittest.TestCase):
 
         self.assertEqual(new_kept_slots, legacy_kept_slots)
 
+    def test_default_config_mirrors_legacy_default_thinning(self) -> None:
+        # The stage DEFAULTS (rounded predicate @ 2 s bins, runs > 4 s thinned,
+        # 2 s ends kept) must reproduce the pre-rewrite sampler's DEFAULT
+        # (noop head/tail = 1/1 @ 0.5 fps) — including bins that are NO_OP
+        # only through rounding (sub-pixel drift), which raw judgment keeps.
+        from realigned_pipeline.lib.common import aggregate_actions, format_action
+        from realigned_pipeline.lib.config import (
+            DEFAULT_IDLE_JUDGMENT_BIN_S,
+            DEFAULT_IDLE_KEEP_HEAD_S,
+            DEFAULT_IDLE_KEEP_TAIL_S,
+            DEFAULT_IDLE_MIN_DURATION_S,
+        )
+        from realigned_pipeline.stage_03_filter import _rounded_activity_mask
+
+        n_bins, bin_ticks = 30, int(DEFAULT_IDLE_JUDGMENT_BIN_S * MASTER_FPS)  # 2s bins
+        n_ticks = n_bins * bin_ticks
+        events = [
+            [1_000_000, ["KeyPress", [0, "KeyA"]]],     # bin 0 active
+            [1_200_000, ["KeyRelease", [0, "KeyA"]]],
+            [9_000_000, ["MouseMove", [0.4, 0.0]]],     # bin 4: drift, rounds to NO_OP
+            [21_000_000, ["MouseMove", [3.0, 0.0]]],    # bin 10 active
+            [23_000_000, ["KeyPress", [0, "KeyB"]]],    # bin 11 active
+            [23_500_000, ["KeyRelease", [0, "KeyB"]]],
+            [57_000_000, ["MouseScroll", [0, -2]]],     # bin 28 active
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            keylog = Path(tmp) / "k.msgpack"
+            keylog.write_bytes(msgpack.packb(events))
+
+            # Legacy path: the actual old binning + thinning at 0.5 fps.
+            bins, _ = aggregate_actions(keylog, n_bins, 0.5)
+            noop = [format_action(b) == "NO_OP" for b in bins]
+            legacy_kept = _legacy_noop_thinning(noop, head=1, tail=1)
+
+            # New path with the stage defaults.
+            active = _rounded_activity_mask(keylog, n_ticks, MASTER_FPS, bin_ticks)
+            masked = [False] * n_ticks
+            for s, e in _idle_interiors(active, MASTER_FPS, DEFAULT_IDLE_MIN_DURATION_S,
+                                        DEFAULT_IDLE_KEEP_HEAD_S, DEFAULT_IDLE_KEEP_TAIL_S):
+                for t in range(s, e):
+                    masked[t] = True
+            new_kept = [not masked[b * bin_ticks] for b in range(n_bins)]
+
+        self.assertEqual(new_kept, legacy_kept)
+        self.assertTrue(noop[4], "drift bin must be NO_OP under the legacy predicate")
+
     def test_runs_at_threshold_are_kept_whole(self) -> None:
         # An inactive run of exactly 4 s (60 ticks) is NOT thinned (> only),
         # matching legacy: a 2-bin NO_OP run survives head/tail=1.
@@ -121,6 +168,30 @@ class MaskMechanicsTest(unittest.TestCase):
                 {"start": 5, "end": 7, "reason": "idle_interior"},
             ],
         )
+
+    def test_rounded_activity_is_the_legacy_noop_predicate(self) -> None:
+        # 4 judgment bins of 1 s on a 4-tick/s axis (16 ticks). Legacy NO_OP
+        # judgment: rounded deltas + deduped key events.
+        #   bin 0: drift summing to 0.4 px  -> rounds to 0 -> NO_OP  (raw: active)
+        #   bin 1: autorepeat +A while held -> deduped     -> NO_OP  (raw: active)
+        #   bin 2: drift summing to 0.6 px  -> rounds to 1 -> active
+        #   bin 3: release of the held key  -> key event   -> active
+        with tempfile.TemporaryDirectory() as tmp:
+            keylog = Path(tmp) / "k.msgpack"
+            keylog.write_bytes(msgpack.packb([
+                [200_000, ["KeyPress", [0, "KeyA"]]],   # bin 0: real press (active)
+                [400_000, ["MouseMove", [0.4, 0.0]]],
+                [1_500_000, ["KeyPress", [0, "KeyA"]]],  # bin 1: autorepeat (deduped)
+                [2_500_000, ["MouseMove", [0.6, 0.0]]],
+                [3_500_000, ["KeyRelease", [0, "KeyA"]]],
+            ]))
+            rounded = _rounded_activity_mask(keylog, 16, master_fps=4.0, bin_ticks=4)
+            raw = _coarsen_activity(_activity_mask(keylog, 16, master_fps=4.0), 4)
+        self.assertEqual(rounded, [True] * 4 + [False] * 4 + [True] * 8)
+        # raw counts the autorepeat + sub-round drift as activity; rounded
+        # (the legacy predicate) does not — that gap is the extra-NO_OP-frames
+        # difference between the pipelines.
+        self.assertEqual(raw, [True] * 16)
 
     def test_coarsen_activity(self) -> None:
         active = [True, False, False, False, False, False, True, False]
