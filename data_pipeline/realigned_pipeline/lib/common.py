@@ -60,6 +60,15 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
+def str2bool(s: str | bool) -> bool:
+    """Parse a boolean CLI value. Accepts the labctl ``--flag=value`` form
+    (labctl renders every arg as ``--key=value``, so a valueless store_true
+    flag can't be expressed); truthy = 1/true/yes/on, everything else False."""
+    if isinstance(s, bool):
+        return s
+    return str(s).strip().lower() in ("1", "true", "yes", "on")
+
+
 def normalize_dashed_argv() -> None:
     """Rewrite ``--foo_bar[=x]`` to ``--foo-bar[=x]`` in sys.argv.
 

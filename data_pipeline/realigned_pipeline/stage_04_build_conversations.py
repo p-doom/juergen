@@ -73,6 +73,7 @@ from realigned_pipeline.lib.action_format import FORMATTERS, get_formatter  # no
 from realigned_pipeline.lib.common import (  # noqa: E402
     ensure_dir,
     normalize_dashed_argv,
+    str2bool,
     write_json,
     write_jsonl,
 )
@@ -85,7 +86,11 @@ from realigned_pipeline.lib.goals import (  # noqa: E402
     project_goals,
 )
 from realigned_pipeline.lib.manifest import make_artifact_id  # noqa: E402
-from realigned_pipeline.lib.views import FilterArtifact, build_segment_view  # noqa: E402
+from realigned_pipeline.lib.views import (  # noqa: E402
+    FPS_MODES,
+    FilterArtifact,
+    build_segment_view,
+)
 
 # Default system prompts. Goal-conditioned reuses the canonical one (it names a
 # goal); goal-free drops the goal but keeps the action-format contract.
@@ -187,7 +192,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
     seg = str(task["index_row"]["segment_id"])
     try:
         filter_seg = json.loads(Path(task["filter_seg_path"]).read_text())
-        view = build_segment_view(filter_seg, fps=task["fps"])
+        view = build_segment_view(filter_seg, fps=task["fps"], fps_mode=task["fps_mode"])
         base = {
             "segment_id": seg,
             "recording_id": view.recording_id,
@@ -318,7 +323,13 @@ def parse_args() -> argparse.Namespace:
                    help="A stage-03 (filter) --output-dir: manifest.json + filter_index.jsonl "
                         "+ filter/<seg>.json.")
     p.add_argument("--fps", type=float, required=True,
-                   help="Training frame rate. master_fps/fps must be an integer.")
+                   help="Training frame rate. With --fps-mode exact, master_fps/fps must "
+                        "be an integer.")
+    p.add_argument("--fps-mode", choices=FPS_MODES, default="exact",
+                   help="'exact' (default): fps must divide the master fps; even spacing. "
+                        "'nearest': any fps <= master; each slot takes the master tick "
+                        "nearest its ideal time (spacing jitters by up to half a tick, "
+                        "e.g. 4 fps on a 15 fps master -> ticks 0,4,8,11,...).")
     p.add_argument("--output-dir", type=Path, required=True)
     p.add_argument("--action-format", type=str, default="canonical",
                    choices=sorted(FORMATTERS),
@@ -336,12 +347,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--system-prompt-file", type=Path, default=None,
                    help="Read the system message from a file (wins over --system-prompt).")
     p.add_argument("--no-system-prompt", action="store_true", help="Emit no system message.")
-    p.add_argument("--use-plans", action="store_true",
+    p.add_argument("--use-plans", nargs="?", const=True, type=str2bool, default=False,
+                   metavar="BOOL",
                    help="Goal mode: prefix the goal's plan prose to the first assistant turn "
-                        f"(plans flagged {sorted(DROP_PLAN_FLAGS)} fall back to plan-less).")
-    p.add_argument("--include-variants", action="store_true",
+                        f"(plans flagged {sorted(DROP_PLAN_FLAGS)} fall back to plan-less). "
+                        "Bare flag or --use-plans=true (labctl's --key=value form).")
+    p.add_argument("--include-variants", nargs="?", const=True, type=str2bool, default=False,
+                   metavar="BOOL",
                    help="Goal mode: one conversation per instruction phrasing (primary + "
-                        "instruction_variants), sharing frames/actions/plan.")
+                        "instruction_variants), sharing frames/actions/plan. Bare flag or "
+                        "--include-variants=true.")
     p.add_argument("--min-frames", type=int, default=1,
                    help="Skip segments (goal-free) / reject goals (goal mode) with fewer frames.")
     p.add_argument("--snap-start", choices=SNAP_START_MODES, default="before",
@@ -363,7 +378,7 @@ def main() -> None:
     args = parse_args()
 
     art = FilterArtifact(args.filter_dir)
-    stride = art.stride_for(args.fps)  # fail fast on non-integer strides
+    stride = art.stride_for(args.fps, args.fps_mode)  # fail fast on invalid rates
 
     goals_id = None
     goals_map = None
@@ -403,6 +418,7 @@ def main() -> None:
             "index_row": row,
             "filter_seg_path": str(art.segment_path(str(row["segment_id"]))),
             "fps": args.fps,
+            "fps_mode": args.fps_mode,
             "action_format": args.action_format,
             "goals_by_segment": goals_map,
             "instruction": args.instruction,
@@ -420,7 +436,7 @@ def main() -> None:
 
     n_workers = max(1, min(args.num_workers or mp.cpu_count(), len(tasks)))
     print(
-        f"[conversations] {len(tasks)} segments | fps={args.fps} (stride {stride}) "
+        f"[conversations] {len(tasks)} segments | fps={args.fps} ({args.fps_mode}, stride {stride:g}) "
         f"format={args.action_format} mode={'goals' if goal_mode else 'goal-free'} "
         f"| workers={n_workers}",
         flush=True,
@@ -464,6 +480,7 @@ def main() -> None:
         "status_counts": dict(counts),
         "goal_mode": goal_mode,
         "fps": args.fps,
+        "fps_mode": args.fps_mode,
         "stride": stride,
         "master_fps": art.master_fps,
         "action_format": args.action_format,

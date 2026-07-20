@@ -78,7 +78,7 @@ from realigned_pipeline.lib.goals import (  # noqa: E402
     view_span_to_master,
 )
 from realigned_pipeline.lib.manifest import make_artifact_id  # noqa: E402
-from realigned_pipeline.lib.views import FilterArtifact  # noqa: E402
+from realigned_pipeline.lib.views import FPS_MODES, FilterArtifact  # noqa: E402
 
 # Routing-only per-frame token guess (720p-ish); the governor corrects with
 # measured actuals, so precision doesn't matter here.
@@ -134,8 +134,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--filter-dir", type=Path, required=True,
                    help="A stage-03 (filter) --output-dir.")
     p.add_argument("--fps", type=float, required=True,
-                   help="Annotation frame rate k. master_fps/k must be an integer. "
-                        "Independent of the training fps.")
+                   help="Annotation frame rate k, independent of the training fps. With "
+                        "--fps-mode exact, master_fps/k must be an integer.")
+    p.add_argument("--fps-mode", choices=FPS_MODES, default="exact",
+                   help="'exact' (default): k must divide the master fps. 'nearest': any "
+                        "k <= master; slots take the nearest master tick (jittered spacing).")
     p.add_argument("--method", required=True, choices=sorted(discover_methods()),
                    help="Annotation method (annotation/methods/<name>/).")
     p.add_argument("--output-dir", type=Path, required=True)
@@ -181,7 +184,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     art = FilterArtifact(args.filter_dir)
-    stride = art.stride_for(args.fps)
+    stride = art.stride_for(args.fps, args.fps_mode)
     method = load_method(args.method)
     # Resolve the env default to its actual name so provenance (goal rows,
     # cache dirs) never records a placeholder.
@@ -236,7 +239,7 @@ def main() -> None:
         raise SystemExit("no items to process")
 
     print(f"[annotate] method={method.name} (input: {method.input_kind}) "
-          f"fps={args.fps} (stride {stride}) prompt_pack={method.prompts.sha} "
+          f"fps={args.fps} ({args.fps_mode}, stride {stride:g}) prompt_pack={method.prompts.sha} "
           f"| {len(items)} items", flush=True)
 
     run_driver(
@@ -273,6 +276,7 @@ def main() -> None:
         "prompt_pack_sha": method.prompts.sha,
         "models": [m or "env" for m in models],
         "fps": args.fps,
+        "fps_mode": args.fps_mode,
         "stride": stride,
         "master_fps": art.master_fps,
         "n_units": n_units,
@@ -309,7 +313,7 @@ def _frames_mode(args, art: FilterArtifact, method: Method, rows, units_dir: Pat
 
     def run_item(item, model: str | None) -> dict[str, Any]:
         seg = item["id"]
-        view = art.segment_view(seg, args.fps)
+        view = art.segment_view(seg, args.fps, args.fps_mode)
         if not view.frames:
             return {"skipped": "empty_view", "n_units": 0, "n_goals": 0, "actual_tokens": 0}
         actions = _segment_actions(view, view.keylog_path)
@@ -382,7 +386,7 @@ def _goals_mode(args, art: FilterArtifact, method: Method, units_dir: Path,
         uid = item["id"]
         goals = [dict(g) for g in item["goals"]]  # never mutate the input rows
         seg = str(goals[0]["segment_id"])
-        view = art.segment_view(seg, in_fps)
+        view = art.segment_view(seg, in_fps, str(in_manifest.get("fps_mode") or "exact"))
         narration_path = in_dir / "describe" / f"{uid}.txt"
         narration = narration_path.read_text() if narration_path.exists() else ""
         result = method.run_unit(
