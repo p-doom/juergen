@@ -6,14 +6,15 @@ import base64
 import json
 import math
 import re
+import sys
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 
 import msgpack
 
 from realigned_pipeline.lib.config import SYSTEM_PROMPT
-
 
 UNKNOWN_RE = re.compile(r"^Unknown\((-?\d+)\)$")
 MACOS_UNKNOWN_NAME_BY_CODE: dict[int, str] = {
@@ -57,6 +58,19 @@ class ActionStats:
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def normalize_dashed_argv() -> None:
+    """Rewrite ``--foo_bar[=x]`` to ``--foo-bar[=x]`` in sys.argv.
+
+    pmanager configs express entrypoint args as python identifiers (rendered
+    ``--foo_bar=value``); the realigned stages declare dashed argparse flags.
+    Call this before parse_args() so both spellings work. Only the flag name
+    (before the first ``=``) is rewritten; values pass through untouched."""
+    for i, arg in enumerate(sys.argv[1:], start=1):
+        if arg.startswith("--") and "_" in arg.split("=", 1)[0]:
+            key, sep, value = arg.partition("=")
+            sys.argv[i] = key.replace("_", "-") + sep + value
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:

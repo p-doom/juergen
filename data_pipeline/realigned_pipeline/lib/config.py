@@ -33,6 +33,16 @@ DEFAULT_NOOP_KEEP_TAIL = 1
 # Unset (None) falls back to DEFAULT_NOOP_KEEP_HEAD/TAIL (legacy interface).
 NOOP_MODES = ("none", "ends", "all")
 
+# --- Stage 03: idle filtering (duration-based, master-fps-agnostic) ----------
+# The filter judges idleness in SECONDS so a 4 fps and a 15 fps master behave
+# identically: the interior of any inactive run longer than MIN_DURATION_S is
+# dropped, keeping KEEP_HEAD_S / KEEP_TAIL_S at each end (a wait's start AND
+# end stay visible). Defaults reproduce the legacy 0.5 fps head/tail=1
+# behavior: runs > 4 s thinned, 2 s kept at each end.
+DEFAULT_IDLE_MIN_DURATION_S = 4.0
+DEFAULT_IDLE_KEEP_HEAD_S = 2.0
+DEFAULT_IDLE_KEEP_TAIL_S = 2.0
+
 # --- Black-frame filtering --------------------------------------------------
 # Detection (per-frame luma metrics) is computed ONCE in stage 01a and written to
 # the frame manifest; the DROP decision runs in the sampler (01b), so these
@@ -85,5 +95,5 @@ def ffmpeg_bin() -> str | None:
         import imageio_ffmpeg
 
         return imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception:  # noqa: BLE001 - optional dependency, only for binary discovery
+    except Exception:
         return None

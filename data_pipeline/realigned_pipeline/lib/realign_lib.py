@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import datetime
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import msgpack

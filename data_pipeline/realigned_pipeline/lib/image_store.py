@@ -77,7 +77,7 @@ def read_jpeg_bytes(ref: str | Path) -> bytes:
     return Path(ref).read_bytes()
 
 
-def read_image_bgr(ref: str | Path) -> "np.ndarray":
+def read_image_bgr(ref: str | Path) -> np.ndarray:
     """Decode ``ref`` (``ar://`` URI or file path) into an OpenCV BGR array."""
     import cv2  # noqa: PLC0415
     import numpy as np  # noqa: PLC0415
@@ -94,7 +94,7 @@ def read_image_bgr(ref: str | Path) -> "np.ndarray":
     return frame
 
 
-def open_image_pil(ref: str | Path) -> "Image.Image":
+def open_image_pil(ref: str | Path) -> Image.Image:
     """Open ``ref`` (``ar://`` URI or file path) as a PIL image."""
     import io  # noqa: PLC0415
 
