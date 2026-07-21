@@ -211,6 +211,10 @@ def parse_args() -> argparse.Namespace:
                    help="Day mode: cap each day stream at this many day-seconds "
                         "(e.g. 3600 = first hour; matches the lumine 3-track "
                         "comparison scope). Partial runs — never corpus results.")
+    p.add_argument("--day-index-cache", type=Path, default=None,
+                   help="Day mode: cache file for the day index (the mvhd probe of "
+                        "every segment video costs minutes per invocation). Reused "
+                        "only when its recorded filter_id matches --filter-dir.")
     # Windowing (frames methods)
     p.add_argument("--context-limit", type=int, default=262144)
     p.add_argument("--window-safety-margin", type=int, default=28000)
@@ -467,8 +471,25 @@ def _days_mode(args, art: FilterArtifact, method: Method, units_dir: Path,
     call-to-call — so the driver's parallelism axis is ACROSS days; the item
     estimate is ONE clip call (a day never has more than one call in flight)
     and live TPM comes from the per-call report hook."""
-    day_rows, counters = build_day_index(art, args.clips_manifest, tz=args.tz)
-    print(f"[annotate] day index: {counters}", flush=True)
+    cache = args.day_index_cache
+    cached = None
+    if cache is not None and cache.is_file():
+        doc = json.loads(cache.read_text())
+        if doc.get("filter_id") == art.filter_id and doc.get("tz") == args.tz:
+            cached = doc
+        else:
+            print("[annotate] day-index cache is stale (filter_id/tz mismatch); rebuilding.",
+                  flush=True)
+    if cached is not None:
+        day_rows, counters = cached["days"], cached["counters"]
+        print(f"[annotate] day index (cached): {counters}", flush=True)
+    else:
+        day_rows, counters = build_day_index(art, args.clips_manifest, tz=args.tz)
+        print(f"[annotate] day index: {counters}", flush=True)
+        if cache is not None:
+            write_json(cache, {"filter_id": art.filter_id, "tz": args.tz,
+                               "clips_manifest": str(args.clips_manifest),
+                               "counters": counters, "days": day_rows})
     if args.day_filter:
         wanted = set(args.day_filter)
         missing = wanted - {d["day_tag"] for d in day_rows}
