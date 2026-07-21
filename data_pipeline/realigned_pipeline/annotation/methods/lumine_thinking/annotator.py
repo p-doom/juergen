@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from realigned_pipeline.annotation.lib.days import DayFrame, DayStream, fmt_t, frame_label
+from realigned_pipeline.annotation.lib.labeler import ContentFilteredError
 from realigned_pipeline.annotation.lib.registry import MethodContext
 from realigned_pipeline.annotation.lib.units import frames_to_data_urls
 from realigned_pipeline.lib.common import write_json, write_jsonl
@@ -205,18 +206,26 @@ def _audit(ctx: MethodContext, day: DayStream, thoughts: list[dict[str, Any]],
     batch of one so the canary exercises the shipping prompt."""
     if not thoughts:
         return
-    if verify_mode == "batched":
-        verdicts = _audit_batched(ctx, day, thoughts, ctx_frames,
-                                  ctx.cache_dir / f"{cache_stem}_verify.txt",
-                                  verify_max, report)
-        for th, v in zip(thoughts, verdicts, strict=True):
-            th["verify"] = v
-    else:
+    try:
+        if verify_mode == "batched":
+            verdicts = _audit_batched(ctx, day, thoughts, ctx_frames,
+                                      ctx.cache_dir / f"{cache_stem}_verify.txt",
+                                      verify_max, report)
+            for th, v in zip(thoughts, verdicts, strict=True):
+                th["verify"] = v
+        else:
+            for th in thoughts:
+                th["verify"] = _audit_per_thought(
+                    ctx, day, th, ctx_frames,
+                    ctx.cache_dir / f"{cache_stem}_v{th['day_idx']:06d}.txt",
+                    verify_max, report)
+    except ContentFilteredError as exc:
+        # The audit itself was blocked — fail CLOSED: unverifiable thoughts
+        # never reach the artifact.
         for th in thoughts:
-            th["verify"] = _audit_per_thought(
-                ctx, day, th, ctx_frames,
-                ctx.cache_dir / f"{cache_stem}_v{th['day_idx']:06d}.txt",
-                verify_max, report)
+            if not th.get("verify"):
+                th["verify"] = {"verdict": "fail", "violations": ["content_filter"],
+                                "reason": f"audit blocked by content filter: {exc}"[:200]}
 
 
 def _specificity(th: dict[str, Any]) -> float:
@@ -269,6 +278,10 @@ def _self_test(ctx: MethodContext, day: DayStream, thoughts: list[dict[str, Any]
                f"selftest_{host['day_idx']:06d}_{donor['day_idx']:06d}",
                verify_max, report)
         v = planted["verify"]
+        if "content_filter" in (v.get("violations") or []):
+            # The plant audit itself was blocked — the gate's health is
+            # untestable on this pair; don't fail a day over it.
+            return {"status": "skipped", "reason": "self-test audit content-filtered"}
         caught = v["verdict"] == "fail"
         n_caught += caught
         plants.append({"host_day_idx": host["day_idx"], "host_t": host["t_label"],
@@ -334,11 +347,19 @@ def run_unit(item: dict[str, Any], ctx: MethodContext) -> dict[str, Any]:
             imgs, labels = _render(ctx, clip)
             user = ctx.prompts.render("clip", max_thoughts=max_per_clip,
                                       memory=memory + gap_note)
-            parsed, res = ctx.labeler.call_json_full(
-                system, user, images=imgs, image_labels=labels,
-                cache_path=ctx.cache_dir / f"{clip_key}.txt", no_cache=ctx.no_cache,
-                max_completion_tokens=writer_max)
-            clip_tokens = _tokens(res.usage)
+            content_filtered = False
+            try:
+                parsed, res = ctx.labeler.call_json_full(
+                    system, user, images=imgs, image_labels=labels,
+                    cache_path=ctx.cache_dir / f"{clip_key}.txt", no_cache=ctx.no_cache,
+                    max_completion_tokens=writer_max)
+            except ContentFilteredError:
+                # The provider refuses to describe THIS clip's screen content.
+                # Degrade to an unannotated clip (zero thoughts, memory carried
+                # unchanged) instead of killing the whole day.
+                parsed, res = {}, None
+                content_filtered = True
+            clip_tokens = _tokens(res.usage) if res else 0
             track(clip_tokens)
 
             thoughts, dropped = _clean_thoughts(parsed, clip, max_per_clip)
@@ -355,12 +376,13 @@ def run_unit(item: dict[str, Any], ctx: MethodContext) -> dict[str, Any]:
                 "segments": sorted({fr.segment_id for fr in clip}),
                 "n_frames": len(clip),
                 "gap_note": bool(gap_note),
+                "content_filtered": content_filtered,
                 "memory_in": memory,
                 "memory_out": memory_out,
                 "log": log,
                 "thoughts": thoughts,
                 "n_dropped_anchor": dropped,
-                "writer_finish": res.finish_reason,
+                "writer_finish": res.finish_reason if res else "content_filter",
                 "writer_tokens": clip_tokens,
             }
             write_json(rec_path, rec)

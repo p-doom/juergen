@@ -307,14 +307,25 @@ def extract_json_object(text: str) -> dict[str, Any]:
     if stripped.startswith("```"):
         stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
         stripped = re.sub(r"\s*```$", "", stripped)
-    try:
-        value = json.loads(stripped)
-    except json.JSONDecodeError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start < 0 or end <= start:
-            raise
-        value = json.loads(stripped[start : end + 1])
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    candidates = [stripped]
+    if start >= 0 and end > start:
+        candidates.append(stripped[start : end + 1])
+    # Models emit raw backslashes inside strings (Windows paths, regexes,
+    # keyboard chords) that json.loads rejects as invalid escapes; escaping
+    # the invalid ones recovers the object without touching valid escapes.
+    candidates += [re.sub(r'\\(?!["\\/bfnrtu]|u[0-9a-fA-F]{4})', r"\\\\", c)
+                   for c in list(candidates)]
+    last_err: Exception | None = None
+    for cand in candidates:
+        try:
+            value = json.loads(cand)
+            break
+        except json.JSONDecodeError as exc:
+            last_err = exc
+    else:
+        raise last_err  # type: ignore[misc]
     if not isinstance(value, dict):
         raise ValueError("Expected a JSON object")
     return value

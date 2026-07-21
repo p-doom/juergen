@@ -88,6 +88,11 @@ class LabelerConfig:
         return cfg
 
 
+class ContentFilteredError(RuntimeError):
+    """The provider's content filter blocked this call (deterministic for
+    these inputs — retrying cannot help). Methods decide how to degrade."""
+
+
 @dataclass
 class LabelResult:
     """One labeler call's output. ``content`` is the model's answer (the prose /
@@ -234,6 +239,10 @@ class Labeler:
                 resp = self._client.chat.completions.create(**kwargs)
             except Exception as exc:
                 last_err = f"{type(exc).__name__}: {exc}"
+                if "content_filter" in last_err:
+                    # Azure blocked the request/response for THESE inputs —
+                    # deterministic; surface it as its own type immediately.
+                    raise ContentFilteredError(last_err) from exc
                 wait = self._transient_wait(exc, transient_n)
                 if wait is not None:
                     if transient_left <= 0:
