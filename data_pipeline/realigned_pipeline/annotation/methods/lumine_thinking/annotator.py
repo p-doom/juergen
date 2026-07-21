@@ -56,8 +56,12 @@ DEFAULT_CLIP_FRAMES = 30          # ~60 s at 0.5 fps
 DEFAULT_MAX_THOUGHTS_PER_CLIP = 3
 DEFAULT_CTX_FRAMES = 12           # pre-anchor evidence frames for the auditor
 DEFAULT_SELFTEST_MIN_SEP_S = 1800.0
-DEFAULT_WRITER_MAX_TOKENS = 4096  # per-call cap; the labeler escalates on reasoning burn
-DEFAULT_VERIFY_MAX_TOKENS = 4096
+# Per-call completion budgets. Kimi's in-band reasoning plus the log field
+# make writer completions run 8-12k observed (lumine's 4k cap predates the
+# log); starting low just buys guaranteed escalation retries at full input
+# cost. The labeler still doubles up to LABELER_MAX_TOKENS on overflow.
+DEFAULT_WRITER_MAX_TOKENS = 16384
+DEFAULT_VERIFY_MAX_TOKENS = 8192
 MEMORY_SEED = "(day just started — no memory yet)"
 
 

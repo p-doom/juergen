@@ -261,18 +261,22 @@ class Labeler:
             content = (msg.content or "").strip()
             reasoning = (getattr(msg, "reasoning_content", None) or "").strip()
             finish_reason = str(getattr(choice, "finish_reason", "") or "")
-            if finish_reason == "length" and not content:
-                # The whole budget went to reasoning; what came back is a
-                # truncated chain-of-thought, not an answer. Double and retry;
-                # never cache it.
+            if finish_reason == "length":
+                # The budget ran out — on reasoning (empty content) or mid-answer
+                # (truncated content). Either way the response is unusable:
+                # retry with a doubled budget and NEVER cache it. Only at the
+                # cap does a truncated-but-present answer fall through (cached,
+                # loud below) — an empty one is an error.
                 if budget < budget_cap:
                     budget = min(budget_cap, budget * 2)
-                    print(f"  [labeler] completion exhausted on reasoning; retrying with "
-                          f"max_completion_tokens={budget} ({tag}).", flush=True)
+                    print(f"  [labeler] completion hit its budget "
+                          f"({'reasoning burn' if not content else 'truncated answer'}); "
+                          f"retrying with max_completion_tokens={budget} ({tag}).", flush=True)
                     continue
-                raise RuntimeError(
-                    f"completion exhausted on reasoning at max_completion_tokens={budget} "
-                    f"(finish_reason=length, empty content; raise LABELER_MAX_TOKENS)")
+                if not content:
+                    raise RuntimeError(
+                        f"completion exhausted on reasoning at max_completion_tokens={budget} "
+                        f"(finish_reason=length, empty content; raise LABELER_MAX_TOKENS)")
             if not content and not reasoning:
                 last_err = "empty completion"
                 if hard_left <= 0:
