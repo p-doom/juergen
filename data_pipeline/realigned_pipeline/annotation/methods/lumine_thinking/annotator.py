@@ -232,13 +232,10 @@ def _specificity(th: dict[str, Any]) -> float:
         core = w.strip(".,;:!?()")
         if not core:
             continue
-        if any(c.isdigit() for c in core):
-            score += 1
-        elif core.startswith(("'", '"')) or core.endswith(("'", '"')):
-            score += 1
-        elif len(core) > 3 and any(c in core for c in "./_-"):
-            score += 1
-        elif i > 0 and core[:1].isupper():
+        if (any(c.isdigit() for c in core)
+                or core.startswith(("'", '"')) or core.endswith(("'", '"'))
+                or (len(core) > 3 and any(c in core for c in "./_-"))
+                or (i > 0 and core[:1].isupper())):
             score += 1
     return score + 0.02 * len(words)
 
