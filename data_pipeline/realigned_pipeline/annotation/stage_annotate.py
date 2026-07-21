@@ -189,9 +189,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--method", required=True, choices=sorted(discover_methods()),
                    help="Annotation method (annotation/methods/<name>/).")
     p.add_argument("--output-dir", type=Path, required=True)
-    p.add_argument("--models", default="",
-                   help="Comma list to split work across (e.g. 'Kimi-K2.6,Kimi-K2.5'); "
-                        "empty = the env-configured LABELER_MODEL.")
+    p.add_argument("--models", default="Kimi-K2.6,Kimi-K2.5",
+                   help="Comma list to split work across. Default: both Kimi models "
+                        "(on-par quality; combined ~5M TPM quota). Pass '' to fall "
+                        "back to the env-configured LABELER_MODEL.")
     p.add_argument("--input-goals-dir", type=Path, default=None,
                    help="For INPUT_KIND=goals methods (e.g. plans): the producing "
                         "stage-03b artifact to enrich.")
@@ -241,7 +242,10 @@ def parse_args() -> argparse.Namespace:
                         "Values are strings; the method casts.")
     p.add_argument("--no-cache", action="store_true")
     # Governor
-    p.add_argument("--target-tpm", type=float, default=1_800_000)
+    p.add_argument("--target-tpm", default="Kimi-K2.6=2700000,Kimi-K2.5=1800000",
+                   help="Per-model sustained-TPM target: 'model=tpm' comma pairs, or one "
+                        "bare number for every model. Defaults leave 429 headroom under "
+                        "the Azure quotas (K2.6 3M, K2.5 2M); unlisted models get 1.8M.")
     p.add_argument("--max-workers", type=int, default=64)
     p.add_argument("--start-limit", type=int, default=24)
     p.add_argument("--max-limit", type=int, default=80)
@@ -284,6 +288,18 @@ def main() -> None:
     labelers = {m: Labeler(LabelerConfig.from_env(model=m, reasoning_effort=reasoning_effort,
                                                   temperature=temperature))
                 for m in models}
+
+    target_tpm: float | dict[str | None, float]
+    if "=" in args.target_tpm:
+        spec: dict[str, float] = {}
+        for pair in args.target_tpm.split(","):
+            key, sep, value = pair.partition("=")
+            if not sep:
+                raise SystemExit(f"--target-tpm: mixed forms in {args.target_tpm!r}")
+            spec[key.strip()] = float(value)
+        target_tpm = {m: spec.get(m or "", 1_800_000.0) for m in models}
+    else:
+        target_tpm = float(args.target_tpm)
 
     method_params: dict[str, Any] = {}
     for spec in args.param or []:
@@ -346,7 +362,7 @@ def main() -> None:
         run_item=run_fn,
         models=models,
         progress_path=progress_path,
-        target_tpm=args.target_tpm,
+        target_tpm=target_tpm,
         max_workers=args.max_workers,
         init_call_s=args.init_call_s,
         tpm_window_s=args.tpm_window_s,

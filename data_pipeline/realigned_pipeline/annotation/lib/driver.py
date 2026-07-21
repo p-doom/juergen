@@ -40,10 +40,16 @@ class TpmGovernor:
     regardless of token-estimate error. A loose projection ceiling guards
     against runaway admission during the measurement lag."""
 
-    def __init__(self, models: list[str | None], target_tpm: float, init_call_s: float = 200.0,
+    def __init__(self, models: list[str | None], target_tpm: float | dict[str | None, float],
+                 init_call_s: float = 200.0,
                  window_s: float = 180.0, start_limit: int = 24, max_limit: int = 80):
         self.models = list(models)
-        self.target = float(target_tpm)
+        # Per-model targets (quotas differ, e.g. K2.6 3M vs K2.5 2M); a bare
+        # float applies to every model.
+        if isinstance(target_tpm, dict):
+            self.target = {m: float(target_tpm[m]) for m in self.models}
+        else:
+            self.target = {m: float(target_tpm) for m in self.models}
         self.window_s = float(window_s)
         self.max_limit = int(max_limit)
         self.cv = threading.Condition()
@@ -74,7 +80,7 @@ class TpmGovernor:
                 for m in self.models:
                     free = self.limit[m] - len(self.inflight[m])
                     # loose projection ceiling (1.5x target) as a runaway guard
-                    proj_ok = self._proj_tpm(m) + est_tokens / max(20.0, self.dur[m]) * 60.0 <= self.target * 1.5
+                    proj_ok = self._proj_tpm(m) + est_tokens / max(20.0, self.dur[m]) * 60.0 <= self.target[m] * 1.5
                     if free > 0 and proj_ok:
                         cands.append((free, m))
                 if not cands and all(not self.inflight[m] for m in self.models):
@@ -115,9 +121,9 @@ class TpmGovernor:
         with self.cv:
             for m in self.models:
                 mt = self._measured_tpm(m, now)
-                if mt > self.target:
+                if mt > self.target[m]:
                     self.limit[m] = max(2, int(self.limit[m] * 0.9))
-                elif mt < 0.9 * self.target and len(self.inflight[m]) >= self.limit[m] - 1:
+                elif mt < 0.9 * self.target[m] and len(self.inflight[m]) >= self.limit[m] - 1:
                     self.limit[m] = min(self.max_limit, self.limit[m] + 2)
             self.cv.notify_all()
 
@@ -137,7 +143,7 @@ def run_driver(
     run_item: Callable[[Any, str | None], dict[str, Any]],
     models: list[str | None],
     progress_path: Path,
-    target_tpm: float = 1_800_000,
+    target_tpm: float | dict[str | None, float] = 1_800_000,
     max_workers: int = 64,
     init_call_s: float = 200.0,
     tpm_window_s: float = 180.0,
@@ -169,8 +175,9 @@ def run_driver(
     counters = {"done": 0, "ok": 0, "fail": 0}
     total = len(todo)
     stop = threading.Event()
+    targets_s = "  ".join(f"{model_slug(m)}={gov.target[m]:,.0f}" for m in models)
     print(f"[driver] {len(items)} items, {len(items) - total} already done, {total} to do "
-          f"| models={[m or 'env' for m in models]} target_tpm={target_tpm:,.0f}/model "
+          f"| models={[m or 'env' for m in models]} target_tpm: {targets_s} "
           f"workers={max_workers}", flush=True)
     if not todo:
         return counters
