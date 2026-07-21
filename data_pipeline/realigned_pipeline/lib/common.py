@@ -313,10 +313,15 @@ def extract_json_object(text: str) -> dict[str, Any]:
     if start >= 0 and end > start:
         candidates.append(stripped[start : end + 1])
     # Models emit raw backslashes inside strings (Windows paths, regexes,
-    # keyboard chords) that json.loads rejects as invalid escapes; escaping
-    # the invalid ones recovers the object without touching valid escapes.
-    candidates += [re.sub(r'\\(?!["\\/bfnrtu]|u[0-9a-fA-F]{4})', r"\\\\", c)
-                   for c in list(candidates)]
+    # LaTeX) that json.loads rejects as invalid escapes; escape the invalid
+    # ones. Valid escapes must be CONSUMED left-to-right (not lookahead-
+    # tested), else the tail of a valid '\\\\' pair followed by a letter
+    # (r'\\\\phi') is itself "repaired" and the string breaks differently.
+    def _fix_escape(m: re.Match) -> str:
+        return m.group(0) if m.group(1) else "\\\\"
+
+    esc = re.compile(r'\\(["\\/bfnrtu]|u[0-9a-fA-F]{4})?')
+    candidates += [esc.sub(_fix_escape, c) for c in list(candidates)]
     last_err: Exception | None = None
     for cand in candidates:
         try:
