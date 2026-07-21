@@ -207,6 +207,10 @@ def parse_args() -> argparse.Namespace:
                         "independent chunks (day mode).")
     p.add_argument("--day-filter", nargs="*", default=None,
                    help="Day mode: only these day tags (smoke/validation runs).")
+    p.add_argument("--day-t1", type=float, default=None,
+                   help="Day mode: cap each day stream at this many day-seconds "
+                        "(e.g. 3600 = first hour; matches the lumine 3-track "
+                        "comparison scope). Partial runs — never corpus results.")
     # Windowing (frames methods)
     p.add_argument("--context-limit", type=int, default=262144)
     p.add_argument("--window-safety-margin", type=int, default=28000)
@@ -380,6 +384,7 @@ def main() -> None:
         "clips_manifest": str(args.clips_manifest) if args.clips_manifest else None,
         "tz": args.tz if method.input_kind == "days" else None,
         "gap_cut_s": args.gap_cut_s if method.input_kind == "days" else None,
+        "day_t1": args.day_t1,
     }
     write_json(out_dir / "annotate_summary.json", summary)
     write_json(out_dir / "manifest.json", {
@@ -486,7 +491,7 @@ def _days_mode(args, art: FilterArtifact, method: Method, units_dir: Path,
             return {"n_clips": unit_doc.get("n_clips"), "n_goals": len(unit_doc.get("goals", [])),
                     "actual_tokens": 0, "resumed": True}
         day = build_day_stream(item["row"], art, fps=args.fps, fps_mode=args.fps_mode,
-                               gap_cut_s=args.gap_cut_s)
+                               gap_cut_s=args.gap_cut_s, t1=args.day_t1)
         if not day.frames:
             return {"skipped": "empty_day", "n_clips": 0, "n_goals": 0, "actual_tokens": 0}
         ctx = ctx_for(model, day_tag, {

@@ -195,19 +195,27 @@ def build_day_stream(
     fps: float,
     fps_mode: str = "exact",
     gap_cut_s: float = DEFAULT_GAP_CUT_S,
+    t1: float | None = None,
 ) -> DayStream:
     """Concatenate the day's segment views onto the day clock. Frames sort by
     day time (segments already come wall-clock-ordered), day_idx is assigned
-    densely, and chunks split at gaps > gap_cut_s."""
+    densely, and chunks split at gaps > gap_cut_s. ``t1`` caps the stream at
+    that many day-seconds (validation/smoke slices — a capped run is a
+    partial artifact, never a corpus result)."""
     raw: list[tuple[float, str, str | None, int, str, str]] = []
     for seg in day_row["segments"]:
+        if t1 is not None and float(seg["t_day_s"]) > t1:
+            continue
         view = art.segment_view(str(seg["segment_id"]), fps, fps_mode)
         if not view.frames:
             continue
         actions = segment_actions(view)
         t0 = float(seg["t_day_s"])
         for f in view.frames:
-            raw.append((t0 + f.t_s, view.segment_id, view.recording_id,
+            t = t0 + f.t_s
+            if t1 is not None and t > t1:
+                continue
+            raw.append((t, view.segment_id, view.recording_id,
                         f.master_idx, str(f.image), actions[f.view_idx]))
     raw.sort(key=lambda r: r[0])
 
