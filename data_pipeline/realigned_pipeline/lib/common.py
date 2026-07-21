@@ -330,7 +330,26 @@ def extract_json_object(text: str) -> dict[str, Any]:
         except json.JSONDecodeError as exc:
             last_err = exc
     else:
-        raise last_err  # type: ignore[misc]
+        # Nothing parses whole ("Extra data" after the object, prose around
+        # it, a broken outer brace). raw_decode parses ONE object at a given
+        # position ignoring the rest — scan every '{' in every candidate and
+        # keep the LARGEST decoded dict (the real answer object dwarfs any
+        # fragment or JSON-ish snippet in surrounding prose).
+        decoder = json.JSONDecoder()
+        best: tuple[int, dict[str, Any]] | None = None
+        for cand in candidates:
+            for m in re.finditer(r"\{", cand):
+                try:
+                    v, end_pos = decoder.raw_decode(cand, m.start())
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(v, dict):
+                    span = end_pos - m.start()
+                    if best is None or span > best[0]:
+                        best = (span, v)
+        if best is None:
+            raise last_err  # type: ignore[misc]
+        value = best[1]
     if not isinstance(value, dict):
         raise ValueError("Expected a JSON object")
     return value
