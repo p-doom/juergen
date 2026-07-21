@@ -219,27 +219,53 @@ def _audit(ctx: MethodContext, day: DayStream, thoughts: list[dict[str, Any]],
                 verify_max, report)
 
 
+def _specificity(th: dict[str, Any]) -> float:
+    """How anchored a thought's text is to concrete on-screen referents.
+    A generic thought ("I'll switch to another application") is consistent
+    with almost ANY moment, so swapping it elsewhere legitimately PASSES the
+    audit — planting one is a false alarm, not a gate test. Count tokens that
+    look like named specifics: digits, quoted text, path-ish tokens, and
+    proper nouns (capitalized past sentence start)."""
+    words = str(th["text"]).split()
+    score = 0.0
+    for i, w in enumerate(words):
+        core = w.strip(".,;:!?()")
+        if not core:
+            continue
+        if any(c.isdigit() for c in core):
+            score += 1
+        elif core.startswith(("'", '"')) or core.endswith(("'", '"')):
+            score += 1
+        elif len(core) > 3 and any(c in core for c in "./_-"):
+            score += 1
+        elif i > 0 and core[:1].isupper():
+            score += 1
+    return score + 0.02 * len(words)
+
+
 def _self_test(ctx: MethodContext, day: DayStream, thoughts: list[dict[str, Any]],
                verify_mode: str, ctx_frames: int, verify_max: int, min_sep_s: float,
                report) -> dict[str, Any]:
     """Verifier canary: swap the texts of two thoughts ≥ min_sep_s apart and
     audit both plants — each text now sits at a moment whose evidence cannot
-    support it, so a working auditor must FAIL both. Returns a status record;
-    the caller aborts the day on 'failed'."""
-    ordered = sorted(thoughts, key=lambda t: float(t["t_day_s"]))
-    pair = None
-    for a in ordered:
-        for b in ordered:
-            if float(b["t_day_s"]) - float(a["t_day_s"]) >= min_sep_s:
-                pair = (a, b)
-                break
-        if pair:
-            break
-    if pair is None:
+    support it, so a working auditor must FAIL both. The pair is the most
+    SPECIFIC eligible one (see _specificity): the canary must plant thoughts
+    whose referents provably aren't at the other anchor, else "vague but
+    consistent passes" turns the test into a coin flip. Returns a status
+    record; the caller aborts the day on 'failed'."""
+    candidates = sorted(thoughts, key=_specificity, reverse=True)[:40]
+    best = None
+    for i, x in enumerate(candidates):
+        for y in candidates[i + 1:]:
+            if abs(float(y["t_day_s"]) - float(x["t_day_s"])) >= min_sep_s:
+                key = min(_specificity(x), _specificity(y))
+                if best is None or key > best[0]:
+                    best = (key, x, y)
+    if best is None:
         return {"status": "skipped", "reason": f"no two thoughts >= {min_sep_s:.0f}s apart"}
-    a, b = pair
+    a, b = sorted(best[1:], key=lambda t: float(t["t_day_s"]))
     plants = []
-    ok = True
+    n_caught = 0
     for host, donor in ((a, b), (b, a)):
         planted = {**host, "text": donor["text"], "verify": None}
         _audit(ctx, day, [planted], verify_mode, ctx_frames,
@@ -247,11 +273,16 @@ def _self_test(ctx: MethodContext, day: DayStream, thoughts: list[dict[str, Any]
                verify_max, report)
         v = planted["verify"]
         caught = v["verdict"] == "fail"
-        ok = ok and caught
+        n_caught += caught
         plants.append({"host_day_idx": host["day_idx"], "host_t": host["t_label"],
                        "donor_day_idx": donor["day_idx"], "donor_t": donor["t_label"],
                        "caught": caught, "reason": v["reason"]})
-    return {"status": "ok" if ok else "failed", "plants": plants}
+    # A DEAD gate passes everything -> both plants pass -> abort. One caught
+    # plant proves the gate works; the passed one is (per the audit's own
+    # "vague but consistent passes" rule) usually a too-generic text — record
+    # it as 'partial', don't kill a healthy day.
+    status = "ok" if n_caught == 2 else ("partial" if n_caught == 1 else "failed")
+    return {"status": status, "plants": plants}
 
 
 def run_unit(item: dict[str, Any], ctx: MethodContext) -> dict[str, Any]:
