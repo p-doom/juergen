@@ -233,6 +233,7 @@ class Labeler:
         hard_left = self.config.retries
         transient_left = self.config.transient_retries
         transient_n = 0
+        cap_resampled = False
         while True:
             kwargs["max_completion_tokens"] = budget
             try:
@@ -283,6 +284,13 @@ class Labeler:
                           f"retrying with max_completion_tokens={budget} ({tag}).", flush=True)
                     continue
                 if not content:
+                    # Reasoning spiral all the way to the cap. It's stochastic
+                    # (temperature > 0): one fresh sample usually escapes it.
+                    if not cap_resampled:
+                        cap_resampled = True
+                        print(f"  [labeler] reasoning spiral at the {budget} cap; "
+                              f"re-sampling once ({tag}).", flush=True)
+                        continue
                     raise RuntimeError(
                         f"completion exhausted on reasoning at max_completion_tokens={budget} "
                         f"(finish_reason=length, empty content; raise LABELER_MAX_TOKENS)")
