@@ -384,6 +384,17 @@ class Labeler:
         res = self.call_full(system, user_text, images=images, image_labels=image_labels,
                             cache_path=cache_path, no_cache=no_cache,
                             max_completion_tokens=max_completion_tokens)
+        try:
+            return extract_json_object(res.text), res
+        except ValueError:
+            # Structurally broken JSON (missing delimiter etc.) happens on a
+            # small % of samples; one re-sample usually fixes it — and the
+            # re-call overwrites the broken cached response.
+            print(f"  [labeler] unparseable JSON response; re-sampling once "
+                  f"({cache_path.name if cache_path else 'call'}).", flush=True)
+        res = self.call_full(system, user_text, images=images, image_labels=image_labels,
+                            cache_path=cache_path, no_cache=True,
+                            max_completion_tokens=max_completion_tokens)
         return extract_json_object(res.text), res
 
 
