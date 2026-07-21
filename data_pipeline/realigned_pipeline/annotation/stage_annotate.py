@@ -23,6 +23,11 @@ Methods (annotation/methods/<name>/, discovered by lib/registry):
   plans             enrichment: goals artifact in -> + plan/plan_flags out
                     (INPUT: goals; needs --input-goals-dir with describe/
                     sidecars from the producing run).
+  lumine_thinking   sequential day-watching with carried memory: thoughts at
+                    decision points, future-blind verified (INPUT: days;
+                    needs --clips-manifest for wall-clock day grouping;
+                    thoughts land as single-tick goal rows, memory/log
+                    trajectory as memory/<day>.jsonl sidecars).
 
 Throughput: units are routed across ``--models`` by a closed-loop TPM governor
 (lib/driver); the labeler is configured by env (LABELER_BASE_URL /
@@ -50,6 +55,13 @@ DATA_PIPELINE_DIR = Path(__file__).resolve().parents[2]
 if str(DATA_PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(DATA_PIPELINE_DIR))
 
+from realigned_pipeline.annotation.lib.days import (  # noqa: E402
+    DEFAULT_GAP_CUT_S,
+    DEFAULT_TZ,
+    build_day_index,
+    build_day_stream,
+    fmt_t,
+)
 from realigned_pipeline.annotation.lib.driver import model_slug, run_driver  # noqa: E402
 from realigned_pipeline.annotation.lib.labeler import (  # noqa: E402
     Labeler,
@@ -128,6 +140,41 @@ def _goal_rows_from_unit(unit, result: dict[str, Any], *, method: Method,
     return rows, n_unbounded
 
 
+def _goal_rows_from_day(day_tag: str, thoughts: list[dict[str, Any]], *, method: Method,
+                        model: str | None, fps: float) -> list[dict[str, Any]]:
+    """Compose uniform goal rows from a day method's VERIFIED thoughts (the
+    artifact only ever contains passes; raw verdicts live in the units/
+    records). A thought anchors to a single master tick: [m, m+1)."""
+    rows: list[dict[str, Any]] = []
+    k = 0
+    for th in thoughts:
+        if (th.get("verify") or {}).get("verdict") != "pass":
+            continue
+        row = {
+            "goal_id": f"{day_tag}_t{k:04d}",
+            "segment_id": str(th["segment_id"]),
+            "recording_id": th.get("recording_id"),
+            "start_master_idx": int(th["master_idx"]),
+            "end_master_idx": int(th["master_idx"]) + 1,
+            "instruction": str(th["text"]),
+            "kind": str(th.get("kind") or ""),
+            "anchor": f"{day_tag} {fmt_t(float(th['t_day_s']))}",
+            "grounding": str((th.get("verify") or {}).get("reason") or ""),
+            "verify": th.get("verify"),
+            "method": method.name,
+            "model": model or "env",
+            "prompt_pack_sha": method.prompts.sha,
+            "unit_id": day_tag,
+            "annotation_fps": fps,
+            "day_tag": day_tag,
+            "t_day_s": th.get("t_day_s"),
+        }
+        validate_goal_row(row)
+        rows.append(row)
+        k += 1
+    return rows
+
+
 def parse_args() -> argparse.Namespace:
     normalize_dashed_argv()  # accept pmanager's --foo_bar=value arg form
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -148,6 +195,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--input-goals-dir", type=Path, default=None,
                    help="For INPUT_KIND=goals methods (e.g. plans): the producing "
                         "stage-03b artifact to enrich.")
+    # Day mode (INPUT_KIND=days methods)
+    p.add_argument("--clips-manifest", type=Path, default=None,
+                   help="For INPUT_KIND=days methods: the stage-00 clip manifest "
+                        "(video_path/user_id per segment) used to group segments "
+                        "into wall-clock user-days via mp4 mvhd creation_time.")
+    p.add_argument("--tz", default=DEFAULT_TZ,
+                   help="Timezone deciding where one user-day ends (day mode).")
+    p.add_argument("--gap-cut-s", type=float, default=DEFAULT_GAP_CUT_S,
+                   help="A recording gap longer than this splits a day into "
+                        "independent chunks (day mode).")
+    p.add_argument("--day-filter", nargs="*", default=None,
+                   help="Day mode: only these day tags (smoke/validation runs).")
     # Windowing (frames methods)
     p.add_argument("--context-limit", type=int, default=262144)
     p.add_argument("--window-safety-margin", type=int, default=28000)
@@ -163,7 +222,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--vlm-frame-height", type=int, default=720,
                    help="Height fed to the labeler (<= stored height; downscales in memory).")
     p.add_argument("--jpeg-quality", type=int, default=80)
-    p.add_argument("--reasoning-effort", default=None)
+    p.add_argument("--reasoning-effort", default=None,
+                   help="Unset: the method's LABELER_DEFAULTS (if any), else env.")
+    p.add_argument("--temperature", type=float, default=None,
+                   help="Sampling temperature. Unset: the method's "
+                        "LABELER_DEFAULTS (if any), else omitted from calls.")
+    p.add_argument("--param", action="append", default=None, metavar="KEY=VALUE",
+                   help="Method knob override(s), passed through in ctx.params "
+                        "(e.g. --param clip_frames=30 --param verify_mode=batched). "
+                        "Values are strings; the method casts.")
     p.add_argument("--no-cache", action="store_true")
     # Governor
     p.add_argument("--target-tpm", type=float, default=1_800_000)
@@ -198,10 +265,27 @@ def main() -> None:
     calls_dir = ensure_dir(out_dir / "calls")
     progress_path = out_dir / "progress.jsonl"
 
-    labelers = {m: Labeler(LabelerConfig.from_env(model=m, reasoning_effort=args.reasoning_effort))
+    # Model discipline: an unset flag falls back to the method's declared
+    # defaults (e.g. lumine_thinking pins temperature 0.2 / low effort).
+    reasoning_effort = (args.reasoning_effort
+                        if args.reasoning_effort is not None
+                        else method.labeler_defaults.get("reasoning_effort"))
+    temperature = (args.temperature
+                   if args.temperature is not None
+                   else method.labeler_defaults.get("temperature"))
+    labelers = {m: Labeler(LabelerConfig.from_env(model=m, reasoning_effort=reasoning_effort,
+                                                  temperature=temperature))
                 for m in models}
 
-    def ctx_for(model: str | None, unit_id: str) -> MethodContext:
+    method_params: dict[str, Any] = {}
+    for spec in args.param or []:
+        key, sep, value = spec.partition("=")
+        if not sep or not key.strip():
+            raise SystemExit(f"--param must be KEY=VALUE, got {spec!r}")
+        method_params[key.strip()] = value.strip()
+
+    def ctx_for(model: str | None, unit_id: str,
+                extra_params: dict[str, Any] | None = None) -> MethodContext:
         return MethodContext(
             labeler=labelers[model],
             prompts=method.prompts,
@@ -209,6 +293,7 @@ def main() -> None:
             vlm_frame_height=args.vlm_frame_height,
             jpeg_quality=args.jpeg_quality,
             no_cache=args.no_cache,
+            params={**method_params, **(extra_params or {})},
         )
 
     input_goals_id = None
@@ -216,6 +301,10 @@ def main() -> None:
         rows = art.usable_rows()
         items, est_fn, run_fn = _frames_mode(args, art, method, rows, units_dir,
                                              describe_dir, ctx_for)
+    elif method.input_kind == "days":
+        if args.clips_manifest is None:
+            raise SystemExit(f"method {method.name!r} consumes days: pass --clips-manifest")
+        items, est_fn, run_fn = _days_mode(args, art, method, units_dir, out_dir, ctx_for)
     else:
         if args.input_goals_dir is None:
             raise SystemExit(f"method {method.name!r} consumes goals: pass --input-goals-dir")
@@ -283,8 +372,14 @@ def main() -> None:
         "n_goals": len(all_goals),
         "n_goals_with_plan": sum(1 for g in all_goals if g.get("plan")),
         "vlm_frame_height": args.vlm_frame_height,
+        "temperature": temperature,
+        "reasoning_effort": reasoning_effort,
+        "method_params": method_params,
         "filter_dir": str(art.dir),
         "input_goals_dir": str(args.input_goals_dir) if args.input_goals_dir else None,
+        "clips_manifest": str(args.clips_manifest) if args.clips_manifest else None,
+        "tz": args.tz if method.input_kind == "days" else None,
+        "gap_cut_s": args.gap_cut_s if method.input_kind == "days" else None,
     }
     write_json(out_dir / "annotate_summary.json", summary)
     write_json(out_dir / "manifest.json", {
@@ -356,6 +451,75 @@ def _frames_mode(args, art: FilterArtifact, method: Method, rows, units_dir: Pat
             n_goals += len(goal_rows)
             tokens += int(result.get("actual_tokens") or 0)
         return {"n_units": len(units), "n_goals": n_goals, "actual_tokens": tokens}
+
+    return items, est_tokens, run_item
+
+
+def _days_mode(args, art: FilterArtifact, method: Method, units_dir: Path,
+               out_dir: Path, ctx_for):
+    """Items = user-days (lib/days: wall-clock groups of the filter's usable
+    segments). A day is inherently sequential — the method carries memory
+    call-to-call — so the driver's parallelism axis is ACROSS days; the item
+    estimate is ONE clip call (a day never has more than one call in flight)
+    and live TPM comes from the per-call report hook."""
+    day_rows, counters = build_day_index(art, args.clips_manifest, tz=args.tz)
+    print(f"[annotate] day index: {counters}", flush=True)
+    if args.day_filter:
+        wanted = set(args.day_filter)
+        missing = wanted - {d["day_tag"] for d in day_rows}
+        if missing:
+            raise SystemExit(f"--day-filter tags not in the day index: {sorted(missing)}")
+        day_rows = [d for d in day_rows if d["day_tag"] in wanted]
+    memory_dir = ensure_dir(out_dir / "memory")
+    items = [{"id": d["day_tag"], "row": d} for d in day_rows]
+
+    def est_tokens(item) -> float:
+        # Admission cost of ONE in-flight call, not the whole day: the day's
+        # calls run strictly one at a time.
+        return 30 * EST_TOKENS_PER_FRAME + 16000
+
+    def run_item(item, model: str | None, report_tokens) -> dict[str, Any]:
+        day_tag = str(item["id"])
+        unit_path = units_dir / f"{day_tag}.json"
+        if unit_path.exists() and not args.force:
+            unit_doc = json.loads(unit_path.read_text())
+            return {"n_clips": unit_doc.get("n_clips"), "n_goals": len(unit_doc.get("goals", [])),
+                    "actual_tokens": 0, "resumed": True}
+        day = build_day_stream(item["row"], art, fps=args.fps, fps_mode=args.fps_mode,
+                               gap_cut_s=args.gap_cut_s)
+        if not day.frames:
+            return {"skipped": "empty_day", "n_clips": 0, "n_goals": 0, "actual_tokens": 0}
+        ctx = ctx_for(model, day_tag, {
+            "day_units_dir": ensure_dir(units_dir / day_tag),
+            "memory_path": memory_dir / f"{day_tag}.jsonl",
+            "force": args.force,
+            "report_tokens": report_tokens,
+        })
+        result = method.run_unit({"id": day_tag, "day": day, "row": item["row"]}, ctx)
+        goal_rows = _goal_rows_from_day(day_tag, result.get("thoughts", []),
+                                        method=method, model=model, fps=args.fps)
+        write_json(unit_path, {
+            "unit_id": day_tag,
+            "day_tag": day_tag,
+            "user_id": day.user_id,
+            "date": day.date,
+            "n_segments": day.n_segments,
+            "n_frames": len(day.frames),
+            "n_chunks": len(day.chunks),
+            "model": model or "env",
+            "fps": args.fps,
+            "n_clips": result.get("n_clips"),
+            "n_thoughts": result.get("n_thoughts"),
+            "n_pass": result.get("n_pass"),
+            "n_dropped_anchor": result.get("n_dropped_anchor"),
+            "verify_mode": result.get("verify_mode"),
+            "selftest": result.get("selftest"),
+            "actual_tokens": result.get("actual_tokens"),
+            "goals": goal_rows,
+        })
+        return {"n_clips": result.get("n_clips"), "n_thoughts": result.get("n_thoughts"),
+                "n_pass": result.get("n_pass"), "n_goals": len(goal_rows),
+                "actual_tokens": int(result.get("actual_tokens") or 0)}
 
     return items, est_tokens, run_item
 

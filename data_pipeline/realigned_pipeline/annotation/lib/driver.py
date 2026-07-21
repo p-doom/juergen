@@ -16,6 +16,7 @@ re-run of an unfinished item free).
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 import threading
@@ -53,6 +54,7 @@ class TpmGovernor:
         self.limit: dict[Any, int] = {m: int(start_limit) for m in self.models}
         self.tokens: dict[Any, int] = dict.fromkeys(self.models, 0)
         self.done: dict[Any, int] = dict.fromkeys(self.models, 0)
+        self.reported: dict[Any, dict[int, int]] = {m: {} for m in self.models}
 
     def _measured_tpm(self, m: Any, now: float) -> float:
         dq = self.recent[m]
@@ -85,13 +87,25 @@ class TpmGovernor:
                     return m, h
                 self.cv.wait(timeout=0.5)
 
+    def note_tokens(self, m: Any, handle: int, n: int, now: float) -> None:
+        """Live token report from a RUNNING item (long chain items report per
+        labeler call so the measured TPM window sees a steady stream instead of
+        one end-of-item spike). Reported tokens are remembered per handle and
+        subtracted from the release-time total, so nothing double-counts."""
+        with self.cv:
+            self.recent[m].append((now, int(n)))
+            self.tokens[m] += int(n)
+            self.reported[m][handle] = self.reported[m].get(handle, 0) + int(n)
+
     def release(self, m: Any, handle: int, actual_tokens: int, dur_s: float, now: float) -> None:
         with self.cv:
             self.inflight[m].pop(handle, None)
             if dur_s > 0:
                 self.dur[m] = 0.75 * self.dur[m] + 0.25 * dur_s
-            self.recent[m].append((now, int(actual_tokens)))
-            self.tokens[m] += int(actual_tokens)
+            residual = max(0, int(actual_tokens) - self.reported[m].pop(handle, 0))
+            if residual:
+                self.recent[m].append((now, residual))
+                self.tokens[m] += residual
             self.done[m] += 1
             self.cv.notify_all()
 
@@ -134,14 +148,20 @@ def run_driver(
     """Run ``run_item(item, model)`` over all items under the governor.
 
     ``run_item`` returns a result dict; ``actual_tokens`` in it (when present)
-    feeds the governor's TPM measurement. Each finished item appends a
-    progress row {id, status, ...result-lite}; ids already in the progress
-    file are skipped unless ``force``."""
+    feeds the governor's TPM measurement. A ``run_item`` that accepts a THIRD
+    parameter is handed a ``report_tokens(n)`` callable to stream token counts
+    while it runs — required for long chain items (e.g. day-scope annotation),
+    whose end-of-item total would otherwise be invisible to the governor for
+    hours; release-time accounting subtracts whatever was reported, so the two
+    paths never double-count. Each finished item appends a progress row
+    {id, status, ...result-lite}; ids already in the progress file are skipped
+    unless ``force``."""
     done_ids: set[str] = set()
     if progress_path.exists() and not force:
         done_ids = {str(r.get("id")) for r in read_jsonl(progress_path)
                     if r.get("status") == "ok"}
     todo = [it for it in items if item_id(it) not in done_ids]
+    takes_report = len(inspect.signature(run_item).parameters) >= 3
 
     gov = TpmGovernor(models, target_tpm, init_call_s,
                       window_s=tpm_window_s, start_limit=start_limit, max_limit=max_limit)
@@ -183,7 +203,11 @@ def run_driver(
             t0 = time.time()
             actual: int | None = None
             try:
-                rec = run_item(item, model)
+                if takes_report:
+                    report = lambda n, m=model, h=handle: gov.note_tokens(m, h, int(n), time.time())  # noqa: E731
+                    rec = run_item(item, model, report)
+                else:
+                    rec = run_item(item, model)
                 actual = int(rec.get("actual_tokens") or 0) or None
                 rec = {"id": iid, "status": "ok", "model": model_slug(model), **rec}
             except Exception as exc:

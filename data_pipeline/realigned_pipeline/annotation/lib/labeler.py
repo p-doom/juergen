@@ -22,9 +22,11 @@ re-spends tokens. ``call_json`` validates/repairs JSON via
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
+import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +59,14 @@ class LabelerConfig:
     api_key: str
     timeout_s: float = 300.0
     retries: int = 2
+    # Transient failures (429 / 5xx / timeouts) get their OWN deeper ladder:
+    # long sequential call chains (day-scope annotation) die mid-stream on the
+    # shallow default above, and Azure Kimi throws 429s even under nominal
+    # quota. Exponential with jitter, honoring Retry-After when the server
+    # sends one, capped at transient_backoff_max_s per wait.
+    transient_retries: int = int(os.environ.get("LABELER_TRANSIENT_RETRIES") or 8)
+    transient_backoff_base_s: float = 2.0
+    transient_backoff_max_s: float = 120.0
     # gpt-5.x reasoning models reject temperature != 1 and use
     # max_completion_tokens. Leave temperature None to omit it; set
     # reasoning_effort to e.g. "low"/"medium"/"high" when supported.
@@ -145,11 +155,19 @@ class Labeler:
         image_labels: list[str] | None = None,
         cache_path: Path | None = None,
         no_cache: bool = False,
+        max_completion_tokens: int | None = None,
     ) -> LabelResult:
         """One call. The answer is cached to ``cache_path`` (raw text), the
         chain-of-thought to ``<stem>.reasoning.txt``, and finish_reason/usage to
         ``<stem>.meta.json`` — so re-runs never re-spend tokens and the inspector
-        can show the thinking. Returns content + reasoning + meta together."""
+        can show the thinking. Returns content + reasoning + meta together.
+
+        ``max_completion_tokens`` overrides the config reservation for THIS
+        call (methods with many small calls keep a small budget so the TPM
+        governor sees honest numbers); if the model spends the whole budget on
+        reasoning (finish_reason=length, empty content) the call is retried
+        with a doubled budget up to the config reservation — a truncated
+        chain-of-thought is never cached as an answer."""
         image_urls = [image_data_url(Path(p)) if not str(p).startswith("data:") else str(p)
                       for p in (images or [])]
 
@@ -194,50 +212,109 @@ class Labeler:
             {"role": "user", "content": content_parts},
         ]
 
+        budget = int(max_completion_tokens or self.config.max_completion_tokens)
+        budget_cap = max(budget, self.config.max_completion_tokens)
         kwargs: dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
-            "max_completion_tokens": self.config.max_completion_tokens,
         }
         if self.config.temperature is not None:
             kwargs["temperature"] = self.config.temperature
         if self.config.reasoning_effort:
             kwargs["reasoning_effort"] = self.config.reasoning_effort
 
+        tag = cache_path.name if cache_path else "call"
         last_err: str | None = None
-        for attempt in range(self.config.retries + 1):
+        hard_left = self.config.retries
+        transient_left = self.config.transient_retries
+        transient_n = 0
+        while True:
+            kwargs["max_completion_tokens"] = budget
             try:
                 resp = self._client.chat.completions.create(**kwargs)
-                choice = resp.choices[0]
-                msg = choice.message
-                content = (msg.content or "").strip()
-                reasoning = (getattr(msg, "reasoning_content", None) or "").strip()
-                if not content and not reasoning:
-                    raise RuntimeError("empty completion")
-                finish_reason = str(getattr(choice, "finish_reason", "") or "")
-                usage = getattr(resp, "usage", None)
-                usage_d = usage.model_dump() if hasattr(usage, "model_dump") else (dict(usage) if usage else None)
-                if finish_reason == "length":
-                    print(f"  [labeler] WARNING: response hit max_completion_tokens "
-                          f"({self.config.max_completion_tokens}); raise LABELER_MAX_TOKENS "
-                          f"({cache_path.name if cache_path else 'call'}).")
-                if cache_path:
-                    cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    cache_path.write_text(content or reasoning)
-                    _reasoning_path(cache_path).write_text(reasoning)
-                    _meta_path(cache_path).write_text(json.dumps(
-                        {"finish_reason": finish_reason, "usage": usage_d, "model": self.config.model}, indent=2))
-                return LabelResult(content=content, reasoning=reasoning, finish_reason=finish_reason,
-                                   usage=usage_d, model=self.config.model)
             except Exception as exc:
                 last_err = f"{type(exc).__name__}: {exc}"
-                # On the first failure, retry once without optional params in
-                # case the deployment rejects temperature/reasoning_effort.
+                wait = self._transient_wait(exc, transient_n)
+                if wait is not None:
+                    if transient_left <= 0:
+                        raise RuntimeError(
+                            f"labeler call failed after {self.config.transient_retries} "
+                            f"transient retries: {last_err}") from exc
+                    transient_left -= 1
+                    transient_n += 1
+                    print(f"  [labeler] transient error ({last_err}); retrying in {wait:.0f}s ({tag}).",
+                          flush=True)
+                    time.sleep(wait)
+                    continue
+                # Non-transient: the deployment may reject optional params —
+                # strip them, then give up after the (shallow) hard-retry count.
                 kwargs.pop("temperature", None)
                 kwargs.pop("reasoning_effort", None)
-                if attempt < self.config.retries:
-                    time.sleep(1.5 * (attempt + 1))
-        raise RuntimeError(f"labeler call failed after retries: {last_err}")
+                if hard_left <= 0:
+                    raise RuntimeError(f"labeler call failed after retries: {last_err}") from exc
+                hard_left -= 1
+                time.sleep(1.5)
+                continue
+
+            choice = resp.choices[0]
+            msg = choice.message
+            content = (msg.content or "").strip()
+            reasoning = (getattr(msg, "reasoning_content", None) or "").strip()
+            finish_reason = str(getattr(choice, "finish_reason", "") or "")
+            if finish_reason == "length" and not content:
+                # The whole budget went to reasoning; what came back is a
+                # truncated chain-of-thought, not an answer. Double and retry;
+                # never cache it.
+                if budget < budget_cap:
+                    budget = min(budget_cap, budget * 2)
+                    print(f"  [labeler] completion exhausted on reasoning; retrying with "
+                          f"max_completion_tokens={budget} ({tag}).", flush=True)
+                    continue
+                raise RuntimeError(
+                    f"completion exhausted on reasoning at max_completion_tokens={budget} "
+                    f"(finish_reason=length, empty content; raise LABELER_MAX_TOKENS)")
+            if not content and not reasoning:
+                last_err = "empty completion"
+                if hard_left <= 0:
+                    raise RuntimeError(f"labeler call failed after retries: {last_err}")
+                hard_left -= 1
+                time.sleep(1.5)
+                continue
+
+            usage = getattr(resp, "usage", None)
+            usage_d = usage.model_dump() if hasattr(usage, "model_dump") else (dict(usage) if usage else None)
+            if finish_reason == "length":
+                print(f"  [labeler] WARNING: response hit max_completion_tokens "
+                      f"({budget}); raise LABELER_MAX_TOKENS ({tag}).")
+            if cache_path:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(content or reasoning)
+                _reasoning_path(cache_path).write_text(reasoning)
+                _meta_path(cache_path).write_text(json.dumps(
+                    {"finish_reason": finish_reason, "usage": usage_d, "model": self.config.model}, indent=2))
+            return LabelResult(content=content, reasoning=reasoning, finish_reason=finish_reason,
+                               usage=usage_d, model=self.config.model)
+
+    def _transient_wait(self, exc: Exception, attempt: int) -> float | None:
+        """Backoff seconds if ``exc`` is transient (429/408/5xx, timeout,
+        connection drop), else None. Full jitter; a server Retry-After floors
+        the wait when present."""
+        import openai  # noqa: PLC0415 - local import: optional dep
+
+        status = getattr(exc, "status_code", None)
+        transient = isinstance(exc, openai.APIConnectionError) or (
+            isinstance(status, int) and (status in (408, 429) or status >= 500))
+        if not transient:
+            return None
+        wait = min(self.config.transient_backoff_max_s,
+                   self.config.transient_backoff_base_s * (2 ** attempt))
+        wait *= 0.5 + random.random()  # full jitter in [0.5x, 1.5x)
+        response = getattr(exc, "response", None)
+        headers = getattr(response, "headers", None)
+        if headers is not None:
+            with contextlib.suppress(TypeError, ValueError):
+                wait = max(wait, float(headers.get("retry-after")))
+        return wait
 
     # -- raw text -----------------------------------------------------------
 
@@ -249,9 +326,11 @@ class Labeler:
         image_labels: list[str] | None = None,
         cache_path: Path | None = None,
         no_cache: bool = False,
+        max_completion_tokens: int | None = None,
     ) -> str:
         return self.call_full(system, user_text, images=images, image_labels=image_labels,
-                              cache_path=cache_path, no_cache=no_cache).text
+                              cache_path=cache_path, no_cache=no_cache,
+                              max_completion_tokens=max_completion_tokens).text
 
     # -- json ---------------------------------------------------------------
 
@@ -263,9 +342,11 @@ class Labeler:
         image_labels: list[str] | None = None,
         cache_path: Path | None = None,
         no_cache: bool = False,
+        max_completion_tokens: int | None = None,
     ) -> dict[str, Any]:
         return self.call_json_full(system, user_text, images=images, image_labels=image_labels,
-                                   cache_path=cache_path, no_cache=no_cache)[0]
+                                   cache_path=cache_path, no_cache=no_cache,
+                                   max_completion_tokens=max_completion_tokens)[0]
 
     def call_json_full(
         self,
@@ -275,18 +356,21 @@ class Labeler:
         image_labels: list[str] | None = None,
         cache_path: Path | None = None,
         no_cache: bool = False,
+        max_completion_tokens: int | None = None,
     ) -> tuple[dict[str, Any], LabelResult]:
         """Like ``call_json`` but also returns the full LabelResult (reasoning,
         raw content, meta). Re-calls once if a cached response is unparseable."""
         if cache_path and cache_path.exists() and not no_cache:
             try:
                 res = self.call_full(system, user_text, images=images, image_labels=image_labels,
-                                     cache_path=cache_path, no_cache=False)
+                                     cache_path=cache_path, no_cache=False,
+                                     max_completion_tokens=max_completion_tokens)
                 return extract_json_object(res.text), res
             except Exception:
                 no_cache = True
         res = self.call_full(system, user_text, images=images, image_labels=image_labels,
-                            cache_path=cache_path, no_cache=no_cache)
+                            cache_path=cache_path, no_cache=no_cache,
+                            max_completion_tokens=max_completion_tokens)
         return extract_json_object(res.text), res
 
 
