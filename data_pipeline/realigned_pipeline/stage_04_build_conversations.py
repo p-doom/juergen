@@ -215,6 +215,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
             + counters.n_discarded_no_coverage
             + counters.n_discarded_pre_first_frame
             + 2 * counters.n_pairs_dropped_dead_zone
+            + counters.n_unreleased_press_dropped
         )
         flagged = n_events > 0 and (n_discarded / n_events) > task["dead_zone_flag_frac"]
 

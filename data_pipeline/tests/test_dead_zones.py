@@ -120,6 +120,24 @@ class StraddleClampTest(unittest.TestCase):
         self.assertEqual(counters.n_presses_clamped, 0)
         self.assertEqual(counters.n_releases_clamped, 0)
 
+    def test_unreleased_press_in_zone_is_dropped(self) -> None:
+        # Pressed during the flash, never released anywhere: clamping forward
+        # would emit a lone +KEY (unbalanced either way), so it is discarded.
+        labels, counters = _format(_events((11.0, "press", "KeyI")))
+        self.assertEqual(labels, ["NO_OP", "NO_OP", "NO_OP"])
+        self.assertEqual(counters.n_unreleased_press_dropped, 1)
+        self.assertEqual(counters.n_presses_clamped, 0)
+        self.assertEqual(counters.n_held_at_end, 1)
+        _assert_balanced(self, labels)
+
+    def test_unreleased_visible_press_still_emitted(self) -> None:
+        # A press on a VISIBLE frame with no release is real supervision at a
+        # real time: it stays emitted (raw-keylog stickiness, counted only).
+        labels, counters = _format(_events((6.0, "press", "KeyJ")))
+        self.assertEqual(labels, ["NO_OP", "0 0 0 ; +KeyJ", "NO_OP"])
+        self.assertEqual(counters.n_unreleased_press_dropped, 0)
+        self.assertEqual(counters.n_held_at_end, 1)
+
     def test_pair_spanning_adjacent_zones_is_dropped(self) -> None:
         # Two abutting zones with no visible tick between press and release.
         zones = [DeadZone(10, 12, "black"), DeadZone(12, 15, "no_coverage")]

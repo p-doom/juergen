@@ -31,7 +31,9 @@ Dead-zone label policy (the load-bearing rules):
     (+ALT +TAB) per key, so alt-tab-style transition supervision survives the
     black flash the transition itself causes.
   * A pair fully inside dead zones (no visible window between its endpoints)
-    is discarded.
+    is discarded. A press in a dead zone that is NEVER released is discarded
+    too: clamping it forward would emit a press with no matching release — an
+    unbalanced label either way, so the clamp buys nothing.
   * Every removal/clamp is counted (``PolicyCounters``); zero dangling keys
     from dead zones by construction. The counters double as a per-segment
     realignment health metric.
@@ -125,6 +127,7 @@ class PolicyCounters:
     n_discarded_no_coverage: int = 0
     n_discarded_pre_first_frame: int = 0
     n_pairs_dropped_dead_zone: int = 0
+    n_unreleased_press_dropped: int = 0
     n_releases_clamped: int = 0
     n_presses_clamped: int = 0
     n_dangling_release: int = 0
@@ -372,7 +375,13 @@ def apply_label_policy(
             # the clamped press sorts before the tick's native events).
             vt = loc.first_visible_at_or_after(p_zone.end)
             r_tick = _tick(release.event.t_s, master_fps) if release is not None else None
-            if vt is None or (r_tick is not None and r_tick < vt):
+            if release is None:
+                # Never released: a clamped press would emit a lone +KEY with
+                # no matching release — unbalanced either way, so discard.
+                press.discard_reason = "unreleased_press_in_dead_zone"
+                counters.n_unreleased_press_dropped += 1
+                continue
+            if vt is None or r_tick < vt:
                 # No visible frame while the key was down: nothing was seen
                 # being done with it — discard the whole pair.
                 _drop_pair(press, release)
