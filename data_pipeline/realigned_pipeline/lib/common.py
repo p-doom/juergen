@@ -325,7 +325,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
     last_err: Exception | None = None
     for cand in candidates:
         try:
-            value = json.loads(cand)
+            value = json.loads(cand, strict=False)  # tolerate raw newlines/tabs in strings
             break
         except json.JSONDecodeError as exc:
             last_err = exc
@@ -335,7 +335,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
         # position ignoring the rest — scan every '{' in every candidate and
         # keep the LARGEST decoded dict (the real answer object dwarfs any
         # fragment or JSON-ish snippet in surrounding prose).
-        decoder = json.JSONDecoder()
+        decoder = json.JSONDecoder(strict=False)
         best: tuple[int, dict[str, Any]] | None = None
         for cand in candidates:
             for m in re.finditer(r"\{", cand):
