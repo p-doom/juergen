@@ -9,7 +9,8 @@ reruns:
                    selector in lib/views picks frames within filter survivors)
   * action format  --action-format (lib/action_format registry; ``canonical``
                    is byte-identical to the historical format on dead-zone-free
-                   stretches)
+                   stretches; ``ordered_events_v2`` renders each window as an
+                   ordered mini-program on a --continuous-action-hz motor grid)
   * goals          --goals-dir (a stage-03b artifact; goals are half-open
                    master-tick intervals, projected onto the ACTUAL selected
                    frames — one conversation per goal, instruction on the
@@ -68,8 +69,12 @@ DATA_PIPELINE_DIR = Path(__file__).resolve().parents[1]
 if str(DATA_PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(DATA_PIPELINE_DIR))
 
-from realigned_pipeline.lib import config  # noqa: E402
-from realigned_pipeline.lib.action_format import FORMATTERS, get_formatter  # noqa: E402
+from realigned_pipeline.lib.action_format import (  # noqa: E402
+    DEFAULT_CONTINUOUS_ACTION_HZ,
+    FORMATTERS,
+    ActionFormatter,
+    get_formatter,
+)
 from realigned_pipeline.lib.common import (  # noqa: E402
     ensure_dir,
     normalize_dashed_argv,
@@ -92,14 +97,28 @@ from realigned_pipeline.lib.views import (  # noqa: E402
     build_segment_view,
 )
 
-# Default system prompts. Goal-conditioned reuses the canonical one (it names a
-# goal); goal-free drops the goal but keeps the action-format contract.
-GOAL_FREE_SYSTEM_PROMPT = (
+# Default system prompts: a fixed framing prefix + the formatter's own reply
+# contract, so the prompt always describes the selected action format. For
+# ``canonical`` the composition is byte-identical to the historical prompts
+# (goal-conditioned == config.SYSTEM_PROMPT — the regression gate in
+# tests/test_action_format.py).
+GOAL_FREE_PROMPT_PREFIX = (
     "You operate a desktop computer. Each user turn shows the current screen. "
-    "Reply with the next action as `<dx> <dy> <scroll>` optionally followed by "
-    "` ; +KEY -KEY` events, or `NO_OP` if no action."
 )
-GOAL_SYSTEM_PROMPT = config.SYSTEM_PROMPT
+GOAL_PROMPT_PREFIX = (
+    "You operate a desktop computer. The first user turn shows the initial "
+    "screen and the user's goal; subsequent user turns show the current screen. "
+)
+
+
+def default_system_prompt(formatter: ActionFormatter, *, goal_conditioned: bool) -> str:
+    if goal_conditioned:
+        return GOAL_PROMPT_PREFIX + formatter.reply_contract.format(
+            what="the next action toward that goal"
+        )
+    return GOAL_FREE_PROMPT_PREFIX + formatter.reply_contract.format(
+        what="the next action"
+    )
 
 # Plans carrying these quality flags are unusable as training prose; the
 # conversation falls back to a plan-less first turn (same as the fold
@@ -204,7 +223,9 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
 
         keylog = Path(view.keylog_path) if view.keylog_path else None
         events, _ = load_events(keylog) if keylog else ([], None)
-        fmt = get_formatter(task["action_format"])
+        fmt = get_formatter(
+            task["action_format"], continuous_action_hz=task["continuous_action_hz"]
+        )
         result = fmt.format_segment(
             events, view.windows(), view.dead_zones, master_fps=view.master_fps
         )
@@ -254,7 +275,12 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
                 "n_non_noop": sum(1 for _, a in turns if a != "NO_OP"),
                 "messages": messages,
             })
-            return {**base, "status": "ok", "rows": rows}
+            return {
+                **base,
+                "status": "ok",
+                "rows": rows,
+                "primitive_counts": result.primitive_counts,
+            }
 
         seg_goals = task["goals_by_segment"].get(seg, [])
         if not seg_goals:
@@ -298,6 +324,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
             **base,
             "status": "ok" if rows else "no_projected_goals",
             "rows": rows,
+            "primitive_counts": result.primitive_counts,
             "projection": {
                 "n_goals": proj_stats.n_goals,
                 "n_projected": proj_stats.n_projected,
@@ -334,7 +361,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output-dir", type=Path, required=True)
     p.add_argument("--action-format", type=str, default="canonical",
                    choices=sorted(FORMATTERS),
-                   help="Registered assistant-turn action formatter.")
+                   help="Registered assistant-turn action formatter ('canonical': aggregate "
+                        "'<dx> <dy> <scroll> ; +KEY -KEY'; 'ordered_events_v2': ordered "
+                        "'move(dx,dy); down(LMB); ...' mini-programs).")
+    p.add_argument("--continuous-action-hz", type=float,
+                   default=DEFAULT_CONTINUOUS_ACTION_HZ,
+                   help="ordered_events_v2 only: internal motor-grid rate for accumulating "
+                        "move/scroll deltas within a window (NOT a frame rate; recorded as "
+                        "null for formats that ignore it).")
     p.add_argument("--goals-dir", type=Path, default=None,
                    help="A stage-03b annotation artifact (goals.jsonl in master intervals). "
                         "Sets goal mode: one conversation per projected goal. Its manifest's "
@@ -397,6 +431,13 @@ def main() -> None:
         goals_map = goals_by_segment(load_goals(args.goals_dir / "goals.jsonl"))
         goals_id = make_artifact_id(args.goals_dir)
 
+    # Fails fast on an unknown format / invalid hz; also carries the format's
+    # provenance attributes (reply contract, hz) for the prompt and manifest.
+    formatter = get_formatter(
+        args.action_format, continuous_action_hz=args.continuous_action_hz
+    )
+    continuous_action_hz = getattr(formatter, "continuous_action_hz", None)
+
     goal_mode = goals_map is not None
     if args.no_system_prompt:
         system_prompt = None
@@ -406,7 +447,7 @@ def main() -> None:
         system_prompt = args.system_prompt
     else:
         goal_conditioned = goal_mode or bool(args.instruction or args.instruction_field)
-        system_prompt = GOAL_SYSTEM_PROMPT if goal_conditioned else GOAL_FREE_SYSTEM_PROMPT
+        system_prompt = default_system_prompt(formatter, goal_conditioned=goal_conditioned)
 
     rows_in = art.usable_rows()
     if args.limit is not None:
@@ -421,6 +462,7 @@ def main() -> None:
             "fps": args.fps,
             "fps_mode": args.fps_mode,
             "action_format": args.action_format,
+            "continuous_action_hz": args.continuous_action_hz,
             "goals_by_segment": goals_map,
             "instruction": args.instruction,
             "instruction_field": args.instruction_field,
@@ -447,6 +489,7 @@ def main() -> None:
     counts: Counter = Counter()
     dz_totals: Counter = Counter()
     proj_totals: Counter = Counter()
+    prim_totals: Counter = Counter()
     n_flagged = 0
     with mp.Pool(n_workers) as pool:
         for i, res in enumerate(pool.imap_unordered(build_segment_conversations, tasks, chunksize=8), 1):
@@ -463,6 +506,8 @@ def main() -> None:
             for k, v in (res.get("projection") or {}).items():
                 if isinstance(v, int):
                     proj_totals[k] += v
+            for k, v in (res.get("primitive_counts") or {}).items():
+                prim_totals[k] += int(v)
             if i % 1000 == 0:
                 print(f"  {i}/{len(tasks)} segments | {len(records)} conversations", flush=True)
 
@@ -485,6 +530,9 @@ def main() -> None:
         "stride": stride,
         "master_fps": art.master_fps,
         "action_format": args.action_format,
+        "continuous_action_hz": continuous_action_hz,
+        "primitive_counts": dict(prim_totals) if prim_totals else None,
+        "n_noop_turns": sum(r["n_turns"] - r["n_non_noop"] for r in records),
         "instruction": args.instruction,
         "instruction_field": args.instruction_field,
         "has_system_prompt": system_prompt is not None,
