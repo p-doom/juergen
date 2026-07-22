@@ -266,3 +266,15 @@ For each function call, return a json object with function name and arguments wi
 {"name": <function-name>, "arguments": <args-json-object>}
 </tool_call>''',
 }
+
+# The thinking-SFT training prompt, loaded from the SAME file stage 04 used
+# (byte-identical modulo the .strip() both sides apply) so eval can never
+# drift from training. Resolved repo-relative: eval runs from a labctl
+# snapshot of this repo, which carries the prompt file along.
+from pathlib import Path as _Path  # noqa: E402
+
+_CUA_V1_THINKING_FILE = (
+    _Path(__file__).resolve().parents[1]
+    / "data_pipeline/realigned_pipeline/system_prompts/cua_v1_thinking.txt"
+)
+SYSTEM_PROMPTS["cua_v1_thinking"] = _CUA_V1_THINKING_FILE.read_text().strip()

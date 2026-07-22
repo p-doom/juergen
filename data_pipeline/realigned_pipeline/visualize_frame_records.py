@@ -503,6 +503,19 @@ class ConversationsDataset(FrameRecordsDataset):
                     self._missing_ref += 1
             elif role == "assistant":
                 action = _first_text(content) or ""
+                # Thinking-mode turns wrap the action: "<think>\n{thought}\n</think>\n{action}"
+                # (and the window's last turn may append "\n{terminal_token}"). Split
+                # those out so the action grammar below stays parseable.
+                thought = None
+                if action.startswith("<think>"):
+                    end = action.find("</think>")
+                    if end != -1:
+                        thought = action[len("<think>"):end].strip()
+                        action = action[end + len("</think>"):].lstrip("\n")
+                terminal = None
+                head, _, tail = action.rpartition("\n")
+                if head and tail and tail.isupper() and tail.isalpha():
+                    action, terminal = head, tail
                 i = len(seg.frames)
                 t = (i / fps) if fps > 0 else float(i)
                 seg.frames.append({
@@ -511,6 +524,8 @@ class ConversationsDataset(FrameRecordsDataset):
                     "t": round(t, 3),
                     "src": None,  # source_frame_idx isn't carried into the conversation
                     "action": action,
+                    "thought": thought,
+                    "terminal": terminal,
                     "is_noop": _is_noop(action),
                     "ref": pending_ref,  # internal; stripped before it hits the client
                 })
@@ -919,6 +934,9 @@ INDEX_HTML = r"""<!doctype html>
   #status { display:flex; gap:14px; color:#aeb6c2; flex-wrap:wrap; align-items:center; }
   #status b { color:#fff; }
   #rawaction { color:#6b7280; font-size:11px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #thought { display:none; color:#b45309; font-size:12px; font-style:italic; max-width:100%; white-space:normal; margin-top:2px; }
+  #thought.show { display:block; }
+  .cell.think { outline:2px solid #f59e0b; outline-offset:-2px; }
   .badge { display:inline-block; padding:0 6px; border-radius:3px; font-size:11px; }
   .badge.noop { background:#26292f; color:#8b93a1; }
   .badge.act  { background:#1e3a2a; color:#7fd6a2; }
@@ -1026,6 +1044,7 @@ INDEX_HTML = r"""<!doctype html>
       <span id="fbadge"></span>
       <span id="rawaction"></span>
     </div>
+    <div id="thought"></div>
     <div id="strip"></div>
     <div id="strip2wrap" style="display:none">
       <div id="striplabels">
@@ -1307,7 +1326,7 @@ function buildStrip(){
   const inCut=i=>{ for(const r of cuts) if(i>=r[0]&&i<r[1]) return true; return false; };
   let h='';
   for(let i=0;i<FR.length;i++){ const f=FR[i]; const cut=inCut(i); const blk=!!f.is_black; const blkAct=blk&&!f.is_noop;
-    h+=`<div class="cell${f.is_noop?'':' act'}${cut?' cut':''}${blk?' black':''}" data-i="${i}" title="#${i} t=${f.t}s ${blkAct?'[black + action] ':(blk?'[black frame] ':'')}${cut?'[cut — collapsed idle] ':''}${esc(f.action||'NO_OP')}"></div>`; }
+    h+=`<div class="cell${f.is_noop?'':' act'}${cut?' cut':''}${blk?' black':''}${f.thought?' think':''}" data-i="${i}" title="#${i} t=${f.t}s ${blkAct?'[black + action] ':(blk?'[black frame] ':'')}${cut?'[cut — collapsed idle] ':''}${f.thought?`[think: ${esc(f.thought)}] `:''}${esc(f.action||'NO_OP')}"></div>`; }
   $('#strip').innerHTML=h;
 }
 // Second timeline (master + alignment only): aligned keys on the video clock,
@@ -1366,8 +1385,11 @@ function show(i){
   const act=(CLOCK==='aligned'&&f.action_aln!=null)?f.action_aln:f.action;
   const noop=!act||act==='NO_OP';
   $('#fbadge').innerHTML=(noop?'<span class="badge noop">NO_OP</span>':'<span class="badge act">ACTION</span>')
+    + (f.thought?' <span class="badge act" style="background:#f59e0b">THINK</span>':'')
+    + (f.terminal?` <span class="badge act" style="background:#dc2626">${esc(f.terminal)}</span>`:'')
     + (f.is_black?' <span class="badge black">BLACK</span>':'');
   $('#rawaction').textContent=act||'NO_OP';
+  const th=$('#thought'); th.textContent=f.thought?('💭 '+f.thought):''; th.classList.toggle('show', !!f.thought);
   if(HAS_ACTIONS){
     const st=stateAt(cur);
     lightKeyboard(st.pressed, st.held); updateRadar(p, st.pressed, st.held); renderTyped(st.chars, cur);

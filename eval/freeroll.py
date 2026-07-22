@@ -65,8 +65,22 @@ class StepLog:
 # juergen/eval/osworld_runtime.py; imported above.
 
 
+def _strip_think(text: str) -> str:
+    """Drop a leading ``<think>...</think>`` block (thinking-SFT models)."""
+    s = text.lstrip()
+    if s.startswith("<think>"):
+        end = s.find("</think>")
+        if end != -1:
+            return s[end + len("</think>"):].lstrip()
+    return text
+
+
 def _is_terminate(text: str) -> bool:
-    return text.strip().split("\n", 1)[0].strip() == _TERMINATE
+    # First line == TERMINATE (classic), or last line == TERMINATE (thinking
+    # models are trained with the terminal token appended after the final
+    # action line). A leading think block never hides the token.
+    lines = [ln.strip() for ln in _strip_think(text).splitlines() if ln.strip()]
+    return bool(lines) and (lines[0] == _TERMINATE or lines[-1] == _TERMINATE)
 
 
 def _computer_use_terminate_status(text: str) -> str | None:
