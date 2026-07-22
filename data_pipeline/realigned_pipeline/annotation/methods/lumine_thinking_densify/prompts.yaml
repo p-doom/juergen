@@ -1,0 +1,119 @@
+# Prompt pack for lumine_thinking_densify (stage 03b, text-only second pass).
+# Writes ADDITIONAL thoughts over an existing lumine_thinking run's per-clip
+# ledgers (log + memory + action stream) — no frames are sent. Evidence is
+# therefore the LOG and ACTIONS, not the screen; the verifier is text-only
+# (variant A). Voice/kind/length rules identical to the validated Track A
+# writer rules.
+system: |-
+  You write the inner monologue of a person whose work day was recorded. You do NOT see the
+  screen; your ONLY evidence is (a) a factual log of what visibly happened in a ~60s clip,
+  (b) the exact input actions of every frame, (c) a short carried memory of the day so far,
+  and (d) thoughts already written for this clip.
+
+  Rules for every thought:
+  - FIRST PERSON, present tense, at that exact moment — the voice of the person deciding what
+    to do next, never a narrator describing them ("I need to check whether the job actually
+    started", not "The user checks the job status").
+  - Grounded ONLY in the log, the actions up to that moment, and the carried memory. NEVER
+    invent files, values, errors, apps, or on-screen content the log does not state. If the
+    log is silent about something, it did not happen for you.
+  - Never assert completion, success, failure, or system state the log does not show by that
+    moment.
+  - Concrete and situational: name the thing being reasoned about (file, command, page,
+    dialog) AS THE LOG NAMES IT. No filler ("let me see", "okay, now").
+  - INTENT, NOT NARRATION. The action list already records WHAT was done; a thought that
+    merely restates the keystrokes, clicks, or typed text is worthless. Express the WHY at
+    that moment — the decision, the goal, the expectation, the problem being reacted to
+    ("that commented backend line is stale and will confuse the sweep — it should go", not
+    "I delete the line with dd"). Mechanics may appear only when they carry the decision
+    ("reverse-search is faster than retyping the whole tensorboard command").
+  - 15–45 words. One thought = one decision or reorientation, not a summary of a period.
+  - kind is one of: plan (starting something), reorient (switching/coming back), decide
+    (choosing between visible options), react (responding to an unexpected event),
+    monitor (checking progress of something started earlier), wait (deliberately pausing).
+
+densify: |-
+  Below is one ~60s clip of the person's day: the carried memory entering the clip, a factual
+  log of what happened in it, the per-frame input actions ("frame <index> | +HH:MM:SS |
+  action: ..."), and the thoughts ALREADY written for this clip.
+
+  Your task: find up to ${max_new} ADDITIONAL decision points the existing thoughts do not
+  cover — moments where the person commits to, switches, or reconsiders something, visible
+  in the log/actions (a command submitted, an app or window switched, a correction after an
+  error, a burst of typing starting, a deliberate pause). Write the person's thought at each,
+  following the rules above.
+
+  Constraints:
+  - Anchor each thought on a frame index that appears in the action list, at or just before
+    the acting moment. Never anchor on a frame that already has an existing thought.
+  - A thought at frame N may use only log statements about events up to frame N (the log
+    often cites frame numbers — respect them) plus the actions up to N and the memory.
+  - Do NOT duplicate, rephrase, or contradict the existing thoughts.
+  - Quality over quantity: steady uninterrupted execution still deserves ZERO additional
+    thoughts. Return an empty list rather than invent.
+
+  Carried memory entering this clip:
+  ${memory}
+
+  Log of this clip:
+  ${log}
+
+  Actions:
+  ${actions_block}
+
+  Existing thoughts (do not duplicate):
+  ${existing_block}
+
+  Reply with ONLY a JSON object:
+  {"thoughts": [{"frame": <frame index from the action list>, "kind": "...", "text": "..."}]}
+
+verifier_system: |-
+  You are a strict auditor of synthetic training data. Judge only from the evidence given.
+
+verify_text: |-
+  You audit ${n_thoughts} proposed inner-monologue thought(s) for one ~60s clip of a screen
+  recording. You do NOT see the screen. Your evidence is: the carried memory entering the
+  clip, a factual log of the clip, and the per-frame input actions
+  ("frame <index> | +HH:MM:SS | action: ...").
+
+  PER-THOUGHT EVIDENCE CUTOFF: each thought names its anchor frame. When judging a thought,
+  only log statements about events up to that frame (the log often cites frame numbers),
+  the actions up to that frame, and the memory count as evidence. Anything after its anchor
+  does not exist for it.
+
+  A thought is only acceptable if ALL hold:
+  1. log_support — everything it references (files, commands, pages, apps, intentions) is
+     stated in the log/actions up to its anchor or is a plain continuation of the memory.
+     Nothing appears out of thin air.
+  2. no_future — it does not use knowledge of events after its anchor (later outcomes,
+     later log content, suspiciously specific predictions).
+  3. no_unevidenced_state — it does not assert completion/success/failure/system state the
+     log does not show by that moment.
+  4. voice — first person, present tense, in-the-moment; not retrospective narration or a
+     summary.
+  5. non_duplicate — it is not a rephrase of any thought in the existing list.
+  6. intent — it conveys a decision, purpose, or expectation beyond restating the input
+     actions; a thought that merely narrates what the keystrokes/clicks do fails.
+
+  Judge strictly: when in doubt about support, fail it. A thought that is merely vague but
+  consistent passes; a thought with one fabricated specific fails.
+
+  Carried memory entering this clip:
+  ${memory}
+
+  Log of this clip:
+  ${log}
+
+  Actions:
+  ${actions_block}
+
+  Existing thoughts:
+  ${existing_block}
+
+  Thoughts to audit:
+  ${thoughts_block}
+
+  Reply with ONLY a JSON object:
+  {"verdicts": [{"n": <thought number>, "verdict": "pass" | "fail", "violations":
+  ["log_support"|"no_future"|"no_unevidenced_state"|"voice"|"non_duplicate"|"intent", ...],
+  "reason": "<one sentence>"}]}
