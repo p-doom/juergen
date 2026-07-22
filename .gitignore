@@ -10,3 +10,5 @@ wandb/
 cache/
 draft/
 uv.lock
+_clamp_audit/
+slurm-*.out

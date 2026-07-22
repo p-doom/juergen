@@ -33,6 +33,25 @@ DEFAULT_NOOP_KEEP_TAIL = 1
 # Unset (None) falls back to DEFAULT_NOOP_KEEP_HEAD/TAIL (legacy interface).
 NOOP_MODES = ("none", "ends", "all")
 
+# --- Stage 03: idle filtering (duration-based, master-fps-agnostic) ----------
+# The filter judges idleness in SECONDS so a 4 fps and a 15 fps master behave
+# identically: the interior of any inactive run longer than MIN_DURATION_S is
+# dropped, keeping KEEP_HEAD_S / KEEP_TAIL_S at each end (a wait's start AND
+# end stay visible).
+#
+# The DEFAULTS byte-mirror the pre-rewrite sampler's defaults (noop head/tail
+# = 1/1 bins at DEFAULT_TARGET_FPS 0.5): idleness is judged with the LEGACY
+# NO_OP predicate ("rounded": a judgment bin is active iff its formatted
+# action is non-NO_OP — deltas round to nonzero or deduped key events) per
+# 2 s judgment bin (= 1/DEFAULT_TARGET_FPS), runs > 4 s (> 2 bins) are
+# thinned, 2 s (1 bin) kept at each end. Set IDLE_ACTIVITY "raw" (any nonzero
+# event counts, per master tick) for the fps-agnostic judgment instead.
+DEFAULT_IDLE_MIN_DURATION_S = 4.0
+DEFAULT_IDLE_KEEP_HEAD_S = 2.0
+DEFAULT_IDLE_KEEP_TAIL_S = 2.0
+DEFAULT_IDLE_JUDGMENT_BIN_S = 1.0 / DEFAULT_TARGET_FPS  # 2 s (legacy default bin)
+DEFAULT_IDLE_ACTIVITY = "rounded"  # legacy NO_OP predicate; "raw" = fps-agnostic
+
 # --- Black-frame filtering --------------------------------------------------
 # Detection (per-frame luma metrics) is computed ONCE in stage 01a and written to
 # the frame manifest; the DROP decision runs in the sampler (01b), so these
@@ -85,5 +104,5 @@ def ffmpeg_bin() -> str | None:
         import imageio_ffmpeg
 
         return imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception:  # noqa: BLE001 - optional dependency, only for binary discovery
+    except Exception:
         return None

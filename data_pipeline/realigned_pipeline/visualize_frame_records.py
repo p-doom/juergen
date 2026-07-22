@@ -78,7 +78,6 @@ import argparse
 import json
 import sys
 from collections import OrderedDict
-from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -91,11 +90,7 @@ if str(DATA_PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(DATA_PIPELINE_DIR))
 
 from realigned_pipeline.lib import config  # noqa: E402
-from realigned_pipeline.lib.image_store import (  # noqa: E402
-    is_arrayrecord_image_uri,
-    parse_arrayrecord_image_uri,
-    read_jpeg_bytes,
-)
+from realigned_pipeline.lib import realign_lib as R  # noqa: E402  (keylog_to_video)
 from realigned_pipeline.lib.common import (  # noqa: E402
     aggregate_actions,
     format_action,
@@ -103,7 +98,11 @@ from realigned_pipeline.lib.common import (  # noqa: E402
     resolve_button_name,
     resolve_key_name,
 )
-from realigned_pipeline.lib import realign_lib as R  # noqa: E402  (keylog_to_video)
+from realigned_pipeline.lib.image_store import (  # noqa: E402
+    is_arrayrecord_image_uri,
+    parse_arrayrecord_image_uri,
+    read_jpeg_bytes,
+)
 
 # Image ref field, tried in order (stage 01 rewrites ``image_path`` to ar://;
 # the grain manifests / stage 02 use ``image``).
@@ -113,23 +112,23 @@ _IMAGE_KEYS = ("image_path", "image", "image_uri")
 # Datasets are built lazily on first access — a frames-master build is cheap, but a
 # frame_records build eager-loads every row, so we defer it until the dataset is
 # actually selected in the UI.
-DATASETS: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+DATASETS: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
 # Fallback keylog source for overlaying raw actions on frames-master datasets (a
 # stage-00 clips_manifest.jsonl mapping segment_id -> keylog_path). Normally each
 # master is auto-linked via its manifest.json "source_clips_manifest"; this only
 # covers masters that don't record it.
-CLIPS_MANIFEST_OVERRIDE: "str | None" = None
+CLIPS_MANIFEST_OVERRIDE: str | None = None
 
 # Optional stage-00 alignment source (an alignment.jsonl file or the realign
 # clip-manifest dir containing it). When set/discovered, master datasets get the
 # dual-clock event table + the "aligned + trims" timeline. Applies to master only.
-ALIGNMENT_OVERRIDE: "str | None" = None
+ALIGNMENT_OVERRIDE: str | None = None
 
 _COALESCE_MOVES = 4
 
 
-def _resolve_alignment_path(clips_manifest: "str | Path | None") -> "Path | None":
+def _resolve_alignment_path(clips_manifest: str | Path | None) -> Path | None:
     """Locate an ``alignment.jsonl``: ``--alignment`` (a file or a dir holding one),
     else a ``*realign*`` sibling of the (raw) clips_manifest dir that belongs to the
     SAME dataset family (matched by the manifest dir's distinctive prefix, so e.g. an
@@ -156,8 +155,8 @@ def _resolve_alignment_path(clips_manifest: "str | Path | None") -> "Path | None
 
 def _raw_events(
     keylog_path: Path,
-    splices: "list[dict] | None" = None,
-    video_end: "float | None" = None,
+    splices: list[dict] | None = None,
+    video_end: float | None = None,
 ) -> list[list[Any]]:
     """Keylog events as table rows.
 
@@ -295,11 +294,11 @@ class FrameRecordsDataset:
     """All segments loaded from one or more ``frame_records.jsonl`` files."""
 
     def __init__(self, jsonl_paths: list[Path]) -> None:
-        self.segments: "OrderedDict[str, Segment]" = OrderedDict()
+        self.segments: OrderedDict[str, Segment] = OrderedDict()
         self._missing_ref = 0
         # Per-master-shard {record_index -> is_black}, read lazily from the shard's
         # sibling frame_manifest.jsonl the first time a segment on it is viewed.
-        self._black_luts: "dict[str, dict[int, bool]]" = {}
+        self._black_luts: dict[str, dict[int, bool]] = {}
         total = 0
         for p in jsonl_paths:
             total += self._load_file(p)
@@ -451,9 +450,9 @@ class ConversationsDataset(FrameRecordsDataset):
     mode = "conversations"
 
     def __init__(self, conversations_path: Path) -> None:
-        self.segments: "OrderedDict[str, Segment]" = OrderedDict()
+        self.segments: OrderedDict[str, Segment] = OrderedDict()
         self._missing_ref = 0
-        self._black_luts: "dict[str, dict[int, bool]]" = {}
+        self._black_luts: dict[str, dict[int, bool]] = {}
         n = self._load_file(conversations_path)
         if not self.segments:
             raise SystemExit(f"No conversations found in {conversations_path}")
@@ -476,7 +475,7 @@ class ConversationsDataset(FrameRecordsDataset):
                     n += 1
         return n
 
-    def _parse_conversation(self, rec: dict[str, Any]) -> "Segment | None":
+    def _parse_conversation(self, rec: dict[str, Any]) -> Segment | None:
         sid = str(rec.get("segment_id") or rec.get("conversation_id") or f"conv{len(self.segments)}")
         seg = Segment(sid, rec.get("recording_id"))
         # Conversation-level metadata, read back in segment_detail()/info().
@@ -569,7 +568,7 @@ class FramesMasterDataset:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.master_fps: float | None = None
-        self.segments: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+        self.segments: OrderedDict[str, dict[str, Any]] = OrderedDict()
         index_path = root / "segment_index.jsonl"
         with index_path.open() as f:
             for line in f:
@@ -637,7 +636,7 @@ class FramesMasterDataset:
                             "splices": row.get("splices") or [],
                         }
             print(f"  alignment overlay: {len(self.align)} segments (from {align_path})", flush=True)
-        self._cache: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+        self._cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._cache_cap = 6
         print(
             f"frames-master: {len(self.segments)} segments, master_fps={self.master_fps}",
@@ -736,7 +735,7 @@ class FramesMasterDataset:
                     }
                 else:
                     events = _raw_events(Path(keylog))
-            except Exception as exc:  # noqa: BLE001 — keep frames if keylog unreadable
+            except Exception as exc:
                 print(f"  keylog read failed for {segment_id}: {exc}", flush=True)
                 keylog = None
         entry = {"frames": frames, "events": events, "has_keylog": bool(keylog),
@@ -829,7 +828,7 @@ class Handler(BaseHTTPRequestHandler):
             return vals[0]
         return next(iter(DATASETS), "")
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         parsed = urlparse(self.path)
         route = parsed.path
         q = parse_qs(parsed.query)
@@ -849,7 +848,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     try:
                         self._send_json(get_dataset(name).info())
-                    except Exception as exc:  # noqa: BLE001 — report, keep UI alive
+                    except Exception as exc:
                         self._send_json({"error": f"failed to load {name!r}: {exc}"}, 500)
             elif route == "/api/segment":
                 name = self._dsname(q)
@@ -866,7 +865,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, b"not found", "text/plain")
         except BrokenPipeError:
             pass
-        except Exception as exc:  # noqa: BLE001 — surface as 500, keep server up
+        except Exception as exc:
             self._send(500, f"{type(exc).__name__}: {exc}".encode(), "text/plain")
 
     def _serve_frame(self, q: dict[str, list[str]]) -> None:
@@ -886,7 +885,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             jpeg = read_jpeg_bytes(ref)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self._send(502, f"frame read failed: {exc}".encode(), "text/plain")
             return
         self._send(200, jpeg, "image/jpeg", cache=True)
@@ -1488,6 +1487,12 @@ def resolve_jsonl_paths(dataset: Path) -> list[Path]:
     root = dataset / "frame_records.jsonl"
     if root.exists():
         return [root]
+    # A stage-03 filter artifact's QC view (qc_view/<segment_id>.jsonl, written
+    # with --qc-view-fps): per-segment sampled frames + derived canonical
+    # actions in frame_records field names — browse it like any 01b sample.
+    qc = sorted((dataset / "qc_view").glob("*.jsonl"))
+    if qc:
+        return qc
     # Otherwise gather per-segment files: shallow layout, then the 01b annotate
     # layout, then a bounded recursive sweep. First non-empty match wins.
     for pattern in (
@@ -1499,9 +1504,10 @@ def resolve_jsonl_paths(dataset: Path) -> list[Path]:
         if found:
             return found
     raise SystemExit(
-        f"no frame_records.jsonl found under {dataset} "
-        f"(looked at the root, */, clips/*/stage_01/, and recursively); "
-        f"pass the file directly with --dataset <path>/frame_records.jsonl"
+        f"no frame_records.jsonl (or qc_view/*.jsonl) found under {dataset} "
+        f"(looked at the root, qc_view/, */, clips/*/stage_01/, and recursively); "
+        f"pass the file directly with --dataset <path>/frame_records.jsonl. "
+        f"For a stage-03 filter artifact, re-run stage_03_filter with --qc-view-fps."
     )
 
 
@@ -1511,10 +1517,11 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--dataset", required=True, nargs="+", metavar="PATH",
-        help="one or more datasets, each a 01b output dir (or frame_records.jsonl "
-             "file), a 01a frames-master store dir (segment_index.jsonl + frames/), "
-             "or a stage-04 conversations dir (or conversations.jsonl file) — "
-             "auto-detected; choose between them in the UI",
+        help="one or more datasets, each a frame-records dir (or frame_records.jsonl "
+             "file), a stage-03 filter artifact with a qc_view/ (run with "
+             "--qc-view-fps), a stage-01 frames-master store dir (segment_index.jsonl "
+             "+ frames/), or a stage-04 conversations dir (or conversations.jsonl "
+             "file) — auto-detected; choose between them in the UI",
     )
     p.add_argument(
         "--clips-manifest", default=None,
