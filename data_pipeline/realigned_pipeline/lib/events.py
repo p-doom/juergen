@@ -66,7 +66,10 @@ class RawEvent:
 
     ``kind`` is one of ``move`` / ``scroll`` / ``press`` / ``release``;
     press/release carry the resolved key/button ``name`` (Key* and Mouse*
-    events share one namespace, exactly as ``common.aggregate_actions``)."""
+    events share one namespace, exactly as ``common.aggregate_actions``).
+    Scroll events carry both raw axes in ``dx``/``dy`` plus the legacy
+    collapsed scalar in ``scroll`` (y, falling back to x — what the canonical
+    format consumes)."""
 
     seq: int
     t_s: float
@@ -181,7 +184,10 @@ def iter_events(
         elif event_type == "MouseScroll":
             if isinstance(payload, list) and len(payload) >= 2:
                 value = payload[1] if payload[1] != 0 else payload[0]
-                yield RawEvent(seq, t_s, "scroll", scroll=float(value))
+                yield RawEvent(
+                    seq, t_s, "scroll",
+                    dx=float(payload[0]), dy=float(payload[1]), scroll=float(value),
+                )
                 seq += 1
         elif event_type in ("KeyPress", "MousePress", "KeyRelease", "MouseRelease"):
             if event_type.startswith("Key"):
