@@ -71,13 +71,23 @@ action — so the same frame/action/HUD/timeline UI applies, plus a banner with 
 system prompt and (if goal-conditioned) the instruction. The images are ``ar://``
 refs into the same stage-01a master, so frames and the black-frame flag resolve
 just as in the 01b view.
+
+Finally it opens a stage-04 → stage-06 **inline SFT records** store (auto-detected
+by a ``manifest.json`` marking stage ``inline_records`` / a ``train``+``val`` layout
+of ArrayRecord shards): each record is one tokenized training example — a
+``<= max_length`` chunk of a conversation, still carrying its ``ar://`` frame refs —
+so it browses exactly like the stage-04 view, plus a banner showing the train/val
+split and how full the token budget is. Since only the KEPT records survive stage
+06's overflow drop/truncate, this is literally the dataset fed to the model.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections import OrderedDict
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -90,7 +100,11 @@ if str(DATA_PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(DATA_PIPELINE_DIR))
 
 from realigned_pipeline.lib import config  # noqa: E402
-from realigned_pipeline.lib import realign_lib as R  # noqa: E402  (keylog_to_video)
+from realigned_pipeline.lib.image_store import (  # noqa: E402
+    is_arrayrecord_image_uri,
+    parse_arrayrecord_image_uri,
+    read_jpeg_bytes,
+)
 from realigned_pipeline.lib.common import (  # noqa: E402
     aggregate_actions,
     format_action,
@@ -98,11 +112,7 @@ from realigned_pipeline.lib.common import (  # noqa: E402
     resolve_button_name,
     resolve_key_name,
 )
-from realigned_pipeline.lib.image_store import (  # noqa: E402
-    is_arrayrecord_image_uri,
-    parse_arrayrecord_image_uri,
-    read_jpeg_bytes,
-)
+from realigned_pipeline.lib import realign_lib as R  # noqa: E402  (keylog_to_video)
 
 # Image ref field, tried in order (stage 01 rewrites ``image_path`` to ar://;
 # the grain manifests / stage 02 use ``image``).
@@ -112,23 +122,27 @@ _IMAGE_KEYS = ("image_path", "image", "image_uri")
 # Datasets are built lazily on first access — a frames-master build is cheap, but a
 # frame_records build eager-loads every row, so we defer it until the dataset is
 # actually selected in the UI.
-DATASETS: OrderedDict[str, dict[str, Any]] = OrderedDict()
+DATASETS: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
 
 # Fallback keylog source for overlaying raw actions on frames-master datasets (a
 # stage-00 clips_manifest.jsonl mapping segment_id -> keylog_path). Normally each
 # master is auto-linked via its manifest.json "source_clips_manifest"; this only
 # covers masters that don't record it.
-CLIPS_MANIFEST_OVERRIDE: str | None = None
+CLIPS_MANIFEST_OVERRIDE: "str | None" = None
 
 # Optional stage-00 alignment source (an alignment.jsonl file or the realign
 # clip-manifest dir containing it). When set/discovered, master datasets get the
 # dual-clock event table + the "aligned + trims" timeline. Applies to master only.
-ALIGNMENT_OVERRIDE: str | None = None
+ALIGNMENT_OVERRIDE: "str | None" = None
+
+# Optional per-dataset load cap. For eager trajectory stores this means the first
+# K segments/conversations/records; for frames-master it caps the listed segments.
+DATASET_SAMPLE_LIMIT: "int | None" = None
 
 _COALESCE_MOVES = 4
 
 
-def _resolve_alignment_path(clips_manifest: str | Path | None) -> Path | None:
+def _resolve_alignment_path(clips_manifest: "str | Path | None") -> "Path | None":
     """Locate an ``alignment.jsonl``: ``--alignment`` (a file or a dir holding one),
     else a ``*realign*`` sibling of the (raw) clips_manifest dir that belongs to the
     SAME dataset family (matched by the manifest dir's distinctive prefix, so e.g. an
@@ -155,8 +169,8 @@ def _resolve_alignment_path(clips_manifest: str | Path | None) -> Path | None:
 
 def _raw_events(
     keylog_path: Path,
-    splices: list[dict] | None = None,
-    video_end: float | None = None,
+    splices: "list[dict] | None" = None,
+    video_end: "float | None" = None,
 ) -> list[list[Any]]:
     """Keylog events as table rows.
 
@@ -254,6 +268,163 @@ def _is_black(mean_luma: Any, frac_dark: Any) -> bool:
     )
 
 
+# --------------------------------------------------------------------------- #
+# Per-trajectory metrics (mouse travel, clicks, scroll, typed-text stats).
+# These power the left filter panel: the client filters the segment list on them,
+# so they must be computed for EVERY segment up front. The action-parse and
+# typed-text reconstruction mirror the front-end's parseAction/stateAt/keyToChar
+# exactly, so a segment's metrics match what the HUD reconstructs when you open it.
+# --------------------------------------------------------------------------- #
+_PUNCT = {
+    "BackQuote": ("`", "~"), "Minus": ("-", "_"), "Equal": ("=", "+"),
+    "BracketLeft": ("[", "{"), "BracketRight": ("]", "}"), "BackSlash": ("\\", "|"),
+    "SemiColon": (";", ":"), "Quote": ("'", '"'), "Comma": (",", "<"),
+    "Dot": (".", ">"), "Slash": ("/", "?"),
+}
+_SHIFTNUM = {"Num1": "!", "Num2": "@", "Num3": "#", "Num4": "$", "Num5": "%",
+             "Num6": "^", "Num7": "&", "Num8": "*", "Num9": "(", "Num0": ")"}
+
+
+def _key_to_char(name: str, shift: bool) -> str | None:
+    """One rdev key name -> the character it types, or None for modifiers / arrows /
+    F-keys (Backspace is handled by the caller). Mirrors the front-end keyToChar."""
+    if len(name) == 4 and name.startswith("Key") and name[3].isalpha():
+        c = name[3].upper()
+        return c if shift else c.lower()
+    if len(name) == 4 and name.startswith("Num") and name[3].isdigit():
+        return _SHIFTNUM[name] if (shift and name in _SHIFTNUM) else name[3]
+    if name == "Space":
+        return " "
+    if name in ("Return", "Enter", "NumpadEnter"):
+        return "\n"
+    if name == "Tab":
+        return "\t"
+    if name in _PUNCT:
+        return _PUNCT[name][1 if shift else 0]
+    return None
+
+
+def _parse_action_str(action: Any) -> tuple[float, float, float, list[tuple[str, str]]]:
+    """Parse a ``format_action`` string into ``(dx, dy, scroll, [(sign, name), ...])``.
+
+    Tolerates a conversation assistant turn that prefixes the action with a
+    natural-language plan (``"plan text\\n<dx> <dy> <scroll> ; +Key... -Key..."``):
+    the movement is read as the trailing numeric run of the last line before the
+    ``" ; "`` separator, and the press/release tokens from after it."""
+    if not action:
+        return (0.0, 0.0, 0.0, [])
+    s = str(action)
+    if s.strip().upper() == "NO_OP":
+        return (0.0, 0.0, 0.0, [])
+    parts = s.split(" ; ")
+    last_line = parts[0].splitlines()[-1] if parts[0] else ""
+    nums: list[float] = []
+    for tok in reversed(last_line.split()):
+        try:
+            nums.append(float(tok))
+        except ValueError:
+            break
+        if len(nums) == 3:
+            break
+    nums.reverse()
+    dx = nums[0] if len(nums) >= 1 else 0.0
+    dy = nums[1] if len(nums) >= 2 else 0.0
+    scroll = nums[2] if len(nums) >= 3 else 0.0
+    events: list[tuple[str, str]] = []
+    if len(parts) > 1:
+        for tok in " ; ".join(parts[1:]).split():
+            if len(tok) > 1 and tok[0] in "+-":
+                events.append((tok[0], tok[1:]))
+    return (dx, dy, scroll, events)
+
+
+def compute_metrics(frames: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate mouse travel / scroll / clicks / key presses and typed-text stats
+    over a trajectory's per-frame action strings. ``typed`` is the reconstructed
+    typed string (for the "typed text contains" filter); the counts are derived
+    from it so letters+digits+special+whitespace add up to ``chars``.
+
+    ``stuck_key_frames`` is the longest keyboard-only press->release gap in frame
+    units. If a key never releases, the gap is measured through the segment's last
+    frame. The UI applies the requested strict ``> T`` threshold against this value."""
+    mouse = scroll_total = 0.0
+    clicks = keys = 0
+    down: set[str] = set()
+    down_since: dict[str, int] = {}
+    chars: list[str] = []
+    max_hold = 0
+    max_hold_key: str | None = None
+    max_hold_start: int | None = None
+    max_hold_end: int | None = None
+    max_hold_unreleased = False
+    key_hold_ranges: list[dict[str, Any]] = []
+
+    def note_hold(name: str, start: int, end: int, unreleased: bool) -> None:
+        nonlocal max_hold, max_hold_key, max_hold_start, max_hold_end, max_hold_unreleased
+        held = max(0, end - start)
+        key_hold_ranges.append({
+            "key": name,
+            "start": start,
+            "end": end,
+            "frames": held,
+            "unreleased": unreleased,
+        })
+        if held > max_hold:
+            max_hold = held
+            max_hold_key = name
+            max_hold_start = start
+            max_hold_end = end
+            max_hold_unreleased = unreleased
+
+    for frame_idx, f in enumerate(frames):
+        dx, dy, scr, events = _parse_action_str(f.get("action", ""))
+        mouse += math.hypot(dx, dy)
+        scroll_total += abs(scr)
+        for sign, name in events:
+            if name in ("LMB", "RMB", "MMB"):
+                if sign == "+":
+                    clicks += 1
+                continue
+            if sign == "+":
+                keys += 1
+                down.add(name)
+                down_since.setdefault(name, frame_idx)
+                shift = "ShiftLeft" in down or "ShiftRight" in down
+                if name == "Backspace":
+                    if chars:
+                        chars.pop()
+                else:
+                    ch = _key_to_char(name, shift)
+                    if ch is not None:
+                        chars.append(ch)
+            else:
+                start = down_since.pop(name, None)
+                if start is not None:
+                    note_hold(name, start, frame_idx, False)
+                down.discard(name)
+    last_frame = len(frames) - 1
+    for name, start in down_since.items():
+        note_hold(name, start, last_frame, True)
+    text = "".join(chars)
+    return {
+        "mouse_px": round(mouse),
+        "scroll": round(scroll_total),
+        "clicks": clicks,
+        "keys": keys,
+        "chars": len(text),
+        "letters": sum(c.isalpha() for c in text),
+        "digits": sum(c.isdigit() for c in text),
+        "special": sum((not c.isalnum()) and (not c.isspace()) for c in text),
+        "typed": text,
+        "stuck_key_frames": max_hold,
+        "stuck_key": max_hold_key,
+        "stuck_key_start": max_hold_start,
+        "stuck_key_end": max_hold_end,
+        "stuck_key_unreleased": max_hold_unreleased,
+        "key_hold_ranges": key_hold_ranges,
+    }
+
+
 class Segment:
     """One trajectory: the ordered kept frames of a single ``segment_id``."""
 
@@ -266,15 +437,31 @@ class Segment:
         n = len(self.frames)
         n_non_noop = sum(1 for f in self.frames if not f["is_noop"])
         dur = self.frames[-1]["t"] if self.frames else 0.0
+        metrics = {
+            k: v for k, v in self.metrics().items()
+            if k != "key_hold_ranges"
+        }
         return {
             "segment_id": self.segment_id,
             "recording_id": self.recording_id,
             "n_frames": n,
             "n_non_noop": n_non_noop,
             "duration_s": round(dur, 2),
+            **metrics,
         }
 
+    def metrics(self) -> dict[str, Any]:
+        """Filter-panel metrics (mouse travel, clicks, scroll, key presses, typed
+        text + char class counts), computed once from the action strings and cached
+        so repeated ``info()`` builds are cheap."""
+        m = getattr(self, "_metrics", None)
+        if m is None:
+            m = compute_metrics(self.frames)
+            self._metrics = m  # type: ignore[attr-defined]
+        return m
+
     def detail(self) -> dict[str, Any]:
+        metrics = self.metrics()
         return {
             "segment_id": self.segment_id,
             "recording_id": self.recording_id,
@@ -284,6 +471,12 @@ class Segment:
             # from the master frame_manifest); absent -> 0.
             "n_black": sum(1 for f in self.frames if f.get("is_black")),
             "n_black_act": sum(1 for f in self.frames if f.get("is_black") and not f["is_noop"]),
+            "stuck_key_frames": metrics.get("stuck_key_frames"),
+            "stuck_key": metrics.get("stuck_key"),
+            "stuck_key_start": metrics.get("stuck_key_start"),
+            "stuck_key_end": metrics.get("stuck_key_end"),
+            "stuck_key_unreleased": metrics.get("stuck_key_unreleased"),
+            "key_hold_ranges": metrics.get("key_hold_ranges"),
             # Drop the internal image ref from the payload; the client fetches
             # frames by (segment, index) via /frame instead.
             "frames": [{k: v for k, v in f.items() if k != "ref"} for f in self.frames],
@@ -293,14 +486,19 @@ class Segment:
 class FrameRecordsDataset:
     """All segments loaded from one or more ``frame_records.jsonl`` files."""
 
-    def __init__(self, jsonl_paths: list[Path]) -> None:
-        self.segments: OrderedDict[str, Segment] = OrderedDict()
+    def __init__(self, jsonl_paths: list[Path], limit: "int | None" = None) -> None:
+        self.segments: "OrderedDict[str, Segment]" = OrderedDict()
+        self.limit = limit
+        self._limited = False
         self._missing_ref = 0
         # Per-master-shard {record_index -> is_black}, read lazily from the shard's
         # sibling frame_manifest.jsonl the first time a segment on it is viewed.
-        self._black_luts: dict[str, dict[int, bool]] = {}
+        self._black_luts: "dict[str, dict[int, bool]]" = {}
         total = 0
         for p in jsonl_paths:
+            if self._limit_reached():
+                self._limited = True
+                break
             total += self._load_file(p)
         if not self.segments:
             raise SystemExit(
@@ -308,9 +506,16 @@ class FrameRecordsDataset:
             )
         print(
             f"loaded {total} frame records across {len(self.segments)} segments"
+            + (
+                f" (limited to first {self.limit} segments)"
+                if self._limited and self.limit is not None else ""
+            )
             + (f" ({self._missing_ref} without an image ref)" if self._missing_ref else ""),
             flush=True,
         )
+
+    def _limit_reached(self) -> bool:
+        return self.limit is not None and len(self.segments) >= self.limit
 
     def _load_file(self, path: Path) -> int:
         n = 0
@@ -323,6 +528,9 @@ class FrameRecordsDataset:
                 sid = str(rec.get("segment_id") or rec.get("clip_id") or "unknown")
                 seg = self.segments.get(sid)
                 if seg is None:
+                    if self._limit_reached():
+                        self._limited = True
+                        break
                     seg = Segment(sid, rec.get("recording_id"))
                     self.segments[sid] = seg
                 ref = _image_ref(rec)
@@ -409,6 +617,8 @@ class FrameRecordsDataset:
         return {
             "n_segments": len(self.segments),
             "mode": "frame_records",
+            "limit": self.limit,
+            "limited": self._limited,
             "segments": [s.summary() for s in self.segments.values()],
         }
 
@@ -449,15 +659,21 @@ class ConversationsDataset(FrameRecordsDataset):
 
     mode = "conversations"
 
-    def __init__(self, conversations_path: Path) -> None:
-        self.segments: OrderedDict[str, Segment] = OrderedDict()
+    def __init__(self, conversations_path: Path, limit: "int | None" = None) -> None:
+        self.segments: "OrderedDict[str, Segment]" = OrderedDict()
+        self.limit = limit
+        self._limited = False
         self._missing_ref = 0
-        self._black_luts: dict[str, dict[int, bool]] = {}
+        self._black_luts: "dict[str, dict[int, bool]]" = {}
         n = self._load_file(conversations_path)
         if not self.segments:
             raise SystemExit(f"No conversations found in {conversations_path}")
         print(
             f"loaded {n} conversations across {len(self.segments)} segments"
+            + (
+                f" (limited to first {self.limit} conversations)"
+                if self._limited and self.limit is not None else ""
+            )
             + (f" ({self._missing_ref} turns without an image)" if self._missing_ref else ""),
             flush=True,
         )
@@ -469,23 +685,39 @@ class ConversationsDataset(FrameRecordsDataset):
                 line = line.strip()
                 if not line:
                     continue
+                if self._limit_reached():
+                    self._limited = True
+                    break
                 seg = self._parse_conversation(json.loads(line))
                 if seg is not None:
                     self.segments[seg.segment_id] = seg
                     n += 1
         return n
 
-    def _parse_conversation(self, rec: dict[str, Any]) -> Segment | None:
-        sid = str(rec.get("segment_id") or rec.get("conversation_id") or f"conv{len(self.segments)}")
+    def _parse_conversation(self, rec: dict[str, Any]) -> "Segment | None":
+        # external goal-SFT rows carry no segment_id/conversation_id — fall back to
+        # sample_id (e.g. u02171b00_20260417_g003), a meaningful per-goal label.
+        sid = str(rec.get("segment_id") or rec.get("conversation_id")
+                  or rec.get("sample_id") or f"conv{len(self.segments)}")
         seg = Segment(sid, rec.get("recording_id"))
         # Conversation-level metadata, read back in segment_detail()/info().
         seg.conversation_id = rec.get("conversation_id")  # type: ignore[attr-defined]
         seg.instruction = rec.get("instruction")  # type: ignore[attr-defined]
+        # Self-compaction ``[CONTEXT]…[/CONTEXT]`` rolling summary, present on non-first
+        # chunks of a split goal (carried as a top-level field by stage 04). Surfaced as
+        # its own banner note; also fused into the first user turn by the builder.
+        seg.context = rec.get("context")  # type: ignore[attr-defined]
         seg.goal_conditioned = bool(rec.get("goal_conditioned"))  # type: ignore[attr-defined]
         seg.target_fps = rec.get("target_fps")  # type: ignore[attr-defined]
         seg.alignment_status = rec.get("alignment_status")  # type: ignore[attr-defined]
         seg.split = rec.get("split")  # type: ignore[attr-defined]
         seg.system_prompt = None  # type: ignore[attr-defined]
+        # Verbatim text of the FIRST user turn -- what the model actually reads before
+        # the first screenshot. For a goal-conditioned segment this is the goal AND
+        # (selfcompact sets) the fused ``[CONTEXT]`` block, which the top-level
+        # ``instruction`` field alone doesn't show; read straight from ``messages`` so
+        # it stays faithful even where stage 06 has dropped that field.
+        seg.first_user_text = None  # type: ignore[attr-defined]
         fps = float(rec.get("target_fps") or 0.0)
         pending_ref: str | None = None
         for m in rec.get("messages") or []:
@@ -496,8 +728,11 @@ class ConversationsDataset(FrameRecordsDataset):
             if role == "system":
                 seg.system_prompt = _first_text(content)  # type: ignore[attr-defined]
             elif role == "user":
-                # A goal-conditioned first turn puts the instruction text before the
-                # image; we take the image (top-level ``instruction`` already has the text).
+                # A goal-conditioned first turn puts the instruction (+ any [CONTEXT])
+                # text before the image; keep the FIRST user turn's text verbatim for
+                # the banner, and take the image as this frame's ref.
+                if seg.first_user_text is None:  # type: ignore[attr-defined]
+                    seg.first_user_text = _first_text(content)  # type: ignore[attr-defined]
                 pending_ref = _first_image(content)
                 if pending_ref is None:
                     self._missing_ref += 1
@@ -517,6 +752,20 @@ class ConversationsDataset(FrameRecordsDataset):
                 pending_ref = None
         return seg
 
+    @staticmethod
+    def _conv_text(seg: Segment) -> str:
+        """Full searchable text of one conversation: the first user turn (goal + any
+        ``[CONTEXT]``) followed by every assistant turn's action/plan string. Powers
+        the left panel's 'conversation contains' filter (so search reaches the plans
+        and actions, not just the goal), and mirrors the front-end's 'full
+        conversation' note. One string per segment, sent with the segment list."""
+        parts: list[str] = []
+        fut = getattr(seg, "first_user_text", None)
+        if fut:
+            parts.append(str(fut))
+        parts.extend(str(f.get("action") or "") for f in seg.frames)
+        return "\n".join(parts)
+
     def segment_detail(self, segment_id: str) -> dict[str, Any] | None:
         d = super().segment_detail(segment_id)  # runs _ensure_black + Segment.detail()
         if d is None:
@@ -526,6 +775,8 @@ class ConversationsDataset(FrameRecordsDataset):
             "mode": "conversations",
             "conversation_id": getattr(seg, "conversation_id", None),
             "instruction": getattr(seg, "instruction", None),
+            "context": getattr(seg, "context", None),
+            "first_user_text": getattr(seg, "first_user_text", None),
             "goal_conditioned": getattr(seg, "goal_conditioned", False),
             "system_prompt": getattr(seg, "system_prompt", None),
             "target_fps": getattr(seg, "target_fps", None),
@@ -540,15 +791,181 @@ class ConversationsDataset(FrameRecordsDataset):
         return {
             "n_segments": len(segs),
             "mode": "conversations",
+            "limit": self.limit,
+            "limited": self._limited,
             "goal_conditioned": any(getattr(s, "goal_conditioned", False) for s in segs),
             "has_system_prompt": any(getattr(s, "system_prompt", None) for s in segs),
             "target_fps": next(
                 (getattr(s, "target_fps", None) for s in segs if getattr(s, "target_fps", None)), None
             ),
             "segments": [
-                {**s.summary(), "instruction": getattr(s, "instruction", None)} for s in segs
+                {
+                    **s.summary(),
+                    "instruction": getattr(s, "instruction", None),
+                    "conv_text": self._conv_text(s),
+                }
+                for s in segs
             ],
         }
+
+
+class InlineRecordsDataset(ConversationsDataset):
+    """A stage-06 *inline SFT records* store — the tokenized training examples,
+    browsed as trajectories.
+
+    Payload-free records built by omegalax ``build_records_from_chat``: each
+    ArrayRecord entry across the ``train/`` and ``val/`` splits IS one training
+    example — a ``<= max_length`` token chunk of a stage-04 conversation with its
+    ``ar://`` image refs into the SAME stage-01a master preserved (message slices,
+    not pre-encoded pixels). So every record is shaped exactly like a stage-04
+    conversation row, and the frame / action / HUD / system-prompt rendering is
+    inherited verbatim from ``ConversationsDataset`` — only the *source* differs
+    (ArrayRecord shards instead of a ``conversations.jsonl``).
+
+    Only KEPT records are present (overflow-dropped / -truncated conversations are
+    already gone), so browsing them is literally the model's training input. On top
+    of the conversation view it surfaces what stage 06 adds: the ``train``/``val``
+    split, the measured token length vs the ``max_length`` budget, the overflow
+    mode, and the tokenizer/model the lengths were measured against.
+
+    ``--dataset`` may point at the stage-06 root (``train/`` + ``val/`` subdirs) or
+    straight at a single split dir. Each record becomes one browsable chunk, keyed
+    ``<split>/<segment_id>`` (a ``#n`` suffix disambiguates a segment that ``split``
+    overflow-mode broke into several chunks)."""
+
+    mode = "inline_records"
+
+    def __init__(self, root: Path, limit: "int | None" = None) -> None:
+        self.segments: "OrderedDict[str, Segment]" = OrderedDict()
+        self.limit = limit
+        self._limited = False
+        self._missing_ref = 0
+        self._black_luts: "dict[str, dict[int, bool]]" = {}
+        self.root = root
+        self.max_length: int | None = None
+        self.model_id: str | None = None
+        self.overflow_mode: str | None = None
+        total = 0
+        for split_name, split_dir in self._discover_splits(root):
+            if self._limit_reached():
+                self._limited = True
+                break
+            total += self._load_split(split_name, split_dir)
+        if not self.segments:
+            raise SystemExit(f"No inline records found under {root}")
+        print(
+            f"loaded {total} inline records across {len(self.segments)} chunks "
+            f"(max_length={self.max_length}, model={self.model_id})"
+            + (
+                f" (limited to first {self.limit} records)"
+                if self._limited and self.limit is not None else ""
+            )
+            + (f" ({self._missing_ref} turns without an image)" if self._missing_ref else ""),
+            flush=True,
+        )
+
+    @staticmethod
+    def _discover_splits(root: Path) -> "list[tuple[str, Path]]":
+        """The split dirs to read: ``train``/``val`` subdirs of a stage-06 root, or
+        the root itself when it is already a single split dir (has ``metadata.json``)."""
+        splits = [
+            (name, root / name)
+            for name in ("train", "val")
+            if (root / name / "metadata.json").exists()
+        ]
+        if splits:
+            return splits
+        if (root / "metadata.json").exists():
+            return [(root.name, root)]
+        raise SystemExit(f"no train/ or val/ split (metadata.json) found under {root}")
+
+    def _load_split(self, split_name: str, split_dir: Path) -> int:
+        from array_record.python.array_record_module import (  # noqa: PLC0415
+            ArrayRecordReader,
+        )
+
+        meta = json.loads((split_dir / "metadata.json").read_text())
+        if self.max_length is None:
+            self.max_length = meta.get("max_length")
+        if self.overflow_mode is None:
+            self.overflow_mode = meta.get("overflow_mode")
+        if self.model_id is None:
+            self.model_id = (meta.get("profile_metadata") or {}).get("model_id")
+        shard_names = meta.get("shard_paths") or sorted(
+            p.name for p in split_dir.glob("*.array_record")
+        )
+        n = 0
+        for shard_name in shard_names:
+            reader = ArrayRecordReader(str(split_dir / shard_name))
+            num = reader.num_records()
+            # Records are small (message slices with ar:// refs, no pixels), but read
+            # in bounded batches so a big shard doesn't materialize all at once.
+            for start in range(0, num, 512):
+                idxs = list(range(start, min(start + 512, num)))
+                for payload in reader.read(idxs):
+                    if self._limit_reached():
+                        self._limited = True
+                        return n
+                    rec = json.loads(payload)
+                    seg = self._parse_conversation(rec)
+                    seg.split = split_name  # type: ignore[attr-defined]
+                    seg.measured_length = rec.get("_omegalax_measured_length")  # type: ignore[attr-defined]
+                    seg.omega_session_id = rec.get("_omegalax_session_id")  # type: ignore[attr-defined]
+                    seg.max_length = self.max_length  # type: ignore[attr-defined]
+                    seg.shard = shard_name  # type: ignore[attr-defined]
+                    key = self._unique_key(f"{split_name}/{seg.segment_id}")
+                    seg.segment_id = key
+                    self.segments[key] = seg
+                    n += 1
+        return n
+
+    def _unique_key(self, base: str) -> str:
+        key, k = base, 2
+        while key in self.segments:
+            key, k = f"{base}#{k}", k + 1
+        return key
+
+    def segment_detail(self, segment_id: str) -> dict[str, Any] | None:
+        d = super().segment_detail(segment_id)  # Conversations detail + _ensure_black
+        if d is None:
+            return None
+        seg = self.segments[segment_id]
+        d.update({
+            "mode": "inline_records",
+            "split": getattr(seg, "split", None),
+            "measured_length": getattr(seg, "measured_length", None),
+            "max_length": self.max_length,
+            "overflow_mode": self.overflow_mode,
+            "model_id": self.model_id,
+            "omega_session_id": getattr(seg, "omega_session_id", None),
+        })
+        return d
+
+    def info(self) -> dict[str, Any]:
+        d = super().info()  # conversation-level goal/system/fps rollup
+        segs = list(self.segments.values())
+        d.update({
+            "mode": "inline_records",
+            "limit": self.limit,
+            "limited": self._limited,
+            "max_length": self.max_length,
+            "model_id": self.model_id,
+            "overflow_mode": self.overflow_mode,
+            "splits": sorted(
+                {getattr(s, "split", None) for s in segs if getattr(s, "split", None)}
+            ),
+            "segments": [
+                {
+                    **s.summary(),
+                    "instruction": getattr(s, "instruction", None),
+                    "conv_text": self._conv_text(s),
+                    "split": getattr(s, "split", None),
+                    "measured_length": getattr(s, "measured_length", None),
+                }
+                for s in segs
+            ],
+        })
+        return d
 
 
 class FramesMasterDataset:
@@ -565,10 +982,12 @@ class FramesMasterDataset:
 
     mode = "frames_master"
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, limit: "int | None" = None) -> None:
         self.root = root
+        self.limit = limit
+        self._limited = False
         self.master_fps: float | None = None
-        self.segments: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self.segments: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
         index_path = root / "segment_index.jsonl"
         with index_path.open() as f:
             for line in f:
@@ -578,6 +997,9 @@ class FramesMasterDataset:
                 row = json.loads(line)
                 if not row.get("num_records"):
                     continue  # skip empty/failed segments (no usable frame store)
+                if self.limit is not None and len(self.segments) >= self.limit:
+                    self._limited = True
+                    break
                 sid = str(row.get("segment_id"))
                 self.master_fps = row.get("master_fps", self.master_fps)
                 self.segments[sid] = {
@@ -636,10 +1058,14 @@ class FramesMasterDataset:
                             "splices": row.get("splices") or [],
                         }
             print(f"  alignment overlay: {len(self.align)} segments (from {align_path})", flush=True)
-        self._cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._cache: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
         self._cache_cap = 6
         print(
-            f"frames-master: {len(self.segments)} segments, master_fps={self.master_fps}",
+            f"frames-master: {len(self.segments)} segments, master_fps={self.master_fps}"
+            + (
+                f" (limited to first {self.limit} segments)"
+                if self._limited and self.limit is not None else ""
+            ),
             flush=True,
         )
 
@@ -735,7 +1161,7 @@ class FramesMasterDataset:
                     }
                 else:
                     events = _raw_events(Path(keylog))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — keep frames if keylog unreadable
                 print(f"  keylog read failed for {segment_id}: {exc}", flush=True)
                 keylog = None
         entry = {"frames": frames, "events": events, "has_keylog": bool(keylog),
@@ -783,6 +1209,8 @@ class FramesMasterDataset:
             "n_segments": len(self.segments),
             "mode": self.mode,
             "master_fps": self.master_fps,
+            "limit": self.limit,
+            "limited": self._limited,
             "has_keylog": bool(self.keylogs),
             "has_alignment": bool(self.align),
             "segments": [
@@ -828,7 +1256,7 @@ class Handler(BaseHTTPRequestHandler):
             return vals[0]
         return next(iter(DATASETS), "")
 
-    def do_GET(self) -> None:
+    def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         route = parsed.path
         q = parse_qs(parsed.query)
@@ -848,7 +1276,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     try:
                         self._send_json(get_dataset(name).info())
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 — report, keep UI alive
                         self._send_json({"error": f"failed to load {name!r}: {exc}"}, 500)
             elif route == "/api/segment":
                 name = self._dsname(q)
@@ -865,7 +1293,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, b"not found", "text/plain")
         except BrokenPipeError:
             pass
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — surface as 500, keep server up
             self._send(500, f"{type(exc).__name__}: {exc}".encode(), "text/plain")
 
     def _serve_frame(self, q: dict[str, list[str]]) -> None:
@@ -885,7 +1313,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             jpeg = read_jpeg_bytes(ref)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             self._send(502, f"frame read failed: {exc}".encode(), "text/plain")
             return
         self._send(200, jpeg, "image/jpeg", cache=True)
@@ -962,6 +1390,7 @@ INDEX_HTML = r"""<!doctype html>
   .cell.black { background:#3b2f5e; box-shadow:inset 0 0 0 1px rgba(167,139,250,.7); }
   /* black frame that ALSO has an action: keep the violet fill, swap the border to a green glow. */
   .cell.black.act { box-shadow:inset 0 0 0 1.5px rgba(127,214,162,.95), 0 0 5px rgba(127,214,162,.5); }
+  .cell.stuck { box-shadow:inset 0 0 0 2px #f59e0b, 0 0 5px rgba(245,158,11,.45); }
   .cell.cur { outline:2px solid #5b9dd9; outline-offset:1px; }
   #strip2wrap { flex:none; }
   #striplabels { display:flex; justify-content:space-between; align-items:baseline; }
@@ -971,12 +1400,67 @@ INDEX_HTML = r"""<!doctype html>
   #strip2 .cell { height:16px; }
   .cell.col { background:#7a2633; box-shadow:0 0 5px rgba(255,120,140,.55); }
 
+  /* left filter sidebar — hidden until toggled */
+  #filters { width:262px; flex:none; display:none; flex-direction:column; gap:8px;
+             min-height:0; overflow-y:auto; padding:9px 11px;
+             background:#191c21; border-right:1px solid #2a2e36; }
+  #filters.show { display:flex; }
+  #filters .fhead { color:#8b93a1; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+                    display:flex; align-items:center; gap:8px; margin-top:4px; }
+  #filters .fhead:first-child { margin-top:0; }
+  #filters .fhead button { margin-left:auto; padding:1px 7px; font-size:11px; text-transform:none; letter-spacing:0; }
+  #fcount { color:#7fd6a2; font-size:12px; }
+  #filters input, #filters select { background:#22262e; color:#d7dae0; border:1px solid #343a44;
+                                     border-radius:4px; padding:2px 6px; font:inherit; min-width:0; }
+  #filters input:focus, #filters select:focus { outline:none; border-color:#5b9dd9; }
+  .frow2 { display:flex; flex-direction:column; gap:3px; color:#aeb6c2; font-size:11px; }
+  .frow2 input { width:100%; }
+  .frow { display:grid; grid-template-columns:1fr 58px 58px; gap:5px; align-items:center; }
+  .flab { color:#aeb6c2; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fnum { width:100%; }
+  #fsort { display:flex; gap:5px; }
+  #fsort select { flex:1; }
+  .fnote { color:#6b7280; font-size:11px; }
+
   #panel { width:430px; flex:none; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
   #modenote { display:none; padding:6px 10px; background:#3a2f14; color:#e8c877;
               font-size:11px; border-bottom:1px solid #2a2e36; }
   #modenote.show { display:block; }
   #modenote .cnote-goal { color:#7fd6a2; font-weight:600; }
+  #modenote .cnote-context { color:#c9a0e8; font-weight:600; }
   #modenote .cnote-sys { color:#b9a06a; }
+  #modenote details { margin-top:4px; }
+  #modenote summary { cursor:pointer; user-select:none; }
+  #modenote .cnote-text { margin-top:3px; white-space:pre-wrap; color:#e4d7a6; }
+  #chatbtn { margin-top:6px; display:inline-block; cursor:pointer; background:#2a3550;
+             color:#cfe0ff; border:1px solid #3a4a6a; border-radius:4px; padding:3px 9px;
+             font-size:11px; font-weight:600; }
+  #chatbtn:hover { background:#33436a; }
+  /* Dedicated, collapsible full-chat window (overlay docked to the right edge). */
+  #chatwin { position:fixed; top:0; right:0; height:100vh; width:min(680px,62vw);
+             background:#12151b; border-left:1px solid #2a2e36; box-shadow:-8px 0 24px rgba(0,0,0,.45);
+             z-index:50; display:none; flex-direction:column; }
+  #chatwin.show { display:flex; }
+  #chatwin-head { flex:none; display:flex; align-items:center; gap:10px; padding:10px 14px;
+                  border-bottom:1px solid #2a2e36; background:#171b22; }
+  #chatwin-head .ttl { font-weight:600; color:#e8eef7; font-size:13px; }
+  #chatwin-head .sub { color:#8b93a1; font-size:11px; }
+  #chatclose { cursor:pointer; background:#2a2e36; color:#cbd3df; border:none; border-radius:4px;
+               padding:4px 10px; font-size:12px; }
+  #chatclose:hover { background:#39404c; }
+  #chatbody { flex:1; overflow:auto; padding:14px 16px; }
+  .turn { margin-bottom:9px; border-radius:8px; padding:8px 11px; }
+  .turn .role { font-size:10px; text-transform:uppercase; letter-spacing:.08em; font-weight:700; margin-bottom:4px; }
+  .turn.sys  { background:#1c1a12; }         .turn.sys  .role { color:#b9a06a; }
+  .turn.user { background:#141c26; }         .turn.user .role { color:#8fc8e8; }
+  .turn.asst { background:#131f18; }         .turn.asst .role { color:#7fd6a2; }
+  .turn .body { white-space:pre-wrap; word-break:break-word; color:#d7dde6; font-size:12.5px; line-height:1.45; }
+  .turn .act  { font-family:ui-monospace,Menlo,Consolas,monospace; color:#e6d39a; }
+  .turn .shot { color:#7f8794; font-style:italic; font-size:11.5px; }
+  .turn .goal { color:#9be3b6; font-weight:600; margin-bottom:6px; }
+  .turn .ctx  { margin-top:6px; padding:7px 9px; background:#0e1520; border:1px solid #24314a;
+                border-radius:6px; color:#c6b8e6; font-size:11.5px; white-space:pre-wrap; word-break:break-word; }
+  #chatbody details.syswrap > summary { cursor:pointer; color:#b9a06a; font-size:11px; }
   .phead { padding:6px 12px; border-bottom:1px solid #2a2e36; border-top:1px solid #2a2e36;
            color:#8b93a1; font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
   #typed { flex:1 1 40%; min-height:70px; overflow-y:auto; padding:10px 12px; white-space:pre-wrap; word-break:break-word;
@@ -1006,6 +1490,7 @@ INDEX_HTML = r"""<!doctype html>
   .seginfo { color:#8b93a1; }
 </style></head><body>
 <header>
+  <button id="filttoggle" title="show/hide filters (f)">⚙ filters</button>
   <label>dataset <select id="ds"></select></label>
   <label>segment <select id="seg"></select></label>
   <button id="prev" title="←">◀</button>
@@ -1013,9 +1498,18 @@ INDEX_HTML = r"""<!doctype html>
   <button id="next" title="→">▶</button>
   <button id="clocktoggle" title="raw vs realigned keylog for the HUD" style="display:none">keys: raw</button>
   <span id="seginfo" class="seginfo"></span>
-  <span class="hint"><kbd>←</kbd>/<kbd>→</kbd> step · <kbd>space</kbd> play · <kbd>a</kbd>/<kbd>d</kbd> prev/next active · <kbd>,</kbd>/<kbd>.</kbd> prev/next black · <kbd>⇧,</kbd>/<kbd>⇧.</kbd> black w/ action</span>
+  <span class="hint"><kbd>←</kbd>/<kbd>→</kbd> step · <kbd>↑</kbd>/<kbd>↓</kbd> prev/next segment · <kbd>space</kbd> play · <kbd>a</kbd>/<kbd>d</kbd> prev/next active · <kbd>,</kbd>/<kbd>.</kbd> prev/next black · <kbd>⇧,</kbd>/<kbd>⇧.</kbd> black w/ action · <kbd>c</kbd> chat</span>
 </header>
 <main>
+  <aside id="filters">
+    <div class="fhead">filters <button id="fclear" title="clear all filters">reset</button></div>
+    <div id="fcount"></div>
+    <div id="ftext"></div>
+    <div class="fhead">ranges (min / max)</div>
+    <div id="fnums"></div>
+    <div class="fhead">sort</div>
+    <div id="fsort"></div>
+  </aside>
   <div id="screen">
     <img id="frameimg" alt="frame">
     <div id="status">
@@ -1066,6 +1560,15 @@ INDEX_HTML = r"""<!doctype html>
     <div id="rows"></div>
   </div>
 </main>
+<div id="chatwin">
+  <div id="chatwin-head">
+    <span class="ttl">full chat</span>
+    <span class="sub" id="chatsub"></span>
+    <span style="flex:1"></span>
+    <button id="chatclose" title="collapse (Esc)">✕ collapse</button>
+  </div>
+  <div id="chatbody"></div>
+</div>
 <script>
 const $ = s => document.querySelector(s);
 let DS=null, SEG=null, FR=[], PARSED=[], cur=0, playing=false, timer=null;
@@ -1073,6 +1576,24 @@ let MODE='frame_records'; const EMPTYSET=new Set(); let _lastCell=null, _lastRow
 let MASTER_FPS=15, EV=null, EVT=[], HAS_ACTIONS=false, _evLo=-1, _evHi=-1;
 let ALN=null, DUAL=false, ALNACT=null;   // alignment overlay (master + --alignment)
 let CLOCK='raw';                         // which keylog drives the HUD: 'raw' | 'aligned'
+let ALL_SEGMENTS=[];                      // full segment list for DS (pre-filter)
+let activeNumMetrics=[];                  // numeric filter rows rendered for this dataset
+// Numeric filter metrics (min/max). Only those present in the loaded dataset's
+// segment summaries are rendered, so the panel adapts to master/sample/conv/records.
+const NUM_METRICS=[
+  {key:'duration_s',  label:'duration (s)'},
+  {key:'n_frames',    label:'frames / turns'},
+  {key:'n_non_noop',  label:'action frames'},
+  {key:'mouse_px',    label:'mouse travel (px)'},
+  {key:'clicks',      label:'clicks'},
+  {key:'scroll',      label:'scroll'},
+  {key:'keys',        label:'key presses'},
+  {key:'chars',       label:'chars typed'},
+  {key:'letters',     label:'letters'},
+  {key:'digits',      label:'digits'},
+  {key:'special',     label:'special chars'},
+  {key:'measured_length', label:'tokens'},
+];
 // Per-frame action for the HUD on the selected clock (falls back to raw).
 function curActions(){ return FR.map(f => (CLOCK==='aligned' && f.action_aln!=null) ? f.action_aln : f.action); }
 function lb(a,x){ let lo=0,hi=a.length; while(lo<hi){ const m=(lo+hi)>>1; if(a[m]<x) lo=m+1; else hi=m; } return lo; }
@@ -1202,6 +1723,44 @@ function updateRadar(p, pressed, held){
 
 // ---- typed text render -----------------------------------------------------
 function esc(s){ return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function collapsibleNote(cls, label, text){
+  if(!text) return '';
+  return `<details><summary><span class="${cls}">${label}</span></summary><div class="cnote-text">${esc(String(text))}</div></details>`;
+}
+// Dedicated full-chat window. Reassembled client-side from what the segment detail
+// already carries (system prompt + goal/context + per-frame actions) — no extra
+// payload. Images are stripped from the client, so each user turn shows a screenshot
+// placeholder (index + time). Toggled from the banner button; collapse with ✕ / Esc.
+function renderChat(){
+  const body=$('#chatbody'), sub=$('#chatsub');
+  if(!SEG || !FR.length){ if(body) body.innerHTML='<div class="fnote" style="color:#8b93a1">no turns</div>'; return; }
+  if(sub) sub.textContent=`${SEG.segment_id||''} · ${FR.length} turns`;
+  const h=[];
+  if(SEG.system_prompt){
+    h.push(`<div class="turn sys"><div class="role">system</div>`
+      +`<details class="syswrap"><summary>show system prompt</summary>`
+      +`<div class="body" style="margin-top:5px">${esc(String(SEG.system_prompt))}</div></details></div>`);
+  }
+  for(let i=0;i<FR.length;i++){
+    let u=`<div class="turn user"><div class="role">user · turn ${i}</div>`;
+    if(i===0){
+      if(SEG.instruction) u+=`<div class="goal">🎯 ${esc(String(SEG.instruction))}</div>`;
+      if(SEG.context)     u+=`<div class="ctx">${esc(String(SEG.context))}</div>`;
+      if(!SEG.instruction && !SEG.context && SEG.first_user_text)
+        u+=`<div class="body">${esc(String(SEG.first_user_text))}</div>`;
+    }
+    u+=`<div class="shot">🖼 screenshot #${i}${FR[i].t!=null?` · t=${FR[i].t}s`:''}${FR[i].is_black?' · ⬛ black':''}</div></div>`;
+    h.push(u);
+    h.push(`<div class="turn asst"><div class="role">assistant · turn ${i}</div>`
+      +`<div class="body act">${esc(String(FR[i].action||'')) || '∅'}</div></div>`);
+  }
+  body.innerHTML=h.join('');
+  body.scrollTop=0;
+}
+function chatBtn(){ return `<span id="chatbtn">💬 full chat (${FR.length} turns)</span>`; }
+function openChat(){ renderChat(); $('#chatwin').classList.add('show'); }
+function closeChat(){ $('#chatwin').classList.remove('show'); }
+function toggleChat(){ $('#chatwin').classList.contains('show') ? closeChat() : openChat(); }
 function renderTyped(chars, cur){
   const el=$('#typed');
   if(!chars.length){ el.innerHTML='<span class="empty">— no text typed yet —</span>'; return; }
@@ -1227,7 +1786,7 @@ async function loadDatasets(){
   const sel=$('#ds'); sel.innerHTML='';
   for(const d of info.datasets){
     const o=document.createElement('option'); o.value=d.name;
-    const ml = d.mode==='frames_master'?'master/raw':d.mode==='conversations'?'conversation':'sample';
+    const ml = d.mode==='frames_master'?'master/raw':d.mode==='conversations'?'conversation':d.mode==='inline_records'?'stage-06 records':'sample';
     o.textContent=`${d.name}  (${ml})`;
     sel.appendChild(o);
   }
@@ -1236,7 +1795,7 @@ async function loadDatasets(){
 }
 async function loadSegments(){
   const info=await jget('/api/segments?ds='+encodeURIComponent(DS));
-  if(info.error){ $('#seginfo').textContent='⚠ '+info.error; $('#seg').innerHTML=''; $('#strip').innerHTML=''; $('#rows').innerHTML=''; return; }
+  if(info.error){ $('#seginfo').textContent='⚠ '+info.error; $('#seg').innerHTML=''; $('#strip').innerHTML=''; $('#rows').innerHTML=''; ALL_SEGMENTS=[]; buildFilters([]); return; }
   MODE=info.mode||'frame_records';
   MASTER_FPS=info.master_fps||MASTER_FPS;
   const note=$('#modenote');
@@ -1252,16 +1811,98 @@ async function loadSegments(){
   } else if(MODE==='conversations'){
     note.textContent=`stage-04 conversations · ${info.goal_conditioned?'goal-conditioned':'goal-free'}${info.target_fps?` · ${info.target_fps} fps`:''} — each step is one screenshot→action turn (assistant reply = the frame's action). Frames resolve from the linked stage-01a master.`;
     note.classList.add('show');
+  } else if(MODE==='inline_records'){
+    note.textContent=`stage-06 inline records · ${info.model_id||'?'} · max_length ${info.max_length||'?'}${info.overflow_mode?` · overflow=${info.overflow_mode}`:''}${info.splits&&info.splits.length?` · splits: ${info.splits.join('/')}`:''} — each entry is ONE tokenized training example (a ≤max_length conversation chunk; ar:// frames into the stage-01a master). Only kept records are shown, so this IS the model's training input.`;
+    note.classList.add('show');
   } else note.classList.remove('show');
-  const sel=$('#seg'); sel.innerHTML='';
-  for(const s of info.segments){
-    const o=document.createElement('option'); o.value=s.segment_id;
-    o.textContent = MODE==='frames_master'
-      ? `${s.segment_id}  (${s.n_frames} frames, ${s.duration_s}s${s.align_status?', '+s.align_status:''})`
-      : `${s.segment_id}  (${s.n_non_noop}/${s.n_frames} act, ${s.duration_s}s)`;
-    sel.appendChild(o);
+  ALL_SEGMENTS = info.segments || [];
+  buildFilters(ALL_SEGMENTS);
+  await applyFilters();   // populates #seg from the (filtered) list and loads one
+}
+
+// ---- filtering (left sidebar) ----------------------------------------------
+// The dropdown option label for one segment, per dataset mode.
+function stuckOptionLabel(s){
+  if(!(s.stuck_key_frames>0)) return '';
+  return `, stuck ${s.stuck_key||'key'} ${s.stuck_key_frames}f${s.stuck_key_unreleased?' open':''}`;
+}
+function segOptionLabel(s){
+  return MODE==='frames_master'
+    ? `${s.segment_id}  (${s.n_frames} frames, ${s.duration_s}s${s.align_status?', '+s.align_status:''})`
+    : MODE==='inline_records'
+    ? `${s.segment_id}  (${s.n_non_noop}/${s.n_frames} act${s.measured_length?', '+s.measured_length+' tok':''}${stuckOptionLabel(s)})`
+    : `${s.segment_id}  (${s.n_non_noop}/${s.n_frames} act, ${s.duration_s}s${stuckOptionLabel(s)})`;
+}
+const _has = (segs,k)=>segs.some(s=>s[k]!=null);
+// Build the filter controls to match the fields this dataset actually carries.
+function buildFilters(segs){
+  const hasGoal=_has(segs,'instruction'), hasConv=_has(segs,'conv_text'), hasTyped=_has(segs,'typed'), hasStuck=_has(segs,'stuck_key_frames');
+  let th='';
+  if(hasGoal)  th+=`<label class="frow2">goal contains<input id="fgoal" type="search" placeholder="substring…"></label>`;
+  if(hasConv)  th+=`<label class="frow2">conversation contains<input id="fconv" type="search" placeholder="goal / context / any action…"></label>`;
+  if(hasTyped) th+=`<label class="frow2">typed text contains<input id="ftyped" type="search" placeholder="substring…"></label>`;
+  if(hasStuck) th+=`<label class="frow2">stuck key held &gt; frames<input id="fstuck" type="number" min="0" step="1" placeholder="T"></label>`;
+  $('#ftext').innerHTML = th || '<div class="fnote">no text/stuck filters in this dataset</div>';
+  activeNumMetrics = NUM_METRICS.filter(m=>_has(segs,m.key));
+  $('#fnums').innerHTML = activeNumMetrics.map(m=>
+    `<div class="frow"><span class="flab" title="${m.label}">${m.label}</span>`
+    + `<input id="min_${m.key}" class="fnum" type="number" step="any" placeholder="min">`
+    + `<input id="max_${m.key}" class="fnum" type="number" step="any" placeholder="max"></div>`
+  ).join('') || '<div class="fnote">no numeric metrics</div>';
+  const sopts=['<option value="">— none —</option>']
+    .concat(activeNumMetrics.map(m=>`<option value="${m.key}">${m.label}</option>`));
+  if(hasGoal) sopts.push('<option value="instruction">goal (A→Z)</option>');
+  $('#fsort').innerHTML = `<select id="fsortkey">${sopts.join('')}</select>`
+    + `<select id="fsortdir"><option value="desc">high → low</option><option value="asc">low → high</option></select>`;
+  // Re-filter live as any control changes (elements are recreated per dataset).
+  $('#filters').querySelectorAll('input,select').forEach(el=>{
+    el.addEventListener('input', applyFilters);
+    el.addEventListener('change', applyFilters);
+  });
+}
+// The current filtered + sorted segment list.
+function filteredSegments(){
+  const g=($('#fgoal')&&$('#fgoal').value||'').trim().toLowerCase();
+  const cv=($('#fconv')&&$('#fconv').value||'').trim().toLowerCase();
+  const tp=($('#ftyped')&&$('#ftyped').value||'').trim().toLowerCase();
+  const stuckRaw=($('#fstuck')&&$('#fstuck').value||'').trim();
+  const stuckT=stuckRaw===''?null:Number(stuckRaw);
+  let list=ALL_SEGMENTS.filter(s=>{
+    if(g && !String(s.instruction||'').toLowerCase().includes(g)) return false;
+    if(cv && !String(s.conv_text||'').toLowerCase().includes(cv)) return false;
+    if(tp && !String(s.typed||'').toLowerCase().includes(tp)) return false;
+    if(stuckT!=null && Number.isFinite(stuckT) && !((s.stuck_key_frames||0)>stuckT)) return false;
+    for(const m of activeNumMetrics){
+      const loEl=$('#min_'+m.key), hiEl=$('#max_'+m.key);
+      const lo=loEl?loEl.value:'', hi=hiEl?hiEl.value:'';
+      const v=s[m.key];
+      if(lo!=='' && (v==null || v< +lo)) return false;
+      if(hi!=='' && (v==null || v> +hi)) return false;
+    }
+    return true;
+  });
+  const skEl=$('#fsortkey'), sk=skEl?skEl.value:'';
+  if(sk){
+    const dir=($('#fsortdir')&&$('#fsortdir').value==='asc')?1:-1;
+    list=list.slice().sort((a,b)=> sk==='instruction'
+      ? dir*String(a.instruction||'').localeCompare(String(b.instruction||''))
+      : dir*(((a[sk]!=null?a[sk]:0)-(b[sk]!=null?b[sk]:0))||0));
   }
-  if(info.segments.length) await loadSegment(info.segments[0].segment_id);
+  return list;
+}
+// Repopulate the segment dropdown from the filtered list; keep the current
+// selection if it still matches, else load the first match.
+async function applyFilters(){
+  const list=filteredSegments();
+  const prev=SEG&&SEG.segment_id;
+  const sel=$('#seg'); sel.innerHTML='';
+  for(const s of list){ const o=document.createElement('option'); o.value=s.segment_id; o.textContent=segOptionLabel(s); sel.appendChild(o); }
+  const cnt=$('#fcount'); if(cnt) cnt.textContent=`${list.length} / ${ALL_SEGMENTS.length} match`;
+  if(!list.length){ $('#seginfo').textContent='⚠ no segments match the filters'; return; }
+  if(prev && list.some(s=>s.segment_id===prev)){
+    sel.value=prev;   // keep current view
+    if(FR.length){ buildStrip(); show(cur); }
+  } else await loadSegment(list[0].segment_id);
 }
 async function loadSegment(id){
   SEG=await jget('/api/segment?ds='+encodeURIComponent(DS)+'&id='+encodeURIComponent(id));
@@ -1281,10 +1922,14 @@ async function loadSegment(id){
   tg.style.display = canAlign ? '' : 'none';
   tg.textContent = 'keys: '+CLOCK; tg.classList.toggle('on', CLOCK==='aligned');
   PARSED=curActions().map(parseAction);
+  const stuckInfo = SEG.stuck_key_frames
+    ? ` · stuck ${SEG.stuck_key||'key'} ${SEG.stuck_key_frames}f${SEG.stuck_key_unreleased?' unreleased':''}`
+    : '';
   $('#seginfo').textContent = ((MODE==='frames_master' && !HAS_ACTIONS)
     ? `${SEG.recording_id||'?'} · ${SEG.n_frames} raw frames`
     : `${SEG.recording_id||'?'} · ${SEG.n_non_noop}/${SEG.n_frames} active frames`)
-    + (SEG.n_black ? ` · ${SEG.n_black} black${SEG.n_black_act?` (${SEG.n_black_act} w/ action)`:''}` : '');
+    + (SEG.n_black ? ` · ${SEG.n_black} black${SEG.n_black_act?` (${SEG.n_black_act} w/ action)`:''}` : '')
+    + stuckInfo;
   if(MODE==='conversations'){
     // Per-segment banner: the system prompt + (optional) goal instruction that
     // frame this conversation, plus its turn count / fps / alignment.
@@ -1293,21 +1938,67 @@ async function loadSegment(id){
     if(SEG.target_fps) h+=` · ${SEG.target_fps} fps`;
     if(SEG.alignment_status) h+=` · ${esc(String(SEG.alignment_status))}`;
     h+=` · ${SEG.n_turns||FR.length} turns`;
-    if(SEG.instruction) h+=`<br><span class="cnote-goal">goal:</span> ${esc(String(SEG.instruction))}`;
-    if(SEG.system_prompt) h+=`<br><span class="cnote-sys">system:</span> ${esc(String(SEG.system_prompt))}`;
+    h+=collapsibleNote('cnote-goal', 'goal', SEG.instruction);
+    h+=collapsibleNote('cnote-context', 'context', SEG.context);
+    h+=collapsibleNote('cnote-sys', 'system prompt', SEG.system_prompt);
+    h+='<div>'+chatBtn()+'</div>';
+    note.innerHTML=h; note.classList.add('show');
+  }
+  if(MODE==='inline_records'){
+    // Per-record banner: which split, how full the token budget is, and the
+    // system prompt / goal that frame this training example.
+    const note=$('#modenote');
+    const ml=SEG.measured_length, mx=SEG.max_length;
+    const pct=(ml&&mx)?Math.round(100*ml/mx):null;
+    let h=`<b>stage-06 record</b> · <span class="cnote-goal">${esc(String(SEG.split||'?'))}</span> split · ${SEG.n_turns||FR.length} turns`;
+    if(ml) h+=` · ${ml}${mx?`/${mx}`:''} tok${pct!=null?` (${pct}% of budget)`:''}`;
+    if(SEG.model_id) h+=` · ${esc(String(SEG.model_id))}`;
+    if(SEG.overflow_mode) h+=` · overflow=${esc(String(SEG.overflow_mode))}`;
+    if(SEG.target_fps) h+=` · ${SEG.target_fps} fps`;
+    h+=collapsibleNote('cnote-goal', 'goal', SEG.instruction);
+    h+=collapsibleNote('cnote-context', 'context', SEG.context);
+    h+=collapsibleNote('cnote-sys', 'system prompt', SEG.system_prompt);
+    h+='<div>'+chatBtn()+'</div>';
     note.innerHTML=h; note.classList.add('show');
   }
   $('#fn').textContent=FR.length;
   buildStrip(); buildStrip2(); buildRows(); show(0);
+  if($('#chatwin').classList.contains('show')) renderChat();  // keep the open window in sync
 }
 // Built via innerHTML (+ delegated click) so multi-thousand-frame segments
 // (e.g. a 15fps frames-master: ~6k frames) render fast.
+function stuckThreshold(){
+  const el=$('#fstuck');
+  if(!el || el.value.trim()==='') return null;
+  const t=Number(el.value);
+  return Number.isFinite(t) ? t : null;
+}
+function stuckTimelineMap(){
+  const t=stuckThreshold();
+  const map=new Map();
+  if(t==null || !SEG || !SEG.key_hold_ranges) return map;
+  for(const r of SEG.key_hold_ranges){
+    if(!((r.frames||0)>t)) continue;
+    const lo=Math.max(0, Math.min(FR.length-1, r.start||0));
+    const hi=Math.max(lo, Math.min(FR.length-1, r.end||0));
+    for(let i=lo;i<=hi;i++){
+      if(!map.has(i)) map.set(i, []);
+      map.get(i).push(r);
+    }
+  }
+  return map;
+}
 function buildStrip(){
   const cuts=(ALN&&ALN.cut_ranges)?ALN.cut_ranges:[];
   const inCut=i=>{ for(const r of cuts) if(i>=r[0]&&i<r[1]) return true; return false; };
+  const stuck=stuckTimelineMap();
   let h='';
   for(let i=0;i<FR.length;i++){ const f=FR[i]; const cut=inCut(i); const blk=!!f.is_black; const blkAct=blk&&!f.is_noop;
-    h+=`<div class="cell${f.is_noop?'':' act'}${cut?' cut':''}${blk?' black':''}" data-i="${i}" title="#${i} t=${f.t}s ${blkAct?'[black + action] ':(blk?'[black frame] ':'')}${cut?'[cut — collapsed idle] ':''}${esc(f.action||'NO_OP')}"></div>`; }
+    const stuckHere=stuck.get(i)||[];
+    const stuckTitle=stuckHere.length
+      ? '['+stuckHere.map(r=>`${r.key||'key'} held ${r.frames||0}f${r.unreleased?' unreleased':''}`).join(', ')+'] '
+      : '';
+    h+=`<div class="cell${f.is_noop?'':' act'}${cut?' cut':''}${blk?' black':''}${stuckHere.length?' stuck':''}" data-i="${i}" title="#${i} t=${f.t}s ${stuckTitle}${blkAct?'[black + action] ':(blk?'[black frame] ':'')}${cut?'[cut — collapsed idle] ':''}${esc(f.action||'NO_OP')}"></div>`; }
   $('#strip').innerHTML=h;
 }
 // Second timeline (master + alignment only): aligned keys on the video clock,
@@ -1416,6 +2107,13 @@ function togglePlay(){
 
 $('#ds').onchange=e=>{ DS=e.target.value; loadSegments(); };
 $('#seg').onchange=e=>loadSegment(e.target.value);
+// Move to the prev/next segment in the (filtered, sorted) dropdown; clamps at the ends.
+function stepSegment(delta){
+  const sel=$('#seg'); if(!sel || !sel.options.length) return;
+  const i=Math.max(0, Math.min(sel.options.length-1, (sel.selectedIndex<0?0:sel.selectedIndex)+delta));
+  if(i===sel.selectedIndex) return;
+  sel.selectedIndex=i; loadSegment(sel.value);
+}
 $('#prev').onclick=()=>step(-1);
 $('#next').onclick=()=>step(1);
 $('#play').onclick=togglePlay;
@@ -1427,9 +2125,23 @@ $('#clocktoggle').onclick=()=>{
   PARSED=curActions().map(parseAction); show(cur);
 };
 $('#rows').onclick=e=>{ const er=e.target.closest('.erow'); if(er){ show(+er.dataset.fi); return; } const r=e.target.closest('.row'); if(r) show(+r.dataset.i); };
+// Full-chat window: the button lives inside #modenote (rebuilt per segment via
+// innerHTML), so bind it by delegation; ✕ / Esc collapse the window.
+$('#modenote').addEventListener('click', e=>{ if(e.target.closest('#chatbtn')) toggleChat(); });
+$('#chatclose').onclick=closeChat;
+// --- filter panel toggle / reset ---
+function setFilters(on){ $('#filters').classList.toggle('show',on); $('#filttoggle').classList.toggle('on',on);
+  localStorage.setItem('fr_filters_open', on?'1':''); }
+$('#filttoggle').onclick=()=>setFilters(!$('#filters').classList.contains('show'));
+$('#fclear').onclick=()=>{ $('#filters').querySelectorAll('input').forEach(i=>i.value=''); const sk=$('#fsortkey'); if(sk) sk.value=''; applyFilters(); };
 document.addEventListener('keydown',e=>{
-  if(e.target.tagName==='SELECT') return;
-  if(e.key==='ArrowLeft'){step(-1);e.preventDefault();}
+  if(e.key==='Escape' && $('#chatwin').classList.contains('show')){ closeChat(); e.preventDefault(); return; }
+  if(e.target.tagName==='SELECT'||e.target.tagName==='INPUT') return;
+  if(e.key==='c'){ toggleChat(); return; }
+  if(e.key==='f'){ setFilters(!$('#filters').classList.contains('show')); return; }
+  if(e.key==='ArrowUp'){stepSegment(-1);e.preventDefault();}
+  else if(e.key==='ArrowDown'){stepSegment(1);e.preventDefault();}
+  else if(e.key==='ArrowLeft'){step(-1);e.preventDefault();}
   else if(e.key==='ArrowRight'){step(1);e.preventDefault();}
   else if(e.key===' '){togglePlay();e.preventDefault();}
   else if(e.key==='a'){nextActive(-1);}
@@ -1458,6 +2170,7 @@ document.addEventListener('mouseup', ()=>{ if(!rdrag) return; rdrag=false; resiz
   document.body.style.userSelect=''; localStorage.setItem('fr_panelw', parseInt(panel.style.width)||430); fitKeyboard(); });
 window.addEventListener('resize', ()=>{ setPanelWidth(parseInt(panel.style.width)||430); fitKeyboard(); });
 (function(){ const s=parseInt(localStorage.getItem('fr_panelw')); if(s) setPanelWidth(s); })();
+if(localStorage.getItem('fr_filters_open')) setFilters(true);
 
 buildKeyboard(); initRadar();
 setTimeout(fitKeyboard, 0);
@@ -1487,12 +2200,6 @@ def resolve_jsonl_paths(dataset: Path) -> list[Path]:
     root = dataset / "frame_records.jsonl"
     if root.exists():
         return [root]
-    # A stage-03 filter artifact's QC view (qc_view/<segment_id>.jsonl, written
-    # with --qc-view-fps): per-segment sampled frames + derived canonical
-    # actions in frame_records field names — browse it like any 01b sample.
-    qc = sorted((dataset / "qc_view").glob("*.jsonl"))
-    if qc:
-        return qc
     # Otherwise gather per-segment files: shallow layout, then the 01b annotate
     # layout, then a bounded recursive sweep. First non-empty match wins.
     for pattern in (
@@ -1504,11 +2211,20 @@ def resolve_jsonl_paths(dataset: Path) -> list[Path]:
         if found:
             return found
     raise SystemExit(
-        f"no frame_records.jsonl (or qc_view/*.jsonl) found under {dataset} "
-        f"(looked at the root, qc_view/, */, clips/*/stage_01/, and recursively); "
-        f"pass the file directly with --dataset <path>/frame_records.jsonl. "
-        f"For a stage-03 filter artifact, re-run stage_03_filter with --qc-view-fps."
+        f"no frame_records.jsonl found under {dataset} "
+        f"(looked at the root, */, clips/*/stage_01/, and recursively); "
+        f"pass the file directly with --dataset <path>/frame_records.jsonl"
     )
+
+
+def _positive_int(raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected an integer, got {raw!r}") from exc
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be > 0")
+    return value
 
 
 def parse_args() -> argparse.Namespace:
@@ -1517,11 +2233,18 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--dataset", required=True, nargs="+", metavar="PATH",
-        help="one or more datasets, each a frame-records dir (or frame_records.jsonl "
-             "file), a stage-03 filter artifact with a qc_view/ (run with "
-             "--qc-view-fps), a stage-01 frames-master store dir (segment_index.jsonl "
-             "+ frames/), or a stage-04 conversations dir (or conversations.jsonl "
-             "file) — auto-detected; choose between them in the UI",
+        help="one or more datasets, each a 01b output dir (or frame_records.jsonl "
+             "file), a 01a frames-master store dir (segment_index.jsonl + frames/), "
+             "a stage-04 conversations dir (or conversations.jsonl file), or a "
+             "stage-06 inline-records dir (train/ + val/ ArrayRecord shards) — "
+             "auto-detected; choose between them in the UI",
+    )
+    p.add_argument(
+        "--limit", "--limit-samples", dest="limit", type=_positive_int, default=None,
+        help="load at most the first K samples per dataset. For frame_records this "
+             "means the first K segment_ids and the loader stops reading at K+1; "
+             "for conversations/inline records it means the first K rows/chunks; "
+             "for frames-master it caps listed segments.",
     )
     p.add_argument(
         "--clips-manifest", default=None,
@@ -1557,55 +2280,98 @@ def looks_like_frames_master(root: Path) -> bool:
 
 
 def looks_like_conversations(root: Path) -> bool:
-    """A stage-04 conversations artifact: a ``conversations.jsonl`` file, a dir
-    holding one, or a dir whose ``manifest.json`` marks it as a conversations store."""
+    """A conversations-shaped artifact: our stage-04 ``conversations.jsonl`` OR an
+    external goal-SFT store (e.g. hindsight_fold canonical SFT: a ``chat.jsonl`` at
+    the root or under ``train``/``val``). Same interleaved screenshot->action
+    ``messages`` schema; the goal shows as the per-conversation instruction."""
     root = root.expanduser()
     if root.is_file():
-        return root.name.endswith(".jsonl") and "conversation" in root.name.lower()
+        name = root.name.lower()
+        return name.endswith(".jsonl") and ("conversation" in name or "chat" in name)
     if not root.is_dir():
         return False
-    if (root / "conversations.jsonl").exists():
+    if any((root / p).exists() for p in (
+        "conversations.jsonl", "chat.jsonl", "val/chat.jsonl", "train/chat.jsonl"
+    )):
         return True
     manifest = root / "manifest.json"
     if manifest.exists():
         try:
-            return "conversations" in json.loads(manifest.read_text()).get("artifact_type", "")
+            at = json.loads(manifest.read_text()).get("artifact_type", "")
+            return "conversations" in at or "canonical_sft" in at
         except (OSError, json.JSONDecodeError):
             return False
     return False
 
 
+def looks_like_inline_records(root: Path) -> bool:
+    """A stage-06 inline SFT records store: a dir whose ``manifest.json`` marks the
+    stage ``inline_records``, or one with ``train``/``val`` split subdirs (or a split
+    dir itself) holding a ``metadata.json`` with ``inline_records: true``."""
+    root = root.expanduser()
+    if not root.is_dir():
+        return False
+    manifest = root / "manifest.json"
+    if manifest.exists():
+        try:
+            if json.loads(manifest.read_text()).get("stage") == "inline_records":
+                return True
+        except (OSError, json.JSONDecodeError):
+            pass
+    for cand in (root, root / "train", root / "val"):
+        meta = cand / "metadata.json"
+        if meta.exists():
+            try:
+                if json.loads(meta.read_text()).get("inline_records"):
+                    return True
+            except (OSError, json.JSONDecodeError):
+                pass
+    return False
+
+
 def resolve_conversations_path(dataset: Path) -> Path:
-    """Locate the ``conversations.jsonl`` for a stage-04 dataset (the file itself,
-    or ``<dir>/conversations.jsonl``)."""
+    """Locate the conversations file for a dataset: the file itself, or -- for a dir
+    -- ``conversations.jsonl`` (our stage-04), then ``chat.jsonl`` / ``val/chat.jsonl``
+    / ``train/chat.jsonl`` (external goal-SFT). A big combined ``chat.jsonl`` loads
+    eagerly, so pass a split file directly (e.g. ``.../val/chat.jsonl``) to browse fast."""
     dataset = dataset.expanduser().resolve()
     if dataset.is_file():
         return dataset
-    candidate = dataset / "conversations.jsonl"
-    if candidate.exists():
-        return candidate
-    raise SystemExit(f"no conversations.jsonl found under {dataset}")
+    for candidate in (
+        dataset / "conversations.jsonl",
+        dataset / "chat.jsonl",
+        dataset / "val" / "chat.jsonl",
+        dataset / "train" / "chat.jsonl",
+    ):
+        if candidate.exists():
+            return candidate
+    raise SystemExit(f"no conversations.jsonl / chat.jsonl found under {dataset}")
 
 
 def detect_mode(path: Path) -> str:
     """Cheap mode detection shared by registration and building (no full load).
-    Frames-master and conversations are checked before the frame_records default."""
+    Frames-master, conversations and inline-records are checked before the
+    frame_records default."""
     if looks_like_frames_master(path):
         return "frames_master"
     if looks_like_conversations(path):
         return "conversations"
+    if looks_like_inline_records(path):
+        return "inline_records"
     return "frame_records"
 
 
 def _build_dataset(path: Path):
     """Build the right dataset object for a path (frames-master / conversations /
-    frame_records)."""
+    inline-records / frame_records)."""
     mode = detect_mode(path)
     if mode == "frames_master":
-        return FramesMasterDataset(path.expanduser().resolve())
+        return FramesMasterDataset(path.expanduser().resolve(), limit=DATASET_SAMPLE_LIMIT)
     if mode == "conversations":
-        return ConversationsDataset(resolve_conversations_path(path))
-    return FrameRecordsDataset(resolve_jsonl_paths(path))
+        return ConversationsDataset(resolve_conversations_path(path), limit=DATASET_SAMPLE_LIMIT)
+    if mode == "inline_records":
+        return InlineRecordsDataset(path.expanduser().resolve(), limit=DATASET_SAMPLE_LIMIT)
+    return FrameRecordsDataset(resolve_jsonl_paths(path), limit=DATASET_SAMPLE_LIMIT)
 
 
 def get_dataset(name: str):
@@ -1639,16 +2405,19 @@ def register_datasets(paths: list[str]) -> None:
 
 
 def main() -> None:
-    global CLIPS_MANIFEST_OVERRIDE, ALIGNMENT_OVERRIDE
+    global CLIPS_MANIFEST_OVERRIDE, ALIGNMENT_OVERRIDE, DATASET_SAMPLE_LIMIT
     args = parse_args()
     CLIPS_MANIFEST_OVERRIDE = args.clips_manifest
     ALIGNMENT_OVERRIDE = args.alignment
+    DATASET_SAMPLE_LIMIT = args.limit
     register_datasets(args.dataset)
     if not DATASETS:
         raise SystemExit("no datasets given")
     print(f"registered {len(DATASETS)} dataset(s):", flush=True)
     for name, entry in DATASETS.items():
         print(f"  {name}  [{entry['mode']}]  {entry['path']}", flush=True)
+    if DATASET_SAMPLE_LIMIT is not None:
+        print(f"sample limit: first {DATASET_SAMPLE_LIMIT} samples per dataset", flush=True)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(
         f"serving on http://{args.host}:{args.port}/  "
