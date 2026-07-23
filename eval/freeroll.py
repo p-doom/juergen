@@ -18,7 +18,7 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -153,6 +153,7 @@ def _run_rollout(
     settle_s: float,
     settle_stable_timeout_s: float,
     settle_poll_s: float,
+    model_resolution: tuple[int, int] | None = None,
 ) -> dict:
     steps_dir = output_dir / "steps"
     if save_frames:
@@ -167,11 +168,25 @@ def _run_rollout(
     _LOGGER.info("VM screen %dx%d; max_steps=%d; instruction=%r", sw, sh, max_steps, instruction)
     _prepare_desktop(client, desktop_setup)
 
+    # The model view: frames are resized to model_resolution before they enter
+    # the conversation (matching the training frame scale), and the model's
+    # dx/dy — which live in that view's pixel space — are scaled back to VM
+    # pixels before dispatch. GIF/saved frames stay native.
+    mres = model_resolution if (model_resolution and tuple(model_resolution) != (sw, sh)) else None
+    ax = (sw / mres[0]) if mres else 1.0
+    ay = (sh / mres[1]) if mres else 1.0
+    if mres:
+        _LOGGER.info("model view %dx%d; deltas scaled x%.3f/x%.3f to VM %dx%d",
+                     mres[0], mres[1], ax, ay, sw, sh)
+
+    def _to_model(img: Image.Image) -> Image.Image:
+        return img.resize(mres, Image.LANCZOS) if mres else img
+
     frame = client.screenshot()
     frames_for_gif: list[Image.Image] = [frame.copy()]
     if save_frames:
         frame.save(steps_dir / "step_000.png")
-    recent_frames: list[Image.Image] = [frame]
+    recent_frames: list[Image.Image] = [_to_model(frame)]
     recent_actions: list[str] = []
 
     t_start = time.time()
@@ -251,7 +266,7 @@ def _run_rollout(
                 frames_for_gif.append(frame.copy())
                 if save_frames:
                     frame.save(steps_dir / f"step_{step:03d}.png")
-                append_turn(recent_frames, recent_actions, frame, action_text,
+                append_turn(recent_frames, recent_actions, _to_model(frame), action_text,
                             n_history_frames=n_history_frames)
 
                 step_log = StepLog(
@@ -306,6 +321,11 @@ def _run_rollout(
                             for e in action.events
                         ],
                     }
+                    if mres and (action.dx or action.dy):
+                        # model-view pixels -> VM pixels (parsed/logs keep
+                        # the model's own frame of reference).
+                        action = replace(action, dx=round(action.dx * ax),
+                                         dy=round(action.dy * ay))
                     sr = client.dispatch_action(action)
                 sr_dict = {
                     "cursor_before": list(sr.cursor_before),
@@ -332,7 +352,7 @@ def _run_rollout(
             frames_for_gif.append(frame.copy())
             if save_frames:
                 frame.save(steps_dir / f"step_{step:03d}.png")
-            append_turn(recent_frames, recent_actions, frame, action_text,
+            append_turn(recent_frames, recent_actions, _to_model(frame), action_text,
                         n_history_frames=n_history_frames)
 
             step_log = StepLog(
@@ -503,6 +523,10 @@ def main() -> int:
         help="Optional VM setup before the first model turn. Use 'terminal' "
              "for typing evals that should start with a focused terminal.",
     )
+    p.add_argument(
+        "--model_resolution", default="",
+        help='"WxH" view served to the model (frames resized, dx/dy scaled '
+             'back to VM pixels). Empty = native VM resolution.')
     p.add_argument("--sglang_port", type=int, default=30000)
     p.add_argument("--sglang_api_key", default="osworld")
     p.add_argument("--mem_fraction_static", type=float, default=0.40)
@@ -523,6 +547,14 @@ def main() -> int:
     )
 
     instructions = _parse_instructions(args.instruction)
+    mres: tuple[int, int] | None = None
+    if args.model_resolution:
+        try:
+            w_s, h_s = args.model_resolution.lower().split("x")
+            mres = (int(w_s), int(h_s))
+        except ValueError:
+            print(f"bad --model_resolution {args.model_resolution!r} (want WxH)", file=sys.stderr)
+            return 2
 
     # Port isolation: shift from SLURM_JOB_ID so concurrent jobs on the same
     # node don't collide. Range: 5000 + (job_id % 200) * 10 → 5000..6990.
@@ -619,6 +651,7 @@ def main() -> int:
                 save_frames=not args.no_frames,
                 stop_on_click=args.stop_on_click,
                 desktop_setup=args.desktop_setup,
+                model_resolution=mres,
                 settle_s=args.settle_s,
                 settle_stable_timeout_s=args.settle_stable_timeout_s,
                 settle_poll_s=args.settle_poll_s,
