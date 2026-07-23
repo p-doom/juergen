@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -30,6 +31,21 @@ _DEFAULT_QEMU_BIN = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin
 # `uv run` (in the labctl recipe command) uses the same path; keeping it
 # as a module constant survives the sys.path-shim removal in juergen 39d6d5f.
 _EVAL_DIR = Path(__file__).resolve().parent
+
+
+def parse_resolution(value: str | None) -> tuple[int, int] | None:
+    """Parse a ``WIDTHxHEIGHT`` string (e.g. ``1280x720``) into a (w, h) tuple.
+
+    ``None``/empty means "native" (no resizing) and returns ``None``. Usable as
+    an argparse ``type=`` callable — argparse turns the ValueError into a clean
+    usage error.
+    """
+    if not value:
+        return None
+    m = re.fullmatch(r"(\d+)\s*[xX]\s*(\d+)", value.strip())
+    if not m:
+        raise ValueError(f"resolution must look like 1280x720, got {value!r}")
+    return int(m.group(1)), int(m.group(2))
 
 
 def _pil_to_data_url(img: Image.Image, *, quality: int = 85) -> str:
@@ -77,6 +93,7 @@ def _interleave_messages(
     instruction: str | None,
     image_parts: list[Any],
     recent_actions: list[str] | None,
+    current_message: str | None = None,
 ) -> list[dict[str, Any]]:
     """Assemble the interleaved chat message list from per-frame ``image_parts``.
 
@@ -86,14 +103,21 @@ def _interleave_messages(
     sent — only the image representation differs. ``image_parts[i]`` is the
     representation of ``recent_frames[i]``; ``recent_actions[i]`` is the action
     that followed it (``len(recent_actions) == len(image_parts) - 1``).
+
+    ``current_message`` (optional) is extra user text attached to the LAST
+    (current) frame's user turn — a message sent to the model alongside the
+    current screenshot. ``None`` leaves the turn image-only (default).
     """
     recent_actions = recent_actions or []
     messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    n = len(image_parts)
     for i, part in enumerate(image_parts):
         content: list[Any] = []
         if i == 0 and instruction:
             content.append({"type": "text", "text": instruction})
         content.append(part)
+        if i == n - 1 and current_message:
+            content.append({"type": "text", "text": current_message})
         messages.append({"role": "user", "content": content})
         if i < len(recent_actions):
             messages.append({"role": "assistant", "content": recent_actions[i]})
@@ -119,6 +143,7 @@ def build_loggable_messages(
     instruction: str | None,
     recent_actions: list[str] | None,
     frame_labels: list[str],
+    current_message: str | None = None,
 ) -> list[dict[str, Any]]:
     """The message list as sent, but with each image replaced by ``<image name>``.
 
@@ -128,7 +153,7 @@ def build_loggable_messages(
     image bytes — the referenced ``step_NNN.png`` files already hold the pixels.
     """
     parts = [{"type": "image", "image": f"<image {lbl}>"} for lbl in frame_labels]
-    return _interleave_messages(system_prompt, instruction, parts, recent_actions)
+    return _interleave_messages(system_prompt, instruction, parts, recent_actions, current_message)
 
 
 def _call_model(
@@ -142,6 +167,7 @@ def _call_model(
     recent_actions: list[str] | None = None,
     max_tokens: int,
     temperature: float,
+    current_message: str | None = None,
     request_timeout_s: float = 120.0,
 ) -> str:
     """One chat-completion call, interleaving frames and the model's prior actions.
@@ -171,7 +197,8 @@ def _call_model(
         {"type": "image_url", "image_url": {"url": _pil_to_data_url(f)}}
         for f in recent_frames
     ]
-    messages = _interleave_messages(system_prompt, instruction, image_parts, recent_actions)
+    messages = _interleave_messages(
+        system_prompt, instruction, image_parts, recent_actions, current_message)
     r = requests.post(
         sglang_url.rstrip("/") + "/chat/completions",
         headers={"Authorization": f"Bearer {api_key}"},

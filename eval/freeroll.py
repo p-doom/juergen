@@ -41,7 +41,7 @@ from osworld_system_prompts import SYSTEM_PROMPTS  # noqa: E402
 from osworld_runtime import (  # noqa: E402
     _DEFAULT_QCOW2, _DEFAULT_QEMU_BIN, _EVAL_DIR,
     _call_model, _pil_to_data_url, _wait_for, append_turn,
-    build_loggable_messages, window_frame_labels,
+    build_loggable_messages, parse_resolution, window_frame_labels,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -139,6 +139,7 @@ def _run_rollout(
     settle_s: float,
     settle_stable_timeout_s: float,
     settle_poll_s: float,
+    model_resolution: tuple[int, int] | None,
 ) -> dict:
     steps_dir = output_dir / "steps"
     if save_frames:
@@ -147,10 +148,15 @@ def _run_rollout(
     conv_path = output_dir / "conversation.jsonl"
     gif_path = output_dir / "rollout.gif"
 
-    client = OSWorldClient(osworld_url)
+    client = OSWorldClient(osworld_url, model_resolution=model_resolution)
     client.wait_ready()
     sw, sh = client.screen_size()
-    _LOGGER.info("VM screen %dx%d; max_steps=%d; instruction=%r", sw, sh, max_steps, instruction)
+    _LOGGER.info(
+        "VM screen %dx%d; model sees %s; max_steps=%d; instruction=%r",
+        sw, sh,
+        "%dx%d" % model_resolution if model_resolution else "native",
+        max_steps, instruction,
+    )
     _prepare_desktop(client, desktop_setup)
 
     frame = client.screenshot()
@@ -356,6 +362,7 @@ def _run_rollout(
         "osworld_url": osworld_url,
         "sglang_url": sglang_url,
         "screen_size": [sw, sh],
+        "model_resolution": list(model_resolution) if model_resolution else None,
         "n_steps": len(steps),
         "max_steps": max_steps,
         "stop_reason": stop_reason,
@@ -489,6 +496,14 @@ def main() -> int:
         help="Optional VM setup before the first model turn. Use 'terminal' "
              "for typing evals that should start with a focused terminal.",
     )
+    p.add_argument(
+        "--model_resolution", type=parse_resolution, default=None,
+        help="WIDTHxHEIGHT (e.g. 1280x720) the model sees. Screenshots are "
+             "downscaled to this before entering the history/prompt, and "
+             "model-emitted deltas/coordinates are scaled back up to the "
+             "VM's native screen on dispatch. Default: native (no resize). "
+             "Match this to the training resolution.",
+    )
     p.add_argument("--sglang_port", type=int, default=30000)
     p.add_argument("--sglang_api_key", default="osworld")
     p.add_argument("--mem_fraction_static", type=float, default=0.40)
@@ -608,6 +623,7 @@ def main() -> int:
                 settle_s=args.settle_s,
                 settle_stable_timeout_s=args.settle_stable_timeout_s,
                 settle_poll_s=args.settle_poll_s,
+                model_resolution=args.model_resolution,
             )
             with (run_dir / "result.json").open("w") as f:
                 json.dump(result, f, indent=2)

@@ -26,6 +26,13 @@ This loses delta-magnitude semantics (the OS sees a teleport, not a
 swept motion) but preserves the model's emission format. Good enough
 for free rollouts where we're watching behavior, not measuring
 grounding precision against deltas-as-such.
+
+``model_resolution`` makes the client the translation boundary between
+the model's frame space and the VM's native screen: ``screenshot()``
+downscales frames to that size before anyone sees them, and both
+dispatch paths scale model-emitted deltas / absolute coordinates back
+up to the native screen. Use it when the checkpoint was trained at a
+different resolution (e.g. 1280x720) than the VM runs at.
 """
 
 from __future__ import annotations
@@ -166,9 +173,17 @@ class StepResult:
 class OSWorldClient:
     """Thin synchronous client over the in-VM Flask agent."""
 
-    def __init__(self, base_url: str, *, request_timeout_s: float = 30.0):
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        request_timeout_s: float = 30.0,
+        model_resolution: tuple[int, int] | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.timeout = request_timeout_s
+        # (w, h) the model sees and emits coordinates in; None = VM-native.
+        self.model_resolution = model_resolution
         self._sess = requests.Session()
 
     # ------------------------------------------------------------- ready
@@ -199,7 +214,10 @@ class OSWorldClient:
     def screenshot(self) -> Image.Image:
         r = self._sess.get(f"{self.base_url}/screenshot", timeout=self.timeout)
         r.raise_for_status()
-        return Image.open(io.BytesIO(r.content)).convert("RGB")
+        img = Image.open(io.BytesIO(r.content)).convert("RGB")
+        if self.model_resolution and img.size != self.model_resolution:
+            img = img.resize(self.model_resolution, Image.LANCZOS)
+        return img
 
     def screenshot_settled(
         self,
@@ -253,6 +271,13 @@ class OSWorldClient:
         d = r.json()
         return int(d["width"]), int(d["height"])
 
+    def _model_to_screen_scale(self, sw: int, sh: int) -> tuple[float, float]:
+        """Per-axis factors mapping model-frame pixels to VM screen pixels."""
+        if not self.model_resolution:
+            return 1.0, 1.0
+        mw, mh = self.model_resolution
+        return sw / mw, sh / mh
+
     # ---------------------------------------------------------- dispatch
     _PYAUTOGUI_PREFIX = (
         "import pyautogui; import time; pyautogui.FAILSAFE = False; pyautogui.PAUSE = 0; "
@@ -296,9 +321,13 @@ class OSWorldClient:
                 action_text="NO_OP",
             )
 
-        # Cursor motion: clip to screen.
-        tx = max(0, min(sw - 1, cx + action.dx))
-        ty = max(0, min(sh - 1, cy + action.dy))
+        # Cursor motion: deltas are in model-frame pixels; map to VM screen
+        # pixels, then clip to screen.
+        kx, ky = self._model_to_screen_scale(sw, sh)
+        dx = round(action.dx * kx)
+        dy = round(action.dy * ky)
+        tx = max(0, min(sw - 1, cx + dx))
+        ty = max(0, min(sh - 1, cy + dy))
         if (tx, ty) != (cx, cy):
             cmd = f"pyautogui.moveTo({tx}, {ty})"
             self.execute(cmd)
@@ -325,7 +354,7 @@ class OSWorldClient:
             cursor_before=cursor_before,
             cursor_after=cursor_after,
             intended_target=(tx, ty),
-            delta=(action.dx, action.dy),
+            delta=(dx, dy),  # as applied (screen px), not as emitted (model px)
             scroll=action.scroll,
             events_dispatched=executed,
             parse_ok=True,
@@ -357,8 +386,10 @@ class OSWorldClient:
             if not isinstance(raw, (list, tuple)) or len(raw) != 2:
                 raise ValueError(f"coordinate must be [x, y], got {raw!r}")
             try:
-                x = int(round(float(raw[0])))
-                y = int(round(float(raw[1])))
+                # Coordinates arrive in model-frame pixels; map to VM screen.
+                kx, ky = self._model_to_screen_scale(sw, sh)
+                x = int(round(float(raw[0]) * kx))
+                y = int(round(float(raw[1]) * ky))
             except (TypeError, ValueError) as e:
                 raise ValueError(
                     f"coordinate values must be numeric, got {raw!r}"
