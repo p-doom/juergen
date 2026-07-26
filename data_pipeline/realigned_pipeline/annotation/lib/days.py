@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from realigned_pipeline.lib.action_format import get_formatter
+from realigned_pipeline.lib.action_format import DEFAULT_CONTINUOUS_ACTION_HZ, get_formatter
 from realigned_pipeline.lib.common import read_jsonl
 from realigned_pipeline.lib.events import load_events
 from realigned_pipeline.lib.realign_lib import mp4_mvhd
@@ -84,11 +84,20 @@ class DayStream:
         raise KeyError(f"frame {day_idx} not in any chunk of {self.day_tag}")
 
 
-def segment_actions(view: SegmentView) -> list[str]:
-    """Canonical per-frame action labels for a segment view (same derivation
-    as stage 03b's frames mode; method-internal, never persisted)."""
+def segment_actions(
+    view: SegmentView,
+    *,
+    action_format: str = "canonical",
+    continuous_action_hz: float = DEFAULT_CONTINUOUS_ACTION_HZ,
+) -> list[str]:
+    """Per-frame action labels for a segment view (same derivation as stage
+    03b's frames mode; method-internal, never persisted). ``action_format``
+    selects from the lib/action_format FORMATTERS registry; the default is
+    byte-identical to the historical canonical labels."""
     events, _ = (load_events(Path(view.keylog_path)) if view.keylog_path else ([], None))
-    result = get_formatter("canonical").format_segment(
+    result = get_formatter(
+        action_format, continuous_action_hz=continuous_action_hz
+    ).format_segment(
         events, view.windows(), view.dead_zones, master_fps=view.master_fps
     )
     return result.labels
@@ -196,6 +205,8 @@ def build_day_stream(
     fps_mode: str = "exact",
     gap_cut_s: float = DEFAULT_GAP_CUT_S,
     t1: float | None = None,
+    action_format: str = "canonical",
+    continuous_action_hz: float = DEFAULT_CONTINUOUS_ACTION_HZ,
 ) -> DayStream:
     """Concatenate the day's segment views onto the day clock. Frames sort by
     day time (segments already come wall-clock-ordered), day_idx is assigned
@@ -209,7 +220,8 @@ def build_day_stream(
         view = art.segment_view(str(seg["segment_id"]), fps, fps_mode)
         if not view.frames:
             continue
-        actions = segment_actions(view)
+        actions = segment_actions(view, action_format=action_format,
+                                  continuous_action_hz=continuous_action_hz)
         t0 = float(seg["t_day_s"])
         for f in view.frames:
             t = t0 + f.t_s

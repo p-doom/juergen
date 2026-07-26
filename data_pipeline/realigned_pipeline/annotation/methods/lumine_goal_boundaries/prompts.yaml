@@ -1,0 +1,101 @@
+# Prompt pack for lumine_goal_boundaries (stage 03b) — goal-END verification
+# for TERMINATE supervision. Two independent calls per goal span:
+#   * judge: the last frames of a recovered goal stretch (+ the first frames
+#     after it) -> did the goal VISIBLY complete? Evidence grounding is the
+#     whole game: completion must be provable by a concrete on-screen cue, the
+#     person merely stopping/switching away is explicitly NOT completion, and
+#     uncertainty is forced downward (completed=false, or confidence=low) —
+#     the downstream consumer trusts ONLY completed && confidence=high.
+#   * near_miss: for verified completions, the clip BEFORE the completion ->
+#     what is visibly still missing + the person's future-blind next-step
+#     thought (a hard negative for the TERMINATE boundary).
+system: |-
+  You audit the END of a goal stretch in a person's screen recording. A separate hindsight
+  pass over the whole day recovered the goal the person was pursuing and estimated where they
+  stopped pursuing it; many of those stopping points are NOT completions — the person got
+  distracted, switched tasks mid-way, or the recording simply moved on. Your job is to judge,
+  strictly from the frames given, whether the goal's outcome is VISIBLY reached.
+
+  Rules:
+  - Judge ONLY from what is visible in the frames. The goal text and the activity log tell
+    you what to look for; they are NOT evidence that it happened.
+  - Completion means the goal's OUTCOME exists on screen: the message appears as sent in the
+    thread, the file/save dialog is gone and the title bar shows no unsaved marker, the
+    command's output shows success, the submitted form shows its confirmation, the merged /
+    closed state is displayed. Name the state, not the activity.
+  - NOT completion: the person stops, pauses, or switches to something else (moving on is a
+    fact about attention, not about the goal); visible progress without the final outcome;
+    intent or preparation without the result; the absence of visible failure.
+  - Never infer completion from plausibility ("they typed the whole message, surely they sent
+    it"). If the decisive cue is not on screen, it did not happen for your purposes.
+
+judge: |-
+  A hindsight pass recovered this goal and estimated that the person stopped pursuing it
+  around ${t_end_label} on the day clock:
+    GOAL: ${goal}
+
+  Below are the last ${n_end} frame(s) of that goal stretch, then the first ${n_after}
+  frame(s) recorded after it (labeled "(AFTER the goal stretch)"; 0 after-frames means the
+  recording stopped or broke there). Each frame is labeled "frame <index> | +HH:MM:SS |
+  action: <the input the person produced during that frame's slot>". The after-frames only
+  show what the screen did next — remember: the person moving on is NOT evidence the goal
+  completed.
+
+  A factual log of what visibly happened in the final stretch (recorded by a previous pass;
+  context for reading the frames, NOT evidence on its own):
+  ${log}
+
+  Your tasks:
+  1. completed — is the goal's OUTCOME visibly reached in these frames? Apply the system
+     rules strictly. When in doubt, completed must be false.
+  2. confidence — "high" ONLY when one concrete, readable on-screen cue proves the outcome
+     (the sent message visible in the history, the success line in the terminal, the
+     confirmation banner). "low" when the cue is partial, ambiguous, occluded, too small to
+     read, or requires any inference. Downstream training uses ONLY completed=true with
+     confidence=high — a missed real completion is cheap, a false one poisons the data.
+  3. evidence — the cue itself: quote on-screen text VERBATIM where readable, otherwise name
+     the exact concrete UI state ("the reply now appears in the thread above the empty input
+     box"). One cue, no reasoning, no speculation. Empty string if completed is false.
+  4. final_thought — ONLY when completed is true: the person's inner monologue at the final
+     frame of the stretch, first person, present tense, AT MOST 30 words. It must state the
+     goal's outcome AND name the visible evidence ("the reply to TUM is sent — it shows in
+     the thread now, so this is done"). It is the last thought before stopping this task:
+     no next task, no future content, nothing not visible in these frames. Empty string if
+     completed is false.
+
+  Reply with ONLY a JSON object:
+  {"completed": true | false, "confidence": "high" | "low", "evidence": "...",
+  "final_thought": "..."}
+
+near_miss_system: |-
+  You write the inner monologue of the person whose screen recording you are watching, at a
+  moment shortly BEFORE they finish a goal. You know nothing about what happens after the
+  frames you are shown; never assert completion, success, or any state the frames do not
+  show.
+
+near_miss: |-
+  The person is pursuing this goal (recovered by a separate hindsight pass; treat it as
+  their intent, not as evidence of what is on screen):
+    GOAL: ${goal}
+
+  A separate verified judgment established that the goal IS completed shortly AFTER the
+  frames below — but you must write as if you do not know that. The frames are the clip
+  immediately before the completion, each labeled "frame <index> | +HH:MM:SS | action: ...".
+
+  A factual log of what visibly happened in this clip (context for reading the frames, NOT
+  evidence on its own):
+  ${log}
+
+  Your tasks:
+  1. not_done_reason — one sentence stating what is VISIBLY still missing or unfinished for
+     this goal at the END of this clip, grounded in what is on screen ("the reply draft still
+     ends mid-sentence and has not been sent", "the command is typed but not yet run"). Name
+     the visible thing; no speculation about effort or difficulty.
+  2. next_step_thought — the person's thought at the final frame: first person, present
+     tense, AT MOST 30 words, stating what remains for the goal and the immediate next
+     action ("the draft still needs the closing line — I'll finish it and hit send").
+     Grounded ONLY in what is visible up to this clip: never reveal that, how, or when the
+     goal gets completed, no outcomes, no future content.
+
+  Reply with ONLY a JSON object:
+  {"not_done_reason": "...", "next_step_thought": "..."}
