@@ -278,3 +278,20 @@ _CUA_V1_THINKING_FILE = (
     / "data_pipeline/realigned_pipeline/system_prompts/cua_v1_thinking.txt"
 )
 SYSTEM_PROMPTS["cua_v1_thinking"] = _CUA_V1_THINKING_FILE.read_text().strip()
+
+# ordered_events_v3 + decision-point thinking + goal conditioning
+# ("GOAL: ..." first user turn). Same file-loader pattern as cua_v1_thinking.
+_CUA_V3_THINKING_FILE = (
+    _Path(__file__).resolve().parents[1]
+    / "data_pipeline/realigned_pipeline/system_prompts/cua_v3_thinking.txt"
+)
+SYSTEM_PROMPTS["cua_v3_thinking"] = _CUA_V3_THINKING_FILE.read_text().strip()
+
+# Qwen-native computer_use tool calls with a RELATIVE mouse
+# (computer_use_rel_v1) + decision-point thinking + goal conditioning.
+# Same file-loader pattern as cua_v1/cua_v3.
+_CUA_V4_THINKING_FILE = (
+    _Path(__file__).resolve().parents[1]
+    / "data_pipeline/realigned_pipeline/system_prompts/cua_v4_thinking.txt"
+)
+SYSTEM_PROMPTS["cua_v4_thinking"] = _CUA_V4_THINKING_FILE.read_text().strip()

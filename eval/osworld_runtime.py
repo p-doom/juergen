@@ -142,8 +142,10 @@ def _call_model(
     recent_actions: list[str] | None = None,
     max_tokens: int,
     temperature: float,
+    top_p: float | None = None,
+    top_k: int | None = None,
     request_timeout_s: float = 120.0,
-) -> str:
+) -> tuple[str, str | None]:
     """One chat-completion call, interleaving frames and the model's prior actions.
 
     Builds a training-shaped conversation: each frame is its own ``user`` turn and
@@ -166,25 +168,43 @@ def _call_model(
     ``instruction`` rides the first (earliest in-window) user turn only. Callers
     pass it every step to keep the goal in context (``persist_instruction``), or
     only on step 1 to match the training distribution.
+
+    ``top_p``/``top_k`` are omitted from the request when None (server
+    defaults apply). ``top_k`` is an sglang SRT extension: its OpenAI-
+    compatible ``ChatCompletionRequest`` declares ``top_k`` as a top-level
+    body field ("Extra parameters for SRT backend only"), so we set it
+    directly in the JSON payload — the same wire shape the OpenAI python
+    client's ``extra_body={"top_k": ...}`` would produce.
+
+    Returns ``(content, finish_reason)``. ``finish_reason == "length"``
+    means the reply was truncated at ``max_tokens`` — callers MUST NOT
+    dispatch a truncated action (a half-emitted ``down(...)`` would leave a
+    key held and trigger OS key-repeat).
     """
     image_parts = [
         {"type": "image_url", "image_url": {"url": _pil_to_data_url(f)}}
         for f in recent_frames
     ]
     messages = _interleave_messages(system_prompt, instruction, image_parts, recent_actions)
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if top_p is not None:
+        payload["top_p"] = top_p
+    if top_k is not None:
+        payload["top_k"] = top_k
     r = requests.post(
         sglang_url.rstrip("/") + "/chat/completions",
         headers={"Authorization": f"Bearer {api_key}"},
-        json={
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        },
+        json=payload,
         timeout=request_timeout_s,
     )
     r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"] or ""
+    choice = r.json()["choices"][0]
+    return choice["message"]["content"] or "", choice.get("finish_reason")
 
 
 def _wait_for(

@@ -416,7 +416,7 @@ def _run_grounding_rollout(
                         frame_labels=window_frame_labels(step, len(recent_frames)),
                     ), indent=2))
             try:
-                action_text = _call_model(
+                action_text, _finish_reason = _call_model(
                     sglang_url=sglang_url, api_key=api_key, model=model,
                     system_prompt=system_prompt,
                     instruction=instr_used,
