@@ -201,6 +201,39 @@ class EncodeRecordGuardTests(unittest.TestCase):
         enc = ots.encode_record(rec, self.tok, _image_processor(), self.sp)
         self.assertEqual([k for k, _ in enc.turns], [ots.TURN_TERMINATE])
 
+    def test_native_terminate_toolcall_passes_guard(self):
+        # computer_use_rel_v1 terminate turns are a tool_call block, not the
+        # literal TERMINATE line; the guard must accept them via action_format.
+        sp_native = ots.SpecialIds.from_tokenizer(
+            self.tok, ots.terminate_text_for("computer_use_rel_v1"))
+        rec = {
+            "conversation_id": "c_native",
+            "day_tag": "d0",
+            "action_format": "computer_use_rel_v1",
+            "terminate": "clean",
+            "messages": [
+                {"role": "user", "content": [_text("x")]},
+                {"role": "assistant", "content": [_text(ots.NATIVE_TERMINATE_LINE)]},
+            ],
+        }
+        enc = ots.encode_record(rec, self.tok, _image_processor(), sp_native)
+        self.assertEqual([k for k, _ in enc.turns], [ots.TURN_TERMINATE])
+
+    def test_native_terminate_literal_TERMINATE_raises(self):
+        # a bare TERMINATE line under the native format is the wrong target
+        rec = {
+            "conversation_id": "c_native_bad",
+            "day_tag": "d0",
+            "action_format": "computer_use_rel_v1",
+            "terminate": "clean",
+            "messages": [
+                {"role": "user", "content": [_text("x")]},
+                {"role": "assistant", "content": [_text("TERMINATE")]},
+            ],
+        }
+        with self.assertRaisesRegex(ValueError, "computer_use_rel_v1"):
+            ots.encode_record(rec, self.tok, _image_processor(), self.sp)
+
     def test_memory_update_kind_on_final_turn(self):
         rec = {
             "conversation_id": "c2",

@@ -83,6 +83,26 @@ TURN_ACTION = "action"
 TURN_TERMINATE = "terminate"
 TURN_MEMORY = "memory"
 
+# The terminate turn's action target is action-format-specific. Text formats
+# (canonical / ordered_events_*) emit the literal ``TERMINATE`` line; the
+# Qwen-native computer_use format emits a terminate tool_call block (mirrors
+# data_pipeline action_format.py terminate_line() — kept here as a literal to
+# avoid a cross-package import into the eval venv). Used to (a) validate the
+# terminate turn decodes to the expected representation and (b) tokenize the
+# terminate opening for the recall / false-alarm metrics.
+NATIVE_TERMINATE_LINE = (
+    '<tool_call>\n'
+    '{"name": "computer_use", "arguments": {"action": "terminate", "status": "success"}}\n'
+    '</tool_call>'
+)
+TERMINATE_LINES = {"computer_use_rel_v1": NATIVE_TERMINATE_LINE}
+
+
+def terminate_text_for(action_format: str | None) -> str:
+    """Expected terminate-turn action text for an action format (default: the
+    literal TERMINATE line for text/canonical/ordered formats)."""
+    return TERMINATE_LINES.get(action_format or "", TERMINATE_TOKEN)
+
 # ---------------------------------------------------------------------------
 # Rendering — VERBATIM replica of omegalax qwen3_encoding.build_chatml_text
 # (/fast/project/HFMI_SynergyUnit/yll/omegalax/omegalax/data/qwen3_encoding.py).
@@ -199,11 +219,15 @@ class SpecialIds:
     assistant: int
     think_open: int
     think_close: int
-    terminate_ids: tuple[int, ...]              # tokenize("TERMINATE")
-    terminate_after_think_ids: tuple[int, ...]  # tokenize("\nTERMINATE")
+    terminate_ids: tuple[int, ...]              # tokenize(terminate_text)
+    terminate_after_think_ids: tuple[int, ...]  # tokenize("\n" + terminate_text)
 
     @classmethod
-    def from_tokenizer(cls, tokenizer) -> SpecialIds:
+    def from_tokenizer(cls, tokenizer, terminate_text: str = TERMINATE_TOKEN) -> SpecialIds:
+        """``terminate_text`` is the action-format's terminate line (literal
+        ``TERMINATE`` for text formats, the terminate tool_call block for the
+        native computer_use format) — the token sequence the recall /
+        false-alarm metrics treat as the 'terminate opening'."""
         def _one(tok_str: str) -> int:
             ids = tokenizer.encode(tok_str, add_special_tokens=False)
             if len(ids) != 1:
@@ -219,9 +243,9 @@ class SpecialIds:
             assistant=tokenizer.encode("assistant", add_special_tokens=False)[0],
             think_open=_one("<think>"),
             think_close=_one("</think>"),
-            terminate_ids=tuple(tokenizer.encode(TERMINATE_TOKEN, add_special_tokens=False)),
+            terminate_ids=tuple(tokenizer.encode(terminate_text, add_special_tokens=False)),
             terminate_after_think_ids=tuple(
-                tokenizer.encode("\n" + TERMINATE_TOKEN, add_special_tokens=False)
+                tokenizer.encode("\n" + terminate_text, add_special_tokens=False)
             ),
         )
 
@@ -345,10 +369,12 @@ def encode_record(record: dict[str, Any], tokenizer, image_processor, sp: Specia
             kinds[-1] = TURN_TERMINATE
             act_s, act_e = spans[-1].action
             decoded = tokenizer.decode(input_ids[act_s: act_e - 1]).strip()
-            if decoded != TERMINATE_TOKEN:
+            expected = terminate_text_for(record.get("action_format"))
+            if decoded != expected:
                 raise ValueError(
                     f"{record.get('conversation_id')}: metadata says terminate but the final "
-                    f"action span decodes to {decoded!r}"
+                    f"action span decodes to {decoded!r} (expected {expected!r} for "
+                    f"action_format={record.get('action_format')!r})"
                 )
         elif record.get("memory_update"):
             kinds[-1] = TURN_MEMORY
@@ -484,7 +510,13 @@ def attach_false_alarms(rows: list[dict[str, Any]], sp: SpecialIds) -> None:
 def score_records(records: list[dict[str, Any]], model, tokenizer, image_processor,
                   *, device: str, batch_size: int, progress_every: int = 10
                   ) -> list[dict[str, Any]]:
-    sp = SpecialIds.from_tokenizer(tokenizer)
+    # Terminate representation is action-format-specific; a dataset is built
+    # with one format, so resolve it from the records (assert consistent) and
+    # tokenize the matching terminate opening for the recall/false-alarm metrics.
+    fmts = {r.get("action_format") for r in records}
+    if len(fmts) > 1:
+        raise ValueError(f"records mix action formats {fmts}; scorer assumes one per run")
+    sp = SpecialIds.from_tokenizer(tokenizer, terminate_text_for(next(iter(fmts), None)))
     pad_id = tokenizer.pad_token_id
     if pad_id is None:
         raise ValueError("tokenizer must define pad_token_id (Qwen3-VL does)")
