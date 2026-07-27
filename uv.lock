@@ -593,6 +593,7 @@ version = "0.1.0"
 source = { editable = "eval" }
 dependencies = [
     { name = "absl-py" },
+    { name = "array-record" },
     { name = "backoff" },
     { name = "beautifulsoup4" },
     { name = "borb" },
@@ -653,6 +654,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "absl-py", specifier = ">=2.0" },
+    { name = "array-record", specifier = ">=0.5.1" },
     { name = "backoff" },
     { name = "beautifulsoup4" },
     { name = "borb" },

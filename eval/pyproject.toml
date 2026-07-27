@@ -10,6 +10,11 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "absl-py>=2.0",
     "ml_collections>=1.1",
+    # offline_thinking_score.py decodes ar:// master-frame refs via
+    # array_record.python.array_record_module. Same pin as data_pipeline
+    # (workspace-shared lock). Without it the offline scorer dies at import
+    # with ModuleNotFoundError: No module named 'array_record'.
+    "array-record>=0.5.1",
     # Heavy CUDA stack. Stock sglang 0.5.x — the `[all]` extra pulls in
     # torch, transformers 5.x, flashinfer, sgl-kernel, fastapi, uvicorn,
     # xgrammar, etc. Without the extra, sglang installs as a thin client
