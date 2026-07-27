@@ -1,0 +1,15 @@
+# Byte-compiled / cache
+__pycache__/
+*.pyc
+
+# Local run outputs (real outputs go to --output-dir under the labctl datasets
+# root / scratchpad, never into the package; this guards accidental in-tree runs)
+out_*/
+runs/
+units/
+calls/
+describe/
+thinking.jsonl
+clips_manifest.jsonl
+tasks.jsonl
+manifest.json

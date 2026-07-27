@@ -1,0 +1,106 @@
+# Prompt pack for the VideoCUA per-task thinking annotator (stage B).
+#
+# Adapted from realigned_pipeline/annotation/methods/lumine_thinking/prompts.yaml.
+# Differences from the crowd-cast (ccast) method:
+#   - GOAL-CONDITIONED: each task carries an explicit task_instruction; the
+#     person legitimately KNOWS their goal, so referencing it is allowed and is
+#     NOT a "future knowledge" violation. Everything else must still be motivated
+#     only by what is visible up to the moment.
+#   - PER-TASK, not per-day: no multi-hour thread. Memory is carried only across
+#     the windows (clips) of ONE short task, then discarded.
+#   - VideoCUA action labels: "CLICK Left (x,y)", "TYPE \"...\"", "PRESS <key>",
+#     "DRAG_TO (x,y)", "MOUSE_DOWN/UP <button>", etc., or NO_OP.
+# Templating: ${name} via string.Template.safe_substitute; literal JSON braces
+# pass through.
+system: |-
+  You write the inner monologue of the person whose screen recording you are watching.
+  They are carrying out one concrete task; you are told their GOAL.
+
+  Rules for every thought:
+  - FIRST PERSON, present tense, at that exact moment — the voice of the person deciding what
+    to do next, never a narrator describing them ("I need to open the layer menu", not
+    "The user opens the layer menu").
+  - Motivated ONLY by what is visible up to that moment plus the known goal. Never mention
+    anything that has not happened yet on screen; never reveal knowledge of a later result.
+  - Never assert completion, success, failure, or system state that is not visibly evidenced
+    ("done", "it worked", "the shape is selected" are forbidden unless the screen shows it).
+  - Concrete and situational: name the visible thing being reasoned about (menu, button, file,
+    dialog, canvas object, command), not the abstract activity. No filler ("let me see", "okay").
+  - Tie the step to the goal when it is a real decision ("to add the checkbox I need the Forms
+    toolbar, so I'll open the top menu"), but do not restate the whole goal every thought.
+  - 15–45 words. One thought = one decision or reorientation, not a summary of a period.
+  - kind is one of: plan (starting something / first move toward the goal), reorient (switching
+    approach or coming back), decide (choosing between visible options), react (responding to an
+    unexpected on-screen event), monitor (checking the result of something just done), wait
+    (deliberately pausing for the UI).
+
+clip: |-
+  You are watching one person carry out a single task, strictly in order, one clip at a time.
+  You carry a light running memory of what they have done so far in THIS task; you never see ahead.
+
+  THE GOAL (known to the person from the start):
+  ${goal}
+
+  Each frame below is labeled "frame <index> | +MM:SS | action: <the input the person produced
+  at that frame's moment>". Actions read e.g. "CLICK Left (x,y)", "DOUBLE_CLICK (x,y)",
+  "MOVE (x,y)", "DRAG_TO (x,y)", "MOUSE_DOWN <button>", "MOUSE_UP <button>", "PRESS <key>",
+  "HOTKEY <combo>", "TYPE \"...\"", or NO_OP. Times are elapsed task seconds.
+
+  Your tasks for THIS clip:
+  1. Identify 0–${max_thoughts} decision points — moments where the person visibly commits to,
+     switches, or reconsiders a step toward the goal. Steady uninterrupted execution has FEW or
+     ZERO. Do not invent a thought for every action; narrate the reasoning, not the mechanics.
+  2. For each, write the person's thought at that frame, following the rules above. The thought
+     must be justified by this clip plus your carried memory and the known goal only.
+  3. Update your memory: 1–3 sentences of what the person has done so far toward the goal and any
+     open thread (something started, not yet visibly concluded). Only facts you actually saw.
+     Keep it LIGHT — it is all you carry into the next clip.
+  4. Write a log for THIS clip: a short factual record of what visibly happened — menus, dialogs,
+     text typed (quoted VERBATIM where readable), on-screen changes. Facts only, no intent. The
+     log is stored for analysis and is NOT carried forward.
+
+  Carried memory so far:
+  ${memory}
+
+  Reply with ONLY a JSON object:
+  {"thoughts": [{"frame": <frame index from a label in THIS clip>, "kind": "...",
+  "text": "..."}], "memory": "...", "log": "..."}
+
+verifier_system: |-
+  You are a strict auditor of synthetic training data. Judge only from the evidence given.
+
+verify_batched: |-
+  You audit ${n_thoughts} proposed inner-monologue thought(s) for a screen recording of a person
+  carrying out one task. Their GOAL (known to them from the start, and therefore legitimate to
+  reference) is:
+  ${goal}
+
+  The frames below show the person's screen up to and including frame ${max_frame}, each labeled
+  "frame <index> | +MM:SS | action: ...".
+
+  PER-THOUGHT EVIDENCE CUTOFF — THE HARD RULE. Each thought names its anchor frame. When judging a
+  thought, its evidence is ONLY the goal plus the frames up to and including ITS OWN anchor. Frames
+  after a thought's anchor are shown to you solely as context for LATER thoughts — for that thought
+  they DO NOT EXIST: if a thought is supported only by something that first becomes visible after
+  its anchor, it FAILS past_support, exactly as if you had never seen those frames.
+
+  A thought is only acceptable if ALL hold:
+  1. past_support — everything it references (menus, dialogs, files, objects, intentions) is visible
+     in the frames up to its anchor, is a plain continuation of them, or follows from the stated
+     goal. Nothing appears out of thin air.
+  2. no_future — it does not reveal knowledge of events after its anchor (later outcomes, later
+     content, "it will turn out", suspiciously specific predictions). Referencing the GOAL is NOT a
+     no_future violation; predicting a specific unseen RESULT is.
+  3. no_unevidenced_state — it does not assert completion/success/failure/system state the frames up
+     to its anchor do not show.
+  4. voice — first person, present tense, in-the-moment; not retrospective narration or a summary.
+
+  Judge each thought INDEPENDENTLY and strictly: when in doubt about support, fail it. A thought that
+  is merely vague but consistent passes; a thought with one fabricated specific fails.
+
+  Thoughts to audit:
+  ${thoughts_block}
+
+  Reply with ONLY a JSON object:
+  {"verdicts": [{"n": <thought number>, "verdict": "pass" | "fail", "violations":
+  ["past_support"|"no_future"|"no_unevidenced_state"|"voice", ...], "reason": "<one sentence>"}]}
