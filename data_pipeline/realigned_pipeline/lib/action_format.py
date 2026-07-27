@@ -347,78 +347,92 @@ def _collapse_typing(
 ) -> list[ActionPrimitive]:
     """One window's primitives with typing runs collapsed to ``type("...")``.
 
-    A *typing pair* is a ``down``/``up`` of the same printable key adjacent in
-    the rendered primitive order (zero-rounded motion between them was already
-    omitted upstream) while no non-Shift modifier and at most one Shift is
-    held. Maximal runs of pairs collapse into one ``type()`` at the run's first
-    position; a Shift down/up is absorbed (not rendered) iff its whole scope
-    lies in this window and encloses >=1 typing pair and nothing else — a bare
-    Shift tap, or a Shift over anything non-typing, renders as normal down/up.
-    Any rendered primitive breaks the run. ``held_mods`` is the cross-window
-    physical modifier held-set; updated in place for the next window."""
+    A *typing run* is a maximal contiguous span of ``down``/``up`` primitives
+    of printable and Shift keys ONLY, that is BALANCED (every key pressed in
+    the span is released in it and vice versa), entered while no non-Shift
+    modifier is held. Characters are emitted in ``down`` order — so key
+    *rollover* (``down h; down e; up h; up e`` from natural fast typing, where
+    releases interleave or reorder) still collapses to ``type("he")``, not a
+    string of per-key events. Shift downs/ups inside such a run are absorbed
+    (the capital is already in the string); the emitted char honors the Shift
+    state at each key's ``down``.
+
+    A span that never balances before a breaker renders explicitly instead:
+    a printable key held across a window boundary (its ``up`` is in another
+    window) → ``down``/``up``; a Shift enclosing a non-typing primitive (move,
+    Tab, …) → the Shift renders while inner printable keys still ``type`` under
+    it; a bare Shift tap (zero characters) → ``down``/``up``. Any non-key
+    primitive (move, scroll, mouse button, Return/Backspace/arrow, a non-Shift
+    modifier) breaks the run. ``held_mods`` is the cross-window physical
+    modifier held-set; updated in place for the next window (balanced runs
+    net-zero it, so only explicitly-rendered modifier events move it)."""
     n = len(prims)
-    # --- pass 1: mark typing pairs, folding physical modifier state ---------
-    pair_char: dict[int, str] = {}  # index of the pair's down -> its character
-    in_pair = [False] * n
+    out: list[ActionPrimitive] = []
     mods = set(held_mods)
+
+    def _is_typing_key(p: ActionPrimitive) -> bool:
+        return p.kind in ("down", "up") and (
+            p.input_name in _US_PRINTABLE or p.input_name in _SHIFT_KEYS
+        )
+
     i = 0
     while i < n:
         p = prims[i]
-        if p.kind == "down":
-            nxt = prims[i + 1] if i + 1 < n else None
-            if (
-                p.input_name in _US_PRINTABLE
-                and nxt is not None
-                and nxt.kind == "up"
-                and nxt.input_name == p.input_name
-                and not (mods & _NON_SHIFT_MODIFIERS)
-                and len(mods & _SHIFT_KEYS) <= 1
-            ):
-                base, shifted = _US_PRINTABLE[p.input_name]
-                pair_char[i] = shifted if mods & _SHIFT_KEYS else base
-                in_pair[i] = in_pair[i + 1] = True
-                i += 2
-                continue
-            if p.input_name in _MODIFIER_KEYS:
-                mods.add(p.input_name)
+        # A typing run can only OPEN on a printable/Shift key down, and only
+        # when no non-Shift modifier is physically held.
+        if p.kind == "down" and _is_typing_key(p) and not (mods & _NON_SHIFT_MODIFIERS):
+            # Scan the longest BALANCED prefix of the contiguous key-only span
+            # starting at i (balanced == every down matched by a later up in
+            # the span). ``run_end`` is exclusive; None if it never balances.
+            open_counts: dict[str, int] = {}
+            run_end: int | None = None
+            j = i
+            while j < n and _is_typing_key(prims[j]):
+                q = prims[j]
+                if q.kind == "down":
+                    open_counts[q.input_name] = open_counts.get(q.input_name, 0) + 1
+                else:  # up
+                    c = open_counts.get(q.input_name, 0)
+                    if c == 0:
+                        break  # up with no matching down in-span → held from before
+                    open_counts[q.input_name] = c - 1
+                    if open_counts[q.input_name] == 0:
+                        del open_counts[q.input_name]
+                j += 1
+                if not open_counts:
+                    run_end = j  # balanced here — candidate maximal run end
+            if run_end is not None:
+                # Emit the run [i, run_end): chars in down order, Shift folded
+                # and absorbed. Non-Shift modifiers cannot occur inside (the
+                # span is printable/Shift only and we entered with none held).
+                shift_held = bool(mods & _SHIFT_KEYS)
+                chars: list[str] = []
+                for k in range(i, run_end):
+                    q = prims[k]
+                    if q.input_name in _SHIFT_KEYS:
+                        shift_held = q.kind == "down"
+                        continue
+                    if q.kind == "down":  # printable down → a typed character
+                        base, shifted = _US_PRINTABLE[q.input_name]
+                        chars.append(shifted if shift_held else base)
+                    # printable up → release only, nothing to emit
+                if chars:
+                    out.append(ActionPrimitive(kind="type", text="".join(chars)))
+                    i = run_end
+                    continue
+                # Zero characters (e.g. a bare Shift tap) — fall through to
+                # render the run's primitives explicitly rather than type("").
+        # Not the start of a (character-producing) typing run: render this
+        # primitive verbatim and track physical modifier state.
+        if p.kind == "down" and p.input_name in _MODIFIER_KEYS:
+            mods.add(p.input_name)
         elif p.kind == "up" and p.input_name in _MODIFIER_KEYS:
             mods.discard(p.input_name)
-        i += 1
-    held_mods.clear()
-    held_mods.update(mods)
-
-    # --- pass 2: absorb all-typing Shift spans, emit maximal runs -----------
-    out: list[ActionPrimitive] = []
-    run: list[str] = []
-
-    def flush_run() -> None:
-        if run:
-            out.append(ActionPrimitive(kind="type", text="".join(run)))
-            run.clear()
-
-    i = 0
-    while i < n:
-        if i in pair_char:
-            run.append(pair_char[i])
-            i += 2
-            continue
-        p = prims[i]
-        if p.kind == "down" and p.input_name in _SHIFT_KEYS:
-            j = i + 1
-            while j < n and not (
-                prims[j].kind == "up" and prims[j].input_name == p.input_name
-            ):
-                j += 1
-            if j < n and j > i + 1 and all(in_pair[k] for k in range(i + 1, j)):
-                for k in range(i + 1, j):
-                    if k in pair_char:
-                        run.append(pair_char[k])
-                i = j + 1
-                continue
-        flush_run()
         out.append(p)
         i += 1
-    flush_run()
+
+    held_mods.clear()
+    held_mods.update(mods)
     return out
 
 

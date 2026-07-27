@@ -327,6 +327,89 @@ class OrderedTypingFormatterTest(unittest.TestCase):
             'type("hello")',
         )
 
+    @staticmethod
+    def _rollover(names: list[str], t0: float = 0.01) -> list[RawEvent]:
+        """Overlapping presses: each key is pressed while the previous is still
+        down, then all release in press order — natural fast-typing rollover
+        (down a; down b; up a; down c; up b; up c ...)."""
+        events: list[RawEvent] = []
+        seq = 0
+        t = t0
+        pending: list[str] = []
+        for name in names:
+            events.append(_key(seq, t, "press", name)); seq += 1; t += 0.005
+            pending.append(name)
+            if len(pending) > 1:  # release the oldest still-held key
+                events.append(_key(seq, t, "release", pending.pop(0))); seq += 1; t += 0.005
+        for name in pending:  # drain the tail
+            events.append(_key(seq, t, "release", name)); seq += 1; t += 0.005
+        return events
+
+    def test_rollover_typing_collapses(self) -> None:
+        # overlapping presses of distinct keys (down w; down o; up w; down r;
+        # up o; down l; up r; down d; up l; up d) still collapse in down order.
+        # (A repeated letter needs release-before-repress; the _rollover helper
+        # double-holds, so distinct letters isolate the rollover behavior.)
+        self.assertEqual(
+            self.one_window_label(self._rollover(["KeyW", "KeyO", "KeyR", "KeyL", "KeyD"])),
+            'type("world")',
+        )
+
+    def test_rollover_repeated_letter_release_before_repress(self) -> None:
+        # "ll": press l, release l, press l (overlapping the surrounding keys)
+        # → both count because each l is released before the next l press.
+        events = [
+            _key(0, 0.01, "press", "KeyE"),
+            _key(1, 0.02, "press", "KeyL"),
+            _key(2, 0.03, "release", "KeyE"),
+            _key(3, 0.04, "release", "KeyL"),
+            _key(4, 0.05, "press", "KeyL"),
+            _key(5, 0.06, "press", "KeyO"),
+            _key(6, 0.07, "release", "KeyL"),
+            _key(7, 0.08, "release", "KeyO"),
+        ]
+        self.assertEqual(self.one_window_label(events), 'type("ello")')
+
+    def test_rollover_reordered_releases(self) -> None:
+        # down h; down e; up e; up h  → chars still in DOWN order → "he"
+        events = [
+            _key(0, 0.01, "press", "KeyH"),
+            _key(1, 0.02, "press", "KeyE"),
+            _key(2, 0.03, "release", "KeyE"),
+            _key(3, 0.04, "release", "KeyH"),
+        ]
+        self.assertEqual(self.one_window_label(events), 'type("he")')
+
+    def test_rollover_with_shift_capital_run(self) -> None:
+        # Shift held across an overlapping printable burst → capitalized run,
+        # Shift absorbed.  down Shift; down h; down i; up h; up i; up Shift
+        events = [
+            _key(0, 0.01, "press", "ShiftLeft"),
+            _key(1, 0.02, "press", "KeyH"),
+            _key(2, 0.03, "press", "KeyI"),
+            _key(3, 0.04, "release", "KeyH"),
+            _key(4, 0.05, "release", "KeyI"),
+            _key(5, 0.06, "release", "ShiftLeft"),
+        ]
+        self.assertEqual(self.one_window_label(events), 'type("HI")')
+
+    def test_rollover_broken_by_mouse_move(self) -> None:
+        # overlapping h/e, then a move, then overlapping l/o
+        events = [
+            _key(0, 0.01, "press", "KeyH"),
+            _key(1, 0.02, "press", "KeyE"),
+            _key(2, 0.03, "release", "KeyH"),
+            _key(3, 0.04, "release", "KeyE"),
+            _move(4, 0.05, 5.0, 0.0),
+            _key(5, 0.06, "press", "KeyL"),
+            _key(6, 0.07, "press", "KeyO"),
+            _key(7, 0.08, "release", "KeyL"),
+            _key(8, 0.09, "release", "KeyO"),
+        ]
+        self.assertEqual(
+            self.one_window_label(events), 'type("he"); move(5,0); type("lo")'
+        )
+
     def test_shift_absorbed_for_capital(self) -> None:
         events = [
             _key(0, 0.01, "press", "ShiftLeft"),
