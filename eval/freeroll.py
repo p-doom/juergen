@@ -69,10 +69,12 @@ _NATIVE_FORMAT = "computer_use_rel_v1"
 _PROMPT_ACTION_FORMATS = {
     "cua_v3_thinking": "ordered_events_v3",
     "cua_v4_thinking": _NATIVE_FORMAT,
+    "cua_v4_thinking_v2": _NATIVE_FORMAT,
 }
 # Prompts whose training data conditions on "GOAL: {goal}" as the first
 # user-turn text (stage_04t goal conditioning).
-_GOAL_CONDITIONED_PROMPT_IDS = frozenset({"cua_v3_thinking", "cua_v4_thinking"})
+_GOAL_CONDITIONED_PROMPT_IDS = frozenset(
+    {"cua_v3_thinking", "cua_v4_thinking", "cua_v4_thinking_v2"})
 
 
 def _resolve_action_format(explicit: str | None, system_prompt_id: str) -> str:

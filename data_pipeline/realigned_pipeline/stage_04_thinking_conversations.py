@@ -24,7 +24,10 @@ GOAL-BOUNDED (``lumine_thinking_goals``) — goal-conditioned windows:
   * every window's first user turn gets ``GOAL: {goal_text}`` and, when a
     strictly-earlier memory row exists (``memory/<day>.jsonl``, latest row
     whose day_idx_range ends BEFORE the window's first frame — no overlap,
-    no future leak), ``So far: {memory}``;
+    no future leak), ``So far: {memory}``; with ``--no-memory-at-goal-start``
+    each goal's very first window (run 0, first emitted window) withholds
+    the memory block so bare ``GOAL:`` conditioning — the shape of an
+    inference episode start — is in-distribution;
   * TERMINATE supervision on the OUTCOME frame — the first frame strictly
     after ``goal_t_end`` in the same chunk. The final window of the span
     containing goal_t_end is extended by that one extra frame whose assistant
@@ -364,6 +367,7 @@ def build_goal_day_rows(
     terminate_max_lag_s: float,
     min_anchor_lead: int,
     memory_update_samples: bool,
+    no_memory_at_goal_start: bool = False,
     system_prompt: str | None,
     fps: float,
     action_format: str,
@@ -458,6 +462,12 @@ def build_goal_day_rows(
                 stats["n_near_miss_unplaced"] += 1
 
     # ---- pass 2: tile + emit ------------------------------------------------
+    # run_index counts runs day-globally; a goal's episode start is its FIRST
+    # run of the day (recurring goal_ids resume with context, they don't start
+    # fresh).
+    first_run_of_gid: dict[Any, int] = {}
+    for plan in plans:
+        first_run_of_gid.setdefault(plan["run"]["goal_id"], plan["run_index"])
     rows: list[dict[str, Any]] = []
     for plan in plans:
         run, idxs = plan["run"], plan["idxs"]
@@ -487,7 +497,20 @@ def build_goal_day_rows(
                     stats["n_windows_skipped_short"] += 1
                     continue
 
-                block = goal_memory_block(goal_text, select_memory(memory_rows, win[0]))
+                # A goal's very first window (first run of that goal_id,
+                # first emitted window) is the training analog of an
+                # inference episode start: with --no-memory-at-goal-start the
+                # "So far:" block is withheld there (the pre-goal day memory
+                # mostly summarizes unrelated earlier goals anyway), so bare
+                # "GOAL: ..." conditioning is in-distribution. Resumed runs
+                # and later windows keep their memory — matching a runtime
+                # that summarizes on context eviction.
+                fresh_goal_start = (no_memory_at_goal_start and w_seq == 0
+                                    and plan["run_index"] == first_run_of_gid[gid])
+                if fresh_goal_start:
+                    stats["n_fresh_goal_start"] += 1
+                memory = "" if fresh_goal_start else select_memory(memory_rows, win[0])
+                block = goal_memory_block(goal_text, memory)
                 messages: list[dict[str, Any]] = []
                 if system_prompt:
                     messages.append({"role": "system", "content": [_text(system_prompt)]})
@@ -705,6 +728,7 @@ def build_day_windows(task: dict[str, Any]) -> dict[str, Any]:
                 terminate_max_lag_s=task["terminate_max_lag_s"],
                 min_anchor_lead=task["min_anchor_lead"],
                 memory_update_samples=task["memory_update_samples"],
+                no_memory_at_goal_start=task["no_memory_at_goal_start"],
                 system_prompt=task["system_prompt"],
                 fps=task["fps"],
                 action_format=task["action_format"],
@@ -782,6 +806,13 @@ def parse_args() -> argparse.Namespace:
                    help="Goal mode: append a MEMORY UPDATE user turn + the last fully-"
                         "contained clip's memory as the assistant target to non-terminate "
                         "windows (trains the model to write its own 'So far' memory).")
+    p.add_argument("--no-memory-at-goal-start", nargs="?", const=True, type=str2bool,
+                   default=False, metavar="BOOL",
+                   help="Goal mode: withhold the 'So far:' memory block on each goal's "
+                        "very first window (run 0, first emitted window) so bare "
+                        "'GOAL: ...' conditioning — the shape of an inference episode "
+                        "start — is in-distribution. Later windows and resumed runs "
+                        "keep their memory.")
     p.add_argument("--system-prompt", type=str, default=None)
     p.add_argument("--system-prompt-file", type=Path, default=None,
                    help="Read the system message from a file (e.g. "
@@ -901,6 +932,7 @@ def main() -> None:
             "terminate_boundaries": args.terminate_boundaries,
             "terminate_max_lag_s": args.terminate_max_lag_s,
             "memory_update_samples": bool(args.memory_update_samples),
+            "no_memory_at_goal_start": bool(args.no_memory_at_goal_start),
             "active": active,
             "memory": memory,
             "boundaries": bounds,
@@ -967,6 +999,8 @@ def main() -> None:
             "terminate_max_lag_s": args.terminate_max_lag_s,
             "boundaries_dir": str(boundaries_dir) if boundaries_dir else None,
             "memory_update_samples": bool(args.memory_update_samples),
+            "no_memory_at_goal_start": bool(args.no_memory_at_goal_start),
+            "n_fresh_goal_start": totals["n_fresh_goal_start"],
             "n_goal_spans": totals["n_spans"],
             "n_terminate_turns": totals["n_terminate_turns"],
             "terminate_skips": {k.removeprefix("n_terminate_skipped_"): v

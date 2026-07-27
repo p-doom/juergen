@@ -295,3 +295,13 @@ _CUA_V4_THINKING_FILE = (
     / "data_pipeline/realigned_pipeline/system_prompts/cua_v4_thinking.txt"
 )
 SYSTEM_PROMPTS["cua_v4_thinking"] = _CUA_V4_THINKING_FILE.read_text().strip()
+
+# v2: prompt fitted to the native_v2 data — no "# Memory" section (MEMORY
+# UPDATE turns are not in the v2 training set) and no think-before-terminate
+# demand (all clean-mode terminate supervisions are bare tool calls). Same
+# loader pattern as cua_v4_thinking.
+_CUA_V4_THINKING_V2_FILE = (
+    _Path(__file__).resolve().parents[1]
+    / "data_pipeline/realigned_pipeline/system_prompts/cua_v4_thinking_v2.txt"
+)
+SYSTEM_PROMPTS["cua_v4_thinking_v2"] = _CUA_V4_THINKING_V2_FILE.read_text().strip()

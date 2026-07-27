@@ -302,6 +302,44 @@ class GoalMemoryBlockTest(unittest.TestCase):
         self.assertTrue(rows[1]["has_memory"])
 
 
+class NoMemoryAtGoalStartTest(unittest.TestCase):
+    def test_goal_start_window_withholds_memory(self) -> None:
+        day = _day(n=90)
+        active = [_clip("c1", 15, 29, gid=1, text="G", t0=30.0, t1=1000.0),
+                  _clip("c2", 30, 44, gid=1, text="G", t0=30.0, t1=1000.0),
+                  _clip("c3", 45, 59, gid=1, text="G", t0=30.0, t1=1000.0)]
+        memory = [_mem("c0", 0, 14, "M0"), _mem("c1", 15, 29, "M1")]
+        # default: pre-goal day memory rides the goal's first window
+        rows, _ = _build(day, active, memory=memory)
+        self.assertEqual(_user_turns(rows[0])[0][0]["text"], "GOAL: G\nSo far: M0")
+        # flag on: first window is a fresh episode start -> bare GOAL
+        rows, stats = _build(day, active, memory=memory,
+                             no_memory_at_goal_start=True)
+        self.assertEqual(_user_turns(rows[0])[0][0]["text"], "GOAL: G")
+        self.assertFalse(rows[0]["has_memory"])
+        self.assertEqual(stats["n_fresh_goal_start"], 1)
+        # later windows keep leak-free memory selection
+        self.assertEqual(_user_turns(rows[1])[0][0]["text"], "GOAL: G\nSo far: M1")
+        self.assertTrue(rows[1]["has_memory"])
+
+    def test_resumed_run_keeps_memory(self) -> None:
+        day = _day(n=90)
+        active = [_clip("c1", 15, 29, gid=1, text="G", t0=30.0, t1=1000.0),
+                  _clip("c2", 30, 44, gid=2, text="H", t0=60.0, t1=1000.0),
+                  _clip("c3", 45, 59, gid=1, text="G", t0=30.0, t1=1000.0)]
+        memory = [_mem("c2", 30, 44, "M2")]
+        rows, stats = _build(day, active, memory=memory,
+                             no_memory_at_goal_start=True)
+        # rows: g1 r00, g2 r00, g1 r01 (plan order)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(_user_turns(rows[0])[0][0]["text"], "GOAL: G")
+        self.assertEqual(_user_turns(rows[1])[0][0]["text"], "GOAL: H")
+        # the resumed run (day-global r02) is NOT an episode start -> memory kept
+        self.assertEqual(rows[2]["run_index"], 2)
+        self.assertEqual(_user_turns(rows[2])[0][0]["text"], "GOAL: G\nSo far: M2")
+        self.assertEqual(stats["n_fresh_goal_start"], 2)
+
+
 class MemoryUpdateSamplesTest(unittest.TestCase):
     def _setup(self):
         day = _day(n=60)
