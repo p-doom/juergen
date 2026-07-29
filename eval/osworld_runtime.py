@@ -19,6 +19,8 @@ from typing import Any
 import requests
 from PIL import Image
 
+from sampling import SamplingParams
+
 _LOGGER = logging.getLogger(__name__)
 
 # Defaults inherited from the original freeroll.py setup. Paths are
@@ -140,10 +142,7 @@ def _call_model(
     instruction: str | None,
     recent_frames: list[Image.Image],
     recent_actions: list[str] | None = None,
-    max_tokens: int,
-    temperature: float | None = None,
-    top_p: float | None = None,
-    top_k: int | None = None,
+    sampling: SamplingParams,
     request_timeout_s: float = 120.0,
 ) -> tuple[str, str | None]:
     """One chat-completion call, interleaving frames and the model's prior actions.
@@ -169,15 +168,11 @@ def _call_model(
     pass it every step to keep the goal in context (``persist_instruction``), or
     only on step 1 to match the training distribution.
 
-    ``temperature``/``top_p``/``top_k`` are omitted from the request when
-    None, which hands the decision to the server: sglang runs
-    ``sampling_defaults="model"`` by default, so it applies the served
-    checkpoint's ``generation_config.json`` values. ``top_k`` is an sglang SRT
-    extension: its OpenAI-
-    compatible ``ChatCompletionRequest`` declares ``top_k`` as a top-level
-    body field ("Extra parameters for SRT backend only"), so we set it
-    directly in the JSON payload — the same wire shape the OpenAI python
-    client's ``extra_body={"top_k": ...}`` would produce.
+    ``sampling`` is the single source of truth for decoding parameters (see
+    ``eval/sampling.py``): the FULL Qwen-recommended tuple (temperature, top_p,
+    top_k, repetition_penalty, presence_penalty, max_tokens) is sent to sglang,
+    not just temperature — so the checkpoint's partial ``generation_config`` can
+    no longer silently fill in the rest (top_p/top_k) or drop presence_penalty.
 
     Returns ``(content, finish_reason)``. ``finish_reason == "length"``
     means the reply was truncated at ``max_tokens`` — callers MUST NOT
@@ -189,21 +184,14 @@ def _call_model(
         for f in recent_frames
     ]
     messages = _interleave_messages(system_prompt, instruction, image_parts, recent_actions)
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-    }
-    if temperature is not None:
-        payload["temperature"] = temperature
-    if top_p is not None:
-        payload["top_p"] = top_p
-    if top_k is not None:
-        payload["top_k"] = top_k
     r = requests.post(
         sglang_url.rstrip("/") + "/chat/completions",
         headers={"Authorization": f"Bearer {api_key}"},
-        json=payload,
+        json={
+            "model": model,
+            "messages": messages,
+            **sampling.as_request_json(),
+        },
         timeout=request_timeout_s,
     )
     r.raise_for_status()
