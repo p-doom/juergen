@@ -3,6 +3,11 @@
 **Author:** franz (prepared 2026-07-29) · **Audience:** colleague seeding our two OSWorld-parity
 post-training pipelines from a checkpoint that has ALREADY been SFT'd on crowd-cast.
 
+> **NOTE — a repo-architecture cleanup is pending** (see `ARCHITECTURE_PROPOSAL.md`). This doc describes
+> the pipelines against the **current** structure (loose scripts now captured on additive
+> `franz/osworld-parity-handoff` branches). Paths/branches below are usable today; after franz picks a
+> pattern, the loose code will be homed into `juergen`/`reinforcement-learning` and some paths will move.
+
 ## TL;DR / the hypothesis you're testing
 Crowd-cast SFT may already have imparted the desktop-control capability; our pipelines just need to
 **ELICIT** it. So instead of starting pipelines (A) and (B) from off-the-shelf `Qwen/Qwen3-VL-8B-Instruct`,
