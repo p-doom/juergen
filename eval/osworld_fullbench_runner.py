@@ -36,6 +36,7 @@ if _OSWORLD_ROOT not in sys.path:
 
 from result import write_result  # noqa: E402
 from sglang_runner import sglang_server  # noqa: E402
+import sampling as sampling_mod  # noqa: E402
 
 FLAGS = flags.FLAGS
 
@@ -57,8 +58,24 @@ flags.DEFINE_string("served_model_name", None, "Name sglang serves the model und
 flags.DEFINE_string("path_to_vm", None, "Path to Ubuntu.qcow2.", required=True)
 flags.DEFINE_string("provider_name", None, "DesktopEnv provider name.", required=True)
 flags.DEFINE_integer("max_steps", None, "Max agent steps.", required=True)
-flags.DEFINE_float("temperature", None, "Generation temperature.", required=True)
-flags.DEFINE_float("top_p", None, "Nucleus sampling top_p.", required=True)
+# Sampling: default to the Qwen-recommended tuple for the detected regime
+# (see eval/sampling.py) instead of requiring a hand-set value. None = "use the
+# Qwen recommendation"; pass a value to override. NOTE: the vendored
+# mm_agents.qwen3vl_agent OpenAI backend COMMENTS OUT temperature/top_p
+# (qwen3vl_agent.py:646-648) and never sends top_k/repetition_penalty/
+# presence_penalty, so these only reach the sampler once the checkout patch in
+# eval/patches/qwen3vl_agent_sampling.patch is applied (a warning fires below if
+# it is not).
+flags.DEFINE_float("temperature", None, "Sampling temperature (default: Qwen tuple).")
+flags.DEFINE_float("top_p", None, "Nucleus top_p (default: Qwen tuple).")
+flags.DEFINE_integer("top_k", None, "top_k (default: Qwen tuple = 20).")
+flags.DEFINE_float("repetition_penalty", None, "repetition_penalty (default: Qwen tuple = 1.0).")
+flags.DEFINE_float(
+    "presence_penalty", None,
+    "presence_penalty (default: Qwen Instruct = 1.5; pass 0 for our OSWorld runs "
+    "— our A/B found 1.5 a near no-op for closed-loop repetition).")
+flags.DEFINE_string("sampling_mode", "auto", "Regime: 'auto'|'instruct'|'thinking'.")
+flags.DEFINE_bool("greedy", False, "Decode greedily (temperature 0). DISCOURAGED.")
 flags.DEFINE_integer("max_tokens", None, "Max tokens per turn.", required=True)
 flags.DEFINE_integer("history_n", None, "History frames per turn.", required=True)
 flags.DEFINE_string("coordinate_type", None, "'absolute' or 'relative'.", required=True)
@@ -193,18 +210,34 @@ def main(_) -> None:
         from desktop_env.desktop_env import DesktopEnv  # noqa: PLC0415
         from mm_agents.qwen3vl_agent import Qwen3VLAgent  # noqa: PLC0415
 
-        agent = Qwen3VLAgent(
-            platform="ubuntu",
-            model=FLAGS.served_model_name,
+        sampling = sampling_mod.qwen_sampling(
+            sampling_mod.detect_mode(
+                model_path=FLAGS.model_path,
+                mode=(None if FLAGS.sampling_mode == "auto" else FLAGS.sampling_mode),
+            ),
             max_tokens=FLAGS.max_tokens,
-            top_p=FLAGS.top_p,
+            greedy=FLAGS.greedy,
             temperature=FLAGS.temperature,
-            action_space="pyautogui",
-            observation_type="screenshot",
-            history_n=FLAGS.history_n,
-            coordinate_type=FLAGS.coordinate_type,
-            api_backend="openai",
+            top_p=FLAGS.top_p,
+            top_k=FLAGS.top_k,
+            repetition_penalty=FLAGS.repetition_penalty,
+            presence_penalty=FLAGS.presence_penalty,
         )
+        log.info("sampling: %s", sampling.to_dict())
+        agent = Qwen3VLAgent(**sampling_mod.openai_agent_kwargs(
+            Qwen3VLAgent,
+            sampling,
+            base=dict(
+                platform="ubuntu",
+                model=FLAGS.served_model_name,
+                action_space="pyautogui",
+                observation_type="screenshot",
+                history_n=FLAGS.history_n,
+                coordinate_type=FLAGS.coordinate_type,
+                api_backend="openai",
+            ),
+            logger=log,
+        ))
 
         env = DesktopEnv(
             provider_name=FLAGS.provider_name,

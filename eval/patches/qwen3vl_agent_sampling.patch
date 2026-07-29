@@ -1,0 +1,49 @@
+--- a/mm_agents/qwen3vl_agent.py
++++ b/mm_agents/qwen3vl_agent.py
+@@ -72,12 +72,18 @@
+         api_backend: str = "dashscope",  # "openai" or "dashscope"
+         enable_thinking: bool = False,  # Enable thinking mode for DashScope
+         thinking_budget: int = 32768,  # Token budget for reasoning
++        top_k: int = None,  # crowd-cast: Qwen-recommended top_k (None = unset)
++        repetition_penalty: float = None,  # crowd-cast: Qwen-recommended
++        presence_penalty: float = None,  # crowd-cast: Qwen-recommended
+     ):
+         self.platform = platform
+         self.model = model
+         self.max_tokens = max_tokens
+         self.top_p = top_p
+         self.temperature = temperature
++        self.top_k = top_k  # crowd-cast
++        self.repetition_penalty = repetition_penalty  # crowd-cast
++        self.presence_penalty = presence_penalty  # crowd-cast
+         self.action_space = action_space
+         self.observation_type = observation_type
+         self.history_n = history_n
+@@ -640,12 +646,25 @@
+         for attempt in range(1, MAX_RETRY_TIMES + 1):
+             logger.info(f"[OpenAI] Generating content with model: {model} (attempt {attempt}/{MAX_RETRY_TIMES})")
+             try:
++                # crowd-cast: enforce the full Qwen-recommended sampling tuple.
++                # temperature/top_p were commented out upstream (the "dead-flag
++                # trap"); top_k/repetition_penalty/presence_penalty ride
++                # extra_body because the stock OpenAI schema rejects them and
++                # sglang forwards them to the sampler.
++                _extra_body = {
++                    k: v for k, v in (
++                        ("top_k", self.top_k),
++                        ("repetition_penalty", self.repetition_penalty),
++                        ("presence_penalty", self.presence_penalty),
++                    ) if v is not None
++                }
+                 response = client.chat.completions.create(
+                     model=model,
+                     messages=messages,
+                     max_tokens=self.max_tokens,
+-                    # temperature=self.temperature,
+-                    # top_p=self.top_p,
++                    temperature=self.temperature,
++                    top_p=self.top_p,
++                    **({"extra_body": _extra_body} if _extra_body else {}),
+                 )
+                 return response.choices[0].message.content
+             except Exception as e:

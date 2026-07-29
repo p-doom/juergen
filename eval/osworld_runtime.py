@@ -19,6 +19,8 @@ from typing import Any
 import requests
 from PIL import Image
 
+from sampling import SamplingParams
+
 _LOGGER = logging.getLogger(__name__)
 
 # Defaults inherited from the original freeroll.py setup. Paths are
@@ -140,8 +142,7 @@ def _call_model(
     instruction: str | None,
     recent_frames: list[Image.Image],
     recent_actions: list[str] | None = None,
-    max_tokens: int,
-    temperature: float,
+    sampling: SamplingParams,
     request_timeout_s: float = 120.0,
 ) -> str:
     """One chat-completion call, interleaving frames and the model's prior actions.
@@ -166,6 +167,12 @@ def _call_model(
     ``instruction`` rides the first (earliest in-window) user turn only. Callers
     pass it every step to keep the goal in context (``persist_instruction``), or
     only on step 1 to match the training distribution.
+
+    ``sampling`` is the single source of truth for decoding parameters (see
+    ``eval/sampling.py``): the FULL Qwen-recommended tuple (temperature, top_p,
+    top_k, repetition_penalty, presence_penalty, max_tokens) is sent to sglang,
+    not just temperature — so the checkpoint's partial ``generation_config`` can
+    no longer silently fill in the rest (top_p/top_k) or drop presence_penalty.
     """
     image_parts = [
         {"type": "image_url", "image_url": {"url": _pil_to_data_url(f)}}
@@ -178,8 +185,7 @@ def _call_model(
         json={
             "model": model,
             "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
+            **sampling.as_request_json(),
         },
         timeout=request_timeout_s,
     )
