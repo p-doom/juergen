@@ -25,6 +25,39 @@ This repo is consumed by `pmanager`/`labctl` recipes that inject task params via
 | `inspect_runner.py` | Subprocess wrapper around the `inspect eval` CLI; parses eval logs. |
 | `result.py` | `write_result()` — atomic writer for `result.json` (pmanager metric contract). |
 | `sglang_runner.py` | `sglang_server()` context manager. Spawns SGLang, polls readiness, tears down. |
+| `sampling.py` | **Single source of truth for Qwen-recommended sampling params** (Instruct vs Thinking). Every rollout harness wires to it. |
+| `patches/` | Patches for vendored (`$OSWORLD_ROOT`) code — currently the `qwen3vl_agent.py` dead-flag fix. See `patches/README.md`. |
+
+## Sampling (Qwen-recommended, enforced)
+
+All closed-loop / rollout harnesses (`freeroll.py`, `osworld_grounding_runner.py`,
+`osworld_one_task_runner.py`, `osworld_fullbench_runner.py`) decode with the
+Qwen-recommended sampling tuple from `sampling.py` — **never greedy by default,
+never a partial param set.** The regime is auto-detected (Instruct vs Thinking)
+from the checkpoint id / system prompt, overridable with `--sampling_mode`:
+
+| regime | temperature | top_p | top_k | repetition_penalty | presence_penalty |
+| --- | --- | --- | --- | --- | --- |
+| **Instruct-VL** (current) | 0.7 | 0.8 | 20 | 1.0 | 1.5 |
+| **Thinking-VL** | 1.0 | 0.95 | 20 | 1.0 | 0.0 |
+
+Each param has an override flag (`--temperature`, `--top_p`, `--top_k`,
+`--repetition_penalty`, `--presence_penalty`, `--max_tokens`); `--greedy` opts
+out of sampling entirely (discouraged — the Qwen cards ship `greedy=false`; kept
+for deterministic monitors like `bc_roundtrip.py`).
+
+**presence_penalty:** defaults to Qwen's recommended **1.5** to "match Qwen
+exactly", but our own closed-loop A/B found 1.5 does **not** cut our OSWorld
+repetition (near no-op: no-terminate 0.31→0.34, repeat 0.53→0.56 — the
+repetition is structural covariate-shift, not a decoding artifact). Pass
+`--presence_penalty 0` for our OSWorld runs.
+
+The stock OpenAI schema rejects `top_k` / `repetition_penalty` /
+`presence_penalty`, so the OpenAI-client path (native runners, via the vendored
+`Qwen3VLAgent`) routes them through `extra_body`; the raw-`requests` harnesses
+(freeroll / grounding) send the full tuple flat to sglang. The native runners
+additionally require the `patches/qwen3vl_agent_sampling.patch` checkout patch
+(the vendored agent otherwise ignores sampling params — see `patches/README.md`).
 
 ## Setup
 

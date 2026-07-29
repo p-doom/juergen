@@ -43,6 +43,8 @@ from osworld_runtime import (  # noqa: E402
     _call_model, _pil_to_data_url, _wait_for, append_turn,
     build_loggable_messages, window_frame_labels,
 )
+import sampling as sampling_mod  # noqa: E402
+from sampling import SamplingParams  # noqa: E402
 
 _LOGGER = logging.getLogger(__name__)
 _TERMINATE = "TERMINATE"
@@ -131,8 +133,7 @@ def _run_rollout(
     system_prompt: str,
     n_history_frames: int,
     persist_instruction: bool,
-    max_tokens: int,
-    temperature: float,
+    sampling: SamplingParams,
     save_frames: bool,
     stop_on_click: bool,
     desktop_setup: str,
@@ -195,7 +196,7 @@ def _run_rollout(
                     instruction=instr_used,
                     recent_frames=recent_frames,
                     recent_actions=recent_actions,
-                    max_tokens=max_tokens, temperature=temperature,
+                    sampling=sampling,
                 )
             except Exception as e:
                 _LOGGER.error("step %d: model call failed: %s", step, e)
@@ -366,8 +367,10 @@ def _run_rollout(
         "system_prompt": system_prompt,
         "n_history_frames": n_history_frames,
         "persist_instruction": persist_instruction,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
+        "sampling": sampling.to_dict(),
+        # back-compat scalar keys for existing result.json readers
+        "max_tokens": sampling.max_tokens,
+        "temperature": 0.0 if sampling.greedy else sampling.temperature,
         "desktop_setup": desktop_setup,
         "settle_s": settle_s,
         "settle_stable_timeout_s": settle_stable_timeout_s,
@@ -453,8 +456,11 @@ def main() -> int:
              "each on a freshly rebooted VM but the same sglang server.",
     )
     p.add_argument("--system_prompt_id", default="training_v1")
-    p.add_argument("--max_tokens", type=int, default=64)
-    p.add_argument("--temperature", type=float, default=0.0)
+    # Sampling flags (--temperature/--top_p/--top_k/--repetition_penalty/
+    # --presence_penalty/--max_tokens/--sampling_mode/--greedy). Default to the
+    # Qwen-recommended tuple for the detected regime — NOT greedy. max_tokens
+    # defaults to 256 (was 64, which truncated native tool-calls).
+    sampling_mod.add_sampling_cli(p, default_max_tokens=256)
     p.add_argument("--n_history_frames", type=int, default=16)
     p.add_argument(
         "--persist_instruction", action=argparse.BooleanOptionalAction, default=True,
@@ -500,6 +506,16 @@ def main() -> int:
         print(f"Unknown --system_prompt_id {args.system_prompt_id!r}. "
               f"Available: {list(SYSTEM_PROMPTS)}", file=sys.stderr)
         return 1
+
+    # Resolve the Qwen-recommended sampling tuple once (Instruct vs Thinking is
+    # auto-detected from the checkpoint / system prompt unless --sampling_mode
+    # forces it). Constant across instructions, so build it before the loop.
+    sampling = sampling_mod.from_cli(
+        args,
+        model_path=args.model_path,
+        system_prompt=SYSTEM_PROMPTS[args.system_prompt_id],
+    )
+    _LOGGER.info("sampling: %s", sampling.to_dict())
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -600,8 +616,7 @@ def main() -> int:
                 system_prompt=SYSTEM_PROMPTS[args.system_prompt_id],
                 n_history_frames=args.n_history_frames,
                 persist_instruction=args.persist_instruction,
-                max_tokens=args.max_tokens,
-                temperature=args.temperature,
+                sampling=sampling,
                 save_frames=not args.no_frames,
                 stop_on_click=args.stop_on_click,
                 desktop_setup=args.desktop_setup,

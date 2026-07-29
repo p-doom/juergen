@@ -50,8 +50,14 @@ flags.DEFINE_string("val_jsonl", None, "Held-out BC samples jsonl to score again
 flags.DEFINE_integer("max_trajectories", 0, "Cap trajectories (0 = all).")
 flags.DEFINE_integer("max_pairs", 1000, "Cap total scored assistant turns (0 = all).")
 flags.DEFINE_integer("max_history_turns", 0, "Cap history turns kept before each step (0 = full).")
-flags.DEFINE_float("temperature", 0.0, "Generation temperature.")
-flags.DEFINE_integer("max_tokens", 64, "Max new tokens per action (actions are short).")
+# INTENTIONALLY GREEDY. bc_roundtrip is a deterministic BC *imitation monitor*
+# (teacher-forced offline scoring of held-out action turns), NOT a closed-loop
+# rollout eval, so it does NOT use the shared Qwen sampling tuple in
+# eval/sampling.py: greedy makes the per-turn imitation score reproducible.
+# The sampling-based harnesses (freeroll / grounding / native runners) all
+# default to the Qwen-recommended tuple instead. See the inference-params audit.
+flags.DEFINE_float("temperature", 0.0, "Greedy by design (imitation monitor); see note above.")
+flags.DEFINE_integer("max_tokens", 64, "Max new tokens per action (BC actions are short).")
 flags.DEFINE_integer("seed", 0, "Generation seed.")
 
 # SGLang params (same names as roundtrip_ifeval.py).
