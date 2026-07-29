@@ -55,7 +55,7 @@ import requests
 from PIL import Image
 
 # Sibling modules in juergen/eval/.
-from action_parser import parse_action_tolerant
+from action_parser import parse_action_tolerant, parse_computer_use_tool_calls
 from osworld_vm_client import OSWorldClient
 from osworld_system_prompts import SYSTEM_PROMPTS
 from osworld_runtime import (
@@ -358,6 +358,8 @@ def _run_grounding_rollout(
     temperature: float,
     output_dir: Path,
     save_frames: bool,
+    action_format: str = "delta",
+    rel_coord_grid: int = 0,
 ) -> dict:
     """Roll out the model and score reach."""
     steps_dir = output_dir / "steps"
@@ -433,11 +435,30 @@ def _run_grounding_rollout(
             cursor_before = pos
             cursor_after = pos
             try:
-                action = parse_action_tolerant(action_text)
-                sr = client.dispatch_action(action)
-                cursor_before = sr.cursor_before
-                cursor_after = sr.cursor_after
-                pos = cursor_after
+                if action_format == "computer_use_relative":
+                    calls = parse_computer_use_tool_calls(action_text)
+                    for c in calls:
+                        # NORMALIZED (0-N grid) relative delta -> screen px before moveRel
+                        # (mirrors freeroll --rel_coord_grid). Default 0 = literal-px (BC-compat).
+                        if rel_coord_grid and rel_coord_grid > 0 and "coordinate" in c.arguments:
+                            raw = c.arguments.get("coordinate")
+                            if isinstance(raw, (list, tuple)) and len(raw) == 2:
+                                try:
+                                    c.arguments["coordinate"] = [
+                                        int(round(float(raw[0]) * sw / rel_coord_grid)),
+                                        int(round(float(raw[1]) * sh / rel_coord_grid)),
+                                    ]
+                                except (TypeError, ValueError):
+                                    pass
+                        client.dispatch_computer_use(c.arguments, relative=True)
+                    cursor_after = client.cursor_position()
+                    pos = cursor_after
+                else:
+                    action = parse_action_tolerant(action_text)
+                    sr = client.dispatch_action(action)
+                    cursor_before = sr.cursor_before
+                    cursor_after = sr.cursor_after
+                    pos = cursor_after
             except ValueError as e:
                 parse_err = str(e)
                 parse_errors += 1
@@ -607,6 +628,11 @@ def main() -> int:
     p.add_argument("--target_idxs", type=int, nargs="+", default=None,
                    help="If set, only run targets with these idx values.")
     p.add_argument("--system_prompt_id", default="training_v1")
+    p.add_argument("--action_format", default="delta",
+                   choices=["delta", "computer_use_relative"],
+                   help="'delta' = custom `<dx> <dy> <scroll>` grammar; "
+                        "'computer_use_relative' = native computer_use tool calls "
+                        "with RELATIVE coordinate (native_rel_v1 models).")
     p.add_argument("--max_tokens", type=int, default=64)
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--n_history_frames", type=int, default=16)
@@ -621,6 +647,10 @@ def main() -> int:
     p.add_argument("--sglang_port", type=int, default=30000)
     p.add_argument("--sglang_api_key", default="osworld")
     p.add_argument("--mem_fraction_static", type=float, default=0.40)
+    p.add_argument("--rel_coord_grid", type=int, default=0,
+                   help="For computer_use_relative: if >0, scale the 0-N NORMALIZED relative "
+                        "delta -> screen px before moveRel (grid=1000 for onpolicy_distill "
+                        "coord_space=normalized models). Default 0 = literal-px (BC-compat).")
     p.add_argument("--qcow2", default=_DEFAULT_QCOW2)
     p.add_argument("--qemu_bin", default=_DEFAULT_QEMU_BIN)
     args = p.parse_args()
@@ -629,6 +659,14 @@ def main() -> int:
         print(f"Unknown --system_prompt_id {args.system_prompt_id!r}. "
               f"Available: {list(SYSTEM_PROMPTS)}", file=sys.stderr)
         return 1
+
+    if args.action_format == "computer_use_relative" and args.max_tokens < 128:
+        _LOGGER.warning(
+            "action_format=computer_use_relative with --max_tokens=%d is likely "
+            "too small: a native tool_call is ~30-40 tokens and a drag emits 3 of "
+            "them. Consider --max_tokens 256 (and --system_prompt_id native_rel_v1).",
+            args.max_tokens,
+        )
 
     bboxes_path = Path(args.bboxes_jsonl)
     output_root = Path(args.output_dir)
@@ -781,6 +819,8 @@ def main() -> int:
                     temperature=args.temperature,
                     output_dir=rollout_dir,
                     save_frames=not args.no_frames,
+                    action_format=args.action_format,
+                    rel_coord_grid=args.rel_coord_grid,
                 )
             except Exception as e:
                 _LOGGER.exception("rollout %s failed", rollout_id)

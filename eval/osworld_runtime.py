@@ -142,6 +142,9 @@ def _call_model(
     recent_actions: list[str] | None = None,
     max_tokens: int,
     temperature: float,
+    top_p: float | None = None,
+    top_k: int | None = None,
+    presence_penalty: float | None = None,
     request_timeout_s: float = 120.0,
 ) -> str:
     """One chat-completion call, interleaving frames and the model's prior actions.
@@ -172,15 +175,25 @@ def _call_model(
         for f in recent_frames
     ]
     messages = _interleave_messages(system_prompt, instruction, image_parts, recent_actions)
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    # Optional sampling knobs — only sent when explicitly set (default None preserves
+    # the prior behaviour where sglang fills top_p/top_k from the checkpoint
+    # generation_config and presence_penalty defaults to 0).
+    if top_p is not None:
+        payload["top_p"] = top_p
+    if top_k is not None:
+        payload["top_k"] = top_k
+    if presence_penalty is not None:
+        payload["presence_penalty"] = presence_penalty
     r = requests.post(
         sglang_url.rstrip("/") + "/chat/completions",
         headers={"Authorization": f"Bearer {api_key}"},
-        json={
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        },
+        json=payload,
         timeout=request_timeout_s,
     )
     r.raise_for_status()

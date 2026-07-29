@@ -40,7 +40,7 @@ from dataclasses import dataclass
 import requests
 from PIL import Image
 
-from action_parser import Action, KeyEvent
+from action_parser import Action, DeltaTypeAction, KeyEvent
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -332,8 +332,60 @@ class OSWorldClient:
             action_text="",  # caller fills the raw text
         )
 
-    def dispatch_computer_use(self, arguments: dict) -> StepResult:
-        """Apply one OpenAI computer-use style tool call to the VM."""
+    def dispatch_deltatype(self, action: DeltaTypeAction, *, rel_coord_grid: int = 0) -> StepResult:
+        """Apply a parsed ``DeltaTypeAction`` (deltatype grammar) to the VM.
+
+        Mouse delta -> absolute moveTo (clipped). If ``rel_coord_grid`` > 0 the
+        (dx, dy) are NORMALIZED thousandths-of-screen and are scaled to pixels
+        (dx_px = dx * sw / grid) before adding to the cursor; grid == 0 means the
+        deltas are already raw pixels (diffabs semantics). Elements are dispatched
+        in emission order: key/button transitions via mouseDown/Up-keyDown/Up, and
+        ``type("...")`` via pyautogui.write(text, interval=0).
+        """
+        cursor_before = self.cursor_position()
+        sw, sh = self.screen_size()
+        cx, cy = cursor_before
+        executed: list[str] = []
+        if action.no_op or action.terminate or action.fail:
+            return StepResult(cursor_before=cursor_before, cursor_after=cursor_before,
+                              intended_target=cursor_before, delta=(0, 0), scroll=0,
+                              events_dispatched=[], parse_ok=True, action_text="")
+
+        if rel_coord_grid and rel_coord_grid > 0:
+            dx_px = int(round(action.dx * sw / rel_coord_grid))
+            dy_px = int(round(action.dy * sh / rel_coord_grid))
+        else:
+            dx_px, dy_px = action.dx, action.dy
+        tx = max(0, min(sw - 1, cx + dx_px))
+        ty = max(0, min(sh - 1, cy + dy_px))
+        if (tx, ty) != (cx, cy):
+            cmd = f"pyautogui.moveTo({tx}, {ty})"
+            self.execute(cmd); executed.append(cmd)
+        if action.scroll != 0:
+            cmd = f"pyautogui.scroll({int(action.scroll)})"
+            self.execute(cmd); executed.append(cmd)
+        for kind, e in action.elements:
+            if kind == "event":
+                cmd = _event_to_pyautogui(e)
+            else:  # "type"
+                cmd = f"pyautogui.write({e!r}, interval=0)"
+            if cmd is None:
+                continue
+            self.execute(cmd); executed.append(cmd)
+        cursor_after = self.cursor_position()
+        return StepResult(cursor_before=cursor_before, cursor_after=cursor_after,
+                          intended_target=(tx, ty), delta=(dx_px, dy_px),
+                          scroll=action.scroll, events_dispatched=executed,
+                          parse_ok=True, action_text="")
+
+    def dispatch_computer_use(self, arguments: dict, *, relative: bool = False) -> StepResult:
+        """Apply one OpenAI computer-use style tool call to the VM.
+
+        With ``relative=True`` (native-relative format), ``coordinate`` is a
+        [dx, dy] offset from the current cursor (moveRel semantics) rather than
+        an absolute screen coordinate, and the extended actions mouse_down /
+        mouse_up / key_down / key_up are supported.
+        """
         if not isinstance(arguments, dict):
             raise TypeError(
                 f"computer_use arguments must be dict, got {type(arguments)!r}"
@@ -363,6 +415,9 @@ class OSWorldClient:
                 raise ValueError(
                     f"coordinate values must be numeric, got {raw!r}"
                 ) from e
+            if relative:
+                x += cursor_before[0]
+                y += cursor_before[1]
             return max(0, min(sw - 1, x)), max(0, min(sh - 1, y))
 
         def move_to(pos: tuple[int, int]) -> None:
@@ -377,6 +432,32 @@ class OSWorldClient:
             pos = coord_from_args(required=True)
             assert pos is not None
             move_to(pos)
+        elif action == "move_rel":
+            # Explicit relative cursor move -> maps 1:1 to pyautogui.moveRel.
+            # `coordinate` is a [dx, dy] delta already scaled to screen px by the
+            # caller's --rel_coord_grid denormalization (0-999 grid -> px). It is
+            # inherently relative, so it does NOT use the absolute coord_from_args
+            # cursor-add path (that path is for absolute-target actions).
+            raw = arguments.get("coordinate")
+            if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+                raise ValueError(
+                    f"computer_use action 'move_rel' requires coordinate [dx, dy], got {raw!r}"
+                )
+            try:
+                dx = int(round(float(raw[0])))
+                dy = int(round(float(raw[1])))
+            except (TypeError, ValueError) as e:
+                raise ValueError(
+                    f"move_rel coordinate must be numeric, got {raw!r}"
+                ) from e
+            target = (
+                max(0, min(sw - 1, cursor_before[0] + dx)),
+                max(0, min(sh - 1, cursor_before[1] + dy)),
+            )
+            if dx or dy:
+                cmd = f"pyautogui.moveRel({dx}, {dy})"
+                self.execute(cmd)
+                executed.append(cmd)
         elif action in {
             "left_click",
             "right_click",
@@ -394,13 +475,35 @@ class OSWorldClient:
                 "double_click": "left",
                 "triple_click": "left",
             }[action]
-            clicks = 2 if action in {"double_click", "triple_click"} else 1
+            clicks = 3 if action == "triple_click" else 2 if action == "double_click" else 1
             cmd = (
                 f"pyautogui.click(clicks={clicks}, interval=0.05, "
                 f"button={button!r})"
             )
             self.execute(cmd)
             executed.append(cmd)
+        elif action in {"mouse_down", "mouse_up"}:
+            pos = coord_from_args(required=False)
+            if pos is not None:
+                move_to(pos)
+            button = str(arguments.get("button", "left")).strip().lower() or "left"
+            if button not in {"left", "right", "middle"}:
+                raise ValueError(f"mouse_down/up button must be left/right/middle, got {button!r}")
+            op = "mouseDown" if action == "mouse_down" else "mouseUp"
+            cmd = f"pyautogui.{op}(button={button!r})"
+            self.execute(cmd)
+            executed.append(cmd)
+        elif action in {"key_down", "key_up"}:
+            keys = arguments.get("keys")
+            if isinstance(keys, str):
+                keys = [keys]
+            if not isinstance(keys, list) or not keys:
+                raise ValueError(f"keys must be a non-empty array, got {keys!r}")
+            op = "keyDown" if action == "key_down" else "keyUp"
+            for key in (_computer_use_key_to_pyautogui(k) for k in keys):
+                cmd = f"pyautogui.{op}({key!r})"
+                self.execute(cmd)
+                executed.append(cmd)
         elif action == "left_click_drag":
             pos = coord_from_args(required=True)
             assert pos is not None

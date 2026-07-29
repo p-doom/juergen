@@ -35,7 +35,12 @@ _JUERGEN_EVAL = str(Path(__file__).resolve().parent)
 if _JUERGEN_EVAL not in sys.path:
     sys.path.insert(0, _JUERGEN_EVAL)
 
-from action_parser import parse_action_tolerant, parse_computer_use_tool_call  # noqa: E402
+from action_parser import (  # noqa: E402
+    parse_action_tolerant,
+    parse_computer_use_tool_call,
+    parse_computer_use_tool_calls,
+    parse_deltatype,
+)
 from osworld_vm_client import OSWorldClient  # noqa: E402
 from osworld_system_prompts import SYSTEM_PROMPTS  # noqa: E402
 from osworld_runtime import (  # noqa: E402
@@ -67,6 +72,18 @@ class StepLog:
 
 def _is_terminate(text: str) -> bool:
     return text.strip().split("\n", 1)[0].strip() == _TERMINATE
+
+
+def _is_fail(text: str) -> bool:
+    """diffabs failure/infeasible declaration token.
+
+    train==eval: the diffabs converter maps the teacher's
+    terminate{status:failure} / answer / infeasible turns to a bare "FAIL"
+    token, so the diffabs policy emits "FAIL" to declare a task infeasible.
+    Recognized as a failure-terminate here (analogous to computer_use
+    terminate{status:failure}); previously "FAIL" was an invalid action, so
+    this is backward-compatible for every other grammar."""
+    return text.strip().split("\n", 1)[0].strip() == "FAIL"
 
 
 def _computer_use_terminate_status(text: str) -> str | None:
@@ -139,6 +156,11 @@ def _run_rollout(
     settle_s: float,
     settle_stable_timeout_s: float,
     settle_poll_s: float,
+    action_format: str = "delta",
+    rel_coord_grid: int = 0,
+    top_p: float | None = None,
+    top_k: int | None = None,
+    presence_penalty: float | None = None,
 ) -> dict:
     steps_dir = output_dir / "steps"
     if save_frames:
@@ -196,6 +218,7 @@ def _run_rollout(
                     recent_frames=recent_frames,
                     recent_actions=recent_actions,
                     max_tokens=max_tokens, temperature=temperature,
+                    top_p=top_p, top_k=top_k, presence_penalty=presence_penalty,
                 )
             except Exception as e:
                 _LOGGER.error("step %d: model call failed: %s", step, e)
@@ -220,8 +243,10 @@ def _run_rollout(
             )
 
             computer_use_status = _computer_use_terminate_status(action_text)
-            if _is_terminate(action_text) or computer_use_status is not None:
-                if computer_use_status and computer_use_status != "success":
+            if _is_terminate(action_text) or _is_fail(action_text) or computer_use_status is not None:
+                if _is_fail(action_text):
+                    stop_reason = "terminate_failure"
+                elif computer_use_status and computer_use_status != "success":
                     stop_reason = f"terminate_{computer_use_status}"
                 else:
                     stop_reason = "terminate"
@@ -266,11 +291,50 @@ def _run_rollout(
             parsed = None
             sr_dict: dict | None = None
             try:
-                try:
-                    computer_call = parse_computer_use_tool_call(action_text)
-                except (TypeError, ValueError):
+                if action_format == "computer_use_relative":
+                    calls = parse_computer_use_tool_calls(action_text)
+                    for c in calls:
+                        # NORMALIZED relative deltas: models trained on 0-999-normalized
+                        # deltas (onpolicy_distill coord_space=normalized) need the delta
+                        # scaled to screen px before moveRel. --rel_coord_grid>0 enables
+                        # this (grid=1000). Default 0 = literal-px (BACKWARD-COMPATIBLE:
+                        # the videocua_nativerel checkpoints emit raw-px deltas).
+                        if rel_coord_grid and rel_coord_grid > 0 and "coordinate" in c.arguments:
+                            raw = c.arguments.get("coordinate")
+                            if isinstance(raw, (list, tuple)) and len(raw) == 2:
+                                try:
+                                    c.arguments["coordinate"] = [
+                                        int(round(float(raw[0]) * sw / rel_coord_grid)),
+                                        int(round(float(raw[1]) * sh / rel_coord_grid)),
+                                    ]
+                                except (TypeError, ValueError):
+                                    pass
+                        sr = client.dispatch_computer_use(c.arguments, relative=True)
+                    parsed = {
+                        "computer_use": [c.arguments for c in calls],
+                        "no_op": False,
+                    }
                     computer_call = None
-                if computer_call is not None:
+                elif action_format == "deltatype":
+                    dt = parse_deltatype(action_text)
+                    parsed = {
+                        "dx": dt.dx, "dy": dt.dy, "scroll": dt.scroll, "no_op": dt.no_op,
+                        "events": [
+                            {"kind": e.kind, "what": e.what, "mouse_button": e.mouse_button}
+                            for e in dt.events
+                        ],
+                        "type_texts": list(dt.type_texts),
+                    }
+                    sr = client.dispatch_deltatype(dt, rel_coord_grid=rel_coord_grid)
+                    computer_call = None
+                else:
+                    try:
+                        computer_call = parse_computer_use_tool_call(action_text)
+                    except (TypeError, ValueError):
+                        computer_call = None
+                if action_format in ("computer_use_relative", "deltatype"):
+                    pass  # already dispatched above
+                elif computer_call is not None:
                     parsed = {
                         "computer_use": computer_call.arguments,
                         "no_op": str(
@@ -453,6 +517,16 @@ def main() -> int:
              "each on a freshly rebooted VM but the same sglang server.",
     )
     p.add_argument("--system_prompt_id", default="training_v1")
+    p.add_argument("--action_format", default="delta",
+                   choices=["delta", "computer_use_relative"],
+                   help="'delta' = custom grammar / absolute computer_use; "
+                        "'computer_use_relative' = native computer_use tool calls "
+                        "with RELATIVE coordinate (native_rel_v1 models).")
+    p.add_argument("--rel_coord_grid", type=int, default=0,
+                   help="For computer_use_relative: if >0, scale the relative delta from a "
+                        "0-N NORMALIZED grid to screen px before moveRel (grid=1000 for the "
+                        "onpolicy_distill coord_space=normalized models). Default 0 = literal-px "
+                        "(backward-compatible with the videocua_nativerel raw-px checkpoints).")
     p.add_argument("--max_tokens", type=int, default=64)
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--n_history_frames", type=int, default=16)
@@ -608,6 +682,8 @@ def main() -> int:
                 settle_s=args.settle_s,
                 settle_stable_timeout_s=args.settle_stable_timeout_s,
                 settle_poll_s=args.settle_poll_s,
+                action_format=args.action_format,
+                rel_coord_grid=args.rel_coord_grid,
             )
             with (run_dir / "result.json").open("w") as f:
                 json.dump(result, f, indent=2)
