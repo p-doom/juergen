@@ -1,0 +1,29 @@
+# On-policy distillation collection set v1 — tasks doable from a pristine
+# GNOME Ubuntu desktop (OSWorld Ubuntu.qcow2, snapshot=on, no per-task setup).
+# Multi-step, navigation+click+type heavy so the converted RELATIVE traces
+# exercise the observation-conditioned servo the offline-BC policy lacks.
+Open the Firefox web browser.
+Open the Firefox web browser and navigate to wikipedia.org.
+Open the Firefox web browser and search for "open source" using the address bar.
+Open a terminal and run the command: ls -la
+Open a terminal and print the current working directory with pwd.
+Open a terminal and create a new directory named testdir using mkdir.
+Open the Files (Nautilus) file manager.
+Open the Files file manager and go to the Downloads folder.
+Click the Activities button in the top-left corner of the screen.
+Open the applications overview and launch the Text Editor.
+Open the Text Editor and type the sentence: Hello world.
+Open the system Settings application.
+Open the Settings application and go to the Sound settings.
+Open the Settings application and open the Display settings.
+Open the calculator application.
+Open the calculator and compute 12 times 8.
+Open the LibreOffice Calc spreadsheet application.
+Open the LibreOffice Writer word processor.
+Open the LibreOffice Impress presentation application.
+Take a screenshot using the screenshot tool.
+Open Firefox and open a new browser tab.
+Open Firefox and go to github.com.
+Open a terminal and run: echo hello > /tmp/note.txt
+Open the file manager and create a new folder on the Desktop.
+Open the Firefox browser settings page.

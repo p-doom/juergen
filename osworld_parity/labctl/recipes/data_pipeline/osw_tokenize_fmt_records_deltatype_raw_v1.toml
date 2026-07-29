@@ -1,0 +1,82 @@
+# ============================================================================
+# OSWorld-parity format dataset BUILD (tokenize) -- labctl-native, deltatype_raw.
+#
+# Ports step (1) of deltatype_distill.sbatch: build_sft_records_from_chat.py over
+# the already-converted per-format chat.jsonl (_normalized/{train,val}/chat.jsonl)
+# -> tokenized array_record shards. deltatype_raw is the one format whose train/
+# was never tokenized; this recipe produces it as a FIRST-CLASS labctl dataset
+# (type="dataset", written under the labctl datasets root, tracked + reproducible)
+# rather than the ad-hoc converted/ path the other formats use. The matching
+# training recipe fmt_sft_8b_osw_deltatype_raw_v1 consumes this output.
+#
+# This is the worked reproducer for the whole family: to rebuild any other format
+# natively, copy this file, swap the chat_dir input path + output alias.
+#
+# NB: tokenizer is Qwen3-VL-2B (shared vocab with 8B) exactly as the raw pipeline;
+# training then runs the 8B. max_length/overflow match the raw fmt_sft tokenize.
+# ============================================================================
+name = "osw_tokenize_fmt_records_deltatype_raw_v1"
+repo = "omegalax"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+declare -A A
+for arg in "$@"; do
+    case "$arg" in --*=*) k="${arg%%=*}"; k="${k#--}"; A[$k]="${arg#*=}";; esac
+done
+OUT="${A[out_dir]}"
+CHAT="${A[chat_dir]}"
+mkdir -p "$OUT"
+for split in train val; do
+    echo "=== tokenizing deltatype_raw $split @ $(date) ==="
+    uv run --project="$REPO" -- python "$REPO/scripts/build_sft_records_from_chat.py" \
+        --data_path "$CHAT/$split/chat.jsonl" \
+        --out_dir "$OUT/$split" \
+        --model_id "${A[model_id]}" \
+        --tokenizer "${A[model_id]}" \
+        --processor "${A[model_id]}" \
+        --max_length "${A[max_length]}" --overflow_mode "${A[overflow_mode]}" \
+        --records_per_shard 8000 --num_workers 8 --overwrite
+done
+[ -f "$OUT/train/metadata.json" ] || { echo "tokenize failed: no train/metadata.json"; exit 1; }
+[ -f "$OUT/val/metadata.json" ]   || { echo "tokenize failed: no val/metadata.json"; exit 1; }
+python3 - "$OUT" <<'PY'
+import json, os, sys, time
+out = sys.argv[1]
+json.dump({"stage": "tokenize_fmt_records", "format": "deltatype_raw",
+           "model_id": "Qwen/Qwen3-VL-2B-Instruct", "built_at": int(time.time())},
+          open(os.path.join(out, "tokenize_manifest.json"), "w"), indent=2)
+PY
+echo "=== deltatype_raw tokenize DONE -> $OUT @ $(date) ==="
+''', "--"]
+
+[resources]
+cpus = 12
+mem  = "64GB"
+time = "02:00:00"
+qos  = "low"
+account   = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--exclude=hai001"]
+
+[inputs.chat]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/converted/osworld_train_deltatype_raw/_normalized"
+
+[outputs.dataset]
+type   = "dataset"
+marker = "tokenize_manifest.json"
+alias  = "osworld_train_deltatype_raw_tok_v1"
+
+[args]
+chat_dir      = "{inputs.chat.path}"
+out_dir       = "{outputs.dataset.path}"
+model_id      = "Qwen/Qwen3-VL-2B-Instruct"
+max_length    = "16384"
+overflow_mode = "truncate"
+
+[env]
+HF_HUB_OFFLINE   = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR           = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR     = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

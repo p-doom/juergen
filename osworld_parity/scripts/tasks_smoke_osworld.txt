@@ -1,0 +1,8 @@
+# Real-OSWorld smoke tasks (app/task_id) — feasible + non-empty setup, spanning apps
+# + setup types (execute / launch / download+open), to measure setup-success rate honestly.
+os/13584542-872b-42d8-b299-866967b5c3ef
+chrome/030eeff7-b492-4218-b312-701ec99ee0cc
+vlc/215dfd39-f493-4bc3-a027-8a97d72c61bf
+libreoffice_calc/01b269ae-2111-4a07-81fd-3fcd711993b0
+libreoffice_writer/0810415c-bde4-4443-9047-d5f70165a697
+libreoffice_impress/05dd4c1d-c489-4c85-8389-a7836c4f0567

@@ -1,0 +1,25 @@
+# ============================================================================
+# INACTIVE TEMPLATE -- per-checkpoint HF export for fmt_sft_8b_osw_diffabs_v1.
+#
+# This file lives OUTSIDE the scanned dispatch.policies_dir on purpose, so it does
+# NOT auto-fire. To activate: copy it into
+#   /fast/home/franz.srambical/slurm/dev/franz/berlin/crowd-cast-bc/labctl/policies/
+# then `labctl evald once`. Clone + swap producer_recipe for the other formats
+# (fmt_sft_8b_osw_{moverel,absolute,diffabsnorm,deltatype_norm,deltatype_raw}_v1).
+#
+# Fires the generic export recipe on every save_every=150 orbax checkpoint of the
+# named training run; the exported HF ckpt carries
+# producer_recipe=export_hf_fmt_sft_8b_osw_v1. If you also want the team's OSWorld
+# grounding/typing eval fan-out on these exports, add eval policies whose
+# applies_to.producer_recipe=export_hf_fmt_sft_8b_osw_v1 with the format's matched
+# system prompt (see the bc_export -> osworld_{grounding,typing}_per_hf_ckpt chain).
+# ============================================================================
+name   = "export_per_ckpt_fmt_sft_8b_osw_diffabs_v1"
+recipe = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/labctl/recipes/data_pipeline/export_hf_fmt_sft_8b_osw_v1.toml"
+
+[applies_to]
+type            = "checkpoint"
+producer_recipe = "fmt_sft_8b_osw_diffabs_v1"
+
+[cadence]
+every_n_steps = 150

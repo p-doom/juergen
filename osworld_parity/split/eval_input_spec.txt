@@ -1,0 +1,42 @@
+EVAL-HARNESS INPUT SPEC — mm_agents.qwen3vl_agent.Qwen3VLAgent
+(computer_use / pyautogui, observation_type=screenshot, coordinate_type=relative, history_n=4)
+The abs-control TRAINING input must byte-match ALL of the following for a true zero-shift control.
+
+[1] SYSTEM PROMPT
+    file: eval_system_prompt.txt   len=4051   sha256=f0aa74a3eb2b6a2f3caf83882e2e07c62b5087835adff04f9c7b6c4c2621795b
+    screen-size independent (resolution hard-coded 1000x1000 for coordinate_type=relative).
+
+[2] MESSAGE STRUCTURE (per predict call)
+    messages[0] = {role: system,  content:[{type:text, text: <SYSTEM PROMPT>}]}
+    then the last history_n=4 turns are interleaved, oldest->newest:
+      user      content:[{image_url}] (+ the instruction text ONLY on the FIRST in-window user turn)
+      assistant content:[{type:text, text: <that turn's raw model response>}]
+    then the CURRENT frame:
+      user      content:[{image_url}]                       (if there IS history)
+      user      content:[{image_url}, {type:text, text: <USER TURN TEXT>}]  (if NO history: instruction rides here)
+    NOTE: the instruction/USER-TURN-TEXT is attached to the FIRST in-window user turn only
+    (qwen3vl_agent.py:224-311). History uses the last 4 (frame,response) turns.
+
+[3] USER-TURN TEXT (byte-exact; {instruction} and {previous_actions_str} are substituted;
+    previous_actions_str = "None" on step 1, else "Step 1: <act>\nStep 2: <act>...")
+    file: eval_user_turn_template.txt
+----BEGIN USER TURN TEXT (instruction=PLACEHOLDER_INSTRUCTION, previous=None)----
+
+Please generate the next move according to the UI screenshot, instruction and previous actions.
+
+Instruction: PLACEHOLDER_INSTRUCTION
+
+Previous actions:
+None
+----END USER TURN TEXT----
+
+[4] IMAGE
+    each frame is a data URL: 'data:image/png;base64,iVBORw0KGg...'  (PNG, base64)
+    frames are smart_resize-processed BEFORE encoding: max_pixels = 16*16*4*12800 = 13107200
+    (qwen3vl_agent.py process_image/smart_resize); e.g. a 1920x1080 screen -> ~1920x1088 processed.
+
+[5] COORDINATES
+    relative 0-999 grid. On PARSE, x_px = int(x * original_width/999), y_px = int(y * original_height/999)
+    (qwen3vl_agent.py:382-385). Eval screen = 1920x1080.
+
+[6] DECODING (eval harness): temperature=0.0, top_p=0.9, max_tokens=1024, history_n=4.

@@ -1,0 +1,240 @@
+{
+  "aliases": {
+    "enter": "Return",
+    "return": "Return",
+    "esc": "Escape",
+    "escape": "Escape",
+    "backspace": "Backspace",
+    "back space": "Backspace",
+    "tab": "Tab",
+    "space": "Space",
+    "spacebar": "Space",
+    "space bar": "Space",
+    "delete": "ForwardDelete",
+    "del": "ForwardDelete",
+    "delete button": "ForwardDelete",
+    "delete key": "ForwardDelete",
+    "forward delete": "ForwardDelete",
+    "up": "UpArrow",
+    "up arrow": "UpArrow",
+    "arrow up": "UpArrow",
+    "up arrow key": "UpArrow",
+    "arrowup": "UpArrow",
+    "up_arrow": "UpArrow",
+    "down": "DownArrow",
+    "down arrow": "DownArrow",
+    "arrow down": "DownArrow",
+    "down arrow key": "DownArrow",
+    "arrowdown": "DownArrow",
+    "down_arrow": "DownArrow",
+    "left": "LeftArrow",
+    "left arrow": "LeftArrow",
+    "arrow left": "LeftArrow",
+    "left arrow key": "LeftArrow",
+    "arrowleft": "LeftArrow",
+    "left_arrow": "LeftArrow",
+    "right": "RightArrow",
+    "right arrow": "RightArrow",
+    "arrow right": "RightArrow",
+    "right arrow key": "RightArrow",
+    "arrowright": "RightArrow",
+    "right_arrow": "RightArrow",
+    "page down": "PageDown",
+    "pagedown": "PageDown",
+    "pgdn": "PageDown",
+    "page down key": "PageDown",
+    "page up": "PageUp",
+    "pageup": "PageUp",
+    "pgup": "PageUp",
+    "page up key": "PageUp",
+    "home": "Home",
+    "end": "End",
+    "insert": "Insert",
+    "print screen": "PrintScreen",
+    "prt sc": "PrintScreen",
+    "prtsc": "PrintScreen",
+    "prtscn": "PrintScreen",
+    "printscreen": "PrintScreen",
+    "f1": "F1",
+    "f2": "F2",
+    "f3": "F3",
+    "f4": "F4",
+    "f5": "F5",
+    "f6": "F6",
+    "f7": "F7",
+    "f8": "F8",
+    "f9": "F9",
+    "f10": "F10",
+    "f11": "F11",
+    "f12": "F12",
+    "caps lock": "CapsLock",
+    "capslock": "CapsLock",
+    "comma": "Comma",
+    "dot": "Dot",
+    "period": "Dot",
+    "minus": "Minus",
+    "dash": "Minus",
+    "hyphen": "Minus",
+    "plus": [
+      "ShiftLeft",
+      "Equal"
+    ],
+    "equals": "Equal",
+    "equal": "Equal",
+    "slash": "Slash",
+    "backslash": "BackSlash",
+    "semicolon": "SemiColon",
+    "quote": "Quote",
+    "apostrophe": "Quote",
+    "backquote": "BackQuote",
+    "backtick": "BackQuote",
+    "grave": "BackQuote",
+    ".": "Dot",
+    ",": "Comma",
+    "-": "Minus",
+    "=": "Equal",
+    "/": "Slash",
+    "\\": "BackSlash",
+    ";": "SemiColon",
+    "'": "Quote",
+    "`": "BackQuote",
+    "[": "LeftBracket",
+    "]": "RightBracket",
+    "*": [
+      "ShiftLeft",
+      "Num8"
+    ],
+    "ctrl": "ControlLeft",
+    "control": "ControlLeft",
+    "strg": "ControlLeft",
+    "shift": "ShiftLeft",
+    "alt": "Alt",
+    "option": "Alt",
+    "altgr": "AltGr",
+    "cmd": "MetaLeft",
+    "command": "MetaLeft",
+    "meta": "MetaLeft",
+    "super": "MetaLeft",
+    "win": "MetaLeft",
+    "windows": "MetaLeft",
+    "windows key": "MetaLeft",
+    "winkey": "MetaLeft",
+    "windowskey": "MetaLeft"
+  },
+  "modifiers": {
+    "ctrl": "ControlLeft",
+    "control": "ControlLeft",
+    "strg": "ControlLeft",
+    "shift": "ShiftLeft",
+    "alt": "Alt",
+    "option": "Alt",
+    "altgr": "AltGr",
+    "cmd": "MetaLeft",
+    "command": "MetaLeft",
+    "meta": "MetaLeft",
+    "super": "MetaLeft",
+    "win": "MetaLeft",
+    "windows": "MetaLeft",
+    "windows key": "MetaLeft",
+    "winkey": "MetaLeft",
+    "windowskey": "MetaLeft"
+  },
+  "chars": {
+    " ": "Space",
+    "`": "BackQuote",
+    "-": "Minus",
+    "=": "Equal",
+    "[": "LeftBracket",
+    "]": "RightBracket",
+    "\\": "BackSlash",
+    ";": "SemiColon",
+    "'": "Quote",
+    ",": "Comma",
+    ".": "Dot",
+    "/": "Slash",
+    "~": [
+      "ShiftLeft",
+      "BackQuote"
+    ],
+    "!": [
+      "ShiftLeft",
+      "Num1"
+    ],
+    "@": [
+      "ShiftLeft",
+      "Num2"
+    ],
+    "#": [
+      "ShiftLeft",
+      "Num3"
+    ],
+    "$": [
+      "ShiftLeft",
+      "Num4"
+    ],
+    "%": [
+      "ShiftLeft",
+      "Num5"
+    ],
+    "^": [
+      "ShiftLeft",
+      "Num6"
+    ],
+    "&": [
+      "ShiftLeft",
+      "Num7"
+    ],
+    "*": [
+      "ShiftLeft",
+      "Num8"
+    ],
+    "(": [
+      "ShiftLeft",
+      "Num9"
+    ],
+    ")": [
+      "ShiftLeft",
+      "Num0"
+    ],
+    "_": [
+      "ShiftLeft",
+      "Minus"
+    ],
+    "+": [
+      "ShiftLeft",
+      "Equal"
+    ],
+    "{": [
+      "ShiftLeft",
+      "LeftBracket"
+    ],
+    "}": [
+      "ShiftLeft",
+      "RightBracket"
+    ],
+    "|": [
+      "ShiftLeft",
+      "BackSlash"
+    ],
+    ":": [
+      "ShiftLeft",
+      "SemiColon"
+    ],
+    "\"": [
+      "ShiftLeft",
+      "Quote"
+    ],
+    "<": [
+      "ShiftLeft",
+      "Comma"
+    ],
+    ">": [
+      "ShiftLeft",
+      "Dot"
+    ],
+    "?": [
+      "ShiftLeft",
+      "Slash"
+    ]
+  }
+}

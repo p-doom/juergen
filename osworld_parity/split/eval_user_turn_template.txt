@@ -1,0 +1,7 @@
+
+Please generate the next move according to the UI screenshot, instruction and previous actions.
+
+Instruction: PLACEHOLDER_INSTRUCTION
+
+Previous actions:
+None

@@ -1,0 +1,77 @@
+# Collection set v3 — VOLUME + BROAD (cursor->target) COVERAGE. iter-2 showed spatial
+# diversity moved cosine 0.00->0.26 but coverage (68 traces) is the limiter. v3 = ~60
+# spatially-diverse in-app tasks, run SHARDED x4 samples for much more volume.
+# Pristine GNOME Ubuntu desktop (snapshot=on, no per-task setup).
+
+# top-right / window controls / right toolbar
+Open Firefox and click the three-line menu button in the top-right corner.
+Open Firefox and click the account menu in the top-right of the toolbar.
+Open Firefox and click the minimize button in the top-right window controls.
+Open Firefox, open the menu top-right, then click Settings.
+Open Firefox and click the star bookmark icon on the right of the address bar.
+Open Firefox and click the refresh button to the left of the address bar.
+Open the Files manager and click the search icon in the top-right of its window.
+Open the Files manager and click the menu (three lines) in its top-right.
+Open the Settings app and click an item in the right-hand content pane.
+Open Settings, go to Displays, and click a control on the right side.
+Open Settings and toggle a switch on the right side of the panel.
+Open Settings, go to Power, and click an option on the right.
+
+# center: dialogs, document body, keypad, cells
+Open LibreOffice Writer and click in the middle of the document to place the cursor.
+Open LibreOffice Writer, click the Insert menu, then choose an item.
+Open LibreOffice Impress and click New Slide in the menu.
+Open LibreOffice Impress and click on the slide editing area in the center.
+Open LibreOffice Calc and click a cell in the middle of the sheet.
+Open LibreOffice Calc and click the cell reference box on the left of the formula bar.
+Open the calculator and click the number 5 button.
+Open the calculator and click the plus button, then equals.
+Open the calculator and click the number 7 then the number 9.
+Open the Text Editor, click in the center of the text area, and type a word.
+Open Firefox and click in the center of the web page content area.
+Open the Files manager and double-click a folder icon in the center of the window.
+Open the Files manager and click a file icon in the middle of the view.
+
+# bottom / lower
+Open a terminal and click near the bottom of the terminal window.
+Open Firefox and click a link near the bottom of the page.
+Open LibreOffice Writer and click the status bar at the bottom of the window.
+Open the Files manager and click the path bar near the bottom.
+Open Settings, scroll down, then click an item near the bottom of the list.
+Open the calculator and click the number 0 at the bottom of the keypad.
+
+# menus opening in varied positions
+Open Firefox, click the menu, then click History.
+Open Firefox, open the menu, then click Downloads.
+Open Firefox, open the menu, then click Bookmarks.
+Open the Files manager, right-click an empty area for the context menu, then click an item.
+Open LibreOffice Writer, click the File menu, then click Save As.
+Open LibreOffice Writer, click the Format menu, then choose Character.
+Open LibreOffice Impress, click the Slide menu, then choose an option.
+Open LibreOffice Calc, click the Data menu, then choose an item.
+Open the Text Editor, click the menu in the header bar, then choose an option.
+
+# left / dock (minority)
+Open a terminal window.
+Open the Files manager from the dock.
+Open the Firefox browser from the dock.
+
+# keyboard / terminal (reliable; teach typing + terminate)
+Open a terminal and run: ls -la
+Open a terminal and run: pwd
+Open a terminal and type echo hello world then press enter.
+Open a terminal and create a directory named demo with mkdir.
+Open a terminal and run: cat /etc/os-release
+Open a terminal and run: whoami
+Open the Text Editor and type: The quick brown fox jumps over the lazy dog.
+Open a terminal, type a command to list files, run it, then terminate.
+Open a terminal and run the date command.
+Open a terminal, make a folder called test, then list the directory.
+
+# search / overview interactions (varied positions)
+Open the Activities overview and type firefox in the search box.
+Open the Activities overview and click an application icon in the grid.
+Open Firefox and type wikipedia.org in the address bar, then press enter.
+Open Firefox and type a search query in the address bar.
+Open the calculator and compute 12 times 8 using the buttons.
+Open Settings and use the search box at the top to find sound settings.

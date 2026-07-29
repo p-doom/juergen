@@ -1,0 +1,95 @@
+# ============================================================================
+# OSWorld-parity format-SFT export: orbax LoRA checkpoint -> merged HF safetensors.
+#
+# Ports step (3) of deltatype_distill.sbatch / the export half of the fmt_sft flow,
+# and is a near-verbatim clone of the team's bc_export_hf_per_checkpoint_8b_nativerel_v2
+# recipe (same JAX_PLATFORMS=cpu restore, same tokenizer/config backfill from the
+# stock snapshot). LoRA handling is automatic: the trainer writes lora_metadata.json
+# and export_to_hf.py re-injects LoRA into the base before restoring, so --model_id
+# only supplies the (Qwen3-VL-8B) architecture. Optimizer-shape flags MUST match the
+# fmt_sft training recipes (grad_accum_steps=8 => optax.MultiSteps, max_grad_norm=1.0
+# => clip_by_global_norm) so the restore pytree lines up.
+#
+# GENERIC + manual: consumes any fmt_sft_8b_osw_* checkpoint via inputs.checkpoint and
+# is invoked by hand (`labctl run ... ` on a specific step), NOT wired as an auto-firing
+# evald policy -- deliberately, so this migration triggers no surprise dispatches. To
+# make exports per-checkpoint-automatic later, add an evald export policy whose
+# applies_to.producer_recipe = fmt_sft_8b_osw_<fmt>_v1 and points here (see the team's
+# bc_export_per_ckpt_* policies for the exact shape).
+# ============================================================================
+name = "export_hf_fmt_sft_8b_osw_v1"
+repo = "omegalax"
+command = ["bash", "-c", '''
+set -euo pipefail
+export JAX_PLATFORMS=cpu
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+cd "$REPO"
+
+declare -A A
+for arg in "$@"; do
+    case "$arg" in --*=*) k="${arg%%=*}"; k="${k#--}"; A[$k]="${arg#*=}";; esac
+done
+
+step_name="$(basename "${A[checkpoint_path]}")"
+out_dir="${A[out_dir_root]}/${step_name}"
+mkdir -p "$out_dir"
+
+srun uv run --project="$REPO" -- python scripts/export_to_hf.py \
+    --model_id="${A[model_id]}" \
+    --out_dir="${out_dir}" \
+    --checkpoint_path="${A[checkpoint_path]}" \
+    --tp_size="${A[tp_size]}" \
+    --fsdp_size="${A[fsdp_size]}" \
+    --dp_size="${A[dp_size]}" \
+    --max_grad_norm="${A[max_grad_norm]}" \
+    --grad_accum_steps="${A[grad_accum_steps]}"
+
+SNAP_BASE="${HF_HOME}/hub/models--${A[model_id]//\//--}/snapshots"
+SNAP=$(ls -1d "$SNAP_BASE"/* | tail -1)
+for f in tokenizer.json tokenizer_config.json vocab.json merges.txt added_tokens.json \
+         special_tokens_map.json chat_template.json generation_config.json \
+         preprocessor_config.json video_preprocessor_config.json; do
+    if [ -f "${SNAP}/${f}" ] && [ ! -f "${out_dir}/${f}" ]; then
+        cp "${SNAP}/${f}" "${out_dir}/${f}"
+    fi
+done
+python3 - "${SNAP}/config.json" "${out_dir}/config.json" <<'PY'
+import json, sys
+snap = json.load(open(sys.argv[1]))
+out  = json.load(open(sys.argv[2]))
+for k in ("architectures", "transformers_version", "vision_end_token_id"):
+    if k in snap and k not in out:
+        out[k] = snap[k]
+json.dump(out, open(sys.argv[2], "w"), indent=2)
+PY
+test -f "${out_dir}/model.safetensors" || test -f "${out_dir}/model.safetensors.index.json"
+echo "=== fmt_sft export DONE -> ${out_dir} ==="
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 16
+mem  = "192GB"
+time = "01:00:00"
+qos  = "low"
+account   = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--exclude=hai001"]
+
+[inputs.checkpoint]
+type = "checkpoint"
+
+[outputs.hf_checkpoint]
+type   = "checkpoint_stream"
+marker = "model.safetensors"
+alias  = "export_hf_fmt_sft_8b_osw_v1_{inputs.checkpoint.id}"
+
+[args]
+checkpoint_path  = "{inputs.checkpoint.path}"
+out_dir_root     = "{outputs.hf_checkpoint.path}"
+model_id         = "Qwen/Qwen3-VL-8B-Instruct"
+tp_size          = "1"
+fsdp_size        = "1"
+dp_size          = "1"
+max_grad_norm    = "1.0"
+grad_accum_steps = "8"

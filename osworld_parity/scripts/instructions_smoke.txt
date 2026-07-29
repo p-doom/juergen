@@ -1,0 +1,6 @@
+# Smoke set: pristine-GNOME-desktop tasks whose targets are at visible,
+# eyeball-checkable locations -> validates coordinate grounding + teacher competence.
+Open the Firefox web browser.
+Open a terminal window.
+Open the Files (Nautilus) file manager.
+Click the Activities button in the top-left corner of the screen.

@@ -1,0 +1,57 @@
+# Collection set v2 — SPATIALLY BALANCED. iter-1 diagnosis: v1 was left-dock/top-left
+# biased -> the anneal learned a "move up-left" prior, not target-conditioned servoing.
+# v2 drives the teacher to click IN-APP elements spread across the WHOLE screen
+# (top-right menus, center dialogs, right-side panels, bottom bars) so the converted
+# relative traces contain diverse (cursor->target) navigation vectors in all directions.
+# Doable from a pristine GNOME Ubuntu desktop (snapshot=on, no per-task setup).
+
+# --- TOP-RIGHT / right-side targets ---
+Open Firefox and click the three-line menu button in the top-right corner.
+Open Firefox, then click the account/profile menu in the top-right of the toolbar.
+Open Firefox and click the minimize button in the top-right window controls.
+Open Firefox, open the menu top-right, then click Settings.
+Open Firefox and click the star/bookmark icon on the right of the address bar.
+Open the Files manager and click the search icon in the top-right of its window.
+Open the Files manager, then click the menu (three lines) in its top-right.
+Open the system Settings and click an item in the right-hand content pane.
+Open Settings, go to Displays, and click a control on the right side.
+Open Settings and toggle a switch on the right side of the panel.
+
+# --- CENTER targets (dialogs, document body, menus that open mid-screen) ---
+Open LibreOffice Writer and click in the middle of the blank document to place the cursor.
+Open LibreOffice Writer, then click the Insert menu and choose an item.
+Open LibreOffice Impress and click 'New Slide' in the menu.
+Open LibreOffice Impress and click on the slide editing area in the center.
+Open LibreOffice Calc and click on a cell in the middle of the sheet.
+Open the calculator and click the number 5 button.
+Open the calculator and click the equals button, then the plus button.
+Open the Text Editor, click in the center of the text area, and type a word.
+Open Firefox and click in the center of the web page content area.
+Open the Files manager and double-click a folder icon in the center of the window.
+
+# --- BOTTOM / lower targets ---
+Open a terminal and click near the bottom of the terminal window.
+Open Firefox and click a link near the bottom of the page.
+Open LibreOffice Writer and click the status bar at the bottom of the window.
+Open the Files manager and click the path bar near the bottom.
+Open Settings and scroll down, then click an item near the bottom of the list.
+
+# --- LEFT / dock (kept but minority) ---
+Open a terminal window.
+Open the Files manager from the dock.
+
+# --- app menus opening in varied positions ---
+Open Firefox, click the menu, then click History.
+Open Firefox, open the menu, then click Downloads.
+Open the Files manager and right-click in an empty area to open the context menu, then click an item.
+Open LibreOffice Writer, click the File menu, then click Save As.
+Open LibreOffice Impress, click the Slide menu, then choose an option.
+Open the calculator, then click several digit buttons across the keypad.
+
+# --- keyboard/terminal (reliable; teach typing + terminate) ---
+Open a terminal and run: ls -la
+Open a terminal and run: pwd
+Open a terminal and type: echo hello world, then press enter.
+Open a terminal and create a directory named demo with mkdir.
+Open the Text Editor and type: The quick brown fox jumps over the lazy dog.
+Open a terminal, type a command to list files, run it, then terminate.
