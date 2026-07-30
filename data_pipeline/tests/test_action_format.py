@@ -1011,5 +1011,77 @@ class FormatterRegistryTest(unittest.TestCase):
             get_formatter("nope")
 
 
+class ComputerUseRelNormTest(unittest.TestCase):
+    """``computer_use_rel_norm_v1``: per-axis 0-1000 move deltas against the
+    ORIGINAL capture size, scroll left raw, ``computer_use_rel_v1`` untouched."""
+
+    WIN = [Window(master_idx=0, start=0, end=30)]
+
+    def deltas(self, events, frame_size, fmt="computer_use_rel_norm_v1"):
+        label = get_formatter(fmt).format_segment(
+            events, self.WIN, [], master_fps=MASTER_FPS, frame_size=frame_size,
+        ).labels[0]
+        return [json.loads(b.split("<tool_call>\n", 1)[1])["arguments"]
+                for b in label.split("</tool_call>") if "<tool_call>" in b]
+
+    def test_move_is_a_per_axis_fraction_of_the_capture_size(self) -> None:
+        # 960 of 1920 wide and 540 of 1080 high are both half a screen -> 500.
+        self.assertEqual(
+            self.deltas([_move(0, 0.1, 960.0, 540.0)], (1920, 1080)),
+            [{"action": "mouse_move_rel", "delta": [500, 500]}],
+        )
+
+    def test_same_pixel_move_on_a_wider_capture_gives_a_smaller_number(self) -> None:
+        (narrow,) = self.deltas([_move(0, 0.1, 960.0, 0.0)], (1920, 1080))
+        (wide,) = self.deltas([_move(0, 0.1, 960.0, 0.0)], (3840, 1080))
+        self.assertEqual(narrow["delta"][0], 500)
+        self.assertEqual(wide["delta"][0], 250)
+
+    def test_scroll_stays_raw_ticks(self) -> None:
+        events = [RawEvent(0, 0.1, "scroll", dx=0.0, dy=-3.0, scroll=-3.0)]
+        self.assertEqual(
+            self.deltas(events, (1920, 1080)),
+            [{"action": "scroll", "pixels": -3}],
+        )
+
+    def test_computer_use_rel_v1_ignores_frame_size(self) -> None:
+        events = [_move(0, 0.1, 960.0, 540.0)]
+        self.assertEqual(
+            self.deltas(events, (1920, 1080), fmt="computer_use_rel_v1"),
+            self.deltas(events, (640, 480), fmt="computer_use_rel_v1"),
+        )
+        self.assertEqual(
+            self.deltas(events, (1920, 1080), fmt="computer_use_rel_v1"),
+            [{"action": "mouse_move_rel", "delta": [960, 540]}],
+        )
+
+    def test_missing_or_invalid_capture_size_raises(self) -> None:
+        for bad in (None, (0, 1080), (1920, 0), (-1, -1)):
+            with self.assertRaises(ValueError):
+                self.deltas([_move(0, 0.1, 10.0, 10.0)], bad)
+
+    def test_sub_scale_move_is_counted_not_silently_dropped(self) -> None:
+        result = get_formatter("computer_use_rel_norm_v1").format_segment(
+            [_move(0, 0.1, 1.0, 0.0)], self.WIN, [],
+            master_fps=MASTER_FPS, frame_size=(2580, 1080),
+        )
+        self.assertEqual(result.primitive_counts["moves_normalized_to_zero"], 1)
+        self.assertTrue(get_formatter("computer_use_rel_norm_v1")
+                        .is_idle_label(result.labels[0]))
+
+    def test_terminate_and_idle_match_the_parent_format(self) -> None:
+        norm = get_formatter("computer_use_rel_norm_v1")
+        base = get_formatter("computer_use_rel_v1")
+        self.assertEqual(norm.terminate_line(), base.terminate_line())
+        self.assertTrue(norm.is_idle_label(
+            render_tool_call({"action": "wait", "time": 2.0})))
+
+    def test_reply_contract_declares_the_scale_and_still_formats(self) -> None:
+        contract = get_formatter("computer_use_rel_norm_v1").reply_contract
+        rendered = contract.format(what="the next action")
+        self.assertIn("0-1000", rendered)
+        self.assertIn("NOT pixels", rendered)
+
+
 if __name__ == "__main__":
     unittest.main()

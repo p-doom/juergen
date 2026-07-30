@@ -241,7 +241,8 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
             task["action_format"], continuous_action_hz=task["continuous_action_hz"]
         )
         result = fmt.format_segment(
-            events, view.windows(), view.dead_zones, master_fps=view.master_fps
+            events, view.windows(), view.dead_zones, master_fps=view.master_fps,
+            frame_size=task.get("frame_size"),
         )
         counters = result.counters
         n_events = len(events)
@@ -373,6 +374,29 @@ def _segments_in_days(art: FilterArtifact, clips_manifest: Path,
     return {str(s["segment_id"]) for d in kept for s in d["segments"]}
 
 
+def _capture_dims(clips_manifest: Path) -> dict[str, tuple[int, int]]:
+    """``segment_id -> (video_width, video_height)`` — the ORIGINAL capture
+    size, which is what a normalized action format divides by. Rows without
+    usable dims are omitted rather than defaulted."""
+    dims: dict[str, tuple[int, int]] = {}
+    for r in read_jsonl(clips_manifest):
+        w, h = r.get("video_width"), r.get("video_height")
+        if isinstance(w, int) and isinstance(h, int) and w > 0 and h > 0:
+            dims[str(r["segment_id"])] = (w, h)
+    return dims
+
+
+def _require_capture_dims(
+    rows: list[dict], dims: dict[str, tuple[int, int]]
+) -> tuple[list[dict], int]:
+    """Keep only rows whose segment has capture dims, plus the dropped count.
+
+    A normalized format must never fall back to a default size: that would
+    silently emit deltas on a different scale than the rest of the corpus."""
+    kept = [r for r in rows if str(r["segment_id"]) in dims]
+    return kept, len(rows) - len(kept)
+
+
 def run_action(args: argparse.Namespace) -> None:
     art = FilterArtifact(args.filter_dir)
     stride = art.stride_for(args.fps, args.fps_mode)  # fail fast on invalid rates
@@ -423,10 +447,23 @@ def run_action(args: argparse.Namespace) -> None:
     if not rows_in:
         raise SystemExit(f"no usable segments in {art.dir}")
 
+    seg_dims = _capture_dims(args.clips_manifest)
+    if getattr(formatter, "normalize_moves", False):
+        rows_in, n_no_dims = _require_capture_dims(rows_in, seg_dims)
+        if n_no_dims:
+            print(f"[conversations] dropped {n_no_dims} segment(s) with no "
+                  f"capture dims in {args.clips_manifest} "
+                  f"(required by {args.action_format})", flush=True)
+        if not rows_in:
+            raise SystemExit(
+                f"no segment in {art.dir} has capture dims in "
+                f"{args.clips_manifest}; {args.action_format} cannot normalize")
+
     tasks = [
         {
             "index_row": row,
             "filter_seg_path": str(art.segment_path(str(row["segment_id"]))),
+            "frame_size": seg_dims.get(str(row["segment_id"])),
             "fps": args.fps,
             "fps_mode": args.fps_mode,
             "action_format": args.action_format,
@@ -556,6 +593,9 @@ DEFAULT_GOAL_SYSTEM_PROMPT_FILE = SYSTEM_PROMPTS_DIR / "cua_v3_thinking.txt"
 # emission format the formatter produces).
 GOAL_SYSTEM_PROMPT_FILES = {
     "computer_use_rel_v1": SYSTEM_PROMPTS_DIR / "cua_v4_thinking.txt",
+    # Same tool spec, but the mouse_move_rel delta is declared as a 0-1000
+    # screen fraction — the model must be told the units it is trained on.
+    "computer_use_rel_norm_v1": SYSTEM_PROMPTS_DIR / "cua_v4_thinking_norm.txt",
     # ordered_events_v2 needs the type()-free ordered prompt (cua_v3 advertises
     # type(), which the v2 formatter never emits).
     "ordered_events_v2": SYSTEM_PROMPTS_DIR / "cua_oev2_thinking.txt",

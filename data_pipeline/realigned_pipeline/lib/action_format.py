@@ -127,7 +127,14 @@ class ActionFormatter(Protocol):
         dead_zones: Sequence[DeadZone],
         *,
         master_fps: float,
-    ) -> FormatResult: ...
+        frame_size: tuple[int, int] | None = None,
+    ) -> FormatResult:
+        """Per-window action labels.
+
+        ``frame_size`` is the segment's ORIGINAL capture ``(width, height)``
+        from the clips manifest. Only formats that normalize move deltas
+        against it require it; every other format ignores it."""
+        ...
 
 
 def _ordered_owned(labeled: Sequence[LabeledEvent]) -> list[LabeledEvent]:
@@ -162,6 +169,7 @@ class CanonicalFormatter:
         dead_zones: Sequence[DeadZone],
         *,
         master_fps: float,
+        frame_size: tuple[int, int] | None = None,
     ) -> FormatResult:
         labeled, counters = apply_label_policy(
             events, windows, dead_zones, master_fps=master_fps
@@ -276,6 +284,7 @@ class OrderedFormatter:
         dead_zones: Sequence[DeadZone],
         *,
         master_fps: float,
+        frame_size: tuple[int, int] | None = None,
     ) -> FormatResult:
         primitives, counters = self._window_primitives(
             events, windows, dead_zones, master_fps=master_fps
@@ -464,6 +473,7 @@ class OrderedTypingFormatter(OrderedFormatter):
         dead_zones: Sequence[DeadZone],
         *,
         master_fps: float,
+        frame_size: tuple[int, int] | None = None,
     ) -> FormatResult:
         primitives, counters = self._window_primitives(
             events, windows, dead_zones, master_fps=master_fps
@@ -615,6 +625,7 @@ class ComputerUseFormatter:
     """
 
     name = "computer_use_rel_v1"
+    normalize_moves = False
     reply_contract = (
         "Reply with {what} as one or more <tool_call> JSON blocks executed in "
         'order, each `{{"name": "computer_use", "arguments": {{"action": ..., '
@@ -642,9 +653,11 @@ class ComputerUseFormatter:
         dead_zones: Sequence[DeadZone],
         *,
         master_fps: float,
+        frame_size: tuple[int, int] | None = None,
     ) -> FormatResult:
-        primitives, counters = self._window_primitives(
-            events, windows, dead_zones, master_fps=master_fps
+        primitives, counters, n_norm_zero = self._window_primitives(
+            events, windows, dead_zones, master_fps=master_fps,
+            normalize=self.normalize_moves, frame_size=frame_size,
         )
         held_mods: set[str] = set()
         collapsed = [_collapse_typing(window, held_mods) for window in primitives]
@@ -661,6 +674,7 @@ class ComputerUseFormatter:
         primitive_counts["unmapped_key_names"] = counts.get("unmapped_key_names", 0)
         primitive_counts["unmapped_button_names"] = counts.get(
             "unmapped_button_names", 0)
+        primitive_counts["moves_normalized_to_zero"] = n_norm_zero
         return FormatResult(
             labels=labels, counters=counters, primitive_counts=primitive_counts
         )
@@ -672,21 +686,42 @@ class ComputerUseFormatter:
         dead_zones: Sequence[DeadZone],
         *,
         master_fps: float,
-    ) -> tuple[list[list[ActionPrimitive]], PolicyCounters]:
+        normalize: bool = False,
+        frame_size: tuple[int, int] | None = None,
+    ) -> tuple[list[list[ActionPrimitive]], PolicyCounters, int]:
         """Ordered primitives per window with BARRIER-level accumulation:
         move and scroll fold independently (floats, first-seen order) until a
         press/release or the window ends flushes both; rounding happens once
-        at flush and zero flushes are omitted."""
+        at flush and zero flushes are omitted.
+
+        With ``normalize``, a MOVE flush is expressed per-axis as a 0-1000
+        fraction of ``frame_size`` instead of raw device counts; scroll stays
+        raw ticks either way. Because 1000/width < 1 for most captures, that
+        rounding can annihilate a move the raw path would have kept, so the
+        third return value counts the flushes lost that way."""
+        if normalize and (frame_size is None
+                          or frame_size[0] <= 0 or frame_size[1] <= 0):
+            raise ValueError(
+                "a normalized action format needs a valid per-segment "
+                f"frame_size=(width,height); got {frame_size!r}")
         labeled, counters = apply_label_policy(
             events, windows, dead_zones, master_fps=master_fps
         )
         primitives: list[list[ActionPrimitive]] = [[] for _ in windows]
         pending: dict[str, list[float]] = {}  # kind -> [dx, dy], insertion-ordered
         cur_win: int | None = None
+        n_normalized_to_zero = 0
 
         def flush() -> None:
+            nonlocal n_normalized_to_zero
             for kind, (dx, dy) in pending.items():
-                rdx, rdy = round(dx), round(dy)
+                if kind == "move" and normalize:
+                    w, h = frame_size
+                    rdx, rdy = round(dx / w * 1000), round(dy / h * 1000)
+                    if rdx == 0 and rdy == 0 and (round(dx) or round(dy)):
+                        n_normalized_to_zero += 1
+                else:
+                    rdx, rdy = round(dx), round(dy)
                 if rdx != 0 or rdy != 0:
                     primitives[cur_win].append(
                         ActionPrimitive(kind=kind, dx=rdx, dy=rdy))
@@ -709,7 +744,7 @@ class ComputerUseFormatter:
                                     input_name=e.name))
         if cur_win is not None:
             flush()
-        return primitives, counters
+        return primitives, counters, n_normalized_to_zero
 
     def _window_tool_calls(
         self, prims: Sequence[ActionPrimitive], counts: Counter
@@ -834,11 +869,31 @@ class ComputerUseFormatter:
         return i + 1
 
 
+class ComputerUseRelNormFormatter(ComputerUseFormatter):
+    """``computer_use_rel_v1`` with ``mouse_move_rel`` deltas normalized to a
+    resolution-independent 0-1000 scale — per-axis ``round(dx / W * 1000)``,
+    ``round(dy / H * 1000)`` against the ORIGINAL capture size, so 1000 is one
+    full screen width for dx and one full height for dy. Scroll stays raw
+    ticks. Requires a per-segment ``frame_size`` from the clips manifest.
+
+    Only the emitted magnitudes differ from the parent: the collapse rules,
+    tool-call vocabulary, terminate block and idle ``wait`` are identical."""
+
+    name = "computer_use_rel_norm_v1"
+    normalize_moves = True
+    reply_contract = (
+        ComputerUseFormatter.reply_contract
+        + " mouse_move_rel delta is on a 0-1000 scale (1000 == full screen "
+        "width for dx, height for dy), NOT pixels."
+    )
+
+
 FORMATTERS: dict[str, Callable[[float], ActionFormatter]] = {
     CanonicalFormatter.name: lambda hz: CanonicalFormatter(),
     OrderedFormatter.name: OrderedFormatter,
     OrderedTypingFormatter.name: OrderedTypingFormatter,
     ComputerUseFormatter.name: lambda hz: ComputerUseFormatter(),
+    ComputerUseRelNormFormatter.name: lambda hz: ComputerUseRelNormFormatter(),
 }
 
 
