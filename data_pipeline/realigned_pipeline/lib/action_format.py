@@ -60,6 +60,13 @@ from realigned_pipeline.lib.events import (
     Window,
     apply_label_policy,
 )
+from realigned_pipeline.lib.rel_step_contract import (
+    MOVEMENT_SCALES,
+    SCROLL_STEPS,
+    TYPING_GAP_S,
+    TYPING_MAX_CHARS,
+    rel_step_delta,
+)
 
 DEFAULT_CONTINUOUS_ACTION_HZ = 10.0
 
@@ -239,6 +246,8 @@ class ActionPrimitive:
     dy: int | None = None
     input_name: str | None = None
     text: str | None = None  # "type" only: raw (unescaped) typed characters
+    t_s: float | None = None  # discrete event time; rel-step typing gap policy
+    owner: int | None = None  # source window; used for cross-window type bursts
 
     def render(self) -> str:
         if self.kind in ("move", "scroll"):
@@ -352,7 +361,8 @@ class OrderedFormatter:
 
 
 def _collapse_typing(
-    prims: Sequence[ActionPrimitive], held_mods: set[str]
+    prims: Sequence[ActionPrimitive], held_mods: set[str],
+    *, max_gap_s: float | None = None,
 ) -> list[ActionPrimitive]:
     """One window's primitives with typing runs collapsed to ``type("...")``.
 
@@ -396,8 +406,16 @@ def _collapse_typing(
             open_counts: dict[str, int] = {}
             run_end: int | None = None
             j = i
+            prev_t_s: float | None = None
             while j < n and _is_typing_key(prims[j]):
                 q = prims[j]
+                if (
+                    max_gap_s is not None
+                    and prev_t_s is not None
+                    and q.t_s is not None
+                    and q.t_s - prev_t_s >= max_gap_s
+                ):
+                    break
                 if q.kind == "down":
                     open_counts[q.input_name] = open_counts.get(q.input_name, 0) + 1
                 else:  # up
@@ -408,6 +426,7 @@ def _collapse_typing(
                     if open_counts[q.input_name] == 0:
                         del open_counts[q.input_name]
                 j += 1
+                prev_t_s = q.t_s
                 if not open_counts:
                     run_end = j  # balanced here — candidate maximal run end
             if run_end is not None:
@@ -426,7 +445,10 @@ def _collapse_typing(
                         chars.append(shifted if shift_held else base)
                     # printable up → release only, nothing to emit
                 if chars:
-                    out.append(ActionPrimitive(kind="type", text="".join(chars)))
+                    out.append(ActionPrimitive(
+                        kind="type", text="".join(chars), t_s=prims[i].t_s,
+                        owner=prims[i].owner,
+                    ))
                     i = run_end
                     continue
                 # Zero characters (e.g. a bare Shift tap) — fall through to
@@ -724,7 +746,7 @@ class ComputerUseFormatter:
                     rdx, rdy = round(dx), round(dy)
                 if rdx != 0 or rdy != 0:
                     primitives[cur_win].append(
-                        ActionPrimitive(kind=kind, dx=rdx, dy=rdy))
+                        ActionPrimitive(kind=kind, dx=rdx, dy=rdy, owner=cur_win))
             pending.clear()
 
         for le in _ordered_owned(labeled):
@@ -741,7 +763,7 @@ class ComputerUseFormatter:
                 flush()
                 primitives[cur_win].append(
                     ActionPrimitive(kind="down" if e.kind == "press" else "up",
-                                    input_name=e.name))
+                                    input_name=e.name, t_s=le.label_t, owner=cur_win))
         if cur_win is not None:
             flush()
         return primitives, counters, n_normalized_to_zero
@@ -888,12 +910,193 @@ class ComputerUseRelNormFormatter(ComputerUseFormatter):
     )
 
 
+class ComputerUseRelStepFormatter(ComputerUseFormatter):
+    """Semantic, closed-loop relative actions with a finite movement codebook.
+
+    Unlike ``ordered_events_v2`` this formatter has no motor clock: all raw
+    movement in an observation window becomes at most one direction decision.
+    Recorded magnitude is discarded.  Consecutive movement windows are
+    labelled coarse -> medium -> fine so deployment can take one fixed step,
+    observe a fresh screenshot, and correct its aim.
+
+    Printable balanced key runs use the inherited rollover-aware ``type``
+    collapse.  Dangling key/button transitions are never emitted: ordinary
+    input is atomic within one assistant response, and only a balanced
+    button_down/move/button_up drag may contain explicit button state.
+    """
+
+    name = "computer_use_rel_step_v1"
+    normalize_moves = False
+    reply_contract = (
+        "Reply with one or more native <tool_call> JSON blocks per the "
+        "computer_use_rel_step_v1 tool spec. Normal mouse movement must be "
+        "exactly one fixed relative step; ordinary typing uses type(text)."
+    )
+
+    def format_segment(
+        self,
+        events: Sequence[RawEvent],
+        windows: Sequence[Window],
+        dead_zones: Sequence[DeadZone],
+        *,
+        master_fps: float,
+        frame_size: tuple[int, int] | None = None,
+    ) -> FormatResult:
+        del frame_size  # fixed screen fractions need no source-device scale
+        primitives, counters, _ = self._window_primitives(
+            events,
+            windows,
+            dead_zones,
+            master_fps=master_fps,
+            normalize=False,
+            frame_size=None,
+        )
+
+        # Collapse a balanced printable burst across decision-window boundaries
+        # and assign the atomic type(text) to the window where the burst began.
+        # This avoids turning natural typing into 4 Hz one-character actions.
+        flat = [primitive for window in primitives for primitive in window]
+        collapsed_flat = _collapse_typing(flat, set(), max_gap_s=TYPING_GAP_S)
+        collapsed: list[list[ActionPrimitive]] = [[] for _ in windows]
+        for primitive in collapsed_flat:
+            if primitive.owner is None:
+                raise AssertionError(f"relative-step primitive lost window owner: {primitive}")
+            collapsed[primitive.owner].append(primitive)
+
+        move_vectors: list[tuple[float, float] | None] = []
+        for window in collapsed:
+            dx = sum(p.dx for p in window if p.kind == "move")
+            dy = sum(p.dy for p in window if p.kind == "move")
+            move_vectors.append((dx, dy) if dx != 0 or dy != 0 else None)
+
+        scales: dict[int, int] = {}
+        i = 0
+        while i < len(move_vectors):
+            if move_vectors[i] is None:
+                i += 1
+                continue
+            j = i + 1
+            while j < len(move_vectors) and move_vectors[j] is not None:
+                j += 1
+            run = list(range(i, j))
+            if len(run) == 1:
+                scales[run[0]] = MOVEMENT_SCALES[1]
+            elif len(run) == 2:
+                scales[run[0]] = MOVEMENT_SCALES[-1]
+                scales[run[1]] = MOVEMENT_SCALES[0]
+            else:
+                scales[run[0]] = MOVEMENT_SCALES[-1]
+                scales[run[-1]] = MOVEMENT_SCALES[0]
+                for idx in run[1:-1]:
+                    scales[idx] = MOVEMENT_SCALES[1]
+            i = j
+
+        labels: list[str] = []
+        counts: Counter = Counter()
+        dropped_unbalanced = 0
+        dropped_competing_move = 0
+        for wi, window in enumerate(collapsed):
+            rebuilt: list[ActionPrimitive] = []
+            inserted_move = False
+            for p in window:
+                if p.kind != "move":
+                    rebuilt.append(p)
+                    continue
+                if inserted_move:
+                    continue
+                inserted_move = True
+                vector = move_vectors[wi]
+                if vector is not None:
+                    delta = rel_step_delta(*vector, scales[wi])
+                    if delta is not None:
+                        rebuilt.append(ActionPrimitive(
+                            kind="move", dx=delta[0], dy=delta[1], owner=wi
+                        ))
+
+            raw_calls = self._window_tool_calls(rebuilt, counts)
+
+            # This format never exposes keyboard holds.  Button holds are kept
+            # only for a complete same-response drag.
+            if any(c["action"] in ("key_down", "key_up") for c in raw_calls):
+                dropped_unbalanced += sum(
+                    c["action"] in ("key_down", "key_up") for c in raw_calls
+                )
+                raw_calls = [
+                    c for c in raw_calls if c["action"] not in ("key_down", "key_up")
+                ]
+
+            downs = [c for c in raw_calls if c["action"] == "button_down"]
+            ups = [c for c in raw_calls if c["action"] == "button_up"]
+            is_drag = (
+                len(downs) == len(ups) == 1
+                and downs[0].get("button") == ups[0].get("button")
+                and raw_calls[0] is downs[0]
+                and raw_calls[-1] is ups[0]
+                and all(
+                    c["action"] == "mouse_move_rel" for c in raw_calls[1:-1]
+                )
+                and len(raw_calls) >= 3
+            )
+            if (downs or ups) and not is_drag:
+                dropped_unbalanced += len(downs) + len(ups)
+                raw_calls = [
+                    c for c in raw_calls
+                    if c["action"] not in ("button_down", "button_up")
+                ]
+
+            if not is_drag:
+                discrete = [
+                    c for c in raw_calls
+                    if c["action"] != "mouse_move_rel"
+                ]
+                if discrete and any(c["action"] == "mouse_move_rel" for c in raw_calls):
+                    dropped_competing_move += 1
+                    raw_calls = [c for c in raw_calls if c["action"] != "mouse_move_rel"]
+
+            calls: list[dict[str, Any]] = []
+            for call in raw_calls:
+                action = call["action"]
+                if action in ("scroll", "hscroll"):
+                    value = int(call["pixels"])
+                    if value:
+                        # Direction only; one wheel step is portable across
+                        # mouse wheels and trackpads.  The prompt calls this
+                        # field ``steps`` to match what the VM executes.
+                        step = 1 if value > 0 else -1
+                        if step not in SCROLL_STEPS:  # defensive contract check
+                            raise AssertionError(step)
+                        calls.append({"action": action, "steps": step})
+                elif action == "wait":
+                    calls.append({"action": "wait"})
+                elif action == "type":
+                    text = str(call.get("text") or "")
+                    calls.extend(
+                        {"action": "type", "text": text[k:k + TYPING_MAX_CHARS]}
+                        for k in range(0, len(text), TYPING_MAX_CHARS)
+                    )
+                else:
+                    calls.append(call)
+
+            if not calls:
+                calls = [{"action": "wait"}]
+            labels.append("\n".join(render_tool_call(c) for c in calls))
+
+        primitive_counts = {k: counts.get(k, 0) for k in _COMPUTER_USE_ACTIONS}
+        primitive_counts.update({
+            "dropped_unbalanced_transitions": dropped_unbalanced,
+            "dropped_competing_move": dropped_competing_move,
+            "ten_hz_motor_ticks": 0,
+        })
+        return FormatResult(labels=labels, counters=counters, primitive_counts=primitive_counts)
+
+
 FORMATTERS: dict[str, Callable[[float], ActionFormatter]] = {
     CanonicalFormatter.name: lambda hz: CanonicalFormatter(),
     OrderedFormatter.name: OrderedFormatter,
     OrderedTypingFormatter.name: OrderedTypingFormatter,
     ComputerUseFormatter.name: lambda hz: ComputerUseFormatter(),
     ComputerUseRelNormFormatter.name: lambda hz: ComputerUseRelNormFormatter(),
+    ComputerUseRelStepFormatter.name: lambda hz: ComputerUseRelStepFormatter(),
 }
 
 

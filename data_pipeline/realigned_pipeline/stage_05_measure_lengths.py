@@ -59,6 +59,12 @@ flags.DEFINE_integer(
     required=True,
     lower_bound=2,
 )
+flags.DEFINE_string(
+    "chat_relpath",
+    "chat.jsonl",
+    "Chat JSONL path relative to source_path. Replay prep artifacts commonly "
+    "use train/chat.jsonl; stage 04 uses chat.jsonl.",
+)
 
 
 def _run_measure(src_chat: Path, out_dir: Path) -> dict:
@@ -96,11 +102,10 @@ def main(_) -> None:
     # -> <output_dir>/message_lengths.jsonl. The train/val split is applied at the
     # records stage, so this cache is reused across every split / val_fraction and
     # never needs re-running when the split changes.
-    src_chat = source_path / "chat.jsonl"
+    src_chat = source_path / FLAGS.chat_relpath
     if not src_chat.is_file():
         raise FileNotFoundError(
-            f"no chat.jsonl under {source_path} (stage 04 writes a single "
-            f"<source>/chat.jsonl)"
+            f"no {FLAGS.chat_relpath} under {source_path}"
         )
     per_unit = [_run_measure(src_chat, output_dir)]
 
@@ -111,6 +116,7 @@ def main(_) -> None:
             "model_id": FLAGS.model_id,
             "processor": FLAGS.processor,
             "num_workers": FLAGS.num_workers,
+            "chat_relpath": FLAGS.chat_relpath,
             "omegalax_repo": FLAGS.omegalax_repo,
         },
         inputs={"source": str(source_path)},

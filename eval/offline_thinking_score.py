@@ -101,6 +101,7 @@ TERMINATE_LINES = {
     # byte-identical. Without this entry the scorer would silently fall back to
     # the bare TERMINATE literal and mis-score every terminate turn.
     "computer_use_rel_norm_v1": NATIVE_TERMINATE_LINE,
+    "computer_use_rel_step_v1": NATIVE_TERMINATE_LINE,
 }
 
 

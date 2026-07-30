@@ -19,6 +19,7 @@ from realigned_pipeline.stage_04_conversations import (
     build_legacy_day_rows,
     goal_system_prompt_file,
     group_goal_runs,
+    reindex_active_rows,
     resolve_terminal_token,
     select_memory,
 )
@@ -138,6 +139,19 @@ class GroupGoalRunsTest(unittest.TestCase):
         self.assertEqual([r["next_goal_id"] for r in runs], [None, 2, None])
 
 
+class DecisionFpsProjectionTest(unittest.TestCase):
+    def test_annotation_clip_projects_by_time_not_dense_index(self) -> None:
+        annotation = _day(n=20, step_s=2.0)
+        decision = _day(n=160, step_s=0.25)
+        active = [_clip("c0", 0, 14, gid=1, text="G", t0=0.0, t1=30.0)]
+        projected = reindex_active_rows(
+            active, annotation, decision, annotation_fps=0.5
+        )
+        self.assertEqual(projected[0]["source_day_idx_range"], [0, 14])
+        # Annotation clip [0s,30s) becomes 120 causal 4 Hz decisions.
+        self.assertEqual(projected[0]["day_idx_range"], [0, 119])
+
+
 class SelectMemoryTest(unittest.TestCase):
     def test_exact_preceding_clip_wins(self) -> None:
         rows = [_mem("c0", 0, 14, "M0"), _mem("c1", 15, 29, "M1")]
@@ -207,6 +221,33 @@ class SpanTilingTest(unittest.TestCase):
         self.assertEqual(_frame_idxs(rows[0]), list(range(15, 30)))
         self.assertEqual(_frame_idxs(rows[1]), list(range(30, 45)))
         self.assertEqual([r["chunk_index"] for r in rows], [0, 1])
+
+
+class FreshDecisionRecordTest(unittest.TestCase):
+    def test_goal_plus_four_images_has_one_assistant_target_and_no_history(self) -> None:
+        day = _day(n=20)
+        active = [_clip("c0", 0, 14, gid=1, text="Click Save", t0=0.0, t1=1e4)]
+        rows, _ = _build(
+            day,
+            active,
+            context_images=4,
+            omit_goal_memory=True,
+            action_format="computer_use_rel_step_v1",
+        )
+        self.assertEqual(len(rows), 15)
+        self.assertEqual([m["role"] for m in rows[4]["messages"]],
+                         ["system", "user", "assistant"])
+        self.assertEqual(_frame_idxs(rows[4]), [1, 2, 3, 4])
+        self.assertEqual(_goal_block(rows[4]), "GOAL: Click Save")
+        self.assertEqual(_assistant_texts(rows[4]), ["act_4"])
+        self.assertEqual(rows[4]["n_turns"], 1)
+        self.assertEqual(rows[4]["context_images"], 4)
+
+    def test_rel_step_default_prompt_is_the_exact_rel_step_prompt(self) -> None:
+        self.assertEqual(
+            goal_system_prompt_file("computer_use_rel_step_v1").name,
+            "cua_rel_step_v1_thinking.txt",
+        )
 
 
 class LeakFreeMemoryTest(unittest.TestCase):

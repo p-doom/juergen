@@ -94,6 +94,12 @@ flags.DEFINE_float(
     "recording_id), 0 writes <out>/train/ only. Because the split is applied here, "
     "the measure cache stays split-agnostic and is reused when you change this value.",
 )
+flags.DEFINE_string(
+    "chat_relpath",
+    "chat.jsonl",
+    "Chat JSONL path relative to source_path. Replay prep artifacts commonly "
+    "use train/chat.jsonl; stage 04 uses chat.jsonl.",
+)
 
 
 def _run_split(split: str, src_chat: Path, out_split_dir: Path, cache_path: Path | None) -> dict:
@@ -142,11 +148,10 @@ def main(_) -> None:
     # recording-level split HERE from --val_fraction, reusing the one root cache for
     # every split (no re-tokenization when val_fraction changes). > 0 writes
     # <out>/train/ and <out>/val/; 0 writes <out>/train/ only.
-    src_chat = source_path / "chat.jsonl"
+    src_chat = source_path / FLAGS.chat_relpath
     if not src_chat.is_file():
         raise FileNotFoundError(
-            f"no chat.jsonl under {source_path} (stage 04 writes a single "
-            f"<source>/chat.jsonl)"
+            f"no {FLAGS.chat_relpath} under {source_path}"
         )
     cache_path = (lengths_root / MESSAGE_LENGTHS_FILENAME) if lengths_root else None
     splits = ("train", "val") if FLAGS.val_fraction > 0.0 else ("train",)
@@ -165,6 +170,7 @@ def main(_) -> None:
             "overflow_mode": FLAGS.overflow_mode,
             "message_lengths_path": FLAGS.message_lengths_path,
             "val_fraction": FLAGS.val_fraction,
+            "chat_relpath": FLAGS.chat_relpath,
         },
         inputs={"source": str(source_path)},
         stats={"per_split": per_split},

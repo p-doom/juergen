@@ -294,6 +294,24 @@ class OSWorldClient:
         )
         r.raise_for_status()
 
+    def release_all_inputs(self) -> None:
+        """Best-effort safety cleanup after a rejected atomic action program.
+
+        Rel-step replies never intentionally carry input state across model
+        turns. Releasing mouse buttons and modifiers therefore cannot cancel a
+        valid continuation, and prevents a malformed/truncated drag or shortcut
+        from leaving the desktop stuck.
+        """
+        command = (
+            "[pyautogui.mouseUp(button=b) for b in ('left','middle','right')]; "
+            "[pyautogui.keyUp(k) for k in "
+            "('shift','ctrl','alt','winleft','winright')]"
+        )
+        try:
+            self.execute(command)
+        except requests.RequestException as e:
+            _LOGGER.warning("failed to release VM inputs after rejected action: %s", e)
+
     def dispatch_action(self, action: Action) -> StepResult:
         """Apply a parsed BC ``Action`` to the VM.
 

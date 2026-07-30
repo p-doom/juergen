@@ -35,6 +35,7 @@ from action_parser import (  # noqa: E402
     OrderedPrimitive,
     parse_computer_use_action,
     parse_computer_use_action_tolerant,
+    parse_computer_use_rel_step_action,
     parse_ordered_action,
     parse_ordered_action_tolerant,
 )
@@ -310,6 +311,77 @@ class ActionFormatSelectionTests(unittest.TestCase):
     def test_unknown_explicit_format_rejected(self) -> None:
         with self.assertRaises(ValueError):
             freeroll._resolve_action_format("bogus", "training_v1")
+
+    def test_rel_step_prompt_binds_strict_relative_format(self) -> None:
+        self.assertEqual(
+            freeroll._resolve_action_format(None, "cua_rel_step_v1_thinking"),
+            "computer_use_rel_step_v1",
+        )
+        self.assertIn("cua_rel_step_v1_thinking", freeroll.SYSTEM_PROMPTS)
+
+
+class RelativeStepParserTests(unittest.TestCase):
+    def test_accepts_exact_codebook_step(self) -> None:
+        action = parse_computer_use_rel_step_action(
+            '<think>align</think>' + _tc('{"action":"mouse_move_rel","delta":[32,-32]}')
+        )
+        self.assertEqual(
+            action.primitives,
+            (OrderedPrimitive(kind="move", dx=32, dy=-32),),
+        )
+
+    def test_rejects_arbitrary_or_float_delta(self) -> None:
+        for delta in ("[31,-31]", "[32.0,-32]"):
+            with self.subTest(delta=delta), self.assertRaises(ValueError):
+                parse_computer_use_rel_step_action(
+                    _tc('{"action":"mouse_move_rel","delta":' + delta + "}")
+                )
+
+    def test_rejects_move_and_click_in_one_normal_reply(self) -> None:
+        with self.assertRaisesRegex(ValueError, "only action"):
+            parse_computer_use_rel_step_action("\n".join([
+                _tc('{"action":"mouse_move_rel","delta":[8,0]}'),
+                _tc('{"action":"left_click"}'),
+            ]))
+
+    def test_accepts_balanced_drag_and_rejects_dangling_state(self) -> None:
+        action = parse_computer_use_rel_step_action("\n".join([
+            _tc('{"action":"button_down","button":"left"}'),
+            _tc('{"action":"mouse_move_rel","delta":[128,0]}'),
+            _tc('{"action":"button_up","button":"left"}'),
+        ]))
+        self.assertEqual([p.kind for p in action.primitives],
+                         ["button_down", "move", "button_up"])
+        with self.assertRaisesRegex(ValueError, "drag"):
+            parse_computer_use_rel_step_action(
+                _tc('{"action":"button_down","button":"left"}')
+            )
+
+    def test_rejects_prose_bad_scroll_and_nonfinal_terminate(self) -> None:
+        bad = [
+            "Here you go " + _tc('{"action":"wait"}'),
+            _tc('{"action":"scroll","steps":2}'),
+            "\n".join([
+                _tc('{"action":"terminate","status":"success"}'),
+                _tc('{"action":"wait"}'),
+            ]),
+        ]
+        for text in bad:
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                parse_computer_use_rel_step_action(text)
+
+    def test_fresh_context_has_no_assistant_history(self) -> None:
+        messages = freeroll.build_loggable_messages(
+            system_prompt="system",
+            instruction="GOAL: click save",
+            recent_actions=["old model action"],
+            frame_labels=["step_001.png", "step_002.png"],
+            fresh_visual_context=True,
+        )
+        self.assertEqual([m["role"] for m in messages], ["system", "user"])
+        content = messages[1]["content"]
+        self.assertEqual(content[0]["text"], "GOAL: click save")
+        self.assertEqual(len(content), 3)
 
 
 class OrderedDispatchHelperTests(unittest.TestCase):
@@ -840,7 +912,8 @@ class NormalizedFormatWiringTests(unittest.TestCase):
 
     def test_only_the_normalized_format_is_denormalized(self) -> None:
         self.assertEqual(freeroll._NORMALIZED_FORMATS,
-                         frozenset({"computer_use_rel_norm_v1"}))
+                         frozenset({"computer_use_rel_norm_v1",
+                                    "computer_use_rel_step_v1"}))
         for fmt in ("computer_use_rel_v1", "ordered_events_v2", "canonical"):
             self.assertNotIn(fmt, freeroll._NORMALIZED_FORMATS)
 

@@ -37,7 +37,8 @@ if _JUERGEN_EVAL not in sys.path:
 
 from action_parser import (  # noqa: E402
     OrderedAction, parse_action_tolerant, parse_computer_use_action_tolerant,
-    parse_computer_use_tool_call, parse_ordered_action_tolerant,
+    parse_computer_use_rel_step_action, parse_computer_use_tool_call,
+    parse_ordered_action_tolerant,
 )
 from osworld_vm_client import OSWorldClient  # noqa: E402
 from osworld_system_prompts import SYSTEM_PROMPTS  # noqa: E402
@@ -68,16 +69,17 @@ _TERMINATE = "TERMINATE"
 # dispatch. Everything else about it — parsing, terminate, wait — is identical.
 _ACTION_FORMATS = (
     "canonical", "ordered_events_v2", "ordered_events_v3", "computer_use_rel_v1",
-    "computer_use_rel_norm_v1",
+    "computer_use_rel_norm_v1", "computer_use_rel_step_v1",
 )
 _ORDERED_FORMATS = frozenset({"ordered_events_v2", "ordered_events_v3"})
 _NATIVE_FORMAT = "computer_use_rel_v1"
 _NATIVE_NORM_FORMAT = "computer_use_rel_norm_v1"
+_NATIVE_STEP_FORMAT = "computer_use_rel_step_v1"
 # Formats parsed by the Qwen-native tool-call grammar.
-_NATIVE_FORMATS = frozenset({_NATIVE_FORMAT, _NATIVE_NORM_FORMAT})
+_NATIVE_FORMATS = frozenset({_NATIVE_FORMAT, _NATIVE_NORM_FORMAT, _NATIVE_STEP_FORMAT})
 # Formats whose move deltas are a 0-1000 screen fraction and must be scaled to
 # VM pixels before dispatch.
-_NORMALIZED_FORMATS = frozenset({_NATIVE_NORM_FORMAT})
+_NORMALIZED_FORMATS = frozenset({_NATIVE_NORM_FORMAT, _NATIVE_STEP_FORMAT})
 _NORMALIZED_SCALE = 1000.0
 # Default action format per system prompt; anything unlisted is canonical.
 _PROMPT_ACTION_FORMATS = {
@@ -85,13 +87,19 @@ _PROMPT_ACTION_FORMATS = {
     "cua_v4_thinking": _NATIVE_FORMAT,
     "cua_v4_thinking_v2": _NATIVE_FORMAT,
     "cua_v4_thinking_norm": _NATIVE_NORM_FORMAT,
+    "cua_rel_step_v1_thinking": _NATIVE_STEP_FORMAT,
     "cua_oev2_thinking": "ordered_events_v2",
 }
 # Prompts whose training data conditions on "GOAL: {goal}" as the first
 # user-turn text (stage_04t goal conditioning).
-_GOAL_CONDITIONED_PROMPT_IDS = frozenset(
-    {"cua_v3_thinking", "cua_v4_thinking", "cua_v4_thinking_v2",
-     "cua_v4_thinking_norm", "cua_oev2_thinking"})
+_GOAL_CONDITIONED_PROMPT_IDS = frozenset({
+    "cua_v3_thinking",
+    "cua_v4_thinking",
+    "cua_v4_thinking_v2",
+    "cua_v4_thinking_norm",
+    "cua_oev2_thinking",
+    "cua_rel_step_v1_thinking",
+})
 
 
 def _resolve_action_format(explicit: str | None, system_prompt_id: str) -> str:
@@ -240,13 +248,19 @@ def _computer_use_terminate_status(text: str) -> str | None:
     return str(call.arguments.get("status", "success")).strip().lower() or "success"
 
 
-def _computer_use_rel_terminate_status(text: str) -> str | None:
+def _computer_use_rel_terminate_status(
+    text: str, *, strict_rel_step: bool = False
+) -> str | None:
     """computer_use_rel_v1 terminate detection: a parsed terminate tool call
     ANYWHERE in the reply stops the rollout. Returns its status, or None
     when the reply parses to no terminate call (or doesn't parse at all —
     that's the dispatch path's parse error to report, not a terminate)."""
     try:
-        action = parse_computer_use_action_tolerant(text)
+        action = (
+            parse_computer_use_rel_step_action(text)
+            if strict_rel_step
+            else parse_computer_use_action_tolerant(text)
+        )
     except (TypeError, ValueError):
         return None
     for p in action.primitives:
@@ -346,6 +360,11 @@ def _run_rollout(
     )
     use_ordered = action_format in _ORDERED_FORMATS
     use_native = action_format in _NATIVE_FORMATS
+    use_rel_step = action_format == _NATIVE_STEP_FORMAT
+    # Rel-step training examples are independent decision records containing
+    # the goal and at most four chronological screenshots in one user turn.
+    # Keep deployment exactly in-distribution and never replay model actions.
+    history_frames = min(max(1, n_history_frames), 4) if use_rel_step else n_history_frames
 
     # The ONLY delta scaling in the dispatch path: a 0-1000 screen fraction
     # back to VM pixels. Depends on the VM screen, never on the model view.
@@ -375,6 +394,20 @@ def _run_rollout(
     recent_frames: list[Image.Image] = [_to_model(frame)]
     recent_actions: list[str] = []
 
+    def _remember(next_frame: Image.Image, action_text: str) -> None:
+        if use_rel_step:
+            recent_frames.append(_to_model(next_frame))
+            recent_frames[:] = recent_frames[-history_frames:]
+            recent_actions.clear()
+        else:
+            append_turn(
+                recent_frames,
+                recent_actions,
+                _to_model(next_frame),
+                action_text,
+                n_history_frames=history_frames,
+            )
+
     t_start = time.time()
     steps: list[StepLog] = []
     stop_reason = "max_steps"
@@ -389,7 +422,11 @@ def _run_rollout(
 
         for step in range(1, max_steps + 1):
             t0 = time.time()
-            instr_used = _instruction_for_step(instr_text, step, persist_instruction)
+            instr_used = (
+                instr_text
+                if use_rel_step
+                else _instruction_for_step(instr_text, step, persist_instruction)
+            )
             # The exact interleaved message list sent to the model this step,
             # with each frame replaced by a <image step_NNN.png> placeholder
             # (see build_loggable_messages). Built once and reused for both the
@@ -397,8 +434,9 @@ def _run_rollout(
             frame_labels = window_frame_labels(step, len(recent_frames))
             loggable_messages = build_loggable_messages(
                 system_prompt=system_prompt, instruction=instr_used,
-                recent_actions=recent_actions,
+                recent_actions=None if use_rel_step else recent_actions,
                 frame_labels=frame_labels,
+                fresh_visual_context=use_rel_step,
             )
             if save_frames:
                 (steps_dir / f"prompt_{step:03d}.json").write_text(
@@ -409,7 +447,8 @@ def _run_rollout(
                     system_prompt=system_prompt,
                     instruction=instr_used,
                     recent_frames=recent_frames,
-                    recent_actions=recent_actions,
+                    recent_actions=None if use_rel_step else recent_actions,
+                    fresh_visual_context=use_rel_step,
                     sampling=sampling,
                 )
             except Exception as e:
@@ -445,7 +484,9 @@ def _run_rollout(
             if clean_text is None:
                 computer_use_status = None
             elif use_native:
-                computer_use_status = _computer_use_rel_terminate_status(clean_text)
+                computer_use_status = _computer_use_rel_terminate_status(
+                    clean_text, strict_rel_step=use_rel_step
+                )
             else:
                 computer_use_status = _computer_use_terminate_status(clean_text)
             if trunc_err is None and (
@@ -468,8 +509,7 @@ def _run_rollout(
                 frames_for_gif.append(frame.copy())
                 if save_frames:
                     frame.save(steps_dir / f"step_{step:03d}.png")
-                append_turn(recent_frames, recent_actions, _to_model(frame), action_text,
-                            n_history_frames=n_history_frames)
+                _remember(frame, action_text)
 
                 step_log = StepLog(
                     step=step,
@@ -500,12 +540,18 @@ def _run_rollout(
                 parse_err = trunc_err
                 parse_errors += 1
                 _LOGGER.warning("step %d: %s", step, trunc_err)
+                if use_rel_step:
+                    client.release_all_inputs()
             else:
                 try:
                     sr = None
                     if use_native or use_ordered:
                         if use_native:
-                            action = parse_computer_use_action_tolerant(clean_text)
+                            action = (
+                                parse_computer_use_rel_step_action(clean_text)
+                                if use_rel_step
+                                else parse_computer_use_action_tolerant(clean_text)
+                            )
                             # parsed/logs keep the model's own frame of reference.
                             parsed = {
                                 "no_op": all(
@@ -576,6 +622,8 @@ def _run_rollout(
                     parse_err = str(e)
                     parse_errors += 1
                     _LOGGER.warning("step %d: parse error %s on %r", step, e, action_text)
+                    if use_rel_step:
+                        client.release_all_inputs()
 
             try:
                 frame = client.screenshot_settled(
@@ -591,8 +639,7 @@ def _run_rollout(
             frames_for_gif.append(frame.copy())
             if save_frames:
                 frame.save(steps_dir / f"step_{step:03d}.png")
-            append_turn(recent_frames, recent_actions, _to_model(frame), action_text,
-                        n_history_frames=n_history_frames)
+            _remember(frame, action_text)
 
             step_log = StepLog(
                 step=step, action_text=action_text, parsed=parsed,

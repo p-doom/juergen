@@ -1011,6 +1011,108 @@ class FormatterRegistryTest(unittest.TestCase):
             get_formatter("nope")
 
 
+class ComputerUseRelStepTest(unittest.TestCase):
+    """Finite semantic relative actions: no 10 Hz motor imitation and no
+    unbalanced input state crossing an assistant response."""
+
+    @staticmethod
+    def _calls(label: str) -> list[dict]:
+        return [json.loads(body)["arguments"] for body in _TOOL_CALL_RE.findall(label)]
+
+    def format(self, events, windows=None):
+        windows = windows or [Window(master_idx=0, start=0, end=30)]
+        self.result = get_formatter("computer_use_rel_step_v1").format_segment(
+            events, windows, [], master_fps=MASTER_FPS,
+        )
+        return [self._calls(label) for label in self.result.labels]
+
+    def test_motion_is_one_direction_decision_not_a_ten_hz_trace(self) -> None:
+        calls = self.format([
+            _move(0, 0.01, 2.0, 0.0),
+            _move(1, 0.20, 5.0, 1.0),
+            _move(2, 0.55, 3.0, -1.0),
+        ])[0]
+        self.assertEqual(calls, [{"action": "mouse_move_rel", "delta": [32, 0]}])
+        self.assertEqual(self.result.primitive_counts["ten_hz_motor_ticks"], 0)
+
+    def test_consecutive_motion_decisions_are_coarse_then_fine(self) -> None:
+        windows = [
+            Window(master_idx=0, start=0, end=15),
+            Window(master_idx=15, start=15, end=30),
+        ]
+        self.assertEqual(
+            self.format([_move(0, 0.1, 1, 0), _move(1, 1.1, 1, 1)], windows),
+            [[{"action": "mouse_move_rel", "delta": [128, 0]}],
+             [{"action": "mouse_move_rel", "delta": [8, 8]}]],
+        )
+
+    def test_move_and_click_becomes_click_only(self) -> None:
+        calls = self.format([
+            _move(0, 0.01, 20, 0),
+            _key(1, 0.10, "press", "LMB"),
+            _key(2, 0.12, "release", "LMB"),
+        ])[0]
+        self.assertEqual(calls, [{"action": "left_click"}])
+
+    def test_incidental_move_during_scroll_becomes_scroll_only(self) -> None:
+        calls = self.format([
+            _move(0, 0.01, 20, 0),
+            _scroll(1, 0.10, 0, -3),
+        ])[0]
+        self.assertEqual(calls, [{"action": "scroll", "steps": -1}])
+
+    def test_balanced_drag_is_the_only_explicit_button_state(self) -> None:
+        calls = self.format([
+            _key(0, 0.05, "press", "LMB"),
+            _move(1, 0.10, 20, 0),
+            _key(2, 0.20, "release", "LMB"),
+        ])[0]
+        self.assertEqual(calls, [
+            {"action": "button_down", "button": "left"},
+            {"action": "mouse_move_rel", "delta": [32, 0]},
+            {"action": "button_up", "button": "left"},
+        ])
+        dangling = self.format([_key(0, 0.05, "press", "LMB")])[0]
+        self.assertEqual(dangling, [{"action": "wait"}])
+
+    def test_typing_coalesces_but_a_one_second_gap_splits_runs(self) -> None:
+        windows = [Window(master_idx=0, start=0, end=60)]
+        events = [
+            _key(0, 0.10, "press", "KeyH"),
+            _key(1, 0.12, "release", "KeyH"),
+            _key(2, 1.30, "press", "KeyI"),
+            _key(3, 1.32, "release", "KeyI"),
+        ]
+        self.assertEqual(self.format(events, windows)[0], [
+            {"action": "type", "text": "h"},
+            {"action": "type", "text": "i"},
+        ])
+
+    def test_typing_burst_coalesces_across_four_hz_windows(self) -> None:
+        windows = [
+            Window(master_idx=0, start=0, end=4),
+            Window(master_idx=4, start=4, end=8),
+            Window(master_idx=8, start=8, end=12),
+        ]
+        events = [
+            _key(0, 0.10, "press", "KeyH"),
+            _key(1, 0.12, "release", "KeyH"),
+            _key(2, 0.30, "press", "KeyI"),
+            _key(3, 0.32, "release", "KeyI"),
+        ]
+        self.assertEqual(self.format(events, windows), [
+            [{"action": "type", "text": "hi"}],
+            [{"action": "wait"}],
+            [{"action": "wait"}],
+        ])
+
+    def test_scroll_is_directional_steps_not_recorded_magnitude(self) -> None:
+        self.assertEqual(
+            self.format([_scroll(0, 0.1, 0, -17)])[0],
+            [{"action": "scroll", "steps": -1}],
+        )
+
+
 class ComputerUseRelNormTest(unittest.TestCase):
     """``computer_use_rel_norm_v1``: per-axis 0-1000 move deltas against the
     ORIGINAL capture size, scroll left raw, ``computer_use_rel_v1`` untouched."""

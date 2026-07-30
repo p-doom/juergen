@@ -50,6 +50,7 @@ Run::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import multiprocessing as mp
 import sys
@@ -596,6 +597,7 @@ GOAL_SYSTEM_PROMPT_FILES = {
     # Same tool spec, but the mouse_move_rel delta is declared as a 0-1000
     # screen fraction — the model must be told the units it is trained on.
     "computer_use_rel_norm_v1": SYSTEM_PROMPTS_DIR / "cua_v4_thinking_norm.txt",
+    "computer_use_rel_step_v1": SYSTEM_PROMPTS_DIR / "cua_rel_step_v1_thinking.txt",
     # ordered_events_v2 needs the type()-free ordered prompt (cua_v3 advertises
     # type(), which the v2 formatter never emits).
     "ordered_events_v2": SYSTEM_PROMPTS_DIR / "cua_oev2_thinking.txt",
@@ -689,6 +691,54 @@ def check_sidecar_alignment(row: dict[str, Any], day: DayStream) -> None:
             f"{day.day_tag}/{row.get('clip_key')}: rebuilt day stream misaligned with the "
             f"goals sidecar (t_range {got} != {list(want)}) — rerun with the producing "
             "run's --filter-dir/--fps/--tz/--gap-cut-s")
+
+
+def reindex_active_rows(
+    active: list[dict[str, Any]],
+    annotation_day: DayStream,
+    decision_day: DayStream,
+    *,
+    annotation_fps: float,
+) -> list[dict[str, Any]]:
+    """Project annotation-fps goal clips onto a denser decision stream.
+
+    Goal sidecars remain immutable evidence from the annotation run. Their
+    dense ``day_idx_range`` addresses the annotation stream, so a 4 Hz action
+    dataset must not interpret those integers on its own stream. We first
+    validate them against the original day, derive each clip's half-open time
+    interval, and select the decision frames in that interval.
+    """
+    if annotation_fps <= 0:
+        raise ValueError(f"annotation_fps must be > 0, got {annotation_fps}")
+    out: list[dict[str, Any]] = []
+    for row in active:
+        check_sidecar_alignment(row, annotation_day)
+        i0, i1 = (int(x) for x in row["day_idx_range"])
+        start_s = annotation_day.frames[i0].t_day_s
+        end_s = (
+            annotation_day.frames[i1 + 1].t_day_s
+            if i1 + 1 < len(annotation_day.frames)
+            else annotation_day.frames[i1].t_day_s + 1.0 / annotation_fps
+        )
+        mapped = [
+            frame.day_idx
+            for frame in decision_day.frames
+            if start_s <= frame.t_day_s < end_s
+        ]
+        if not mapped:
+            raise ValueError(
+                f"{decision_day.day_tag}/{row.get('clip_key')}: no decision frames "
+                f"in annotation interval [{start_s}, {end_s})"
+            )
+        projected = dict(row)
+        projected["source_day_idx_range"] = list(row["day_idx_range"])
+        projected["day_idx_range"] = [mapped[0], mapped[-1]]
+        projected["t_range"] = [
+            fmt_t(decision_day.frames[mapped[0]].t_day_s),
+            fmt_t(decision_day.frames[mapped[-1]].t_day_s),
+        ]
+        out.append(projected)
+    return out
 
 
 def group_goal_runs(active: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -826,6 +876,9 @@ def build_goal_day_rows(
     fps: float,
     action_format: str,
     annotation_method: str,
+    context_images: int = 0,
+    omit_goal_memory: bool = False,
+    idle_keep_fraction: float = 1.0,
 ) -> tuple[list[dict[str, Any]], Counter]:
     """Pure goal-bounded window construction over one rebuilt day stream.
     ``anchored`` maps day_idx -> verified-thought row (goals.jsonl). Windows
@@ -836,6 +889,10 @@ def build_goal_day_rows(
     if terminate_mode not in TERMINATE_BOUNDARY_MODES:
         raise ValueError(f"terminate mode must be one of {TERMINATE_BOUNDARY_MODES}, "
                          f"got {terminate_mode!r}")
+    if not 0.0 <= idle_keep_fraction <= 1.0:
+        raise ValueError(
+            f"idle_keep_fraction must be in [0,1], got {idle_keep_fraction}"
+        )
     # the formatter's complete goal-done action payload (TERMINATE literal for
     # the text formats, the native terminate tool_call for computer_use_rel_v1)
     formatter = get_formatter(action_format)
@@ -939,6 +996,123 @@ def build_goal_day_rows(
 
         w_seq = 0
         for piece in pieces:
+            if context_images > 0:
+                # Decision-record mode: one supervised assistant decision per
+                # record, conditioned only on GOAL + recent screenshots.  No
+                # prior assistant text is replayed, so standardized fixed-step
+                # labels never claim to have caused the demonstrator's next
+                # device-specific cursor displacement.
+                for pos_in_piece, current in enumerate(piece):
+                    ctx = piece[max(0, pos_in_piece - context_images + 1):pos_in_piece + 1]
+                    target = frames[current].action
+                    thought_ids: list[str] = []
+                    th = anchored.get(current)
+                    if th is not None:
+                        target = f"<think>\n{th['instruction']}\n</think>\n{target}"
+                        thought_ids.append(str(th["goal_id"]))
+                    record_key = (
+                        f"{day.day_tag}:{gid_s}:{plan['run_index']}:{current}"
+                    )
+                    bucket = int(
+                        hashlib.sha1(record_key.encode()).hexdigest()[:8], 16
+                    ) / 0xFFFFFFFF
+                    is_idle = formatter.is_idle_label(frames[current].action)
+                    if (
+                        is_idle
+                        and not thought_ids
+                        and bucket >= idle_keep_fraction
+                    ):
+                        stats["n_idle_decisions_dropped"] += 1
+                        w_seq += 1
+                        continue
+                    goal_block = goal_memory_block(goal_text, "")
+                    user_content = [_text(goal_block), *(_image(frames[i].image) for i in ctx)]
+                    messages: list[dict[str, Any]] = []
+                    if system_prompt:
+                        messages.append({"role": "system", "content": [_text(system_prompt)]})
+                    messages.append({"role": "user", "content": user_content})
+                    messages.append({"role": "assistant", "content": [_text(target)]})
+                    rows.append({
+                        "conversation_id": (
+                            f"{day.day_tag}_g{gid_s}_r{plan['run_index']:02d}_d{w_seq:05d}"
+                        ),
+                        "day_tag": day.day_tag,
+                        "chunk_index": chunk_of[current],
+                        "recording_id": frames[current].recording_id,
+                        "segment_ids": sorted({frames[i].segment_id for i in ctx}),
+                        "t_start": fmt_t(frames[ctx[0]].t_day_s),
+                        "t_end": fmt_t(frames[current].t_day_s),
+                        "target_fps": fps,
+                        "window_frames": window_frames,
+                        "context_images": context_images,
+                        "action_format": action_format,
+                        "goal_conditioned": True,
+                        "annotation_method": annotation_method,
+                        "goal_id": gid,
+                        "goal_text": goal_text,
+                        "run_index": plan["run_index"],
+                        "terminate": None,
+                        "has_memory": False,
+                        "n_frames": len(ctx),
+                        "n_turns": 1,
+                        "n_thoughts": len(thought_ids),
+                        "thought_ids": thought_ids,
+                        "n_non_noop": int(not formatter.is_idle_label(frames[current].action)),
+                        "messages": messages,
+                    })
+                    stats["n_thoughts_placed"] += len(thought_ids)
+                    w_seq += 1
+
+                # Completion is a separate fresh decision whose final image is
+                # the verified/clean outcome frame.
+                if plan["terminate_text"] is not None and piece[-1] == idxs[-1]:
+                    outcome_idx = plan["outcome_idx"]
+                    prior = piece[max(0, len(piece) - context_images + 1):]
+                    ctx_images = [frames[i].image for i in prior] + [frames[outcome_idx].image]
+                    messages = []
+                    if system_prompt:
+                        messages.append({"role": "system", "content": [_text(system_prompt)]})
+                    messages.append({
+                        "role": "user",
+                        "content": [_text(goal_memory_block(goal_text, "")),
+                                    *(_image(image) for image in ctx_images[-context_images:])],
+                    })
+                    messages.append({
+                        "role": "assistant",
+                        "content": [_text(plan["terminate_text"])],
+                    })
+                    rows.append({
+                        "conversation_id": (
+                            f"{day.day_tag}_g{gid_s}_r{plan['run_index']:02d}_term"
+                        ),
+                        "day_tag": day.day_tag,
+                        "chunk_index": chunk_of[piece[-1]],
+                        "recording_id": frames[piece[-1]].recording_id,
+                        "segment_ids": sorted({frames[i].segment_id for i in prior}
+                                              | {frames[outcome_idx].segment_id}),
+                        "t_start": fmt_t(frames[prior[0]].t_day_s),
+                        "t_end": fmt_t(frames[outcome_idx].t_day_s),
+                        "target_fps": fps,
+                        "window_frames": window_frames,
+                        "context_images": context_images,
+                        "action_format": action_format,
+                        "goal_conditioned": True,
+                        "annotation_method": annotation_method,
+                        "goal_id": gid,
+                        "goal_text": goal_text,
+                        "run_index": plan["run_index"],
+                        "terminate": terminate_mode,
+                        "has_memory": False,
+                        "n_frames": min(context_images, len(ctx_images)),
+                        "n_turns": 1,
+                        "n_thoughts": 0,
+                        "thought_ids": [],
+                        "n_non_noop": 1,
+                        "messages": messages,
+                    })
+                    stats["n_terminate_turns"] += 1
+                continue
+
             for k in range(0, len(piece), window_frames):
                 win = piece[k: k + window_frames]
                 is_final = win[-1] == idxs[-1]
@@ -954,7 +1128,7 @@ def build_goal_day_rows(
                 # bare "GOAL: ..." conditioning, the in-distribution shape of an
                 # inference episode start. Every later window carries the
                 # memory_out of the clip ending exactly at win[0]-1.
-                if k == 0:
+                if omit_goal_memory or k == 0:
                     memory, mem_status = "", "piece_start"
                 else:
                     memory, mem_status = select_memory(memory_rows, win[0])
@@ -1139,13 +1313,40 @@ def build_day_windows(task: dict[str, Any]) -> dict[str, Any]:
     day_tag = str(day_row["day_tag"])
     try:
         day: DayStream = build_day_stream(
-            day_row, _WORKER["art"], fps=task["fps"], fps_mode="exact",
+            day_row,
+            _WORKER["art"],
+            fps=task["decision_fps"],
+            fps_mode="nearest" if task["decision_fps"] != task["fps"] else "exact",
             gap_cut_s=task["gap_cut_s"], action_format=task["action_format"],
             continuous_action_hz=task["continuous_action_hz"],
         )
         if not day.frames:
             return {"day_tag": day_tag, "status": "empty_day", "rows": [], "stats": {}}
-        # thought anchor -> day frame (exact: training fps == annotation fps)
+        active = task["active"]
+        if task["decision_fps"] != task["fps"]:
+            if not (task["goal_conditioned"] and task["context_images"] > 0
+                    and task["omit_goal_memory"]):
+                raise ValueError(
+                    "--decision-fps differing from --fps requires fresh goal decision "
+                    "records (--context-images > 0 --omit-goal-memory)"
+                )
+            annotation_day = build_day_stream(
+                day_row,
+                _WORKER["art"],
+                fps=task["fps"],
+                fps_mode="exact",
+                gap_cut_s=task["gap_cut_s"],
+                action_format="canonical",
+            )
+            active = reindex_active_rows(
+                active,
+                annotation_day,
+                day,
+                annotation_fps=task["fps"],
+            )
+
+        # Thought anchors use persistent master coordinates, so they remain
+        # exact when the decision stream is denser than annotation.
         by_coord = {(fr.segment_id, fr.master_idx): fr.day_idx for fr in day.frames}
         anchored: dict[int, dict[str, Any]] = {}
         n_unmapped = 0
@@ -1158,16 +1359,19 @@ def build_day_windows(task: dict[str, Any]) -> dict[str, Any]:
 
         if task["goal_conditioned"]:
             rows, stats = build_goal_day_rows(
-                day, task["active"], task["memory"],
+                day, active, task["memory"],
                 {r["goal_id"]: r for r in task["boundaries"]}, anchored,
                 window_frames=task["window_frames"],
                 terminate_mode=task["terminate_boundaries"],
                 terminate_max_lag_s=task["terminate_max_lag_s"],
                 min_anchor_lead=task["min_anchor_lead"],
                 system_prompt=task["system_prompt"],
-                fps=task["fps"],
+                fps=task["decision_fps"],
                 action_format=task["action_format"],
                 annotation_method=task["annotation_method"],
+                context_images=task["context_images"],
+                omit_goal_memory=task["omit_goal_memory"],
+                idle_keep_fraction=task["idle_keep_fraction"],
             )
             status = "ok" if rows else "no_goal_spans"
         else:
@@ -1211,6 +1415,20 @@ def run_thinking(args: argparse.Namespace) -> None:
     if float(gm.get("fps") or 0) != args.fps:
         raise SystemExit(f"--fps {args.fps} != artifact annotation fps {gm.get('fps')} "
                          "(v1 locks training fps to annotation fps)")
+    decision_fps = args.decision_fps or args.fps
+    if decision_fps <= 0:
+        raise SystemExit("--decision-fps must be > 0")
+    if decision_fps != args.fps:
+        if not (goal_conditioned and args.context_images > 0 and args.omit_goal_memory):
+            raise SystemExit(
+                "a denser --decision-fps requires goal-conditioned fresh records: "
+                "--context-images > 0 --omit-goal-memory"
+            )
+        if args.terminate_boundaries == "verified":
+            raise SystemExit(
+                "denser --decision-fps currently supports clean/all termination; "
+                "verified near-miss ranges remain annotation-indexed"
+            )
 
     # Windows must be a positive multiple of the annotation clip stride so their
     # edges land on clip edges (the leak-free memory predecessor precondition).
@@ -1271,10 +1489,14 @@ def run_thinking(args: argparse.Namespace) -> None:
             "day_row": d,
             "goals": by_day.get(d["day_tag"], []),
             "fps": args.fps,
+            "decision_fps": args.decision_fps or args.fps,
             "gap_cut_s": args.gap_cut_s,
             "window_frames": args.window_frames,
             "action_format": args.action_format,
-            "continuous_action_hz": args.continuous_action_hz,
+            "continuous_action_hz": (
+                0.0 if args.action_format == "computer_use_rel_step_v1"
+                else args.continuous_action_hz
+            ),
             "context_thoughts": args.context_thoughts,
             "min_anchor_lead": args.min_anchor_lead,
             "thinking_only": bool(args.thinking_only),
@@ -1282,6 +1504,9 @@ def run_thinking(args: argparse.Namespace) -> None:
             "terminal_token": args.terminal_token,
             "goal_conditioned": goal_conditioned,
             "annotation_method": gm.get("method"),
+            "context_images": args.context_images,
+            "omit_goal_memory": bool(args.omit_goal_memory),
+            "idle_keep_fraction": args.idle_keep_fraction,
             "terminate_boundaries": args.terminate_boundaries,
             "terminate_max_lag_s": args.terminate_max_lag_s,
             "active": active,
@@ -1295,7 +1520,9 @@ def run_thinking(args: argparse.Namespace) -> None:
     mode = "goal_windows" if goal_conditioned else "thinking_windows"
     print(f"[conversations] mode=thinking ({mode}) | {len(tasks)} days, "
           f"{sum(len(t['goals']) for t in tasks):,} thoughts | window={args.window_frames}f "
-          f"(stride {CLIP_STRIDE}) fps={args.fps} format={args.action_format}"
+          f"(stride {CLIP_STRIDE}) annotation_fps={args.fps} "
+          f"decision_fps={args.decision_fps or args.fps} "
+          f"format={args.action_format}"
           + (f" terminate={args.terminate_boundaries}" if goal_conditioned else "")
           + f" | workers={n_workers}", flush=True)
 
@@ -1329,12 +1556,21 @@ def run_thinking(args: argparse.Namespace) -> None:
         "n_thoughts_demoted_boundary": totals["n_demoted"],
         "n_anchors_unmapped": totals["n_unmapped"],
         "status_counts": dict(counts),
-        "fps": args.fps,
+        "fps": args.decision_fps or args.fps,
+        "annotation_fps": args.fps,
+        "decision_fps": args.decision_fps or args.fps,
         "window_frames": args.window_frames,
         "clip_stride": CLIP_STRIDE,
         "action_format": args.action_format,
-        "continuous_action_hz": args.continuous_action_hz,
+        "continuous_action_hz": (
+            0.0 if args.action_format == "computer_use_rel_step_v1"
+            else args.continuous_action_hz
+        ),
         "context_thoughts": args.context_thoughts,
+        "context_images": args.context_images,
+        "omit_goal_memory": bool(args.omit_goal_memory),
+        "idle_keep_fraction": args.idle_keep_fraction,
+        "n_idle_decisions_dropped": totals["n_idle_decisions_dropped"],
         "min_anchor_lead": args.min_anchor_lead,
         "thinking_only": bool(args.thinking_only),
         "has_system_prompt": system_prompt is not None,
@@ -1403,6 +1639,16 @@ def parse_args() -> argparse.Namespace:
                    help="Training frame rate. Action mode: any integer divisor of the "
                         "master fps (--fps-mode). Thinking mode: MUST equal the artifact's "
                         "annotation fps (v1 lock).")
+    p.add_argument(
+        "--decision-fps",
+        type=float,
+        default=None,
+        help="Thinking fresh-decision mode only: optional denser observation/action "
+             "rate. Goal evidence remains anchored at --fps and is projected by "
+             "time. A differing value requires --context-images > 0 and "
+             "--omit-goal-memory; 4 Hz uses causal nearest-tick sampling on the "
+             "15 Hz master stream.",
+    )
     p.add_argument("--output-dir", type=Path, required=True)
     p.add_argument("--day-filter", nargs="+", default=None, metavar="DAY",
                    help="Include only these day tags (mutually exclusive with --day-exclude).")
@@ -1482,6 +1728,20 @@ def parse_args() -> argparse.Namespace:
     t.add_argument("--context-thoughts", type=int, default=8,
                    help="Legacy (goal-free) mode: earlier same-chunk thoughts on the first "
                         "user turn.")
+    t.add_argument("--context-images", type=int, default=0,
+                   help="Goal mode only: >0 emits one fresh decision record per target "
+                        "with GOAL plus up to this many chronological screenshots and no "
+                        "prior assistant messages. 0 keeps transcript windows.")
+    t.add_argument("--omit-goal-memory", action="store_true",
+                   help="Never emit annotation-generated 'So far:' memory. Required by "
+                        "fresh relative-step recipes so train and rollout context match.")
+    t.add_argument(
+        "--idle-keep-fraction",
+        type=float,
+        default=1.0,
+        help="Fresh decision records only: deterministic fraction of idle wait targets "
+             "to retain (thought-bearing and terminate records are always retained).",
+    )
     t.add_argument("--thinking-only", nargs="?", const=True, type=str2bool, default=True,
                    metavar="BOOL",
                    help="Legacy mode: emit only windows with >=1 thought (ignored in goal "

@@ -102,6 +102,27 @@ def _interleave_messages(
     return messages
 
 
+def _fresh_visual_messages(
+    system_prompt: str,
+    instruction: str | None,
+    image_parts: list[Any],
+) -> list[dict[str, Any]]:
+    """One decision record: system + one user turn containing goal and images.
+
+    This is the runtime twin of stage 04's ``--context-images`` mode. It never
+    replays prior assistant actions, so every prediction is conditioned on a
+    fresh visual state rather than on model-generated history.
+    """
+    content: list[Any] = []
+    if instruction:
+        content.append({"type": "text", "text": instruction})
+    content.extend(image_parts)
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": content},
+    ]
+
+
 def window_frame_labels(step: int, n_frames: int) -> list[str]:
     """PNG filenames for the ``n_frames`` in the window at the start of ``step``.
 
@@ -121,6 +142,7 @@ def build_loggable_messages(
     instruction: str | None,
     recent_actions: list[str] | None,
     frame_labels: list[str],
+    fresh_visual_context: bool = False,
 ) -> list[dict[str, Any]]:
     """The message list as sent, but with each image replaced by ``<image name>``.
 
@@ -130,6 +152,8 @@ def build_loggable_messages(
     image bytes — the referenced ``step_NNN.png`` files already hold the pixels.
     """
     parts = [{"type": "image", "image": f"<image {lbl}>"} for lbl in frame_labels]
+    if fresh_visual_context:
+        return _fresh_visual_messages(system_prompt, instruction, parts)
     return _interleave_messages(system_prompt, instruction, parts, recent_actions)
 
 
@@ -142,6 +166,7 @@ def _call_model(
     instruction: str | None,
     recent_frames: list[Image.Image],
     recent_actions: list[str] | None = None,
+    fresh_visual_context: bool = False,
     sampling: SamplingParams,
     request_timeout_s: float = 120.0,
 ) -> tuple[str, str | None]:
@@ -183,7 +208,11 @@ def _call_model(
         {"type": "image_url", "image_url": {"url": _pil_to_data_url(f)}}
         for f in recent_frames
     ]
-    messages = _interleave_messages(system_prompt, instruction, image_parts, recent_actions)
+    messages = (
+        _fresh_visual_messages(system_prompt, instruction, image_parts)
+        if fresh_visual_context
+        else _interleave_messages(system_prompt, instruction, image_parts, recent_actions)
+    )
     r = requests.post(
         sglang_url.rstrip("/") + "/chat/completions",
         headers={"Authorization": f"Bearer {api_key}"},

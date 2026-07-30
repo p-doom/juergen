@@ -316,6 +316,16 @@ _CUA_V4_THINKING_NORM_FILE = (
 )
 SYSTEM_PROMPTS["cua_v4_thinking_norm"] = _CUA_V4_THINKING_NORM_FILE.read_text().strip()
 
+# Finite fixed-step relative mouse + atomic type/key actions. This is loaded
+# from the exact stage-04 prompt so dataset generation and eval cannot drift.
+_CUA_REL_STEP_V1_THINKING_FILE = (
+    _Path(__file__).resolve().parents[1]
+    / "data_pipeline/realigned_pipeline/system_prompts/cua_rel_step_v1_thinking.txt"
+)
+SYSTEM_PROMPTS["cua_rel_step_v1_thinking"] = (
+    _CUA_REL_STEP_V1_THINKING_FILE.read_text().strip()
+)
+
 # ordered_events_v2 (ordered move/scroll/down/up mini-program, per-key typing,
 # 10 Hz motion grid — NO type() primitive) + decision-point thinking + goal
 # conditioning. Goal-conditioned twin of the goal-free cua_v2_thinking; same

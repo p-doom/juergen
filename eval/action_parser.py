@@ -45,6 +45,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 
 # Mouse button names → X11 button code (matches XTest convention).
@@ -733,3 +734,200 @@ def parse_computer_use_action_tolerant(text: str) -> OrderedAction:
         primitives=tuple(_parse_cua_v4_block(m.group(1)) for m in matches),
         no_op=False,
     )
+
+
+# --------------------------------------------------------------------------
+# computer_use_rel_step_v1 — finite screen-relative steps, atomic input.
+# Binding contract: action_specs/computer_use_rel_step_v1.json and
+# system_prompts/cua_rel_step_v1_thinking.txt.
+# --------------------------------------------------------------------------
+
+_REL_STEP_SPEC_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "data_pipeline/realigned_pipeline/action_specs/computer_use_rel_step_v1.json"
+)
+_REL_STEP_SPEC = json.loads(_REL_STEP_SPEC_PATH.read_text())
+if _REL_STEP_SPEC.get("format") != "computer_use_rel_step_v1":  # pragma: no cover
+    raise RuntimeError(f"wrong relative-step spec at {_REL_STEP_SPEC_PATH}")
+
+_REL_STEP_VALID_DELTAS = frozenset(
+    (int(scale) * int(direction[0]), int(scale) * int(direction[1]))
+    for scale in _REL_STEP_SPEC["movement_scales"]
+    for direction in _REL_STEP_SPEC["directions"]
+)
+_REL_STEP_SCROLL_STEPS = frozenset(int(v) for v in _REL_STEP_SPEC["scroll_steps"])
+_REL_STEP_MAX_CALLS = int(_REL_STEP_SPEC["max_tool_calls"])
+_REL_STEP_MAX_TYPE_CHARS = int(_REL_STEP_SPEC["typing_max_chars"])
+_REL_STEP_REQUIRED_ARGS: dict[str, tuple[str, ...]] = {
+    "mouse_move_rel": ("delta",),
+    "left_click": (),
+    "right_click": (),
+    "middle_click": (),
+    "double_click": (),
+    "triple_click": (),
+    "button_down": ("button",),
+    "button_up": ("button",),
+    "key": ("keys",),
+    "type": ("text",),
+    "scroll": ("steps",),
+    "hscroll": ("steps",),
+    "wait": (),
+    "terminate": ("status",),
+}
+
+
+def _rel_step_primitive(arguments: dict, *, where: str) -> OrderedPrimitive:
+    """Validate one rel-step arguments object without coercion or repair."""
+    action = arguments.get("action")
+    if not isinstance(action, str) or action not in _REL_STEP_REQUIRED_ARGS:
+        raise ValueError(f"{where}: unknown or missing action {action!r}")
+    required = set(_REL_STEP_REQUIRED_ARGS[action])
+    extra = set(arguments) - {"action"} - required
+    missing = required - set(arguments)
+    if extra:
+        raise ValueError(f"{where}: unknown argument(s) {sorted(extra)} for {action!r}")
+    if missing:
+        raise ValueError(f"{where}: missing argument(s) {sorted(missing)} for {action!r}")
+
+    if action == "mouse_move_rel":
+        delta = arguments["delta"]
+        if (
+            not isinstance(delta, list)
+            or len(delta) != 2
+            or any(isinstance(v, bool) or not isinstance(v, int) for v in delta)
+            or tuple(delta) not in _REL_STEP_VALID_DELTAS
+        ):
+            raise ValueError(
+                f"{where}: delta must be an exact fixed relative step, got {delta!r}"
+            )
+        return OrderedPrimitive(kind="move", dx=delta[0], dy=delta[1])
+    if action == "key":
+        keys = arguments["keys"]
+        if (
+            not isinstance(keys, list)
+            or not keys
+            or any(not isinstance(k, str) or not k.strip() for k in keys)
+        ):
+            raise ValueError(f"{where}: keys must be a non-empty string array")
+        return OrderedPrimitive(kind="key_combo", keys=tuple(keys))
+    if action == "type":
+        value = arguments["text"]
+        if not isinstance(value, str) or not value or len(value) > _REL_STEP_MAX_TYPE_CHARS:
+            raise ValueError(
+                f"{where}: text must contain 1..{_REL_STEP_MAX_TYPE_CHARS} characters"
+            )
+        return OrderedPrimitive(kind="type", text=value)
+    if action in _CUA_V4_CLICKS:
+        button, count = _CUA_V4_CLICKS[action]
+        return OrderedPrimitive(kind="click", name=button, count=count)
+    if action in ("button_down", "button_up"):
+        button = arguments["button"]
+        if button not in _CUA_V4_BUTTONS:
+            raise ValueError(f"{where}: invalid button {button!r}")
+        return OrderedPrimitive(kind=action, name=button)
+    if action in ("scroll", "hscroll"):
+        steps = arguments["steps"]
+        if isinstance(steps, bool) or not isinstance(steps, int) or steps not in _REL_STEP_SCROLL_STEPS:
+            raise ValueError(
+                f"{where}: steps must be one of {sorted(_REL_STEP_SCROLL_STEPS)}, got {steps!r}"
+            )
+        return OrderedPrimitive(
+            kind="scroll",
+            dx=steps if action == "hscroll" else 0,
+            dy=steps if action == "scroll" else 0,
+        )
+    if action == "wait":
+        return OrderedPrimitive(kind="wait")
+    if action == "terminate":
+        if arguments["status"] != "success":
+            raise ValueError(f"{where}: terminate status must be 'success'")
+        return OrderedPrimitive(kind="terminate", status="success")
+    raise AssertionError(f"unhandled relative-step action {action!r}")  # pragma: no cover
+
+
+def _parse_rel_step_block(body: str) -> OrderedPrimitive:
+    where = f"tool call {body.strip()!r}"
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"{where}: invalid JSON: {e}") from e
+    if not isinstance(payload, dict):
+        raise ValueError(f"{where}: payload must be an object")
+    if set(payload) != {"name", "arguments"}:
+        raise ValueError(f"{where}: top-level keys must be exactly name and arguments")
+    if payload["name"] != _REL_STEP_SPEC["tool_name"]:
+        raise ValueError(f"{where}: name must be {_REL_STEP_SPEC['tool_name']!r}")
+    arguments = payload["arguments"]
+    if not isinstance(arguments, dict):
+        raise ValueError(f"{where}: arguments must be an object")
+    return _rel_step_primitive(arguments, where=where)
+
+
+def _validate_rel_step_program(primitives: tuple[OrderedPrimitive, ...]) -> None:
+    """Enforce response-level atomicity before any primitive is dispatched."""
+    if len(primitives) > _REL_STEP_MAX_CALLS:
+        raise ValueError(
+            f"too many tool calls: {len(primitives)} > {_REL_STEP_MAX_CALLS}"
+        )
+    terminations = [i for i, p in enumerate(primitives) if p.kind == "terminate"]
+    if terminations:
+        if len(primitives) != 1:
+            raise ValueError("terminate must be the only tool call in a reply")
+        return
+
+    state_calls = [i for i, p in enumerate(primitives) if p.kind in ("button_down", "button_up")]
+    move_calls = [i for i, p in enumerate(primitives) if p.kind == "move"]
+    if state_calls:
+        if len(state_calls) != 2:
+            raise ValueError("drag must contain exactly one button_down and one button_up")
+        down_i, up_i = state_calls
+        down, up = primitives[down_i], primitives[up_i]
+        if (
+            down.kind != "button_down"
+            or up.kind != "button_up"
+            or down.name != up.name
+            or down_i != 0
+            or up_i != len(primitives) - 1
+            or not move_calls
+            or any(not (down_i < i < up_i) for i in move_calls)
+            or any(p.kind not in ("button_down", "move", "button_up") for p in primitives)
+        ):
+            raise ValueError(
+                "drag must be button_down, one or more fixed moves, button_up for the same button"
+            )
+        return
+
+    if len(move_calls) > 1:
+        raise ValueError("normal replies may contain at most one mouse move")
+    if move_calls and any(p.kind != "move" for p in primitives):
+        raise ValueError("a normal mouse move must be the only action in its reply")
+
+
+def parse_computer_use_rel_step_action(text: str) -> OrderedAction:
+    """Strict, transactional parser for ``computer_use_rel_step_v1``.
+
+    An optional leading think block is accepted. Everything after it must be
+    valid tool-call blocks, and the whole program is validated before the
+    returned action can reach the executor. There is deliberately no tolerant
+    parser for this safety-critical format.
+    """
+    if not isinstance(text, str):
+        raise TypeError(
+            f"parse_computer_use_rel_step_action expects str, got {type(text)!r}"
+        )
+    s = _strip_leading_think(text)
+    matches = list(_CUA_V4_TOOL_CALL_RE.finditer(s))
+    if not matches:
+        raise ValueError(f"no <tool_call> blocks found in {s.strip()!r}")
+    prev_end = 0
+    for match in matches:
+        fragment = s[prev_end:match.start()].strip()
+        if fragment:
+            raise ValueError(f"unexpected content outside tool calls: {fragment!r}")
+        prev_end = match.end()
+    tail = s[prev_end:].strip()
+    if tail:
+        raise ValueError(f"unexpected content outside tool calls: {tail!r}")
+    primitives = tuple(_parse_rel_step_block(m.group(1)) for m in matches)
+    _validate_rel_step_program(primitives)
+    return OrderedAction(primitives=primitives, no_op=all(p.kind == "wait" for p in primitives))
