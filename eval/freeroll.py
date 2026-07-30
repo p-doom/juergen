@@ -190,10 +190,18 @@ def _dispatch_plan(action_text: str, finish_reason: str | None) -> tuple[str | N
 
 
 def _scale_ordered_moves(action: OrderedAction, ax: float, ay: float) -> OrderedAction:
-    """Scale move() deltas from model-view pixels to VM pixels.
+    """Scale move() deltas by an explicit per-axis factor.
 
     Only move() carries cursor deltas — scroll ticks and key/type primitives
-    are resolution-independent.
+    are unaffected.
+
+    No caller applies a factor today: every trained action format emits move
+    deltas straight from the crowd-cast keylog, which records raw device counts
+    (pre-acceleration evdev/CGEvent HID deltas), NOT pixels of the frame the
+    model was shown. Re-extracting a segment at a different frame height yields
+    byte-identical deltas, so no frame-derived factor belongs here. This exists
+    for a normalized action format, whose denormalization is a genuine per-axis
+    scale: a 0-1000 screen-fraction delta becomes pixels via sw/1000, sh/1000.
     """
     return OrderedAction(
         primitives=tuple(
@@ -326,15 +334,14 @@ def _run_rollout(
     use_native = action_format == _NATIVE_FORMAT
 
     # The model view: frames are resized to model_resolution before they enter
-    # the conversation (matching the training frame scale), and the model's
-    # dx/dy — which live in that view's pixel space — are scaled back to VM
-    # pixels before dispatch. GIF/saved frames stay native.
+    # the conversation (matching the training frame scale). Move deltas are NOT
+    # rescaled with them — they are raw device counts from the keylog, invariant
+    # to the frame scale. GIF/saved frames stay native.
     mres = model_resolution if (model_resolution and tuple(model_resolution) != (sw, sh)) else None
-    ax = (sw / mres[0]) if mres else 1.0
-    ay = (sh / mres[1]) if mres else 1.0
     if mres:
-        _LOGGER.info("model view %dx%d; deltas scaled x%.3f/x%.3f to VM %dx%d",
-                     mres[0], mres[1], ax, ay, sw, sh)
+        _LOGGER.info("model view %dx%d; VM %dx%d; move deltas dispatched "
+                     "unscaled (device counts, not view pixels)",
+                     mres[0], mres[1], sw, sh)
 
     def _to_model(img: Image.Image) -> Image.Image:
         return img.resize(mres, Image.LANCZOS) if mres else img
@@ -493,11 +500,6 @@ def _run_rollout(
                                 for p in action.primitives
                             ],
                         }
-                        if mres:
-                            # model-view pixels -> VM pixels: mouse_move_rel
-                            # deltas ONLY (kind=="move"); scroll pixels and
-                            # key/type primitives are resolution-independent.
-                            action = _scale_ordered_moves(action, ax, ay)
                         sr = client.dispatch_ordered_action(action)
                     elif use_ordered:
                         action = parse_ordered_action_tolerant(clean_text)
@@ -512,9 +514,6 @@ def _run_rollout(
                                 for p in action.primitives
                             ],
                         }
-                        if mres:
-                            # model-view pixels -> VM pixels (move deltas only).
-                            action = _scale_ordered_moves(action, ax, ay)
                         sr = client.dispatch_ordered_action(action)
                     else:
                         try:
@@ -543,11 +542,6 @@ def _run_rollout(
                                     for e in action.events
                                 ],
                             }
-                            if mres and (action.dx or action.dy):
-                                # model-view pixels -> VM pixels (parsed/logs keep
-                                # the model's own frame of reference).
-                                action = replace(action, dx=round(action.dx * ax),
-                                                 dy=round(action.dy * ay))
                             sr = client.dispatch_action(action)
                     sr_dict = {
                         "cursor_before": list(sr.cursor_before),
