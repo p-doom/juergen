@@ -59,8 +59,13 @@ retain their `hai003,hai004,hai007` nodelist pins. Export stages are CPU-only.
 All stages use 8 hours, low QoS, requeue, and project-backed outputs/caches.
 
 Evaluation is generic across all four rung-2 grammars, greedy temperature 0,
-k=1, seed 0, requires a real chat completion, runs the known-answer self-test,
-and aborts on any request error. The effect stage consumes eight reports using
+k=1, seed 0, requires a real vision chat completion (with schema compliance
+logged but deliberately non-blocking), runs the known-answer self-test,
+and aborts on any request error. It stages output privately, publishes the
+manifest last, requires the cell-specific action/schema, and binds the 80-row
+report to the exact export manifest, config, and weight inventory by checksums.
+The effect stage revalidates those contracts and derives `in_box` from the rows
+before consuming eight reports using
 `+1 = relative/tool-call/preamble`, `-1 = absolute/bare/action-only`; an effect
 is the positive-product mean minus the negative-product mean.
 

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from experiments.relative_factorial.build_relative import ARMS, BuildError, build
-from experiments.relative_factorial.effects import CELLS, _load_cell, calculate
+from experiments.relative_factorial.effects import CELLS, EffectError, _load_cell, calculate
 
 
 ROOT = Path("/fast/project/HFMI_SynergyUnit/p-doom_shared/franz")
@@ -96,7 +96,8 @@ def test_factorial_effect_sign_and_scale():
 
 
 def test_effect_loader_requires_matched_greedy_manifests(tmp_path):
-    for index, (cell, (rel, grammar_code, pre, grammar_name)) in enumerate(CELLS.items()):
+    for index, (cell, spec) in enumerate(CELLS.items()):
+        rel, grammar_code, pre, grammar_name = spec[:4]
         directory = tmp_path / cell
         directory.mkdir()
         manifest = {
@@ -109,9 +110,8 @@ def test_effect_loader_requires_matched_greedy_manifests(tmp_path):
         report = {"summary": {f"{grammar_name}/all": {"in_box": index / 10}}}
         (directory / "eval_manifest.json").write_text(json.dumps(manifest))
         (directory / "report.json").write_text(json.dumps(report))
-        value, provenance = _load_cell(cell, directory, "in_box")
-        assert value == pytest.approx(index / 10)
-        assert provenance["grammar"] == grammar_name
+        with pytest.raises(EffectError, match="missing report.json/rows.jsonl/eval_manifest.json"):
+            _load_cell(cell, directory, "in_box")
 
 
 def test_labctl_training_and_eval_contracts():
@@ -168,7 +168,11 @@ def test_labctl_training_and_eval_contracts():
         assert recipe["inputs"]["orbax"]["path"].endswith(f"/{name}_r32_2k/000750")
         assert recipe["outputs"]["model"]["marker"] == "export_manifest.json"
 
-    eval_files = sorted(recipes.glob("eval_*.toml"))
+    canonical_eval_names = [
+        "reltool_act", "relraw_act", "reltool_pre", "relraw_pre",
+        "abstool_act", "absraw_act", "abstool_pre", "absraw_pre",
+    ]
+    eval_files = [recipes / f"eval_{name}.toml" for name in canonical_eval_names]
     assert len(eval_files) == 8
     for path in eval_files:
         recipe = tomllib.loads(path.read_text())
@@ -178,6 +182,20 @@ def test_labctl_training_and_eval_contracts():
         assert recipe["resources"]["qos"] == "low"
         assert "--requeue" in recipe["resources"]["sbatch_extra"]
         assert recipe["args"]["preamble"] in {"true", "false"}
+        stem = path.stem.removeprefix("eval_")
+        expected = {
+            "reltool_act": ("train_reltool_act", "move_rel", "false"),
+            "relraw_act": ("train_relraw_act", "deltatype_raw", "false"),
+            "reltool_pre": ("train_reltool_pre", "move_rel", "true"),
+            "relraw_pre": ("train_relraw_pre", "deltatype_raw", "true"),
+            "abstool_act": ("export_abstool_act", "absolute_toolcall", "false"),
+            "absraw_act": ("export_absraw_act", "absolute_raw", "false"),
+            "abstool_pre": ("export_abstool_pre", "absolute_toolcall", "true"),
+            "absraw_pre": ("export_absraw_pre", "absolute_raw", "true"),
+        }[stem]
+        assert recipe["inputs"]["model"]["stage"] == expected[0]
+        assert recipe["args"]["grammar"] == expected[1]
+        assert recipe["args"]["preamble"] == expected[2]
         if path.name.startswith(("eval_absraw", "eval_abstool")):
             assert recipe["inputs"]["model"]["type"] == "stage"
             assert recipe["inputs"]["model"]["stage"] == path.stem.replace("eval_", "export_")

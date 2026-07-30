@@ -57,13 +57,15 @@ server_pid=$!
 trap 'kill -9 "$server_pid" 2>/dev/null || true' EXIT
 
 "$PY" "${A[experiment_dir]}/readiness.py" \
-    --base-url "$base_url" --model policy --timeout-s 900 --pid "$server_pid"
+    --base-url "$base_url" --model policy --grammar "${A[grammar]}" \
+    --timeout-s 900 --pid "$server_pid"
 
 eval_args=(
     --audit-dir "${A[audit_dir]}"
     --out "$OUT"
     --base-url "$base_url"
     --model policy
+    --model-dir "$MODEL_PATH"
     --grammar "${A[grammar]}"
     --concurrency 24
 )

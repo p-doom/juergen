@@ -1,0 +1,51 @@
+name = "relative_factorial_eval_abstool_act_pinned_019fb44a_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/relative_factorial/eval_stage.sh" "$@" \
+    "--experiment_dir=$REPO/experiments/relative_factorial"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 16
+mem = "150GB"
+time = "08:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--signal=USR1@600", "--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001", "--nodelist=hai003,hai004,hai007"]
+
+[inputs.model]
+type = "artifact"
+artifact = "relative_factorial_abstool_act_hf_v1_run_019fb44ae67d76e1b022d4521c233dfb"
+
+[inputs.audit]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand"
+
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+
+[outputs.result]
+type = "eval_result"
+marker = "eval_manifest.json"
+alias = "relative_factorial_eval_abstool_act_pinned_019fb44a_v1_{run.id}"
+
+[args]
+prime_rl_repo = "{inputs.runtime.path}"
+model_path = "{inputs.model.path}/hf"
+out = "{outputs.result.path}"
+grammar = "absolute_toolcall"
+preamble = "false"
+audit_dir = "{inputs.audit.path}"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"
+LD_PRELOAD = "/fast/home/franz.srambical/.tmp_suite/mihir_ablation/nccl_2.28.3/libnccl.so.2"
