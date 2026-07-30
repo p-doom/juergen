@@ -141,7 +141,7 @@ def _call_model(
     recent_frames: list[Image.Image],
     recent_actions: list[str] | None = None,
     max_tokens: int,
-    temperature: float,
+    temperature: float | None = None,
     top_p: float | None = None,
     top_k: int | None = None,
     request_timeout_s: float = 120.0,
@@ -169,8 +169,11 @@ def _call_model(
     pass it every step to keep the goal in context (``persist_instruction``), or
     only on step 1 to match the training distribution.
 
-    ``top_p``/``top_k`` are omitted from the request when None (server
-    defaults apply). ``top_k`` is an sglang SRT extension: its OpenAI-
+    ``temperature``/``top_p``/``top_k`` are omitted from the request when
+    None, which hands the decision to the server: sglang runs
+    ``sampling_defaults="model"`` by default, so it applies the served
+    checkpoint's ``generation_config.json`` values. ``top_k`` is an sglang SRT
+    extension: its OpenAI-
     compatible ``ChatCompletionRequest`` declares ``top_k`` as a top-level
     body field ("Extra parameters for SRT backend only"), so we set it
     directly in the JSON payload — the same wire shape the OpenAI python
@@ -190,8 +193,9 @@ def _call_model(
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
-        "temperature": temperature,
     }
+    if temperature is not None:
+        payload["temperature"] = temperature
     if top_p is not None:
         payload["top_p"] = top_p
     if top_k is not None:

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import argparse
 import ast
+import inspect
+import json
 import re
+import shutil
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -30,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 _install_import_stubs()
 
 import freeroll  # noqa: E402
+import osworld_runtime  # noqa: E402
 import osworld_vm_client  # noqa: E402
 from action_parser import (  # noqa: E402
     OrderedPrimitive,
@@ -310,6 +316,72 @@ class ActionFormatSelectionTests(unittest.TestCase):
     def test_unknown_explicit_format_rejected(self) -> None:
         with self.assertRaises(ValueError):
             freeroll._resolve_action_format("bogus", "training_v1")
+
+
+class SamplingProvenanceTests(unittest.TestCase):
+    """freeroll holds no sampling opinion: unset params are omitted from the
+    request so sglang applies the served checkpoint's generation_config. The
+    checkpoint file is read ONLY to record what the run effectively sampled
+    with."""
+
+    THINKING_CFG = {"do_sample": True, "temperature": 1.0, "top_p": 0.95,
+                    "top_k": 20, "repetition_penalty": 1.0,
+                    "bos_token_id": 151643}
+
+    def _args(self, **over):
+        base = dict(max_tokens=1024, temperature=None, top_p=None, top_k=None,
+                    n_history_frames=16)
+        base.update(over)
+        return argparse.Namespace(**base)
+
+    def _ckpt(self, cfg: dict | None) -> str:
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        if cfg is not None:
+            (d / "generation_config.json").write_text(json.dumps(cfg))
+        return str(d)
+
+    def test_reads_only_the_sampling_keys(self) -> None:
+        got = freeroll._model_sampling_defaults(self._ckpt(self.THINKING_CFG))
+        self.assertEqual(got, {"temperature": 1.0, "top_p": 0.95, "top_k": 20,
+                               "repetition_penalty": 1.0})  # no bos/do_sample
+
+    def test_missing_or_unreadable_config_is_empty_not_fatal(self) -> None:
+        self.assertEqual(freeroll._model_sampling_defaults(self._ckpt(None)), {})
+        bad = Path(self._ckpt(None))
+        (bad / "generation_config.json").write_text("{not json")
+        self.assertEqual(freeroll._model_sampling_defaults(str(bad)), {})
+        # an HF id (never a local dir) resolves inside sglang
+        self.assertEqual(
+            freeroll._model_sampling_defaults("Qwen/Qwen3-VL-4B-Instruct"), {})
+
+    def test_record_attributes_each_value_to_its_source(self) -> None:
+        rec = freeroll._effective_sampling(
+            self._args(temperature=0.7), self._ckpt(self.THINKING_CFG))
+        self.assertEqual(rec["sampling"]["temperature"], 0.7)
+        self.assertEqual(rec["sampling_source"]["temperature"], "flag")
+        self.assertEqual(rec["sampling"]["top_p"], 0.95)
+        self.assertEqual(rec["sampling_source"]["top_p"], "generation_config")
+
+    def test_explicit_zero_is_honoured_not_read_as_unset(self) -> None:
+        rec = freeroll._effective_sampling(
+            self._args(temperature=0.0), self._ckpt(self.THINKING_CFG))
+        self.assertEqual(rec["sampling"]["temperature"], 0.0)
+        self.assertEqual(rec["sampling_source"]["temperature"], "flag")
+
+    def test_unknowable_sampling_is_omitted_from_the_record(self) -> None:
+        rec = freeroll._effective_sampling(self._args(), self._ckpt(None))
+        self.assertEqual(rec, {"sampling": {}, "sampling_source": {}})
+
+    def test_runner_accepts_the_record_and_the_nullable_params(self) -> None:
+        params = inspect.signature(freeroll._run_rollout).parameters
+        self.assertIn("sampling_record", params)
+        for name in ("temperature", "top_p", "top_k"):
+            self.assertIn(name, params)
+        # _call_model must tolerate temperature=None for the omit-it path
+        self.assertIsNone(
+            inspect.signature(osworld_runtime._call_model)
+            .parameters["temperature"].default)
 
 
 class OrderedDispatchHelperTests(unittest.TestCase):

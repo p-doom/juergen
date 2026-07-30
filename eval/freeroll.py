@@ -78,6 +78,48 @@ _GOAL_CONDITIONED_PROMPT_IDS = frozenset(
     {"cua_v3_thinking", "cua_v4_thinking", "cua_v4_thinking_v2", "cua_oev2_thinking"})
 
 
+# Sampling params this harness has NO opinion about: left unset they are
+# omitted from the request, and sglang (``sampling_defaults="model"`` by
+# default) applies the served checkpoint's generation_config.json — the vendor
+# preset that shipped with the base, per artifact, nothing to maintain here.
+# Qwen3-VL-*-Thinking bases carry 1.0 / 0.95 / 20, -Instruct 0.7 / 0.8 / 20.
+# To deviate, pin the values in the recipe's [params] so the run's artifact
+# alias records which sampling produced it.
+_MODEL_SAMPLING_PARAMS = ("temperature", "top_p", "top_k", "repetition_penalty",
+                          "min_p")
+
+
+def _model_sampling_defaults(model_path: str) -> dict[str, Any]:
+    """The served checkpoint's generation_config sampling params, READ ONLY for
+    the run record — never sent, so the server stays the single applier. Empty
+    for a non-local --model_path (an HF id resolves inside sglang, which logs
+    its own 'default chat sampling params' line)."""
+    cfg = Path(model_path) / "generation_config.json"
+    if not cfg.is_file():
+        return {}
+    try:
+        doc = json.loads(cfg.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {k: doc[k] for k in _MODEL_SAMPLING_PARAMS if doc.get(k) is not None}
+
+
+def _effective_sampling(args: argparse.Namespace, model_path: str) -> dict[str, Any]:
+    """What the run actually samples with, for the record: explicit flags over
+    the checkpoint's generation_config, tagged with where each value came
+    from."""
+    from_model = _model_sampling_defaults(model_path)
+    effective: dict[str, Any] = {}
+    source: dict[str, str] = {}
+    for key in _MODEL_SAMPLING_PARAMS:
+        explicit = getattr(args, key, None)
+        if explicit is not None:
+            effective[key], source[key] = explicit, "flag"
+        elif key in from_model:
+            effective[key], source[key] = from_model[key], "generation_config"
+    return {"sampling": effective, "sampling_source": source}
+
+
 def _resolve_action_format(explicit: str | None, system_prompt_id: str) -> str:
     """--action_format wins; otherwise infer from the system prompt id."""
     if explicit:
@@ -299,9 +341,10 @@ def _run_rollout(
     n_history_frames: int,
     persist_instruction: bool,
     max_tokens: int,
-    temperature: float,
-    top_p: float,
-    top_k: int,
+    temperature: float | None,
+    top_p: float | None,
+    top_k: int | None,
+    sampling_record: dict[str, Any],
     save_frames: bool,
     stop_on_click: bool,
     desktop_setup: str,
@@ -622,6 +665,7 @@ def _run_rollout(
         "temperature": temperature,
         "top_p": top_p,
         "top_k": top_k,
+        **sampling_record,
         "desktop_setup": desktop_setup,
         "settle_s": settle_s,
         "settle_stable_timeout_s": settle_stable_timeout_s,
@@ -715,18 +759,19 @@ def main() -> int:
              "cua_v4_thinking -> computer_use_rel_v1, everything else -> "
              "canonical).",
     )
-    # Sampling defaults follow the base Qwen3-VL-Thinking generation_config
-    # (temperature 1.0, top_p 0.95, top_k 20). max_tokens 1024 leaves room
-    # for a <think> block ahead of the action line.
+    _unset_ref = ("Unset -> omitted from the request, so sglang applies the "
+                  "served checkpoint's generation_config.json (Thinking bases "
+                  "ship 1.0/0.95/20, Instruct 0.7/0.8/20). Pin it in the "
+                  "recipe's [params] to deviate.")
     p.add_argument("--max_tokens", type=int, default=1024)
-    p.add_argument("--temperature", type=float, default=1.0)
-    p.add_argument("--top_p", type=float, default=0.95)
+    p.add_argument("--temperature", type=float, default=None, help=_unset_ref)
+    p.add_argument("--top_p", type=float, default=None, help=_unset_ref)
     p.add_argument(
-        "--top_k", type=int, default=20,
+        "--top_k", type=int, default=None,
         help="Top-k sampling (sglang SRT extension, sent top-level in the "
-             "/chat/completions body). -1 disables.",
+             "/chat/completions body). -1 disables. " + _unset_ref,
     )
-    p.add_argument("--n_history_frames", type=int, default=24)
+    p.add_argument("--n_history_frames", type=int, default=16)
     p.add_argument(
         "--persist_instruction", action=argparse.BooleanOptionalAction, default=True,
         help="Re-anchor the natural-language goal on the earliest in-window user "
@@ -776,6 +821,9 @@ def main() -> int:
               f"Available: {list(SYSTEM_PROMPTS)}", file=sys.stderr)
         return 1
     action_format = _resolve_action_format(args.action_format, args.system_prompt_id)
+    sampling_record = _effective_sampling(args, args.model_path)
+    _LOGGER.info("sampling: %s (source: %s)", sampling_record["sampling"],
+                 sampling_record["sampling_source"] or "server/generation_config")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -891,6 +939,7 @@ def main() -> int:
                 temperature=args.temperature,
                 top_p=args.top_p,
                 top_k=args.top_k,
+                sampling_record=sampling_record,
                 save_frames=not args.no_frames,
                 stop_on_click=args.stop_on_click,
                 desktop_setup=args.desktop_setup,
