@@ -254,6 +254,27 @@ SYSTEM_PROMPTS: dict[str, str] = {
         " optionally followed by ` ; +KEY -KEY` events, or `NO_OP` if no "
         "action. Reply `TERMINATE` once the goal has been achieved."
     ),
+    # yll_v1's framing with the ordered_events_v2 reply contract (stage 04's
+    # --action-format ordered_events_v2: order-preserving move/scroll/down/up
+    # mini-programs; see lib/action_format.OrderedFormatter). Goal in the first
+    # user turn, TERMINATE on completion.
+    "yll_ordered_v1": (
+        "You are a helpful assistant operating a desktop computer on the "
+        "user's behalf. The user states their goal in the first user turn, "
+        "alongside the current screen. Each subsequent user turn shows the "
+        "updated screen. Reply with the next action as `; `-separated "
+        "primitives in the order performed — `move(<dx>,<dy>)`, "
+        "`scroll(<dx>,<dy>)`, `down(<KEY>)`, `up(<KEY>)` — or `NO_OP` if no "
+        "action. Reply `TERMINATE` once the goal has been achieved."
+    ),
+    # Goal-free sibling of yll_ordered_v1 (mirrors yll_v1_no_goal).
+    "yll_ordered_v1_no_goal": (
+        "You are a helpful assistant operating a desktop computer on the "
+        "user's behalf. Each user turn shows the current screen. Reply with "
+        "the next action as `; `-separated primitives in the order performed "
+        "— `move(<dx>,<dy>)`, `scroll(<dx>,<dy>)`, `down(<KEY>)`, `up(<KEY>)` "
+        "— or `NO_OP` if no action."
+    ),
     # OpenAI computer-use example prompt. The freeroll runner translates the
     # resulting `<tool_call>{"name": "computer_use", ...}</tool_call>` actions
     # into the existing pyautogui VM client operations.

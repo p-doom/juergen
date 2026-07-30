@@ -25,7 +25,9 @@ from realigned_pipeline.lib.action_format import (
     render_tool_call,
 )
 from realigned_pipeline.lib.common import aggregate_actions, format_action
+from realigned_pipeline.lib.config import SYSTEM_PROMPT
 from realigned_pipeline.lib.events import RawEvent, Window, load_events
+from realigned_pipeline.stage_04_build_conversations import default_system_prompt
 
 MASTER_FPS = 15.0
 TARGET_FPS = 1.0
@@ -959,6 +961,32 @@ class ComputerUseFormatterTest(unittest.TestCase):
     def test_registry(self) -> None:
         self.assertEqual(get_formatter("computer_use_rel_v1").name,
                          "computer_use_rel_v1")
+
+
+class DefaultSystemPromptTest(unittest.TestCase):
+    """Canonical prompts must stay byte-identical to the historical constants."""
+
+    def test_canonical_goal_prompt_matches_legacy(self) -> None:
+        self.assertEqual(
+            default_system_prompt(get_formatter("canonical"), goal_conditioned=True),
+            SYSTEM_PROMPT,
+        )
+
+    def test_canonical_goal_free_prompt_matches_legacy(self) -> None:
+        self.assertEqual(
+            default_system_prompt(get_formatter("canonical"), goal_conditioned=False),
+            "You operate a desktop computer. Each user turn shows the current screen. "
+            "Reply with the next action as `<dx> <dy> <scroll>` optionally followed by "
+            "` ; +KEY -KEY` events, or `NO_OP` if no action.",
+        )
+
+    def test_ordered_prompt_describes_the_grammar(self) -> None:
+        prompt = default_system_prompt(
+            get_formatter("ordered_events_v2"), goal_conditioned=True
+        )
+        self.assertIn("the next action toward that goal", prompt)
+        self.assertIn("move(<dx>,<dy>)", prompt)
+        self.assertIn("NO_OP", prompt)
 
 
 class FormatterRegistryTest(unittest.TestCase):

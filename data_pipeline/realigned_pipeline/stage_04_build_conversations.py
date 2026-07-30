@@ -53,6 +53,26 @@ token the eval side's ``freeroll._is_terminate`` recognizes). This applies in
 goal-conditioned mode ONLY -- a per-segment end is not a task completion -- and pairs
 with a system prompt that describes the contract (e.g. ``--system-prompt-id yll_v1``).
 
+ACTION FORMAT (``--action-format``): by default (``sampled``) the assistant turns
+carry the stage-03 frame records' ``action`` strings verbatim (the canonical
+``"<dx> <dy> <scroll> [; +KEY -KEY]"`` aggregate). Any registered formatter name
+(``lib/action_format.FORMATTERS``: ``canonical``, ``ordered_events_v2``,
+``ordered_events_v3``, ``computer_use_rel_v1``) instead RE-DERIVES every label
+from the segment's REALIGNED keylog at build time, so the action format is a
+stage-04 ablation flag, not a pipeline rerun. The re-derivation reconstructs the
+lib/events view from the sample artifact: the kept frames' ``master_record_index``
+ticks become label windows ``[tick_i, tick_{i+1})`` (the last runs to the end of
+master coverage), and dead zones are the pre-first-frame span plus every
+(near-)black master tick (from the master store's ``frame_manifest.jsonl``, using
+the thresholds the sample was built with -- only when it was built with
+``drop_black_frames``). Labels then follow the shared dead-zone policy
+(``lib/events.apply_label_policy``): deltas in dead zones are discarded, straddling
+press/release pairs are clamped to zone boundaries. NOTE this differs near black
+gaps from the ``sampled`` strings (stage 03 dropped whole black bins); ``canonical``
+via the formatter is byte-identical to ``sampled`` only on dead-zone-free
+stretches. Per-segment dead-zone counters land on every row
+(``dead_zone_counters`` / ``dead_zone_flagged``) as a realignment health signal.
+
 One conversation per segment (no windowing): a long, high-fps segment becomes a
 long conversation -- watch the trainee's context window at high --target-fps.
 
@@ -86,8 +106,11 @@ Run::
 from __future__ import annotations
 
 import argparse
+import json
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
+from collections.abc import Callable
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -98,7 +121,18 @@ if str(DATA_PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(DATA_PIPELINE_DIR))
 
 from realigned_pipeline.lib import config  # noqa: E402
+from realigned_pipeline.lib.action_format import (  # noqa: E402
+    DEFAULT_CONTINUOUS_ACTION_HZ,
+    FORMATTERS,
+    ActionFormatter,
+    get_formatter,
+)
 from realigned_pipeline.lib.common import ensure_dir, read_jsonl, write_json, write_jsonl  # noqa: E402
+from realigned_pipeline.lib.events import DeadZone, Window, load_events  # noqa: E402
+from realigned_pipeline.lib.image_store import (  # noqa: E402
+    is_arrayrecord_image_uri,
+    parse_arrayrecord_image_uri,
+)
 
 # Named system prompts are shared with the eval side (single source of truth):
 # the OSWorld runners select from this same SYSTEM_PROMPTS dict by id, so a model
@@ -115,11 +149,38 @@ from osworld_system_prompts import SYSTEM_PROMPTS  # noqa: E402
 # Stage-03 statuses that carry a usable frame_records.jsonl.
 USABLE_STATUSES = {"ok", "cached"}
 
-# Default system prompts. Goal-free reuses the verbatim training-time prompt
-# ("training_v1") from the shared eval dict; goal-conditioned reuses the
-# canonical one (it names a goal) but keeps the action-format contract.
+# --action-format value meaning "no formatter": pass the stage-03 frame records'
+# canonical action strings through verbatim (the historical behavior).
+SAMPLED_FORMAT = "sampled"
+
+# Default system prompts (``sampled`` mode). Goal-free reuses the verbatim
+# training-time prompt ("training_v1") from the shared eval dict; goal-conditioned
+# reuses the canonical one (it names a goal) but keeps the action-format contract.
 GOAL_FREE_SYSTEM_PROMPT = SYSTEM_PROMPTS["yll_v1"]
 GOAL_SYSTEM_PROMPT = config.SYSTEM_PROMPT
+
+# Formatter-mode default system prompts: a fixed framing prefix + the formatter's
+# own reply contract, so the default prompt always describes the SELECTED action
+# format (ported from main's injection-point stage 04; for ``canonical`` the
+# composition is byte-identical to the historical prompts -- the regression gate
+# in tests/test_action_format.py).
+GOAL_FREE_PROMPT_PREFIX = (
+    "You operate a desktop computer. Each user turn shows the current screen. "
+)
+GOAL_PROMPT_PREFIX = (
+    "You operate a desktop computer. The first user turn shows the initial "
+    "screen and the user's goal; subsequent user turns show the current screen. "
+)
+
+
+def default_system_prompt(formatter: ActionFormatter, *, goal_conditioned: bool) -> str:
+    if goal_conditioned:
+        return GOAL_PROMPT_PREFIX + formatter.reply_contract.format(
+            what="the next action toward that goal"
+        )
+    return GOAL_FREE_PROMPT_PREFIX + formatter.reply_contract.format(
+        what="the next action"
+    )
 
 
 def _text_block(text: str) -> dict[str, Any]:
@@ -178,6 +239,144 @@ def build_messages(
     return messages
 
 
+def _load_segment_frames(index_row: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """One segment's kept frame records, in conversation order (or None when the
+    stage-03 artifact has no records for it)."""
+    fr_path = index_row.get("frame_records")
+    if not fr_path or not Path(fr_path).exists():
+        return None
+    frames = read_jsonl(Path(fr_path))
+    frames.sort(key=lambda r: int(r.get("global_frame_idx") or 0))
+    return frames
+
+
+def _is_black_record(mrec: dict[str, Any], luma_max: float, dark_frac_min: float) -> bool:
+    """Same predicate as stage 03: (near-)black per the stage-01a luma metrics;
+    records without metrics are never black (absence of evidence isn't blackness)."""
+    ml, fd = mrec.get("mean_luma"), mrec.get("frac_dark")
+    return (ml is not None and ml <= luma_max) or (fd is not None and fd >= dark_frac_min)
+
+
+def _load_sample_config(sample_dir: Path) -> dict[str, Any]:
+    """The stage-03 artifact's build provenance (black-filter flag + thresholds,
+    frames_master_dir, master_fps) -- what the formatter path needs to reconstruct
+    dead zones exactly as the sample was built."""
+    for name in ("sample_summary.json", "manifest.json"):
+        path = sample_dir / name
+        if path.is_file():
+            return json.loads(path.read_text())
+    raise SystemExit(
+        f"no sample_summary.json/manifest.json under {sample_dir} -- "
+        "--action-format needs the sample artifact's build provenance"
+    )
+
+
+def _master_manifest_path(
+    frames: list[dict[str, Any]], sample_cfg: dict[str, Any], segment_id: str
+) -> Path:
+    """Locate the segment's master ``frame_manifest.jsonl``: prefer the shard the
+    frames actually reference (``ar://<shard>#idx`` -- robust to a moved store),
+    falling back to the artifact's recorded ``frames_master_dir`` layout."""
+    for f in frames:
+        ref = str(f.get("image_path") or "")
+        if is_arrayrecord_image_uri(ref):
+            shard, _ = parse_arrayrecord_image_uri(ref)
+            return Path(shard).parent / "frame_manifest.jsonl"
+    root = sample_cfg.get("frames_master_dir")
+    if root:
+        return Path(root) / "frames" / segment_id / "frame_manifest.jsonl"
+    raise FileNotFoundError(
+        f"{segment_id}: cannot locate the master frame_manifest.jsonl "
+        "(no ar:// image refs and no frames_master_dir in the sample summary)"
+    )
+
+
+def reformat_segment_actions(
+    frames: list[dict[str, Any]],
+    index_row: dict[str, Any],
+    *,
+    formatter: ActionFormatter,
+    sample_cfg: dict[str, Any],
+    dead_zone_flag_frac: float,
+) -> dict[str, Any]:
+    """Replace every kept frame's ``action`` IN PLACE with ``formatter``'s label,
+    re-derived from the segment's realigned keylog under the shared dead-zone
+    policy (see the module docstring). Windows are the kept frames' master ticks
+    tiled to the end of master coverage; dead zones are the pre-first-frame span
+    plus black master ticks (when the sample was built with drop_black_frames).
+
+    Returns segment-level accounting: ``action_format`` / ``dead_zone_counters`` /
+    ``dead_zone_flagged`` (row fields) + ``primitive_counts`` (summary totals)."""
+    seg = str(index_row.get("segment_id"))
+    ticks = [int(f["master_record_index"]) for f in frames]
+    if any(b <= a for a, b in zip(ticks, ticks[1:])):
+        raise ValueError(f"{seg}: master_record_index not strictly increasing")
+
+    manifest_path = _master_manifest_path(frames, sample_cfg, seg)
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"{seg}: no master frame_manifest at {manifest_path}")
+    master_manifest = read_jsonl(manifest_path)
+    if not master_manifest:
+        raise ValueError(f"{seg}: empty master frame_manifest {manifest_path}")
+    n_records = len(master_manifest)
+
+    # Windows tile from each kept tick to the next; the last runs to the end of
+    # master coverage (events past it resolve to the implicit no_coverage zone).
+    axis_end = max(n_records, ticks[-1] + 1)
+    windows = [
+        Window(t, t, ticks[i + 1] if i + 1 < len(ticks) else axis_end)
+        for i, t in enumerate(ticks)
+    ]
+
+    first_tick = ticks[0]
+    dead_zones: list[DeadZone] = []
+    if first_tick > 0:
+        dead_zones.append(DeadZone(0, first_tick, "pre_first_frame"))
+    # Black zones only when the sample was built black-filtered (same thresholds),
+    # clipped to the visible region -- everything before the first kept frame is
+    # already one pre_first_frame zone. Kept ticks are non-black by construction
+    # (stage 03 dropped black candidate bins), so no window start is swallowed.
+    if sample_cfg.get("drop_black_frames"):
+        luma_max = float(sample_cfg.get("black_luma_max", config.DEFAULT_BLACK_LUMA_MAX))
+        dark_min = float(sample_cfg.get("black_dark_frac_min", config.DEFAULT_BLACK_DARK_FRAC_MIN))
+        run_start: int | None = None
+        for tick, mrec in enumerate(master_manifest):
+            black = tick >= first_tick and _is_black_record(mrec, luma_max, dark_min)
+            if black and run_start is None:
+                run_start = tick
+            elif not black and run_start is not None:
+                dead_zones.append(DeadZone(run_start, tick, "black"))
+                run_start = None
+        if run_start is not None:
+            dead_zones.append(DeadZone(run_start, n_records, "black"))
+
+    keylog = index_row.get("keylog_path")
+    if keylog and not Path(keylog).exists():
+        # load_events would silently yield no events -> an all-NO_OP segment.
+        raise FileNotFoundError(f"{seg}: realigned keylog missing: {keylog}")
+    events, _ = load_events(Path(keylog)) if keylog else ([], None)
+
+    master_fps = float(index_row.get("master_fps") or sample_cfg["master_fps"])
+    result = formatter.format_segment(events, windows, dead_zones, master_fps=master_fps)
+    for f, label in zip(frames, result.labels, strict=True):
+        f["action"] = label
+
+    counters = result.counters
+    n_discarded = (
+        counters.n_discarded_black
+        + counters.n_discarded_no_coverage
+        + counters.n_discarded_pre_first_frame
+        + 2 * counters.n_pairs_dropped_dead_zone
+        + counters.n_unreleased_press_dropped
+    )
+    return {
+        "action_format": formatter.name,
+        "dead_zone_counters": asdict(counters),
+        "dead_zone_flagged": len(events) > 0 and (n_discarded / len(events)) > dead_zone_flag_frac,
+        "primitive_counts": result.primitive_counts,
+    }
+
+
 def _resolve_instruction(
     index_row: dict[str, Any],
     frames: list[dict[str, Any]],
@@ -197,21 +396,17 @@ def _resolve_instruction(
 
 def build_conversation(
     index_row: dict[str, Any],
+    frames: list[dict[str, Any]],
     *,
     instruction: str | None,
     instruction_field: str | None,
     system_prompt: str | None,
-    min_frames: int,
-) -> dict[str, Any] | None:
-    """One segment -> one conversation record, or None if it has no usable frames."""
-    fr_path = index_row.get("frame_records")
-    if not fr_path or not Path(fr_path).exists():
-        return None
-    frames = read_jsonl(Path(fr_path))
-    frames.sort(key=lambda r: int(r.get("global_frame_idx") or 0))
-    if len(frames) < min_frames:
-        return None
-
+    idle_fn: Callable[[str], bool],
+    fmt_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One segment -> one conversation record (frames pre-loaded and pre-filtered
+    by the caller; ``fmt_fields`` carries the formatter provenance when the
+    actions were re-derived -- action_format / dead-zone accounting)."""
     seg_instruction = _resolve_instruction(
         index_row, frames, instruction=instruction, instruction_field=instruction_field
     )
@@ -223,9 +418,10 @@ def build_conversation(
         "segment_idx": index_row.get("segment_idx"),
         "instruction": seg_instruction,
         "goal_conditioned": seg_instruction is not None,
+        **(fmt_fields or {}),
         "n_frames": len(frames),
         "n_turns": len(frames),  # one user+assistant pair per frame
-        "n_non_noop": sum(1 for f in frames if str(f.get("action")) != "NO_OP"),
+        "n_non_noop": sum(1 for f in frames if not idle_fn(str(f.get("action")))),
         "target_fps": index_row.get("target_fps"),
         "alignment_status": index_row.get("alignment_status"),
         "messages": messages,
@@ -239,7 +435,9 @@ def build_goal_conversation(
     *,
     system_prompt: str | None,
     min_frames: int,
+    idle_fn: Callable[[str], bool],
     terminate_token: str | None = None,
+    fmt_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """One goal-conditioned conversation: OUR ``--sample-dir`` frames for the goal's
     segment, windowed to its source-frame span ``[lo, hi]`` (from stage-03b), with the
@@ -288,9 +486,10 @@ def build_goal_conversation(
         "kind": goal.get("kind"),
         "status": goal.get("status"),
         "split": goal.get("split"),
+        **(fmt_fields or {}),  # segment-level formatter provenance (dead-zone counters)
         "n_frames": len(frames),
         "n_turns": len(frames),  # one user+assistant pair per frame
-        "n_non_noop": sum(1 for f in frames if str(f.get("action")) != "NO_OP"),
+        "n_non_noop": sum(1 for f in frames if not idle_fn(str(f.get("action")))),
         "target_fps": index_row.get("target_fps"),
         "alignment_status": index_row.get("alignment_status"),
         "messages": messages,
@@ -303,6 +502,26 @@ def parse_args() -> argparse.Namespace:
                    help="A stage-03 (sample_frames_actions) --output-dir: must contain "
                         "sample_index.jsonl and clips/<seg>/stage_01/frame_records.jsonl.")
     p.add_argument("--output-dir", type=Path, required=True)
+    p.add_argument("--action-format", type=str, default=SAMPLED_FORMAT,
+                   choices=[SAMPLED_FORMAT, *sorted(FORMATTERS)],
+                   help="Assistant-turn action format. 'sampled' (default): pass the "
+                        "stage-03 frame records' canonical action strings through "
+                        "verbatim. Any registered formatter (lib/action_format) instead "
+                        "re-derives every label from the realigned keylog at build time "
+                        "under the shared dead-zone policy: 'canonical' (aggregate "
+                        "'<dx> <dy> <scroll> ; +KEY -KEY'), 'ordered_events_v2' (ordered "
+                        "'move(dx,dy); down(LMB); ...' mini-programs), 'ordered_events_v3' "
+                        "(v2 + type(\"...\") typing runs), 'computer_use_rel_v1' (Qwen "
+                        "native <tool_call> JSON, relative mouse).")
+    p.add_argument("--continuous-action-hz", type=float,
+                   default=DEFAULT_CONTINUOUS_ACTION_HZ,
+                   help="ordered_events_* only: internal motor-grid rate for accumulating "
+                        "move/scroll deltas within a window (NOT a frame rate; recorded as "
+                        "null for formats that ignore it).")
+    p.add_argument("--dead-zone-flag-frac", type=float, default=0.05,
+                   help="Formatter modes: flag a segment (dead_zone_flagged) when more than "
+                        "this fraction of its keylog events were discarded by the dead-zone "
+                        "policy (realignment health).")
     p.add_argument("--instruction", type=str, default=None,
                    help="Fixed instruction placed on each segment's first user turn "
                         "(goal-conditioned). Omit for goal-free (system-prompt only).")
@@ -351,10 +570,25 @@ def main() -> None:
     if not usable:
         raise SystemExit(f"no usable segments (status in {sorted(USABLE_STATUSES)}) in {index_path}")
 
+    # Action format: 'sampled' keeps the frame records' strings; a registered
+    # formatter re-derives every label from the realigned keylog (fails fast on an
+    # unknown name / invalid hz). The idle predicate feeds n_non_noop either way.
+    formatter: ActionFormatter | None = None
+    sample_cfg: dict[str, Any] | None = None
+    if args.action_format != SAMPLED_FORMAT:
+        formatter = get_formatter(
+            args.action_format, continuous_action_hz=args.continuous_action_hz
+        )
+        sample_cfg = _load_sample_config(args.sample_dir)
+    idle_fn: Callable[[str], bool] = (
+        formatter.is_idle_label if formatter is not None else (lambda a: a == "NO_OP")
+    )
+
     # System prompt: explicit override wins; else default by goal-conditioning. A
     # segment is goal-conditioned iff it resolves an instruction, but the system
     # prompt is chosen once for the run from whether ANY instruction source is set
-    # (a --goal-index run is always goal-conditioned).
+    # (a --goal-index run is always goal-conditioned). With a formatter active the
+    # default is COMPOSED from its reply contract, so it describes the format.
     goal_conditioned = bool(args.goal_index or args.instruction or args.instruction_field)
     system_prompt_id = None
     if args.no_system_prompt:
@@ -369,22 +603,52 @@ def main() -> None:
             )
         system_prompt_id = args.system_prompt_id
         system_prompt = SYSTEM_PROMPTS[system_prompt_id]
+    elif formatter is not None:
+        system_prompt = default_system_prompt(formatter, goal_conditioned=goal_conditioned)
     else:
         system_prompt_id = "training_v1" if not goal_conditioned else None
         system_prompt = GOAL_SYSTEM_PROMPT if goal_conditioned else GOAL_FREE_SYSTEM_PROMPT
 
     # TERMINATE is goal-conditioned-only (a segment end is not a task completion).
+    # With a formatter active, the default token is the formatter's own terminate
+    # line ("TERMINATE" for the text formats, the native terminate tool_call for
+    # computer_use_rel_v1); an explicitly different --terminate-token still wins.
     terminate_token = args.terminate_token
     if terminate_token and not args.goal_index:
         print("[conversations] WARNING: --terminate-token is ignored without --goal-index "
               "(per-segment ends are not goal completions).", flush=True)
         terminate_token = None
+    elif terminate_token == "TERMINATE" and formatter is not None:
+        terminate_token = formatter.terminate_line()
 
     out_dir = ensure_dir(args.output_dir)
     records: list[dict[str, Any]] = []
     n_skipped = 0
+    n_failed = 0
     n_frames_total = 0
     n_turns_total = 0
+    dz_totals: Counter = Counter()
+    prim_totals: Counter = Counter()
+    n_dz_flagged = 0
+
+    def _reformat(frames: list[dict[str, Any]], row: dict[str, Any]) -> dict[str, Any] | None:
+        """Re-derive one segment's labels (formatter modes) and fold its
+        accounting into the run totals; returns the per-row provenance fields."""
+        nonlocal n_dz_flagged
+        if formatter is None or not frames:
+            return None
+        info = reformat_segment_actions(
+            frames, row, formatter=formatter, sample_cfg=sample_cfg,
+            dead_zone_flag_frac=args.dead_zone_flag_frac,
+        )
+        for k, v in info["dead_zone_counters"].items():
+            if k != "max_simultaneous_keys":
+                dz_totals[k] += int(v)
+        for k, v in (info.pop("primitive_counts", None) or {}).items():
+            prim_totals[k] += int(v)
+        if info["dead_zone_flagged"]:
+            n_dz_flagged += 1
+        return info
 
     if args.goal_index:
         # GOAL-CONDITIONED: one conversation per goal, OUR sampled frames windowed to
@@ -406,12 +670,18 @@ def main() -> None:
             if row is None or row.get("status") not in USABLE_STATUSES:
                 n_skipped += len(seg_goals)  # segment not in --sample-dir (or unusable)
                 continue
-            fr_path = row.get("frame_records")
-            seg_frames = read_jsonl(Path(fr_path)) if fr_path and Path(fr_path).exists() else []
+            try:
+                seg_frames = _load_segment_frames(row) or []
+                fmt_fields = _reformat(seg_frames, row)  # once per segment, all its goals share it
+            except Exception as exc:  # noqa: BLE001 - one bad segment must not abort the run
+                n_failed += len(seg_goals)
+                print(f"  FAIL {segment_id}: {exc}", flush=True)
+                continue
             for g in seg_goals:
                 conv = build_goal_conversation(
                     g, seg_frames, row, system_prompt=system_prompt,
-                    min_frames=args.min_frames, terminate_token=terminate_token,
+                    min_frames=args.min_frames, idle_fn=idle_fn,
+                    terminate_token=terminate_token, fmt_fields=fmt_fields,
                 )
                 if conv is None:
                     n_skipped += 1
@@ -423,15 +693,24 @@ def main() -> None:
                 print(f"  {j}/{len(goals_by_seg)} segments | {len(records)} goal conversations", flush=True)
     else:
         for i, row in enumerate(usable, 1):
-            conv = build_conversation(
-                row,
-                instruction=args.instruction,
-                instruction_field=args.instruction_field,
-                system_prompt=system_prompt,
-                min_frames=args.min_frames,
-            )
-            if conv is None:
-                n_skipped += 1
+            try:
+                frames = _load_segment_frames(row)
+                if frames is None or len(frames) < args.min_frames:
+                    n_skipped += 1
+                    continue
+                fmt_fields = _reformat(frames, row)
+                conv = build_conversation(
+                    row,
+                    frames,
+                    instruction=args.instruction,
+                    instruction_field=args.instruction_field,
+                    system_prompt=system_prompt,
+                    idle_fn=idle_fn,
+                    fmt_fields=fmt_fields,
+                )
+            except Exception as exc:  # noqa: BLE001 - one bad segment must not abort the run
+                n_failed += 1
+                print(f"  FAIL {row.get('segment_id')}: {exc}", flush=True)
                 continue
             records.append(conv)
             n_frames_total += conv["n_frames"]
@@ -448,11 +727,17 @@ def main() -> None:
     summary = {
         "n_conversations": len(records),
         "n_skipped": n_skipped,  # goals (goal-index mode) or segments below --min-frames
+        "n_failed": n_failed,
         "n_frames_total": n_frames_total,
         "n_turns_total": n_turns_total,
         "mode": "goal" if args.goal_index else "segment",
         "goal_conditioned": goal_conditioned,
         "goal_index": str(args.goal_index) if args.goal_index else None,
+        "action_format": args.action_format,
+        "continuous_action_hz": getattr(formatter, "continuous_action_hz", None),
+        "primitive_counts": dict(prim_totals) if prim_totals else None,
+        "dead_zone_totals": dict(dz_totals) if formatter is not None else None,
+        "n_dead_zone_flagged": n_dz_flagged if formatter is not None else None,
         "terminate_token": terminate_token,
         "instruction": args.instruction,
         "instruction_field": args.instruction_field,
@@ -470,7 +755,8 @@ def main() -> None:
     })
     print(
         f"[conversations] {len(records)} conversations, {n_turns_total} turns, "
-        f"{n_frames_total} frames, {n_skipped} skipped -> {out_dir}",
+        f"{n_frames_total} frames, {n_skipped} skipped, {n_failed} failed "
+        f"| format={args.action_format} -> {out_dir}",
         flush=True,
     )
 
