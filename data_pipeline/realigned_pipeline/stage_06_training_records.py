@@ -94,6 +94,18 @@ flags.DEFINE_float(
     "recording_id), 0 writes <out>/train/ only. Because the split is applied here, "
     "the measure cache stays split-agnostic and is reused when you change this value.",
 )
+flags.DEFINE_bool(
+    "carry_goal_context",
+    False,
+    "overflow_mode=split ONLY: re-attach the system prompt and the first user "
+    "turn's goal/[CONTEXT] text to EVERY chunk of a split conversation, so a "
+    "goal-conditioned conversation that is split at max_length yields standalone "
+    "goal-conditioned chunks instead of headless screenshot->action tails. Budget "
+    "for the carried header is reserved up front; the stage-05 measure cache is "
+    "reused unchanged (the goal/context text is priced separately at build time). "
+    "Forwarded to build_sft_records_from_chat.py --carry_goal_context; no-op for "
+    "other overflow modes. Per-split truncation_stats.json reports injected_chunks.",
+)
 
 
 def _run_split(split: str, src_chat: Path, out_split_dir: Path, cache_path: Path | None) -> dict:
@@ -118,6 +130,7 @@ def _run_split(split: str, src_chat: Path, out_split_dir: Path, cache_path: Path
         f"--overflow_mode={FLAGS.overflow_mode}",
         f"--val_fraction={FLAGS.val_fraction}",
         f"--split={split}",
+        ("--carry_goal_context" if FLAGS.carry_goal_context else "--nocarry_goal_context"),
         "--overwrite",
     ]
     if cache_path is not None:
@@ -165,6 +178,7 @@ def main(_) -> None:
             "overflow_mode": FLAGS.overflow_mode,
             "message_lengths_path": FLAGS.message_lengths_path,
             "val_fraction": FLAGS.val_fraction,
+            "carry_goal_context": FLAGS.carry_goal_context,
         },
         inputs={"source": str(source_path)},
         stats={"per_split": per_split},
