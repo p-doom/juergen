@@ -1,0 +1,48 @@
+name = "relative_factorial_train_reltool_pre_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/relative_factorial/train_export.sh" "$@"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 12
+mem = "150GB"
+time = "08:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--signal=USR1@600", "--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001", "--nodelist=hai003,hai004,hai007"]
+
+[inputs.dataset]
+type = "stage"
+stage = "build_tokenize"
+role = "dataset"
+
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+
+[outputs.model]
+type = "checkpoint"
+marker = "train_export_manifest.json"
+alias = "relative_factorial_reltool_pre_r32_s750_v1_{run.id}"
+
+[args]
+omegalax_repo = "{inputs.omegalax.path}"
+dataset = "{inputs.dataset.path}"
+arm = "reltool_pre"
+output = "{outputs.model.path}"
+model_id = "Qwen/Qwen3-VL-8B-Instruct"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+WANDB_MODE = "offline"
+PYTHONUNBUFFERED = "1"
+XLA_PYTHON_CLIENT_ALLOCATOR = "cuda_async"
+XLA_PYTHON_CLIENT_MEM_FRACTION = "0.8"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

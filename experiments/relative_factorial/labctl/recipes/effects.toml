@@ -1,0 +1,70 @@
+name = "relative_factorial_effects_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+python3 "$REPO/experiments/relative_factorial/effects.py" "$@"
+''', "--"]
+
+[resources]
+cpus = 2
+mem = "8GB"
+time = "08:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.abs_tool_act]
+type = "stage"
+stage = "eval_abstool_act"
+role = "result"
+[inputs.abs_bare_act]
+type = "stage"
+stage = "eval_absraw_act"
+role = "result"
+[inputs.abs_tool_pre]
+type = "stage"
+stage = "eval_abstool_pre"
+role = "result"
+[inputs.abs_bare_pre]
+type = "stage"
+stage = "eval_absraw_pre"
+role = "result"
+[inputs.rel_tool_act]
+type = "stage"
+stage = "eval_reltool_act"
+role = "result"
+[inputs.rel_bare_act]
+type = "stage"
+stage = "eval_relraw_act"
+role = "result"
+[inputs.rel_tool_pre]
+type = "stage"
+stage = "eval_reltool_pre"
+role = "result"
+[inputs.rel_bare_pre]
+type = "stage"
+stage = "eval_relraw_pre"
+role = "result"
+
+[outputs.result]
+type = "eval_result"
+marker = "effects.json"
+alias = "relative_factorial_effects_v1_{run.id}"
+
+[args]
+abs_tool_act = "{inputs.abs_tool_act.path}"
+abs_bare_act = "{inputs.abs_bare_act.path}"
+abs_tool_pre = "{inputs.abs_tool_pre.path}"
+abs_bare_pre = "{inputs.abs_bare_pre.path}"
+rel_tool_act = "{inputs.rel_tool_act.path}"
+rel_bare_act = "{inputs.rel_bare_act.path}"
+rel_tool_pre = "{inputs.rel_tool_pre.path}"
+rel_bare_pre = "{inputs.rel_bare_pre.path}"
+metric = "in_box"
+out = "{outputs.result.path}/effects.json"
+
+[env]
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"

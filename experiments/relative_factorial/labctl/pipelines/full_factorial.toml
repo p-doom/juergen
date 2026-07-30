@@ -1,0 +1,48 @@
+name = "synthetic_relative_factorial_2x2x2_v1"
+
+# Relative critical paths:
+# build_tokenize -> train_rel{tool,raw}_{act,pre} -> matching eval.
+# Four CPU export stages recover the intact absolute 000750 Orbax checkpoints;
+# the absolute cells are exported and evaluated but never retrained.
+
+[stages.build_tokenize]
+recipe = "../recipes/build_tokenize.toml"
+
+[stages.train_reltool_act]
+recipe = "../recipes/train_reltool_act.toml"
+[stages.train_relraw_act]
+recipe = "../recipes/train_relraw_act.toml"
+[stages.train_reltool_pre]
+recipe = "../recipes/train_reltool_pre.toml"
+[stages.train_relraw_pre]
+recipe = "../recipes/train_relraw_pre.toml"
+
+[stages.eval_reltool_act]
+recipe = "../recipes/eval_reltool_act.toml"
+[stages.eval_relraw_act]
+recipe = "../recipes/eval_relraw_act.toml"
+[stages.eval_reltool_pre]
+recipe = "../recipes/eval_reltool_pre.toml"
+[stages.eval_relraw_pre]
+recipe = "../recipes/eval_relraw_pre.toml"
+
+[stages.export_abstool_act]
+recipe = "../recipes/export_abstool_act.toml"
+[stages.export_absraw_act]
+recipe = "../recipes/export_absraw_act.toml"
+[stages.export_abstool_pre]
+recipe = "../recipes/export_abstool_pre.toml"
+[stages.export_absraw_pre]
+recipe = "../recipes/export_absraw_pre.toml"
+
+[stages.eval_abstool_act]
+recipe = "../recipes/eval_abstool_act.toml"
+[stages.eval_absraw_act]
+recipe = "../recipes/eval_absraw_act.toml"
+[stages.eval_abstool_pre]
+recipe = "../recipes/eval_abstool_pre.toml"
+[stages.eval_absraw_pre]
+recipe = "../recipes/eval_absraw_pre.toml"
+
+[stages.effects]
+recipe = "../recipes/effects.toml"

@@ -1,0 +1,116 @@
+name = "relative_factorial_build_tokenize_v1"
+repo = "juergen_rft"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+declare -A A
+for arg in "$@"; do
+    case "$arg" in --*=*) key="${arg%%=*}"; key="${key#--}"; A[$key]="${arg#*=}";; esac
+done
+OUT="${A[out]}"
+EXP="$REPO/experiments/relative_factorial"
+mkdir -p "$OUT"
+
+# Requeue-safe: a completed, invariant-passing source build may be reused while
+# tokenization restarts with --overwrite. A partial build has no manifest and is
+# rebuilt by the builder's private staging-directory transaction.
+if [[ ! -f "$OUT/build_manifest.json" ]]; then
+    python3 "$EXP/build_relative.py" \
+        --source-root "${A[source]}" --out-root "$OUT" \
+        --audit-dir "${A[audit_dir]}" --eval-scenes "${A[eval_scenes]}"
+else
+    python3 - "$OUT/invariant_report.json" <<'PY'
+import json, sys
+report = json.load(open(sys.argv[1]))
+if report.get("status") != "pass":
+    raise SystemExit(f"FATAL existing build did not pass invariants: {report}")
+print("reusing invariant-passing relative source build")
+PY
+fi
+
+for arm in reltool_act relraw_act reltool_pre relraw_pre; do
+    for split in train val; do
+        src="$OUT/$arm/_normalized/$split/chat.jsonl"
+        [[ -f "$src" ]] || { echo "FATAL missing converted chat: $src" >&2; exit 2; }
+        uv run --project="${A[omegalax_repo]}" -- \
+            python "${A[omegalax_repo]}/scripts/build_sft_records_from_chat.py" \
+            --data_path "$src" --out_dir "$OUT/$arm/$split" \
+            --model_id Qwen/Qwen3-VL-2B-Instruct \
+            --tokenizer Qwen/Qwen3-VL-2B-Instruct \
+            --processor Qwen/Qwen3-VL-2B-Instruct \
+            --max_length 4096 --overflow_mode truncate \
+            --records_per_shard 8000 --num_workers 8 --overwrite
+    done
+done
+
+OMX_SHA="$(git -C "${A[omegalax_repo]}" rev-parse HEAD)"
+OMX_DIFF_SHA="$(git -C "${A[omegalax_repo]}" diff --binary | sha256sum | awk '{print $1}')"
+python3 - "$OUT" "$OMX_SHA" "$OMX_DIFF_SHA" <<'PY'
+import json, sys
+from pathlib import Path
+out = Path(sys.argv[1])
+omegalax_commit, omegalax_diff_sha256 = sys.argv[2:4]
+for arm in ("reltool_act", "relraw_act", "reltool_pre", "relraw_pre"):
+    for split, expected in (("train", 2000), ("val", 200)):
+        path = out / arm / split / "metadata.json"
+        meta = json.loads(path.read_text())
+        if meta.get("num_records") != expected or meta.get("max_length") != 4096:
+            raise SystemExit(f"FATAL tokenization invariant {path}: {meta}")
+(out / "build_tokenize_manifest.json").write_text(json.dumps({
+    "artifact_type": "relative_factorial_tokenized",
+    "schema_version": 1,
+    "status": "complete",
+    "arms": ["reltool_act", "relraw_act", "reltool_pre", "relraw_pre"],
+    "train_records_per_arm": 2000,
+    "val_records_per_arm": 200,
+    "max_length": 4096,
+    "omegalax_commit": omegalax_commit,
+    "omegalax_tracked_diff_sha256": omegalax_diff_sha256,
+}, indent=2, sort_keys=True) + "\n")
+PY
+''', "--"]
+
+[resources]
+cpus = 16
+mem = "96GB"
+time = "08:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--signal=USR1@600", "--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.absolute_source]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand/r3data_2k"
+
+[inputs.audit]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand"
+
+[inputs.eval_scenes]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand/runs/rung2_offshelf/px/scenes.jsonl"
+
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+
+[outputs.dataset]
+type = "dataset"
+marker = "build_tokenize_manifest.json"
+alias = "relative_factorial_r3data_2k_v1_{run.id}"
+
+[args]
+source = "{inputs.absolute_source.path}"
+audit_dir = "{inputs.audit.path}"
+eval_scenes = "{inputs.eval_scenes.path}"
+out = "{outputs.dataset.path}"
+omegalax_repo = "{inputs.omegalax.path}"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"
