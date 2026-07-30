@@ -202,5 +202,49 @@ class TestCli(unittest.TestCase):
         self.assertTrue(sp.greedy)
 
 
+class TestSourceMap(unittest.TestCase):
+    """source_map attributes each resolved value to flag vs regime default vs
+    greedy, for the run record."""
+
+    def _parse(self, argv):
+        p = argparse.ArgumentParser()
+        sampling.add_sampling_cli(p, default_max_tokens=256)
+        return p.parse_args(argv)
+
+    def test_all_defaults_attribute_to_the_regime(self):
+        args = self._parse([])
+        sp = sampling.from_cli(args, model_path="Qwen/Qwen3-VL-8B-Instruct")
+        src = sampling.source_map(args, sp)
+        self.assertEqual(set(src), set(sampling._SOURCEABLE))
+        self.assertTrue(all(v == "qwen:instruct" for v in src.values()), src)
+
+    def test_regime_label_follows_detected_mode(self):
+        args = self._parse([])
+        sp = sampling.from_cli(args, model_path="/ckpt/qwen3vl-thinking")
+        self.assertEqual(sampling.source_map(args, sp)["temperature"],
+                         "qwen:thinking")
+
+    def test_overridden_fields_attribute_to_flag(self):
+        args = self._parse(["--temperature", "0.3", "--top_k", "40"])
+        sp = sampling.from_cli(args, model_path="Qwen/Qwen3-VL-8B-Instruct")
+        src = sampling.source_map(args, sp)
+        self.assertEqual(src["temperature"], "flag")
+        self.assertEqual(src["top_k"], "flag")
+        self.assertEqual(src["top_p"], "qwen:instruct")  # untouched -> default
+
+    def test_explicit_value_equal_to_default_still_reads_as_flag(self):
+        # the whole point: 0.7 passed explicitly is distinguishable from the
+        # Instruct default of 0.7
+        args = self._parse(["--temperature", "0.7"])
+        sp = sampling.from_cli(args, model_path="Qwen/Qwen3-VL-8B-Instruct")
+        self.assertEqual(sampling.source_map(args, sp)["temperature"], "flag")
+
+    def test_greedy_marks_every_field(self):
+        args = self._parse(["--greedy"])
+        sp = sampling.from_cli(args, model_path="Qwen/Qwen3-VL-8B-Instruct")
+        src = sampling.source_map(args, sp)
+        self.assertTrue(all(v == "greedy" for v in src.values()), src)
+
+
 if __name__ == "__main__":
     unittest.main()

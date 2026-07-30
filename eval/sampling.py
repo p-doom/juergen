@@ -266,6 +266,28 @@ def from_cli(
     )
 
 
+# Sampling knobs that carry a Qwen regime default (max_tokens is excluded: its
+# CLI default is a concrete int, so flag-vs-default is not recoverable from the
+# namespace the way the None-defaulted knobs are).
+_SOURCEABLE = ("temperature", "top_p", "top_k", "repetition_penalty",
+               "presence_penalty")
+
+
+def source_map(args: argparse.Namespace, params: SamplingParams) -> dict[str, str]:
+    """Per-field provenance for the run record: where each resolved sampling
+    value came from — ``"flag"`` when the user set it on the CLI,
+    ``"qwen:<mode>"`` when it is the regime default, or ``"greedy"`` when
+    ``--greedy`` zeroed sampling. Recorded alongside :meth:`SamplingParams.to_dict`
+    so a result.json is self-describing: a later reader can tell an explicit
+    ``temperature 0.7`` from the Instruct default of the same value."""
+    if params.greedy:
+        return {f: "greedy" for f in _SOURCEABLE}
+    return {
+        f: ("flag" if getattr(args, f, None) is not None else f"qwen:{params.mode}")
+        for f in _SOURCEABLE
+    }
+
+
 _UNPATCHED_AGENT_WARNING = (
     "The vendored mm_agents.qwen3vl_agent.Qwen3VLAgent does not accept %s: its "
     "OpenAI backend COMMENTS OUT temperature/top_p (qwen3vl_agent.py:646-648) and "

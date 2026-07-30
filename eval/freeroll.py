@@ -315,6 +315,7 @@ def _run_rollout(
     n_history_frames: int,
     persist_instruction: bool,
     sampling: SamplingParams,
+    sampling_source: dict[str, str],
     save_frames: bool,
     stop_on_click: bool,
     desktop_setup: str,
@@ -641,6 +642,9 @@ def _run_rollout(
         "n_history_frames": n_history_frames,
         "persist_instruction": persist_instruction,
         "sampling": sampling.to_dict(),
+        # per-field provenance: 'flag' | 'qwen:<mode>' | 'greedy' (see
+        # sampling.source_map) — tells an explicit override from a regime default
+        "sampling_source": sampling_source,
         # back-compat scalar keys for existing result.json readers
         "max_tokens": sampling.max_tokens,
         "temperature": 0.0 if sampling.greedy else sampling.temperature,
@@ -801,7 +805,8 @@ def main() -> int:
         model_path=args.model_path,
         system_prompt=SYSTEM_PROMPTS[args.system_prompt_id],
     )
-    _LOGGER.info("sampling: %s", sampling.to_dict())
+    sampling_source = sampling_mod.source_map(args, sampling)
+    _LOGGER.info("sampling: %s (source: %s)", sampling.to_dict(), sampling_source)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -914,6 +919,7 @@ def main() -> int:
                 n_history_frames=args.n_history_frames,
                 persist_instruction=args.persist_instruction,
                 sampling=sampling,
+                sampling_source=sampling_source,
                 save_frames=not args.no_frames,
                 stop_on_click=args.stop_on_click,
                 desktop_setup=args.desktop_setup,
