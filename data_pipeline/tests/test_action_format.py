@@ -27,7 +27,7 @@ from realigned_pipeline.lib.action_format import (
 from realigned_pipeline.lib.common import aggregate_actions, format_action
 from realigned_pipeline.lib.config import SYSTEM_PROMPT
 from realigned_pipeline.lib.events import RawEvent, Window, load_events
-from realigned_pipeline.stage_04_build_conversations import default_system_prompt
+from realigned_pipeline.stage_04_conversations import default_system_prompt
 
 MASTER_FPS = 15.0
 TARGET_FPS = 1.0

@@ -305,3 +305,14 @@ _CUA_V4_THINKING_V2_FILE = (
     / "data_pipeline/realigned_pipeline/system_prompts/cua_v4_thinking_v2.txt"
 )
 SYSTEM_PROMPTS["cua_v4_thinking_v2"] = _CUA_V4_THINKING_V2_FILE.read_text().strip()
+
+# ordered_events_v2 (ordered move/scroll/down/up mini-program, per-key typing,
+# 10 Hz motion grid — NO type() primitive) + decision-point thinking + goal
+# conditioning. Goal-conditioned twin of the goal-free cua_v2_thinking; same
+# file-loader pattern (byte-identical to stage_04's --system-prompt-file,
+# modulo the .strip() both sides apply).
+_CUA_OEV2_THINKING_FILE = (
+    _Path(__file__).resolve().parents[1]
+    / "data_pipeline/realigned_pipeline/system_prompts/cua_oev2_thinking.txt"
+)
+SYSTEM_PROMPTS["cua_oev2_thinking"] = _CUA_OEV2_THINKING_FILE.read_text().strip()

@@ -1,9 +1,9 @@
-"""Stage 04t goal-bounded windows: span tiling, outcome-frame TERMINATE
-placement (clean/verified/all), near-miss thought attachment, leak-free
-GOAL/So-far memory selection, no-goal exclusion, memory-update samples, the
-TERMINATE-is-own-turn invariant, and the legacy goal-free mode's golden
-regression. All on synthetic DayStreams + sidecar rows — no filter artifact,
-no frame store, no labeler.
+"""Stage 04 --mode thinking goal-bounded windows: clip-stride window alignment,
+leak-free GOAL/So-far memory selection (exact preceding-clip only), outcome-
+frame TERMINATE placement (clean/verified/all), near-miss thought attachment,
+no-goal exclusion, the TERMINATE-is-own-turn invariant, and the legacy goal-
+free mode's golden regression. All on synthetic DayStreams + sidecar rows — no
+filter artifact, no frame store, no labeler.
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ import unittest
 
 from realigned_pipeline.annotation.lib.days import DayFrame, DayStream, fmt_t
 from realigned_pipeline.lib.action_format import get_formatter
-from realigned_pipeline.stage_04_thinking_conversations import (
-    MEMORY_UPDATE_PROMPT,
+from realigned_pipeline.lib.conversations import CLIP_STRIDE, require_window_alignment
+from realigned_pipeline.stage_04_conversations import (
     TERMINATE_TOKEN,
     build_goal_day_rows,
     build_legacy_day_rows,
@@ -77,10 +77,10 @@ def _thought(i: int, text: str) -> dict:
 
 
 def _build(day, active, memory=(), boundaries=None, anchored=None, **over):
-    cfg = dict(window_frames=24, terminate_mode="clean", terminate_max_lag_s=180.0,
-               min_anchor_lead=0, memory_update_samples=False, system_prompt="SYS",
-               fps=0.5, action_format="canonical",
-               annotation_method="lumine_thinking_goals")
+    # 30 is the smallest aligned window >1 clip; individual tests override it.
+    cfg = dict(window_frames=30, terminate_mode="clean", terminate_max_lag_s=180.0,
+               min_anchor_lead=0, system_prompt="SYS", fps=0.5,
+               action_format="canonical", annotation_method="lumine_thinking_goals")
     cfg.update(over)
     return build_goal_day_rows(day, list(active), list(memory), boundaries or {},
                                anchored or {}, **cfg)
@@ -100,6 +100,28 @@ def _frame_idxs(row) -> list[int]:
             for turn in _user_turns(row) for block in turn if block["type"] == "image"]
 
 
+def _goal_block(row) -> str:
+    return _user_turns(row)[0][0]["text"]
+
+
+class WindowAlignmentTest(unittest.TestCase):
+    def test_multiples_of_the_clip_stride_pass(self) -> None:
+        self.assertEqual(CLIP_STRIDE, 15)
+        for wf in (15, 30, 45, 60, 300):
+            require_window_alignment(wf)  # no raise
+
+    def test_non_multiples_error_and_name_the_stride(self) -> None:
+        for bad in (24, 14, 16, 1):  # positive, not a multiple of 15
+            with self.assertRaises(SystemExit) as ctx:
+                require_window_alignment(bad)
+            self.assertIn(str(CLIP_STRIDE), str(ctx.exception))
+
+    def test_nonpositive_errors(self) -> None:
+        for bad in (0, -15):
+            with self.assertRaises(SystemExit):
+                require_window_alignment(bad)
+
+
 class GroupGoalRunsTest(unittest.TestCase):
     def test_contiguous_runs_and_handoff_ids(self) -> None:
         active = [
@@ -117,24 +139,30 @@ class GroupGoalRunsTest(unittest.TestCase):
 
 
 class SelectMemoryTest(unittest.TestCase):
-    def test_latest_strictly_earlier_row_wins(self) -> None:
+    def test_exact_preceding_clip_wins(self) -> None:
         rows = [_mem("c0", 0, 14, "M0"), _mem("c1", 15, 29, "M1")]
-        self.assertEqual(select_memory(rows, 30), "M1")
-        self.assertEqual(select_memory(rows, 15), "M0")
+        # window starting at 30 -> predecessor clip ends at 29 == 30-1 -> M1
+        self.assertEqual(select_memory(rows, 30), ("M1", "ok"))
+        # window starting at 15 -> predecessor ends at 14 -> M0
+        self.assertEqual(select_memory(rows, 15), ("M0", "ok"))
 
-    def test_overlapping_row_is_rejected(self) -> None:
+    def test_overlapping_or_gappy_clip_is_never_attached(self) -> None:
         rows = [_mem("c0", 0, 14, "M0"), _mem("c1", 15, 29, "M1")]
-        # window starts at 20: [15, 29] overlaps it (ends at 29 >= 20) -> M0
-        self.assertEqual(select_memory(rows, 20), "M0")
-        # inclusive range ending exactly ON the window start also overlaps
-        self.assertEqual(select_memory([_mem("c0", 0, 20, "M0")], 20), "")
+        # window starts at 20 (mid clip [15,29]): [15,29] overlaps (ends 29>=20)
+        # and [0,14] ends at 14, NOT at 19 -> gappy -> omit (no leak of M1).
+        self.assertEqual(select_memory(rows, 20), ("", "gap"))
+        # a clip ending exactly ON the window start overlaps too -> nothing before
+        self.assertEqual(select_memory([_mem("c0", 0, 20, "M0")], 20), ("", "none"))
+
+    def test_empty_predecessor_memory(self) -> None:
+        self.assertEqual(select_memory([_mem("c0", 0, 14, "")], 15), ("", "empty"))
 
     def test_no_earlier_memory(self) -> None:
-        self.assertEqual(select_memory([_mem("c0", 0, 14, "M0")], 0), "")
+        self.assertEqual(select_memory([_mem("c0", 0, 14, "M0")], 0), ("", "none"))
 
 
 class SpanTilingTest(unittest.TestCase):
-    def test_tiles_span_and_excludes_no_goal_frames(self) -> None:
+    def test_tiles_span_at_30_and_excludes_no_goal_frames(self) -> None:
         day = _day(n=100)
         active = [
             _clip("c0", 0, 14),
@@ -145,7 +173,7 @@ class SpanTilingTest(unittest.TestCase):
         ]
         rows, stats = _build(day, active)  # goal_t_end beyond the chunk: no outcome
         self.assertEqual(len(rows), 2)
-        self.assertEqual([r["n_frames"] for r in rows], [24, 21])  # 45 frames <= 24 each
+        self.assertEqual([r["n_frames"] for r in rows], [30, 15])  # 45 frames, 30-tiled
         shown = sorted(i for r in rows for i in _frame_idxs(r))
         self.assertEqual(shown, list(range(15, 60)))  # in-span only, nothing else
         self.assertEqual(stats["n_terminate_turns"], 0)
@@ -154,9 +182,19 @@ class SpanTilingTest(unittest.TestCase):
         for r in rows:
             self.assertTrue(r["goal_conditioned"])
             self.assertEqual(r["goal_text"], "Do the thing")
-            first_user = _user_turns(r)[0]
-            self.assertEqual(first_user[0]["type"], "text")
-            self.assertTrue(first_user[0]["text"].startswith("GOAL: Do the thing"))
+            self.assertTrue(_goal_block(r).startswith("GOAL: Do the thing"))
+
+    def test_tiles_span_at_60_lands_on_clip_edges(self) -> None:
+        day = _day(n=200)
+        # one span of 8 clips, 120 in-span frames [15..134]
+        active = [_clip("c0", 0, 14)] + [
+            _clip(f"c{j}", 15 * j, 15 * j + 14, gid=1, text="G", t0=30.0, t1=1e4)
+            for j in range(1, 9)]
+        rows, _ = _build(day, active, window_frames=60)
+        # 120 frames / 60 -> two full windows, edges at clip boundaries 15,75,135
+        self.assertEqual([_frame_idxs(r)[0] for r in rows], [15, 75])
+        self.assertEqual([_frame_idxs(r)[-1] for r in rows], [74, 134])
+        self.assertEqual([r["n_frames"] for r in rows], [60, 60])
 
     def test_windows_never_cross_chunk_boundaries(self) -> None:
         day = _day(n=60, chunk_splits=(30,))
@@ -169,6 +207,53 @@ class SpanTilingTest(unittest.TestCase):
         self.assertEqual(_frame_idxs(rows[0]), list(range(15, 30)))
         self.assertEqual(_frame_idxs(rows[1]), list(range(30, 45)))
         self.assertEqual([r["chunk_index"] for r in rows], [0, 1])
+
+
+class LeakFreeMemoryTest(unittest.TestCase):
+    def test_span_start_has_no_memory_then_exact_predecessor(self) -> None:
+        day = _day(n=60)
+        active = [_clip("c0", 0, 14, gid=1, text="G", t0=0.0, t1=1000.0),
+                  _clip("c1", 15, 29, gid=1, text="G", t0=0.0, t1=1000.0),
+                  _clip("c2", 30, 44, gid=1, text="G", t0=0.0, t1=1000.0)]
+        memory = [_mem("c0", 0, 14, "M0"), _mem("c1", 15, 29, "M1"),
+                  _mem("c2", 30, 44, "M2")]
+        rows, stats = _build(day, active, memory=memory)  # window_frames=30
+        # window 0 [0..29] is the span start -> bare GOAL, no So-far
+        self.assertEqual(_goal_block(rows[0]), "GOAL: G")
+        self.assertFalse(rows[0]["has_memory"])
+        # window 1 [30..44] -> predecessor clip [15,29] ends at 29 == 30-1 -> M1
+        self.assertEqual(_goal_block(rows[1]), "GOAL: G\nSo far: M1")
+        self.assertTrue(rows[1]["has_memory"])
+        self.assertEqual(stats["n_windows_with_memory"], 1)
+        self.assertEqual(stats["n_windows_memory_omitted_boundary"], 0)
+
+    def test_chunk_start_window_withholds_memory(self) -> None:
+        # a span crossing a chunk boundary: the second chunk's first window is a
+        # piece start -> no memory even though an in-span clip ends just before.
+        day = _day(n=60, chunk_splits=(30,))
+        active = [_clip("c1", 15, 29, gid=1, text="G", t0=30.0, t1=1000.0),
+                  _clip("c2", 30, 44, gid=1, text="G", t0=30.0, t1=1000.0)]
+        memory = [_mem("c1", 15, 29, "M1"), _mem("c2", 30, 44, "M2")]
+        rows, _ = _build(day, active, memory=memory)
+        self.assertEqual(_goal_block(rows[0]), "GOAL: G")   # span start
+        self.assertEqual(_goal_block(rows[1]), "GOAL: G")   # chunk start, not So-far
+        self.assertFalse(any(r["has_memory"] for r in rows))
+
+    def test_later_window_omits_gappy_memory_and_counts_it(self) -> None:
+        # a well-tiled window whose exact predecessor clip is MISSING from the
+        # memory sidecar (only a farther-back row exists) -> omit + count.
+        day = _day(n=60)
+        active = [_clip(f"c{j}", 15 * j, 15 * j + 14, gid=1, text="G", t0=0.0, t1=1e4)
+                  for j in range(0, 3)]
+        memory = [_mem("c0", 0, 14, "M0")]  # clip ending at 29 (win 2's pred) absent
+        rows, stats = _build(day, active, memory=memory, window_frames=15)
+        # win0 span start (no mem); win1 pred [0,14] present -> M0; win2 pred
+        # would end at 29 but that clip is missing from the sidecar -> gappy,
+        # omitted rather than attaching the farther-back [0,14].
+        self.assertEqual([r["has_memory"] for r in rows], [False, True, False])
+        self.assertEqual(_goal_block(rows[1]), "GOAL: G\nSo far: M0")
+        self.assertEqual(_goal_block(rows[2]), "GOAL: G")
+        self.assertEqual(stats["n_windows_memory_omitted_boundary"], 1)
 
 
 class CleanTerminateTest(unittest.TestCase):
@@ -233,7 +318,7 @@ class VerifiedTerminateTest(unittest.TestCase):
         day = _day(n=60)
         boundaries = {1: _brow(1, final_thought="The reply is in the sent thread.")}
         rows, stats = _build(day, self._active(), boundaries=boundaries,
-                             terminate_mode="verified", window_frames=48)
+                             terminate_mode="verified", window_frames=60)
         row = [r for r in rows if r["goal_id"] == 1][0]
         # supervised 0..27 (t <= 55), outcome frame 28 (t=56)
         self.assertEqual(_frame_idxs(row), list(range(0, 29)))
@@ -254,7 +339,7 @@ class VerifiedTerminateTest(unittest.TestCase):
             ({}, {"no_boundaries_row": 2}),
         ):
             rows, stats = _build(day, self._active(), boundaries=boundaries,
-                                 terminate_mode="verified", window_frames=48)
+                                 terminate_mode="verified", window_frames=60)
             row = [r for r in rows if r["goal_id"] == 1][0]
             self.assertIsNone(row["terminate"])
             # untruncated: ends on the last in-span frame's normal action
@@ -273,7 +358,7 @@ class VerifiedTerminateTest(unittest.TestCase):
         anchored = {0: _thought(0, "I open the mail client.")}
         rows, stats = _build(day, self._active(), boundaries=boundaries,
                              anchored=anchored, terminate_mode="verified",
-                             window_frames=48)
+                             window_frames=60)
         row = [r for r in rows if r["goal_id"] == 1][0]
         self.assertEqual(
             _assistant_texts(row)[0],
@@ -281,107 +366,6 @@ class VerifiedTerminateTest(unittest.TestCase):
         self.assertIn("near_miss:g0001", row["thought_ids"])
         self.assertEqual(stats["n_near_miss_attached"], 1)
         self.assertEqual(stats["n_thoughts_placed"], 1)  # replacement, not addition
-
-
-class GoalMemoryBlockTest(unittest.TestCase):
-    def test_first_window_no_memory_then_leak_free_selection(self) -> None:
-        day = _day(n=60)
-        active = [_clip("c0", 0, 14, gid=1, text="G", t0=0.0, t1=1000.0),
-                  _clip("c1", 15, 29, gid=1, text="G", t0=0.0, t1=1000.0),
-                  _clip("c2", 30, 44, gid=1, text="G", t0=0.0, t1=1000.0)]
-        memory = [_mem("c0", 0, 14, "M0"), _mem("c1", 15, 29, "M1"),
-                  _mem("c2", 30, 44, "M2")]
-        rows, _ = _build(day, active, memory=memory)
-        # window 1 [0..23]: no strictly-earlier memory -> GOAL line only
-        b0 = _user_turns(rows[0])[0][0]["text"]
-        self.assertEqual(b0, "GOAL: G")
-        self.assertFalse(rows[0]["has_memory"])
-        # window 2 [24..44]: [15,29] overlaps its start (24) -> only M0 usable
-        b1 = _user_turns(rows[1])[0][0]["text"]
-        self.assertEqual(b1, "GOAL: G\nSo far: M0")
-        self.assertTrue(rows[1]["has_memory"])
-
-
-class NoMemoryAtGoalStartTest(unittest.TestCase):
-    def test_goal_start_window_withholds_memory(self) -> None:
-        day = _day(n=90)
-        active = [_clip("c1", 15, 29, gid=1, text="G", t0=30.0, t1=1000.0),
-                  _clip("c2", 30, 44, gid=1, text="G", t0=30.0, t1=1000.0),
-                  _clip("c3", 45, 59, gid=1, text="G", t0=30.0, t1=1000.0)]
-        memory = [_mem("c0", 0, 14, "M0"), _mem("c1", 15, 29, "M1")]
-        # default: pre-goal day memory rides the goal's first window
-        rows, _ = _build(day, active, memory=memory)
-        self.assertEqual(_user_turns(rows[0])[0][0]["text"], "GOAL: G\nSo far: M0")
-        # flag on: first window is a fresh episode start -> bare GOAL
-        rows, stats = _build(day, active, memory=memory,
-                             no_memory_at_goal_start=True)
-        self.assertEqual(_user_turns(rows[0])[0][0]["text"], "GOAL: G")
-        self.assertFalse(rows[0]["has_memory"])
-        self.assertEqual(stats["n_fresh_goal_start"], 1)
-        # later windows keep leak-free memory selection
-        self.assertEqual(_user_turns(rows[1])[0][0]["text"], "GOAL: G\nSo far: M1")
-        self.assertTrue(rows[1]["has_memory"])
-
-    def test_resumed_run_keeps_memory(self) -> None:
-        day = _day(n=90)
-        active = [_clip("c1", 15, 29, gid=1, text="G", t0=30.0, t1=1000.0),
-                  _clip("c2", 30, 44, gid=2, text="H", t0=60.0, t1=1000.0),
-                  _clip("c3", 45, 59, gid=1, text="G", t0=30.0, t1=1000.0)]
-        memory = [_mem("c2", 30, 44, "M2")]
-        rows, stats = _build(day, active, memory=memory,
-                             no_memory_at_goal_start=True)
-        # rows: g1 r00, g2 r00, g1 r01 (plan order)
-        self.assertEqual(len(rows), 3)
-        self.assertEqual(_user_turns(rows[0])[0][0]["text"], "GOAL: G")
-        self.assertEqual(_user_turns(rows[1])[0][0]["text"], "GOAL: H")
-        # the resumed run (day-global r02) is NOT an episode start -> memory kept
-        self.assertEqual(rows[2]["run_index"], 2)
-        self.assertEqual(_user_turns(rows[2])[0][0]["text"], "GOAL: G\nSo far: M2")
-        self.assertEqual(stats["n_fresh_goal_start"], 2)
-
-
-class MemoryUpdateSamplesTest(unittest.TestCase):
-    def _setup(self):
-        day = _day(n=60)
-        active = [_clip("c1", 15, 29, gid=1, text="G", t0=30.0, t1=1000.0),
-                  _clip("c2", 30, 44, gid=1, text="G", t0=30.0, t1=1000.0)]
-        memory = [_mem("c1", 15, 29, "The draft  reads 'Muss ich'."),
-                  _mem("c2", 30, 44, "M2")]
-        return day, active, memory
-
-    def test_appendix_shape_and_verbatim_memory(self) -> None:
-        day, active, memory = self._setup()
-        rows, stats = _build(day, active, memory=memory, memory_update_samples=True)
-        # window 1 [15..38] fully contains clip [15,29] -> appendix
-        row = rows[0]
-        self.assertTrue(row["memory_update"])
-        self.assertEqual(row["messages"][-2]["role"], "user")
-        self.assertEqual(row["messages"][-2]["content"],
-                         [{"type": "text", "text": MEMORY_UPDATE_PROMPT}])  # no image
-        self.assertEqual(row["messages"][-1]["role"], "assistant")
-        self.assertEqual(row["messages"][-1]["content"][0]["text"],
-                         "The draft  reads 'Muss ich'.")  # verbatim, not normalized
-        # window 2 [39..44] fully contains no clip -> no appendix
-        self.assertFalse(rows[1]["memory_update"])
-        self.assertEqual(stats["n_memory_update_samples"], 1)
-
-    def test_terminate_window_skips_the_appendix(self) -> None:
-        day, active, memory = self._setup()
-        active[0]["goal_t_end"] = active[1]["goal_t_end"] = 86.0  # inside c2
-        rows, stats = _build(day, active, memory=memory, memory_update_samples=True,
-                             terminate_mode="all", window_frames=48)
-        self.assertEqual(len(rows), 1)
-        row = rows[0]
-        self.assertEqual(row["terminate"], "all")
-        self.assertFalse(row["memory_update"])
-        self.assertEqual(_assistant_texts(row)[-1], TERMINATE_TOKEN)
-        self.assertEqual(stats["n_memory_update_samples"], 0)
-
-    def test_flag_off_appends_nothing(self) -> None:
-        day, active, memory = self._setup()
-        rows, stats = _build(day, active, memory=memory)
-        self.assertFalse(any(r["memory_update"] for r in rows))
-        self.assertEqual(stats["n_memory_update_samples"], 0)
 
 
 class RecurringGoalRunsTest(unittest.TestCase):
@@ -403,7 +387,6 @@ class RecurringGoalRunsTest(unittest.TestCase):
         self.assertEqual(resumed["terminate"], "all")
         self.assertEqual(_frame_idxs(resumed), list(range(30, 45)))  # 30..43 + outcome 44
         self.assertEqual(_assistant_texts(resumed)[-1], TERMINATE_TOKEN)
-        # exactly one terminate for goal 1 (plus goal 2's own, 'all' mode)
         g1_terminates = [r["terminate"] for r in g1 if r["terminate"]]
         self.assertEqual(g1_terminates, ["all"])
         self.assertEqual(stats["n_terminate_turns"], 2)
@@ -424,8 +407,8 @@ class TerminateOwnTurnInvariantTest(unittest.TestCase):
                 for text in _assistant_texts(row):
                     if TERMINATE_TOKEN not in text:
                         continue
-                    # the whole action line is TERMINATE, optionally preceded
-                    # by exactly one think block — never an action + TERMINATE
+                    # the whole action line is TERMINATE, optionally preceded by
+                    # exactly one think block — never an action + TERMINATE
                     self.assertTrue(
                         text == TERMINATE_TOKEN
                         or (text.startswith("<think>\n")
@@ -436,8 +419,8 @@ class TerminateOwnTurnInvariantTest(unittest.TestCase):
 
 class TerminateHookTest(unittest.TestCase):
     """Terminate turns come from the formatter's ``terminate_line()`` — the
-    TERMINATE literal for the text formats, the native terminate tool_call
-    block for computer_use_rel_v1 — never a hardcoded literal."""
+    TERMINATE literal for the text formats, the native terminate tool_call block
+    for computer_use_rel_v1 — never a hardcoded literal."""
 
     NATIVE_TERMINATE = ('<tool_call>\n{"name": "computer_use", "arguments": '
                         '{"action": "terminate", "status": "success"}}\n</tool_call>')
@@ -477,8 +460,6 @@ class TerminateHookTest(unittest.TestCase):
         self.assertEqual(_assistant_texts(row)[-1], TERMINATE_TOKEN)
 
     def test_resolve_terminal_token(self) -> None:
-        # the TERMINATE sentinel resolves through the formatter; canonical/v2/v3
-        # are byte-identical, computer_use renders its native block
         self.assertEqual(resolve_terminal_token(TERMINATE_TOKEN, "canonical"),
                          TERMINATE_TOKEN)
         self.assertEqual(resolve_terminal_token(TERMINATE_TOKEN, "ordered_events_v3"),
@@ -486,7 +467,6 @@ class TerminateHookTest(unittest.TestCase):
         self.assertEqual(
             resolve_terminal_token(TERMINATE_TOKEN, "computer_use_rel_v1"),
             self.NATIVE_TERMINATE)
-        # anything else (incl. the default None) passes through untouched
         self.assertIsNone(resolve_terminal_token(None, "computer_use_rel_v1"))
         self.assertEqual(resolve_terminal_token("<TERM>", "computer_use_rel_v1"),
                          "<TERM>")
@@ -494,7 +474,9 @@ class TerminateHookTest(unittest.TestCase):
     def test_goal_system_prompt_defaults_per_format(self) -> None:
         self.assertEqual(goal_system_prompt_file("computer_use_rel_v1").name,
                          "cua_v4_thinking.txt")
-        for name in ("canonical", "ordered_events_v2", "ordered_events_v3"):
+        self.assertEqual(goal_system_prompt_file("ordered_events_v2").name,
+                         "cua_oev2_thinking.txt")
+        for name in ("canonical", "ordered_events_v3"):
             self.assertEqual(goal_system_prompt_file(name).name,
                              "cua_v3_thinking.txt")
 
@@ -505,7 +487,7 @@ class ThoughtsInGoalWindowsTest(unittest.TestCase):
         active = [_clip("c1", 15, 29, gid=1, text="G", t0=30.0, t1=1000.0),
                   _clip("c2", 30, 44, gid=1, text="G", t0=30.0, t1=1000.0)]
         anchored = {20: _thought(20, "I switch to the terminal.")}
-        rows, stats = _build(day, active, anchored=anchored)
+        rows, stats = _build(day, active, anchored=anchored, window_frames=15)
         self.assertEqual(len(rows), 2)  # thought-less window 2 is KEPT
         self.assertEqual(rows[0]["n_thoughts"], 1)
         self.assertEqual(_assistant_texts(rows[0])[5],  # frame 20, pos 5
@@ -517,15 +499,17 @@ class ThoughtsInGoalWindowsTest(unittest.TestCase):
         day = _day(n=60)
         active = [_clip("c1", 15, 29, gid=1, text="G", t0=30.0, t1=1000.0),
                   _clip("c2", 30, 44, gid=1, text="G", t0=30.0, t1=1000.0)]
-        # window 2 starts mid-chunk at 39; anchor at 40 sits 1 frame in
+        # window 2 starts mid-chunk at 30; anchor at 40 sits 10 frames in
         anchored = {40: _thought(40, "T")}
-        rows, stats = _build(day, active, anchored=anchored, min_anchor_lead=12)
-        self.assertEqual(_assistant_texts(rows[1])[1], "act_40")  # demoted
+        rows, stats = _build(day, active, anchored=anchored, min_anchor_lead=12,
+                             window_frames=15)
+        self.assertEqual(_assistant_texts(rows[1])[10], "act_40")  # demoted
         self.assertEqual(stats["n_demoted"], 1)
         # a chunk-start window is exempt: anchor at pos 0 of window 1 keeps it
         anchored = {15: _thought(15, "T")}
         day2 = _day(n=60, chunk_splits=(15,))
-        rows, stats = _build(day2, active, anchored=anchored, min_anchor_lead=12)
+        rows, stats = _build(day2, active, anchored=anchored, min_anchor_lead=12,
+                             window_frames=15)
         self.assertEqual(_assistant_texts(rows[0])[0], "<think>\nT\n</think>\nact_15")
         self.assertEqual(stats["n_demoted"], 0)
 
@@ -542,9 +526,6 @@ class LegacyModeRegressionTest(unittest.TestCase):
             day, anchored, window_frames=6, context_thoughts=8, min_anchor_lead=3,
             thinking_only=True, system_prompt="LEGACY SYS", terminal_token=None,
             fps=0.5)
-        # window 0 [0..5]: thought@2 kept (chunk-start exemption); window 1
-        # [6..11]: thought@8 at pos 2 < 3 demoted -> thinking_only drops it;
-        # window 2 [12..13]: no thoughts -> dropped.
         self.assertEqual(len(rows), 1)
         self.assertEqual(stats["n_demoted"], 1)
         self.assertEqual(stats["n_thoughts_placed"], 1)

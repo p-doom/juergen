@@ -1,5 +1,12 @@
 # Handoff: stage-04 thinking-SFT mode (lumine_thinking → training samples)
 
+> **RESOLVED — historical brief, do not re-execute.** The open design decision
+> below was settled by the merge: think-insertion is a MODE of the real stage 04.
+> `stage_04_build_conversations.py` and `stage_04_thinking_conversations.py` are
+> both gone, replaced by `stage_04_conversations.py --mode action|thinking` with
+> shared plumbing in `lib/conversations.py`. Current-state reference:
+> `data_pipeline/PIPELINE.md`. Everything below describes the pre-merge world.
+
 **Task for the next session**: extend `stage_04_build_conversations.py` with a
 WINDOW/THINKING mode that turns the `lumine_thinking` stage-03b artifact into
 SFT conversations — `<think>` before the anchored action, earlier thoughts as

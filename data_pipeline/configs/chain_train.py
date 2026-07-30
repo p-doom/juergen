@@ -64,8 +64,11 @@ def stage_04_conversations():
     cfg.resources.mem = "128GB"
     cfg.resources.cpus = 32
     cfg.entrypoint.repo_paths = {"berlin": PROJECT_REPO}
-    cfg.entrypoint.path = "realigned_pipeline/stage_04_build_conversations.py"
+    cfg.entrypoint.path = "realigned_pipeline/stage_04_conversations.py"
+    cfg.entrypoint.args.mode = "action"
     cfg.entrypoint.args.filter_dir = f"{DATASETS_ROOT}/{FILTER_VERSION}"
+    cfg.entrypoint.args.clips_manifest = CLIPS_MANIFEST
+    cfg.entrypoint.args.day_index_cache = f"{DATASETS_ROOT}/{CONV_VERSION}_day_index_cache.json"
     cfg.entrypoint.args.fps = TRAIN_FPS
     cfg.entrypoint.args.action_format = "canonical"
     cfg.entrypoint.args.num_workers = 32
