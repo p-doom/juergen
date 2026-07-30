@@ -14,8 +14,9 @@ HERE. This stage is the cheap, metadata-only half of the old
   * bins that keylog into per-target-fps ``ActionBin``s (``common.aggregate_actions``),
   * picks, for each target bin, the master record NEAREST in time
     (``round(bin_time * master_fps)``),
-  * drops (near-)black frames flagged by stage 01a (``--drop-black-frames``),
-    carrying their actions into the next kept frame,
+  * drops (near-)black frames flagged by stage 01a (``--drop-black-frames``)
+    together with the actions recorded during them (inputs against a blank
+    screen have no visible frame to attach to),
   * thins NO_OP frames per ``--noop-mode`` (``none`` drop all / ``ends`` keep each
     idle run's first+last / ``all`` keep every one; legacy ``--noop-keep-head/tail``
     still honored when ``--noop-mode`` is unset), and
@@ -245,6 +246,7 @@ def sample_segment(task: dict[str, Any]) -> dict[str, Any]:
     candidates: list[dict[str, Any]] = []
     missing_frames = 0
     n_black_dropped = 0
+    n_black_events_dropped = 0
     n_bins_carried = 0
     carry: ActionBin | None = None
     for local_bin_idx in range(n_bins):
@@ -260,13 +262,18 @@ def sample_segment(task: dict[str, Any]) -> dict[str, Any]:
             carry = action_bin
             continue
         mrec = master_manifest[rec_idx]
-        # Black-frame filter: a (near-)black master frame has no usable image, so
-        # drop it exactly like an out-of-coverage bin -- carry its actions into the
-        # next kept frame (never split a press/release), and let Pass 2 thin NO_OPs
+        # Black-frame filter: a (near-)black master frame has no usable image, and
+        # the inputs recorded during it happened against a blank screen -- there is
+        # no visible frame to attribute them to -- so its actions are DROPPED, not
+        # carried forward. (A carry can never reach here: the only prior frames that
+        # set one are out-of-coverage tail bins, which are monotonically at the end,
+        # and black frames no longer carry.) This can orphan a press/release pair
+        # that straddles the black gap, the intended trade-off. Pass 2 thins NO_OPs
         # over the ALREADY black-filtered sequence.
         if drop_black and _is_black(mrec, black_luma_max, black_dark_frac_min):
             n_black_dropped += 1
-            carry = action_bin
+            n_black_events_dropped += len(action_bin.events)
+            carry = None
             continue
         candidates.append({
             "local_bin_idx": local_bin_idx,
@@ -329,6 +336,7 @@ def sample_segment(task: dict[str, Any]) -> dict[str, Any]:
         "n_frames_kept": len(records),
         "n_missing_frames": missing_frames,
         "n_black_dropped": n_black_dropped,
+        "n_black_events_dropped": n_black_events_dropped,
         "n_noop_dropped": n_noop_dropped,
         "noop_mode": task.get("noop_mode"),
         "noop_keep_head": head,
@@ -359,6 +367,7 @@ def sample_segment(task: dict[str, Any]) -> dict[str, Any]:
         "noop_keep_all": keep_all_noops,
         "n_noop_dropped": n_noop_dropped,
         "n_black_dropped": n_black_dropped,
+        "n_black_events_dropped": n_black_events_dropped,
         "drop_black_frames": drop_black,
         "black_luma_max": black_luma_max,
         "black_dark_frac_min": black_dark_frac_min,
@@ -374,7 +383,7 @@ def sample_segment(task: dict[str, Any]) -> dict[str, Any]:
     return {**base, "status": "ok" if records else "empty",
             "n_frames": len(records), "n_non_noop": seg_summary["n_non_noop"],
             "n_missing_frames": missing_frames, "n_noop_dropped": n_noop_dropped,
-            "n_black_dropped": n_black_dropped}
+            "n_black_dropped": n_black_dropped, "n_black_events_dropped": n_black_events_dropped}
 
 
 def _load_master_fps(master_dir: Path, index_rows: list[dict[str, Any]], fallback: float) -> float:
@@ -431,8 +440,8 @@ def parse_args() -> argparse.Namespace:
                    "(ignored when --noop-mode is set).")
     p.add_argument("--drop-black-frames", nargs="?", const=True, type=_str2bool,
                    default=config.DEFAULT_DROP_BLACK_FRAMES, metavar="BOOL",
-                   help="Drop (near-)black master frames flagged by stage 01a; their "
-                   "actions carry into the next kept frame. Bare --drop-black-frames = on; "
+                   help="Drop (near-)black master frames flagged by stage 01a; the "
+                   "actions recorded during them are discarded too. Bare --drop-black-frames = on; "
                    "pass --drop-black-frames=false to keep black frames (works via labctl's "
                    "--key=value arg form).")
     p.add_argument("--black-luma-max", type=float, default=config.DEFAULT_BLACK_LUMA_MAX,
@@ -514,12 +523,14 @@ def main() -> None:
     n_frames_total = 0
     n_non_noop_total = 0
     n_black_dropped_total = 0
+    n_black_events_dropped_total = 0
     with mp.Pool(n_workers) as pool:
         for i, res in enumerate(pool.imap_unordered(sample_segment, tasks, chunksize=8), 1):
             counts[res["status"]] += 1
             n_frames_total += int(res.get("n_frames") or 0)
             n_non_noop_total += int(res.get("n_non_noop") or 0)
             n_black_dropped_total += int(res.get("n_black_dropped") or 0)
+            n_black_events_dropped_total += int(res.get("n_black_events_dropped") or 0)
             index_out.append(res)
             if res["status"] == "failed":
                 print(f"  FAIL {res['segment_id']}: {res.get('error')}", flush=True)
@@ -545,6 +556,7 @@ def main() -> None:
         "n_frames_total": n_frames_total,
         "n_non_noop_total": n_non_noop_total,
         "n_black_dropped_total": n_black_dropped_total,
+        "n_black_events_dropped_total": n_black_events_dropped_total,
         "frames_master_dir": str(master_dir),
         "source_clips_manifest": str(args.clips_manifest),
     }
@@ -561,7 +573,8 @@ def main() -> None:
     )
     print(
         f"[sample] done: {dict(counts)} | {n_frames_total} frames "
-        f"({n_non_noop_total} non-NO_OP, {n_black_dropped_total} black dropped) -> {out_dir}",
+        f"({n_non_noop_total} non-NO_OP, {n_black_dropped_total} black dropped, "
+        f"{n_black_events_dropped_total} black actions discarded) -> {out_dir}",
         flush=True,
     )
 
