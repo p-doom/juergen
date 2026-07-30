@@ -16,7 +16,7 @@ mkdir -p "$OUT"
 # tokenization restarts with --overwrite. A partial build has no manifest and is
 # rebuilt by the builder's private staging-directory transaction.
 if [[ ! -f "$OUT/build_manifest.json" ]]; then
-    uv run --project="${A[omegalax_repo]}" -- python "$EXP/build_relative.py" \
+    "${A[prime_rl_repo]}/.venv/bin/python" "$EXP/build_relative.py" \
         --source-root "${A[source]}" --out-root "$OUT" \
         --audit-dir "${A[audit_dir]}" --eval-scenes "${A[eval_scenes]}"
 else
@@ -96,6 +96,10 @@ path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand/runs/ru
 type = "external"
 path = "/fast/home/franz.srambical/omegalax"
 
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+
 [outputs.dataset]
 type = "dataset"
 marker = "build_tokenize_manifest.json"
@@ -107,6 +111,7 @@ audit_dir = "{inputs.audit.path}"
 eval_scenes = "{inputs.eval_scenes.path}"
 out = "{outputs.dataset.path}"
 omegalax_repo = "{inputs.omegalax.path}"
+prime_rl_repo = "{inputs.runtime.path}"
 
 [env]
 HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
