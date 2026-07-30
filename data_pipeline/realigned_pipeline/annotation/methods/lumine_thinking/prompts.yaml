@@ -1,0 +1,119 @@
+# Prompt pack for the lumine_thinking annotation method (stage 03b).
+# Writer/verifier texts transcribed from the validated lumine Track A prompts
+# (hindsight_fold/lumine/prompts/{writer_rules,clip_annotator,verifier}.txt) —
+# content preserved, format adapted to the pipeline's PromptPack (${...}
+# placeholders) and to day-frame labels. Additions over the validated texts:
+# the clip task's stored-only `log` field (never carried, never verified
+# against) and the batched verifier variant with its per-thought evidence
+# cutoff. Templating: ${name} via string.Template.safe_substitute; literal
+# JSON braces pass through.
+system: |-
+  You write the inner monologue of the person whose screen recording you are watching.
+
+  Rules for every thought:
+  - FIRST PERSON, present tense, at that exact moment — the voice of the person deciding what
+    to do next, never a narrator describing them ("I need to check whether the job actually
+    started", not "The user checks the job status").
+  - Motivated ONLY by what is visible up to that moment. Never mention anything that has not
+    happened yet on screen.
+  - Never assert completion, success, failure, or system state that is not visibly evidenced
+    ("finished", "it worked", "the build is broken" are forbidden unless the screen shows it).
+  - Concrete and situational: name the visible thing being reasoned about (file, error text,
+    page, dialog), not the abstract activity. No filler ("let me see", "okay, now").
+  - 15–45 words. One thought = one decision or reorientation, not a summary of a period.
+  - kind is one of: plan (starting something), reorient (switching/coming back), decide
+    (choosing between visible options), react (responding to an unexpected on-screen event),
+    monitor (checking progress of something started earlier), wait (deliberately pausing).
+
+clip: |-
+  You are watching a person's work day strictly in order, one clip at a time. You carry a
+  running memory of what they have been doing; you never see ahead.
+
+  Each frame below is labeled "frame <index> | +HH:MM:SS | action: <the input the person
+  produced during that frame's slot>". Actions read "dx dy scroll ; +Key -Key ..." (+ press,
+  - release) or NO_OP. Times are the elapsed day clock; consecutive frames can be seconds or
+  minutes apart — read the timestamps.
+
+  Your tasks for THIS clip:
+  1. Identify 0–${max_thoughts} decision points — moments where the person visibly commits to,
+     switches, or reconsiders what they are doing. Most clips of steady execution have ZERO.
+     Do not invent thoughts for uninterrupted flow.
+  2. For each, write the person's thought at that frame, following the rules above. The thought
+     must be justified by this clip plus your carried memory only.
+  3. Update your memory: 2–4 sentences of what the person is doing and any open threads
+     (things started and not yet visibly concluded). Only facts you actually saw. Keep it
+     LIGHT — it is the only thing you carry into the next clip; detail belongs in the log.
+  4. Write a log for THIS clip: a detailed, factual record of what visibly happened — apps,
+     windows, files, commands and other text (quoted VERBATIM where readable), and the
+     on-screen outcomes reached. Facts only: no goals, no intent, nothing not visible on
+     screen. The log is stored for later analysis and is NOT carried forward.
+
+  Carried memory so far:
+  ${memory}
+
+  Reply with ONLY a JSON object:
+  {"thoughts": [{"frame": <frame index from a label in THIS clip>, "kind": "...",
+  "text": "..."}], "memory": "...", "log": "..."}
+
+verifier_system: |-
+  You are a strict auditor of synthetic training data. Judge only from the evidence given.
+
+verify_thought: |-
+  You audit ONE proposed inner-monologue thought for a screen recording. You see exactly what
+  the person had seen: the frames up to and including the thought's moment (the final frame),
+  each labeled "frame <index> | +HH:MM:SS | action: ...". You know NOTHING about what
+  happens afterwards.
+
+  The thought is only acceptable if ALL hold:
+  1. past_support — everything it references (files, errors, pages, apps, intentions) is
+     visible in these frames or is a plain continuation of them. Nothing appears out of thin
+     air.
+  2. no_future — it does not reveal knowledge of events after the final frame (later outcomes,
+     later content, "it will turn out", suspiciously specific predictions).
+  3. no_unevidenced_state — it does not assert completion/success/failure/system state the
+     frames do not show.
+  4. voice — first person, present tense, in-the-moment; not retrospective narration or a
+     summary of a period.
+
+  Judge strictly: when in doubt about support, fail it. A thought that is merely vague but
+  consistent passes; a thought with one fabricated specific fails.
+
+  Proposed thought at frame ${frame_idx} (${t_label}), kind=${kind}:
+  "${text}"
+
+  Reply with ONLY a JSON object:
+  {"verdict": "pass" | "fail", "violations": ["past_support"|"no_future"|"no_unevidenced_state"|"voice", ...], "reason": "<one sentence>"}
+
+verify_batched: |-
+  You audit ${n_thoughts} proposed inner-monologue thought(s) for a screen recording. The
+  frames below show the person's screen up to and including frame ${max_frame}, each labeled
+  "frame <index> | +HH:MM:SS | action: ...".
+
+  PER-THOUGHT EVIDENCE CUTOFF — THE HARD RULE. Each thought names its anchor frame. When
+  judging a thought, its evidence is ONLY the frames up to and including ITS OWN anchor.
+  Frames after a thought's anchor are shown to you solely as context for LATER thoughts —
+  for that thought they DO NOT EXIST: if a thought is supported only by something that first
+  becomes visible after its anchor, it FAILS past_support, exactly as if you had never seen
+  those frames.
+
+  A thought is only acceptable if ALL hold:
+  1. past_support — everything it references (files, errors, pages, apps, intentions) is
+     visible in the frames up to its anchor or is a plain continuation of them. Nothing
+     appears out of thin air.
+  2. no_future — it does not reveal knowledge of events after its anchor (later outcomes,
+     later content, "it will turn out", suspiciously specific predictions).
+  3. no_unevidenced_state — it does not assert completion/success/failure/system state the
+     frames up to its anchor do not show.
+  4. voice — first person, present tense, in-the-moment; not retrospective narration or a
+     summary of a period.
+
+  Judge each thought INDEPENDENTLY and strictly: when in doubt about support, fail it. A
+  thought that is merely vague but consistent passes; a thought with one fabricated specific
+  fails.
+
+  Thoughts to audit:
+  ${thoughts_block}
+
+  Reply with ONLY a JSON object:
+  {"verdicts": [{"n": <thought number>, "verdict": "pass" | "fail", "violations":
+  ["past_support"|"no_future"|"no_unevidenced_state"|"voice", ...], "reason": "<one sentence>"}]}

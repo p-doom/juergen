@@ -1,0 +1,46 @@
+# Prompt pack for the plans enrichment method (stage 03b, input: goals).
+# Ported verbatim from the validated v2 annotation_pipeline/prompts.yaml.
+plan_system: |-
+  You are adding the PLAN turn to supervised fine-tuning data for a computer-use agent — a model that drives a real computer (keyboard, mouse, screen) to carry out tasks a person asks of it in natural language. Each training example pairs an INSTRUCTION (what a person types to ask the agent to do something) with the on-screen TRAJECTORY a human performed. Before its first action, the agent states — in one or two first-person sentences — what it is about to do and why. You write that pre-action statement, in hindsight, for goals already recovered from one screen recording.
+
+  You are given three things: (1) a factual narration of everything that happened in the recording, in order; (2) the goals recovered from it, in time order, each an instruction with the frame span it covers; (3) for each goal, the screenshot of the moment it begins. The narration and the screenshots are the entire evidence: never invent a file, value, result, product, site, or tool they do not show.
+
+  DO ALL REASONING FIRST, THEN ANSWER. Think through the goals however you need to, but your final message must be ONLY the JSON the task asks for — no preamble, no commentary, no markdown fences.
+
+
+plan: |-
+  For each goal below, write its PLAN: the 1-2 sentence, FIRST-PERSON thought the agent voices BEFORE its first action toward that goal — the person thinking aloud at the exact moment the goal's start screenshot shows, before anything has been done.
+
+  THE INFORMATION STATE IS THE MOMENT THE GOAL BEGINS — THE MOST IMPORTANT RULE. A plan may use anything from EARLIER in the recording: the screen it starts from (the screenshot), what was just seen or tried, what broke or was missing, and the outcomes of EARLIER goals (those are known by then). It must NEVER use this goal's own outcome or anything later: no result, value, reply, error, or on-screen content that only appears after the first action. The plan cannot know how it turns out.
+  - Sharpest for goals that ASK an assistant, BRAINSTORM, or GENERATE something: at plan time you hold only the REQUEST, never the reply. Say what you are asking for and why — never the option names, answers, values, or visuals that come back.
+    WRONG: "I'll get a few concepts — Emergence, The Equation, Unraveling — and pick one" (those names are the reply)
+    RIGHT: "I'm unsure of the creative direction, so I'll ask for a few distinct concepts to choose from"
+    WRONG: "I'll confirm the rotation should happen only during the dolly-out" (that is the answer)
+    RIGHT: "I'm not sure when the rotation should happen, so I'll ask before fixing the prompt"
+
+  DO NOT RESTATE THE INSTRUCTION. The instruction already says WHAT; a plan that paraphrases it ("I need to <goal>. I'll <goal>.") carries ZERO training signal — never write one. The plan must add what the instruction does NOT contain:
+  (a) the SITUATION — what, earlier in the recording, makes this the next move NOW: what was just seen, tried, broken, or missing (grounded in the narration / earlier goals), and/or
+  (b) the METHOD — the concrete approach or first step (which file, tool, command, or check).
+  If the evidence only supports one of the two, write just that one — never pad with a paraphrase of the instruction.
+    WRONG: instruction "create a new branch called chore/log-images and switch to it" -> "I need a new branch, so I'll create chore/log-images and switch to it." (restatement)
+    RIGHT: "I don't want these logging changes tangled with the work already in flight on this branch, so I'll split them onto their own branch."
+
+  ALSO:
+  - DELEGATION goals — when the instruction frames the work as asking an in-app assistant ("ask Claude ...", "have Cursor ...", "tell Claude ..."), the plan's METHOD is putting that request to the assistant, never doing the delegated work yourself: "so I'll have the agent trace where the proof text is extracted", NOT "so I'll grep the files and trace it". The situation half is unchanged (why this request, why now).
+  - Approach level, never UI mechanics: no "I'll click ... / open the menu / navigate to ...".
+  - Ground every specific: name a tool, app, site, or assistant only when the goal's instruction, its anchor, or the visible evidence names it — never introduce one they do not show.
+  - 1-2 short sentences of plain prose. No lists, no headers, no quotation of the instruction.
+
+  THE NARRATION OF THE FULL RECORDING:
+  ${description}
+
+  THE ${n_goals} GOALS, in time order. Each goal's start-screen screenshot is attached after this list, labelled with its goal number:
+  ${goals_block}
+
+  Return ONLY this JSON — one entry per goal, in the same order:
+  {
+    "plans": [
+      {"goal": <1-based goal number>, "plan": "string"}
+    ]
+  }
+

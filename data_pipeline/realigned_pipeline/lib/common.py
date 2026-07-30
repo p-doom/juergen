@@ -6,14 +6,15 @@ import base64
 import json
 import math
 import re
+import sys
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 
 import msgpack
 
 from realigned_pipeline.lib.config import SYSTEM_PROMPT
-
 
 UNKNOWN_RE = re.compile(r"^Unknown\((-?\d+)\)$")
 MACOS_UNKNOWN_NAME_BY_CODE: dict[int, str] = {
@@ -57,6 +58,28 @@ class ActionStats:
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def str2bool(s: str | bool) -> bool:
+    """Parse a boolean CLI value. Accepts the labctl ``--flag=value`` form
+    (labctl renders every arg as ``--key=value``, so a valueless store_true
+    flag can't be expressed); truthy = 1/true/yes/on, everything else False."""
+    if isinstance(s, bool):
+        return s
+    return str(s).strip().lower() in ("1", "true", "yes", "on")
+
+
+def normalize_dashed_argv() -> None:
+    """Rewrite ``--foo_bar[=x]`` to ``--foo-bar[=x]`` in sys.argv.
+
+    pmanager configs express entrypoint args as python identifiers (rendered
+    ``--foo_bar=value``); the realigned stages declare dashed argparse flags.
+    Call this before parse_args() so both spellings work. Only the flag name
+    (before the first ``=``) is rewritten; values pass through untouched."""
+    for i, arg in enumerate(sys.argv[1:], start=1):
+        if arg.startswith("--") and "_" in arg.split("=", 1)[0]:
+            key, sep, value = arg.partition("=")
+            sys.argv[i] = key.replace("_", "-") + sep + value
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -284,14 +307,49 @@ def extract_json_object(text: str) -> dict[str, Any]:
     if stripped.startswith("```"):
         stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
         stripped = re.sub(r"\s*```$", "", stripped)
-    try:
-        value = json.loads(stripped)
-    except json.JSONDecodeError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start < 0 or end <= start:
-            raise
-        value = json.loads(stripped[start : end + 1])
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    candidates = [stripped]
+    if start >= 0 and end > start:
+        candidates.append(stripped[start : end + 1])
+    # Models emit raw backslashes inside strings (Windows paths, regexes,
+    # LaTeX) that json.loads rejects as invalid escapes; escape the invalid
+    # ones. Valid escapes must be CONSUMED left-to-right (not lookahead-
+    # tested), else the tail of a valid '\\\\' pair followed by a letter
+    # (r'\\\\phi') is itself "repaired" and the string breaks differently.
+    def _fix_escape(m: re.Match) -> str:
+        return m.group(0) if m.group(1) else "\\\\"
+
+    esc = re.compile(r'\\(["\\/bfnrtu]|u[0-9a-fA-F]{4})?')
+    candidates += [esc.sub(_fix_escape, c) for c in list(candidates)]
+    last_err: Exception | None = None
+    for cand in candidates:
+        try:
+            value = json.loads(cand, strict=False)  # tolerate raw newlines/tabs in strings
+            break
+        except json.JSONDecodeError as exc:
+            last_err = exc
+    else:
+        # Nothing parses whole ("Extra data" after the object, prose around
+        # it, a broken outer brace). raw_decode parses ONE object at a given
+        # position ignoring the rest — scan every '{' in every candidate and
+        # keep the LARGEST decoded dict (the real answer object dwarfs any
+        # fragment or JSON-ish snippet in surrounding prose).
+        decoder = json.JSONDecoder(strict=False)
+        best: tuple[int, dict[str, Any]] | None = None
+        for cand in candidates:
+            for m in re.finditer(r"\{", cand):
+                try:
+                    v, end_pos = decoder.raw_decode(cand, m.start())
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(v, dict):
+                    span = end_pos - m.start()
+                    if best is None or span > best[0]:
+                        best = (span, v)
+        if best is None:
+            raise last_err  # type: ignore[misc]
+        value = best[1]
     if not isinstance(value, dict):
         raise ValueError("Expected a JSON object")
     return value

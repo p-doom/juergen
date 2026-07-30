@@ -168,9 +168,14 @@ def snap_goal_starts(goals: list[dict[str, Any]], sent: list[dict[str, Any]]) ->
 
 
 def run_describe_prose(lab: Labeler, imgs: list[Path | str], n: int, output_dir: Path, no_cache: bool,
-                       cache_name: str = "describe_prose") -> dict[str, Any]:
+                       cache_name: str = "describe_prose", image_labels: list[str] | None = None) -> dict[str, Any]:
     prompt = describe_prose_prompt(n)
-    res = lab.call_full(SYSTEM, prompt, images=imgs, cache_path=_cache(output_dir, cache_name), no_cache=no_cache)
+    # Interleave the same `frame <N>` labels as extract, so the narration's frame
+    # references are GROUNDED in the printed index rather than the model's own
+    # running count (which drifts early on idle/black-heavy clips and then
+    # poisons extract's goal boundaries).
+    res = lab.call_full(SYSTEM, prompt, images=imgs, image_labels=image_labels,
+                        cache_path=_cache(output_dir, cache_name), no_cache=no_cache)
     return {"prompt": prompt, "reasoning": res.reasoning, "content": res.content,
             "finish_reason": res.finish_reason, "usage": res.usage, "description": res.content}
 
@@ -278,7 +283,8 @@ def main() -> None:
     # segments into independent __wN window-segments upstream), so there is no
     # windowing or merging here.
     with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as ex:
-        describe = ex.submit(run_describe_prose, lab, imgs, n, output_dir, args.no_cache).result()
+        describe = ex.submit(run_describe_prose, lab, imgs, n, output_dir, args.no_cache,
+                             "describe_prose", frame_labels).result()
     extract = run_extract(lab, describe["description"], imgs, n, "extract_from_prose",
                           output_dir, args.no_cache, frame_labels, frame_lo, frame_hi, own_hi)
 

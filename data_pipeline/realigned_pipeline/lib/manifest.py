@@ -60,3 +60,34 @@ def file_sha256_short(path: Path, n: int = 16) -> str:
         for chunk in iter(lambda: f.read(64 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()[:n]
+
+
+def make_artifact_id(artifact_dir: Path) -> str:
+    """Identity of a built artifact: ``<abs dir>::<sha16 of its manifest.json>``.
+
+    Downstream stages record the ids of their inputs (``master_store_id``,
+    ``filter_id``) and refuse joins whose recorded id no longer matches the
+    artifact on disk (e.g. a master store rebuilt in place)."""
+    artifact_dir = Path(artifact_dir).resolve()
+    return f"{artifact_dir}::{file_sha256_short(artifact_dir / 'manifest.json')}"
+
+
+def check_artifact_id(artifact_id: str, *, what: str) -> Path:
+    """Verify a recorded artifact id against the artifact currently on disk.
+
+    Returns the artifact directory. Raises if the manifest is gone or its hash
+    changed — the artifact was rebuilt and every downstream join is stale."""
+    path_s, _, recorded_sha = artifact_id.rpartition("::")
+    if not path_s or not recorded_sha:
+        raise ValueError(f"malformed {what} artifact id: {artifact_id!r}")
+    artifact_dir = Path(path_s)
+    manifest_path = artifact_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"{what} at {artifact_dir} has no manifest.json (moved or deleted?)")
+    current = file_sha256_short(manifest_path, n=len(recorded_sha))
+    if current != recorded_sha:
+        raise ValueError(
+            f"{what} at {artifact_dir} was rebuilt since this artifact was made "
+            f"(manifest sha {current} != recorded {recorded_sha}); re-run the consumer stage"
+        )
+    return artifact_dir
