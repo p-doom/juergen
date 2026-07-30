@@ -130,6 +130,8 @@ def test_labctl_training_and_eval_contracts():
         assert required in script
 
     recipes = EXPERIMENT / "labctl/recipes"
+    build_recipe_text = (recipes / "build_tokenize.toml").read_text()
+    assert 'uv run --project="${A[omegalax_repo]}" -- python "$EXP/build_relative.py"' in build_recipe_text
     train_names = ["reltool_act", "relraw_act", "reltool_pre", "relraw_pre"]
     for name in train_names:
         recipe = tomllib.loads((recipes / f"train_{name}.toml").read_text())

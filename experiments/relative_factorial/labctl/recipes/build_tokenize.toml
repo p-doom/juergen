@@ -16,7 +16,7 @@ mkdir -p "$OUT"
 # tokenization restarts with --overwrite. A partial build has no manifest and is
 # rebuilt by the builder's private staging-directory transaction.
 if [[ ! -f "$OUT/build_manifest.json" ]]; then
-    python3 "$EXP/build_relative.py" \
+    uv run --project="${A[omegalax_repo]}" -- python "$EXP/build_relative.py" \
         --source-root "${A[source]}" --out-root "$OUT" \
         --audit-dir "${A[audit_dir]}" --eval-scenes "${A[eval_scenes]}"
 else
