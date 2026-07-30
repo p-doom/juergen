@@ -306,6 +306,16 @@ _CUA_V4_THINKING_V2_FILE = (
 )
 SYSTEM_PROMPTS["cua_v4_thinking_v2"] = _CUA_V4_THINKING_V2_FILE.read_text().strip()
 
+# cua_v4_thinking_v2 with the mouse_move_rel delta declared as a per-axis
+# 0-1000 screen fraction instead of pixels (computer_use_rel_norm_v1). Derived
+# from the v2 file by three substitutions; freeroll denormalizes to VM pixels
+# at dispatch. Same loader pattern.
+_CUA_V4_THINKING_NORM_FILE = (
+    _Path(__file__).resolve().parents[1]
+    / "data_pipeline/realigned_pipeline/system_prompts/cua_v4_thinking_norm.txt"
+)
+SYSTEM_PROMPTS["cua_v4_thinking_norm"] = _CUA_V4_THINKING_NORM_FILE.read_text().strip()
+
 # ordered_events_v2 (ordered move/scroll/down/up mini-program, per-key typing,
 # 10 Hz motion grid — NO type() primitive) + decision-point thinking + goal
 # conditioning. Goal-conditioned twin of the goal-free cua_v2_thinking; same

@@ -60,22 +60,36 @@ _TERMINATE = "TERMINATE"
 # mouse (cua_v4_thinking contract): one or more <tool_call>{json}</tool_call>
 # blocks executed strictly in order; terminate is a tool call, not a
 # TERMINATE line.
+# "computer_use_rel_norm_v1" is the same grammar with mouse_move_rel deltas on
+# a per-axis 0-1000 scale (1000 == one full screen width for dx, height for
+# dy) instead of raw device counts; it is denormalized to VM pixels at
+# dispatch. Everything else about it — parsing, terminate, wait — is identical.
 _ACTION_FORMATS = (
     "canonical", "ordered_events_v2", "ordered_events_v3", "computer_use_rel_v1",
+    "computer_use_rel_norm_v1",
 )
 _ORDERED_FORMATS = frozenset({"ordered_events_v2", "ordered_events_v3"})
 _NATIVE_FORMAT = "computer_use_rel_v1"
+_NATIVE_NORM_FORMAT = "computer_use_rel_norm_v1"
+# Formats parsed by the Qwen-native tool-call grammar.
+_NATIVE_FORMATS = frozenset({_NATIVE_FORMAT, _NATIVE_NORM_FORMAT})
+# Formats whose move deltas are a 0-1000 screen fraction and must be scaled to
+# VM pixels before dispatch.
+_NORMALIZED_FORMATS = frozenset({_NATIVE_NORM_FORMAT})
+_NORMALIZED_SCALE = 1000.0
 # Default action format per system prompt; anything unlisted is canonical.
 _PROMPT_ACTION_FORMATS = {
     "cua_v3_thinking": "ordered_events_v3",
     "cua_v4_thinking": _NATIVE_FORMAT,
     "cua_v4_thinking_v2": _NATIVE_FORMAT,
+    "cua_v4_thinking_norm": _NATIVE_NORM_FORMAT,
     "cua_oev2_thinking": "ordered_events_v2",
 }
 # Prompts whose training data conditions on "GOAL: {goal}" as the first
 # user-turn text (stage_04t goal conditioning).
 _GOAL_CONDITIONED_PROMPT_IDS = frozenset(
-    {"cua_v3_thinking", "cua_v4_thinking", "cua_v4_thinking_v2", "cua_oev2_thinking"})
+    {"cua_v3_thinking", "cua_v4_thinking", "cua_v4_thinking_v2",
+     "cua_v4_thinking_norm", "cua_oev2_thinking"})
 
 
 # Sampling params this harness has NO opinion about: left unset they are
@@ -374,17 +388,25 @@ def _run_rollout(
         goal_conditioned=system_prompt_id in _GOAL_CONDITIONED_PROMPT_IDS,
     )
     use_ordered = action_format in _ORDERED_FORMATS
-    use_native = action_format == _NATIVE_FORMAT
+    use_native = action_format in _NATIVE_FORMATS
+
+    # The ONLY delta scaling in the dispatch path: a 0-1000 screen fraction
+    # back to VM pixels. Depends on the VM screen, never on the model view.
+    denorm = ((sw / _NORMALIZED_SCALE, sh / _NORMALIZED_SCALE)
+              if action_format in _NORMALIZED_FORMATS else None)
+    if denorm:
+        _LOGGER.info("%s: denormalizing move deltas x%.4f/x%.4f to VM %dx%d",
+                     action_format, denorm[0], denorm[1], sw, sh)
 
     # The model view: frames are resized to model_resolution before they enter
     # the conversation (matching the training frame scale). Move deltas are NOT
-    # rescaled with them — they are raw device counts from the keylog, invariant
-    # to the frame scale. GIF/saved frames stay native.
+    # rescaled with them — a raw format's deltas are device counts invariant to
+    # the frame scale, and a normalized format's are a fraction of the VM
+    # screen. GIF/saved frames stay native.
     mres = model_resolution if (model_resolution and tuple(model_resolution) != (sw, sh)) else None
     if mres:
-        _LOGGER.info("model view %dx%d; VM %dx%d; move deltas dispatched "
-                     "unscaled (device counts, not view pixels)",
-                     mres[0], mres[1], sw, sh)
+        _LOGGER.info("model view %dx%d; VM %dx%d; move deltas not scaled by "
+                     "the view ratio", mres[0], mres[1], sw, sh)
 
     def _to_model(img: Image.Image) -> Image.Image:
         return img.resize(mres, Image.LANCZOS) if mres else img
@@ -525,38 +547,40 @@ def _run_rollout(
             else:
                 try:
                     sr = None
-                    if use_native:
-                        action = parse_computer_use_action_tolerant(clean_text)
-                        # parsed/logs keep the model's own frame of reference.
-                        parsed = {
-                            "no_op": all(
-                                p.kind == "wait" for p in action.primitives
-                            ),
-                            "primitives": [
-                                {
-                                    "kind": p.kind, "dx": p.dx, "dy": p.dy,
-                                    "name": p.name,
-                                    "keys": list(p.keys) if p.keys else None,
-                                    "count": p.count, "text": p.text,
-                                    "status": p.status,
-                                }
-                                for p in action.primitives
-                            ],
-                        }
-                        sr = client.dispatch_ordered_action(action)
-                    elif use_ordered:
-                        action = parse_ordered_action_tolerant(clean_text)
-                        # parsed/logs keep the model's own frame of reference.
-                        parsed = {
-                            "no_op": action.no_op,
-                            "primitives": [
-                                {
-                                    "kind": p.kind, "dx": p.dx, "dy": p.dy,
-                                    "name": p.name, "text": p.text,
-                                }
-                                for p in action.primitives
-                            ],
-                        }
+                    if use_native or use_ordered:
+                        if use_native:
+                            action = parse_computer_use_action_tolerant(clean_text)
+                            # parsed/logs keep the model's own frame of reference.
+                            parsed = {
+                                "no_op": all(
+                                    p.kind == "wait" for p in action.primitives
+                                ),
+                                "primitives": [
+                                    {
+                                        "kind": p.kind, "dx": p.dx, "dy": p.dy,
+                                        "name": p.name,
+                                        "keys": list(p.keys) if p.keys else None,
+                                        "count": p.count, "text": p.text,
+                                        "status": p.status,
+                                    }
+                                    for p in action.primitives
+                                ],
+                            }
+                        else:
+                            action = parse_ordered_action_tolerant(clean_text)
+                            # parsed/logs keep the model's own frame of reference.
+                            parsed = {
+                                "no_op": action.no_op,
+                                "primitives": [
+                                    {
+                                        "kind": p.kind, "dx": p.dx, "dy": p.dy,
+                                        "name": p.name, "text": p.text,
+                                    }
+                                    for p in action.primitives
+                                ],
+                            }
+                        if denorm:
+                            action = _scale_ordered_moves(action, *denorm)
                         sr = client.dispatch_ordered_action(action)
                     else:
                         try:

@@ -95,7 +95,13 @@ NATIVE_TERMINATE_LINE = (
     '{"name": "computer_use", "arguments": {"action": "terminate", "status": "success"}}\n'
     '</tool_call>'
 )
-TERMINATE_LINES = {"computer_use_rel_v1": NATIVE_TERMINATE_LINE}
+TERMINATE_LINES = {
+    "computer_use_rel_v1": NATIVE_TERMINATE_LINE,
+    # Normalization changes move magnitudes only; the terminate block is
+    # byte-identical. Without this entry the scorer would silently fall back to
+    # the bare TERMINATE literal and mis-score every terminate turn.
+    "computer_use_rel_norm_v1": NATIVE_TERMINATE_LINE,
+}
 
 
 def terminate_text_for(action_format: str | None) -> str:

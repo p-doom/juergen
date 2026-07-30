@@ -895,5 +895,56 @@ class KeyTableConsistencyTests(unittest.TestCase):
         )
 
 
+class NormalizedFormatWiringTests(unittest.TestCase):
+    """computer_use_rel_norm_v1: recognised, parsed by the native grammar, and
+    denormalized against the VM screen — never against the model view."""
+
+    def test_format_is_selectable_and_prompt_bound(self) -> None:
+        self.assertIn("computer_use_rel_norm_v1", freeroll._ACTION_FORMATS)
+        self.assertEqual(
+            freeroll._resolve_action_format(None, "cua_v4_thinking_norm"),
+            "computer_use_rel_norm_v1",
+        )
+
+    def test_it_uses_the_native_grammar(self) -> None:
+        self.assertIn("computer_use_rel_norm_v1", freeroll._NATIVE_FORMATS)
+        self.assertIn("computer_use_rel_v1", freeroll._NATIVE_FORMATS)
+
+    def test_only_the_normalized_format_is_denormalized(self) -> None:
+        self.assertEqual(freeroll._NORMALIZED_FORMATS,
+                         frozenset({"computer_use_rel_norm_v1"}))
+        for fmt in ("computer_use_rel_v1", "ordered_events_v2", "canonical"):
+            self.assertNotIn(fmt, freeroll._NORMALIZED_FORMATS)
+
+    def test_denorm_factor_is_the_vm_screen_not_the_model_view(self) -> None:
+        sw, sh = 1920, 1080
+        ax = sw / freeroll._NORMALIZED_SCALE
+        ay = sh / freeroll._NORMALIZED_SCALE
+        # 500 == half a screen -> half of 1920 px.
+        a = parse_computer_use_action(
+            '<tool_call>\n{"name": "computer_use", "arguments": '
+            '{"action": "mouse_move_rel", "delta": [500, 500]}}\n</tool_call>'
+        )
+        scaled = freeroll._scale_ordered_moves(a, ax, ay)
+        self.assertEqual(scaled.primitives[0],
+                         OrderedPrimitive(kind="move", dx=960, dy=540))
+        # A 1280x720 model view must not enter the factor at all.
+        self.assertNotEqual(ax, sw / 1280)
+
+    def test_denorm_leaves_scroll_and_typing_alone(self) -> None:
+        a = parse_computer_use_action("\n".join([
+            '<tool_call>\n{"name": "computer_use", "arguments": '
+            '{"action": "scroll", "pixels": -3}}\n</tool_call>',
+            '<tool_call>\n{"name": "computer_use", "arguments": '
+            '{"action": "type", "text": "hi"}}\n</tool_call>',
+        ]))
+        scaled = freeroll._scale_ordered_moves(a, 1.92, 1.08)
+        self.assertEqual(scaled.primitives[0].dy, -3)
+        self.assertEqual(scaled.primitives[1].text, "hi")
+
+    def test_goal_conditioning_matches_the_other_cua_prompts(self) -> None:
+        self.assertIn("cua_v4_thinking_norm", freeroll._GOAL_CONDITIONED_PROMPT_IDS)
+
+
 if __name__ == "__main__":
     unittest.main()
