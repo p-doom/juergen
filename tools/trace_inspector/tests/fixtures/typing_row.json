@@ -1,0 +1,1 @@
+{"sample_id":"typing_fixture_000","lineage":"A","format":"perkey","target_text":"ok","raw_output":"0 0 0 ; +KeyO -KeyO +KeyK -KeyK","completion_tokens":12,"request_error":null,"parse_error":null,"parse_ok":true,"canonical_action_line":true,"strict_schema_ok":true,"zero_mouse_delta_ok":true,"executed_text":"ok","exact_typed_string_success":true}

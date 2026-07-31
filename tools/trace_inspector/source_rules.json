@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "expected_user": "franz.srambical",
+  "exclusions": [
+    {"glob": "relative_factorial_capacity_eval_relraw_act_r256_v1_run_019fb4fd77067512a7d4fdae7daaa507", "reason": "superseded pre-final attempt; no registered .meta seal"},
+    {"glob": "relative_factorial_capacity_eval_relraw_act_r64_v1_run_019fb4ff442876f38831b6eae8c22e03", "reason": "superseded pre-final attempt; no registered .meta seal"},
+    {"glob": "relative_factorial_capacity_eval_relraw_pre_r256_v1_run_019fb4fd871e7240b3b7caacc8e1ae69", "reason": "superseded pre-final attempt; no registered .meta seal"},
+    {"glob": "relative_factorial_capacity_eval_relraw_pre_r64_v1_run_019fb4ff531f72c0b1a67ad87e05b406", "reason": "superseded pre-final attempt; no registered .meta seal"},
+    {"glob": "relative_factorial_capacity_eval_reltool_act_r256_v1_run_019fb4fd967b79438e2519f8638687e6", "reason": "superseded pre-final attempt; no registered .meta seal"},
+    {"glob": "relative_factorial_capacity_eval_reltool_act_r64_v1_run_019fb4ff62037880a9e37dbaf8a77143", "reason": "superseded pre-final attempt; no registered .meta seal"},
+    {"glob": "relative_factorial_capacity_eval_reltool_pre_r256_v1_run_019fb4fdab0876a181226b1c0f51ba80", "reason": "superseded pre-final attempt; no registered .meta seal"},
+    {"glob": "relative_factorial_capacity_eval_reltool_pre_r64_v1_run_019fb4ff710a7963857648eeb3f1da74", "reason": "superseded pre-final attempt; no registered .meta seal"},
+    {"glob": "synthetic_typing_factorial_A_coalesced_eval_tp1_v10_run_019fb6fa0a0e77e394c05037eb726f1b", "reason": "superseded pre-final attempt; no registered .meta seal"},
+    {"glob": "synthetic_typing_factorial_A_perkey_eval_tp1_v10_run_019fb6fa0a0a78d08b568cc2aaf7f1c4", "reason": "superseded pre-final attempt; no registered .meta seal"},
+    {"glob": "synthetic_typing_factorial_B_coalesced_eval_tp1_v10_run_019fb6fa0a0870b2a560cb79ae5b2c7f", "reason": "superseded pre-final attempt; no registered .meta seal"},
+    {"glob": "synthetic_typing_factorial_B_perkey_eval_tp1_v10_run_019fb6fa0a0c7f21925c0a85b658b35b", "reason": "superseded pre-final attempt; no registered .meta seal"}
+  ],
+  "rules": [
+    {
+      "name": "relative-factorial-r32",
+      "glob": "relative_factorial_eval_*_pinned_019fb44a_v1_run_*",
+      "adapter": "relative_mouse",
+      "min_matches": 8
+    },
+    {
+      "name": "relative-factorial-capacity",
+      "glob": "relative_factorial_capacity_eval_*_v1_run_*",
+      "adapter": "relative_mouse",
+      "min_matches": 8
+    },
+    {
+      "name": "phaseb-relative-prose",
+      "glob": "phaseb_relative_eval_prose_keep_visionfixed_v2_run_*",
+      "adapter": "phaseb_mouse",
+      "min_matches": 1
+    },
+    {
+      "name": "phaseb-normalized",
+      "glob": "phaseb_normalized_v2_eval_A_to_A_r256_s900_v1_run_*",
+      "adapter": "phaseb_mouse",
+      "min_matches": 1
+    },
+    {
+      "name": "typing-factorial-tp1-v10",
+      "glob": "synthetic_typing_factorial_[AB]_*_eval_tp1_v10_run_*",
+      "adapter": "typing",
+      "min_matches": 4
+    },
+    {
+      "name": "proper-vm-closed-loop-pilot",
+      "glob": "synthetic_proper_vm_roadmap_stage2_*_chunk0_pilot_v1_run_*",
+      "adapter": "closed_loop_mouse",
+      "min_matches": 1
+    },
+    {
+      "name": "future-compact-scale",
+      "glob": "compact_scale_ablation_*eval*run_*",
+      "adapter": "auto",
+      "min_matches": 0
+    },
+    {
+      "name": "future-typing-prose",
+      "glob": "typing_prose_serialization_factorial_*eval*run_*",
+      "adapter": "auto",
+      "min_matches": 0
+    }
+  ]
+}

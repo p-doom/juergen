@@ -1,0 +1,1 @@
+{"action":"delta","coord":[20,10],"distance_px":22.36,"endpoint_err_px":0.0,"grammar":"deltatype_raw","ideal_coord":[20,10],"in_box":true,"k":7,"kind":"short","landing":[30,20],"parse_ok":true,"raw_output":"20 10 0 ; +LMB -LMB","request_error":false,"scene_id":"fixture_scene","schema_ok":true,"space":"rel_px"}
