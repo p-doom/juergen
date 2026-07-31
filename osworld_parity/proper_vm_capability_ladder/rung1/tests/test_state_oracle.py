@@ -486,6 +486,126 @@ def test_http_surface_exposes_fixture_but_no_oracle_state() -> None:
             assert caught.value.code == 404
 
 
+def test_browser_audit_is_opt_in_and_independent_of_semantic_reporter() -> None:
+    manifest = load_manifest()
+    fixture = next(
+        item
+        for item in manifest.select(split="development")
+        if item.template == "click"
+    )
+    plain_html = render_fixture_html(fixture, 1)
+    audit_html = render_fixture_html(fixture, 1, enable_browser_audit=True)
+    assert "navigator.sendBeacon(auditEndpoint" not in plain_html
+    assert "navigator.sendBeacon(auditEndpoint" in audit_html
+    for name in (
+        "pointerdown",
+        "pointerup",
+        "pointermove",
+        "mousedown",
+        "mouseup",
+        "mousemove",
+        "click",
+        "input",
+        "change",
+        "focus",
+        "blur",
+    ):
+        assert repr(name) in audit_html
+    for field in (
+        "is_trusted",
+        "default_prevented",
+        "checkbox_state",
+        "active_element",
+        "document_has_focus",
+        "visibility_state",
+        "event_time_stamp_ms",
+        "page_time_origin_ms",
+    ):
+        assert field in audit_html
+
+    with FixtureHttpServer(manifest, enable_browser_audit=True) as server:
+        state = server.store.snapshot(fixture.id)
+        payload = {
+            "schema_version": 1,
+            "generation": state["generation"],
+            "audit_sequence": 2,
+            "event": "pointerup",
+            "browser_wall_time_ms": 10,
+            "client_monotonic_ms": 2.0,
+            "event_time_stamp_ms": 1.5,
+            "is_trusted": True,
+            "default_prevented": False,
+            "target": {"id": "target", "tag": "input", "checked": False},
+            "target_checked": False,
+            "checkbox_state": {"target": False, "decoy": False},
+            "active_element": {"id": "target", "tag": "input", "checked": False},
+            "document_has_focus": True,
+            "visibility_state": "visible",
+            "button": 0,
+            "buttons": 0,
+            "pointer_type": "mouse",
+            "client_x": 295,
+            "client_y": 231,
+            "screen_x": 365,
+            "screen_y": 345,
+        }
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.port}/audit/{fixture.id}",
+            data=json.dumps(payload).encode(),
+            method="POST",
+            headers={"Content-Type": "text/plain;charset=UTF-8"},
+        )
+        with urllib.request.urlopen(request) as response:
+            assert response.status == 200
+        snapshot = server.store.snapshot(fixture.id)
+    assert snapshot["events"] == []
+    assert snapshot["diagnostic_journal"] == []
+    assert snapshot["browser_audit_dropped"] == 0
+    assert len(snapshot["browser_audit_events"]) == 1
+    event = snapshot["browser_audit_events"][0]
+    assert event["audit_sequence"] == 2
+    assert event["event"] == "pointerup"
+    assert event["host_audit_request_id"] == 1
+    assert isinstance(event["host_monotonic_ns"], int)
+
+
+def test_browser_audit_endpoint_fails_closed_when_disabled_or_stale() -> None:
+    manifest = load_manifest()
+    fixture = next(
+        item
+        for item in manifest.select(split="development")
+        if item.template == "click"
+    )
+
+    def request(server: FixtureHttpServer, generation: int) -> urllib.request.Request:
+        return urllib.request.Request(
+            f"http://127.0.0.1:{server.port}/audit/{fixture.id}",
+            data=json.dumps(
+                {
+                    "schema_version": 1,
+                    "generation": generation,
+                    "audit_sequence": 1,
+                    "event": "audit_ready",
+                }
+            ).encode(),
+            method="POST",
+        )
+
+    with FixtureHttpServer(manifest) as server:
+        generation = server.store.snapshot(fixture.id)["generation"]
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request(server, generation))
+        assert caught.value.code == 404
+
+    with FixtureHttpServer(manifest, enable_browser_audit=True) as server:
+        generation = server.store.snapshot(fixture.id)["generation"]
+        server.store.reset(fixture)
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request(server, generation))
+        assert caught.value.code == 400
+        assert server.store.snapshot(fixture.id)["browser_audit_events"] == []
+
+
 def test_http_event_path_records_bounded_ingress_apply_and_response_journal() -> None:
     manifest = load_manifest()
     fixture = manifest.select(split="development")[0]

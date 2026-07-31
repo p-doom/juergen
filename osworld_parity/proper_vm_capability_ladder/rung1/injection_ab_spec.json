@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "suite": "rung1_click_release_injection_ab_v1",
+  "status": "preregistered_cpu_development_diagnostic",
+  "parent_evidence": {
+    "pipeline_id": "pipeline_019fb96c7d6f7f5397b24d572b97e6be",
+    "run_id": "run_019fb96c7d6f7f5397b24d41375ebc7a",
+    "job_id": "136131",
+    "artifact_index_sha256": "f395785bb95906f369402e7e31ae034bea08de5845bd594c6e9d5ae20bee7aec",
+    "content_address": "sha256:c61ca3c3587693cb542f53f81d2389d97acd6d0402e9a449ee54bf009df1db69",
+    "failure_sha256": "2f40b7cc06ab1269107955a0e04d582331da2e62293a8fdb44f8a1fba99487ef",
+    "progress_sha256": "784503c54d93b883615ddc031368b77a1e6b827a04424318bbf2f2317c4e19d3",
+    "git_commit": "74db1499839106b82630ddb463c4d12161ba337f",
+    "git_tree": "533b27568c6ffbf416661d8400682abacb867d6c",
+    "lock_sha256": "391e50f4a1a0d2b0aa3776ca10ed2828e8d41cbc42ffc0ba84570729df4c3163",
+    "observed_signature": {
+      "passed_trials": 9,
+      "trial_count": 10,
+      "failed_trial": "preflight-pair-005-compact",
+      "host_events": [
+        "pointerdown",
+        "pointermove",
+        "pointerup"
+      ],
+      "host_click_observed": false,
+      "final_pointer_mask": 0,
+      "cdp_immediate_error": "ConnectionResetError: [Errno 104] Connection reset by peer",
+      "cdp_post_grace_error": "ConnectionResetError: [Errno 104] Connection reset by peer",
+      "classification": "inconclusive"
+    }
+  },
+  "manifest_payload_sha256": "5d4ea3ab33c084f1a5de1b716429c242a97452416f5b74efc3654b7d4b338097",
+  "fixture_id": "r1a-click-dev-1101",
+  "fixture_sha256": "0124b5dab062e69ed83c37f9b91396b152b1f27a6cd3b9de72a0f9fa18ff5c0e",
+  "development_only": true,
+  "canonical_action_format": "compact_raw_phaseb",
+  "canonical_semantic_operations": [
+    "move_relative",
+    "mouse_down",
+    "mouse_up"
+  ],
+  "canonical_lowered_operations": [
+    "move_relative",
+    "click"
+  ],
+  "backend_arms": {
+    "A": {
+      "name": "pyautogui_release_motion",
+      "order": [
+        "pyautogui_press",
+        "x_sync",
+        "dwell_50ms",
+        "pyautogui_release_side_same_coordinate_motion",
+        "pyautogui_release",
+        "x_sync"
+      ],
+      "release_side_motion_notify": true
+    },
+    "B": {
+      "name": "direct_xtest_no_release_motion",
+      "order": [
+        "xtest_press",
+        "x_sync",
+        "dwell_50ms",
+        "xtest_release",
+        "x_sync"
+      ],
+      "release_side_motion_notify": false
+    }
+  },
+  "only_backend_difference": "release-side same-coordinate MotionNotify emitted by PyAutoGUI _mouseUp",
+  "dwell_ms": 50,
+  "observation_window_s": 3.0,
+  "audit_drain_s": 0.25,
+  "order_block": [
+    "A",
+    "B",
+    "B",
+    "A",
+    "B",
+    "A",
+    "A",
+    "B"
+  ],
+  "order_block_repetitions": 6,
+  "trial_count": 48,
+  "trials_per_arm": 24,
+  "reset_snapshot": "osworld_ready",
+  "reset_before_every_trial": true,
+  "fresh_chromium_every_trial": true,
+  "dispatches_per_trial": 1,
+  "guest_processes_per_dispatch": 1,
+  "retry_count": 0,
+  "replacement_count": 0,
+  "stop_policy": "integrity_abort_only",
+  "browser_audit": {
+    "transport": "independent_navigator_sendBeacon_to_host_audit_endpoint",
+    "serialized_post_queue_independent": true,
+    "cdp_independent": true,
+    "arm_neutral": true,
+    "required_ready_event": "audit_ready",
+    "dom_events": [
+      "pointerdown",
+      "pointerup",
+      "pointermove",
+      "mousedown",
+      "mouseup",
+      "mousemove",
+      "click",
+      "input",
+      "change",
+      "focus",
+      "blur"
+    ],
+    "required_fields": [
+      "audit_sequence",
+      "browser_wall_time_ms",
+      "client_monotonic_ms",
+      "event_time_stamp_ms",
+      "is_trusted",
+      "default_prevented",
+      "target",
+      "target_checked",
+      "checkbox_state",
+      "active_element",
+      "document_has_focus",
+      "visibility_state"
+    ]
+  },
+  "guest_timestamp_clock": "time.monotonic_ns",
+  "required_guest_timestamp_stages": [
+    "press_call_before",
+    "press_call_after",
+    "press_sync_completed",
+    "dwell_started",
+    "dwell_completed",
+    "release_call_before",
+    "release_call_after",
+    "release_sync_completed"
+  ],
+  "passive_x_observer": {
+    "enabled": false,
+    "installed": false,
+    "observer_process_count": 0,
+    "additional_x_connection_count": 0,
+    "assessment": "omitted_not_demonstrably_non_perturbing",
+    "limitation": "not installed: a same-process XRecord/XI2 observer requires a second X connection and concurrent event consumption, which is not demonstrably non-perturbing for this timing experiment"
+  },
+  "primary_success": "trusted independent-audit click, input, and change on target with target checked true and final pointer mask zero; serialized host reporter state is secondary evidence only",
+  "integrity_abort_conditions": [
+    "spec, parent evidence, fixture, provider, source, or lock seal drift",
+    "reset or fresh Chromium launch failure",
+    "missing or duplicate audit_ready, non-contiguous audit sequence, audit overflow, or malformed required audit fields",
+    "canonical action format, semantic operations, endpoint, or only-backend-difference contract drift",
+    "missing guest injection timestamps, one-process contract failure, nonzero final pointer mask, or dispatch count other than one"
+  ],
+  "interpretation_table": [
+    {
+      "condition": "any integrity abort",
+      "interpretation": "invalid_experiment"
+    },
+    {
+      "condition": "A failures = 0 and B failures = 0",
+      "interpretation": "failure_not_reproduced"
+    },
+    {
+      "condition": "A failures > 0 and B failures = 0",
+      "interpretation": "supports_release_motion_hypothesis"
+    },
+    {
+      "condition": "A failures = 0 and B failures > 0",
+      "interpretation": "contradicts_release_motion_hypothesis"
+    },
+    {
+      "condition": "A failures > B failures and B failures > 0",
+      "interpretation": "directional_support_with_shared_failures_inconclusive"
+    },
+    {
+      "condition": "A failures = B failures and A failures > 0",
+      "interpretation": "nondifferential_failures_inconclusive"
+    },
+    {
+      "condition": "B failures > A failures and A failures > 0",
+      "interpretation": "directional_contradiction_with_shared_failures"
+    }
+  ],
+  "gpu_count": 0,
+  "model_access": false,
+  "sealed_evaluation_access": false,
+  "qualification_authorized": false
+}

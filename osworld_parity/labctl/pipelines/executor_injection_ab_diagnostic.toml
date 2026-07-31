@@ -1,0 +1,7 @@
+name = "proper_vm_executor_click_release_injection_ab_v1"
+
+[stages.build]
+recipe = "../recipes/executor_injection_ab_build_cpu.toml"
+
+[stages.injection_ab]
+recipe = "../recipes/executor_injection_ab_cpu_kvm.toml"

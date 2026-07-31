@@ -13,6 +13,15 @@ DIAGNOSTIC_PIPELINE = (
 DIAGNOSTIC_RECIPE = (
     ROOT / "labctl" / "recipes" / "executor_diag_click_instrumented_cpu_kvm.toml"
 )
+INJECTION_AB_PIPELINE = (
+    ROOT / "labctl" / "pipelines" / "executor_injection_ab_diagnostic.toml"
+)
+INJECTION_AB_BUILD_RECIPE = (
+    ROOT / "labctl" / "recipes" / "executor_injection_ab_build_cpu.toml"
+)
+INJECTION_AB_RECIPE = (
+    ROOT / "labctl" / "recipes" / "executor_injection_ab_cpu_kvm.toml"
+)
 NAMES = (
     "executor_cert_build_cpu.toml",
     "executor_cert_click_preflight_cpu_kvm.toml",
@@ -156,3 +165,47 @@ def test_instrumented_diagnostic_is_a_separate_fail_closed_identity() -> None:
     assert "retry" not in " ".join(raw["command"]).lower()
     assert "heldout" not in text.lower()
     assert "sealed_eval" not in text.lower()
+
+
+def test_injection_ab_is_a_new_cpu_only_fail_closed_identity() -> None:
+    pipeline = tomllib.loads(INJECTION_AB_PIPELINE.read_text(encoding="utf-8"))
+    assert pipeline == {
+        "name": "proper_vm_executor_click_release_injection_ab_v1",
+        "stages": {
+            "build": {"recipe": "../recipes/executor_injection_ab_build_cpu.toml"},
+            "injection_ab": {
+                "recipe": "../recipes/executor_injection_ab_cpu_kvm.toml"
+            },
+        },
+    }
+    build = tomllib.loads(INJECTION_AB_BUILD_RECIPE.read_text(encoding="utf-8"))
+    raw = tomllib.loads(INJECTION_AB_RECIPE.read_text(encoding="utf-8"))
+    text = INJECTION_AB_RECIPE.read_text(encoding="utf-8")
+    assert build["repo"] == raw["repo"] == "juergen_gui_executor_injection_ab"
+    assert build["resources"]["gpus"] == raw["resources"]["gpus"] == 0
+    assert build["env"]["CUDA_VISIBLE_DEVICES"] == ""
+    assert raw["env"]["CUDA_VISIBLE_DEVICES"] == ""
+    assert raw["inputs"]["build"] == {
+        "type": "stage",
+        "stage": "build",
+        "role": "result",
+    }
+    assert raw["resources"]["sbatch_extra"] == [
+        "--no-requeue",
+        "--ntasks=1",
+        "--ntasks-per-node=1",
+        "--exclude=hai001,hai005",
+    ]
+    assert raw["outputs"]["result"]["marker"] == "ARTIFACT_INDEX.json"
+    assert "diagnostic_rc=$?" in text
+    assert "injection_ab_result.json" in text
+    assert "injection_ab_failure.json" in text
+    assert "injection_ab_progress.json" in text
+    assert "vm_metadata.json" in text
+    assert '--result="$terminal_name=$terminal_path"' in text
+    assert 'exit "$diagnostic_rc"' in text
+    assert "qualification_result" not in text
+    assert "heldout" not in text.lower()
+    assert "sealed_eval" not in text.lower()
+    assert "teacher_collect" not in text.lower()
+    assert "--array" not in text

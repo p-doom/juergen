@@ -20,6 +20,21 @@ class FixtureServerError(RuntimeError):
 STABLE_GEOMETRY_OBSERVATIONS = 3
 MAX_GEOMETRY_ANIMATION_FRAMES = 120
 HOST_DIAGNOSTIC_JOURNAL_LIMIT = 1024
+BROWSER_AUDIT_EVENT_LIMIT = 512
+BROWSER_AUDIT_EVENTS = {
+    "audit_ready",
+    "pointerdown",
+    "pointerup",
+    "pointermove",
+    "mousedown",
+    "mouseup",
+    "mousemove",
+    "click",
+    "input",
+    "change",
+    "focus",
+    "blur",
+}
 
 
 def _initial_current(fixture: Fixture) -> dict[str, Any]:
@@ -65,9 +80,55 @@ class FixtureStateStore:
                 "diagnostic_journal_dropped": 0,
                 "diagnostic_journal_next_sequence": 1,
                 "diagnostic_http_request_next_id": 1,
+                "browser_audit_events": [],
+                "browser_audit_dropped": 0,
+                "browser_audit_request_next_id": 1,
             }
             self._condition.notify_all()
             return generation
+
+    def apply_browser_audit(
+        self, fixture: Fixture, payload: dict[str, Any]
+    ) -> None:
+        """Persist the arm-neutral DOM listener trace outside ``postQueue``.
+
+        Audit reports use their own HTTP path, sequence, request identity, and
+        bounded store.  They therefore remain available when the serialized
+        semantic reporter or CDP diagnostic connection fails.  Arrival order
+        is not treated as browser order: ``sendBeacon`` requests may be served
+        concurrently, so the browser sequence and timestamps are preserved.
+        """
+        with self._condition:
+            state = self._states[fixture.id]
+            if payload.get("schema_version") != 1:
+                raise FixtureServerError("browser audit schema mismatch")
+            if payload.get("generation") != state["generation"]:
+                raise FixtureServerError("stale browser audit generation")
+            event_name = payload.get("event")
+            if event_name not in BROWSER_AUDIT_EVENTS:
+                raise FixtureServerError("unsupported browser audit event")
+            audit_sequence = payload.get("audit_sequence")
+            if (
+                not isinstance(audit_sequence, int)
+                or isinstance(audit_sequence, bool)
+                or audit_sequence < 1
+            ):
+                raise FixtureServerError("invalid browser audit sequence")
+            request_id = int(state["browser_audit_request_next_id"])
+            state["browser_audit_request_next_id"] = request_id + 1
+            event = copy.deepcopy(payload)
+            event.update(
+                {
+                    "host_audit_request_id": request_id,
+                    "host_monotonic_ns": time.monotonic_ns(),
+                    "host_wall_time_ns": time.time_ns(),
+                }
+            )
+            if len(state["browser_audit_events"]) >= BROWSER_AUDIT_EVENT_LIMIT:
+                state["browser_audit_dropped"] += 1
+            else:
+                state["browser_audit_events"].append(event)
+            self._condition.notify_all()
 
     @staticmethod
     def _append_diagnostic_locked(
@@ -470,7 +531,13 @@ class FixtureStateStore:
 
 
 class FixtureHttpServer:
-    def __init__(self, manifest: FixtureManifest, *, host: str = "0.0.0.0") -> None:
+    def __init__(
+        self,
+        manifest: FixtureManifest,
+        *,
+        host: str = "0.0.0.0",
+        enable_browser_audit: bool = False,
+    ) -> None:
         self.manifest = manifest
         self.store = FixtureStateStore(manifest)
         store = self.store
@@ -501,7 +568,11 @@ class FixtureHttpServer:
                 try:
                     fixture = manifest.by_id(fixture_id)
                     generation = store.snapshot(fixture.id)["generation"]
-                    body = render_fixture_html(fixture, generation).encode("utf-8")
+                    body = render_fixture_html(
+                        fixture,
+                        generation,
+                        enable_browser_audit=enable_browser_audit,
+                    ).encode("utf-8")
                 except Exception as exc:  # fail closed; no state is returned
                     self._send(404, str(exc).encode("utf-8"), "text/plain; charset=utf-8")
                     return
@@ -509,6 +580,33 @@ class FixtureHttpServer:
 
             def do_POST(self) -> None:  # noqa: N802
                 path = urllib.parse.urlsplit(self.path).path
+                audit_prefix = "/audit/"
+                if path.startswith(audit_prefix):
+                    if not enable_browser_audit:
+                        self._send(404, b"not found", "text/plain; charset=utf-8")
+                        return
+                    try:
+                        fixture = manifest.by_id(
+                            urllib.parse.unquote(path[len(audit_prefix) :])
+                        )
+                        length = int(self.headers.get("Content-Length", "0"))
+                        if not 0 < length <= 65536:
+                            raise FixtureServerError("invalid browser audit body length")
+                        payload = json.loads(self.rfile.read(length))
+                        if not isinstance(payload, dict):
+                            raise FixtureServerError(
+                                "browser audit body must be an object"
+                            )
+                        store.apply_browser_audit(fixture, payload)
+                    except Exception as exc:
+                        self._send(
+                            HTTPStatus.BAD_REQUEST,
+                            json.dumps({"error": str(exc)}).encode("utf-8"),
+                            "application/json",
+                        )
+                        return
+                    self._send(200, b'{"status":"accepted"}', "application/json")
+                    return
                 prefix = "/event/"
                 if not path.startswith(prefix):
                     self._send(404, b"not found", "text/plain; charset=utf-8")
@@ -635,14 +733,100 @@ class FixtureHttpServer:
         self.close()
 
 
+def _browser_audit_script(fixture: Fixture) -> str:
+    endpoint = json.dumps(f"/audit/{urllib.parse.quote(fixture.id)}")
+    script = r"""
+const auditEndpoint = __AUDIT_ENDPOINT__;
+let browserAuditSequence = 0;
+function auditElement(element) {
+  if (!element) return null;
+  return {
+    id: element.id || '',
+    tag: element.tagName ? element.tagName.toLowerCase() : '',
+    checked: typeof element.checked === 'boolean' ? element.checked : null
+  };
+}
+function auditPageState() {
+  const target = document.getElementById('target');
+  const decoy = document.getElementById('decoy');
+  return {
+    checkbox_state: {
+      target: target && typeof target.checked === 'boolean' ? target.checked : null,
+      decoy: decoy && typeof decoy.checked === 'boolean' ? decoy.checked : null
+    },
+    active_element: auditElement(
+      document.activeElement instanceof Element ? document.activeElement : null
+    ),
+    document_has_focus: document.hasFocus(),
+    visibility_state: document.visibilityState
+  };
+}
+function sendBrowserAudit(payload) {
+  payload.schema_version = 1;
+  payload.generation = generation;
+  payload.audit_sequence = ++browserAuditSequence;
+  payload.browser_wall_time_ms = Date.now();
+  payload.client_monotonic_ms = Math.round(performance.now() * 1000) / 1000;
+  Object.assign(payload, auditPageState());
+  navigator.sendBeacon(auditEndpoint, JSON.stringify(payload));
+}
+function emitBrowserAudit(event) {
+  const target = event.target instanceof Element ? event.target : null;
+  sendBrowserAudit({
+    event: event.type,
+    event_time_stamp_ms: Math.round(Number(event.timeStamp) * 1000) / 1000,
+    is_trusted: event.isTrusted === true,
+    default_prevented: event.defaultPrevented === true,
+    target: auditElement(target),
+    target_checked: target && typeof target.checked === 'boolean'
+      ? target.checked : null,
+    button: typeof event.button === 'number' ? event.button : null,
+    buttons: typeof event.buttons === 'number' ? event.buttons : null,
+    pointer_type: typeof event.pointerType === 'string' ? event.pointerType : null,
+    client_x: typeof event.clientX === 'number' ? Math.round(event.clientX) : null,
+    client_y: typeof event.clientY === 'number' ? Math.round(event.clientY) : null,
+    screen_x: typeof event.screenX === 'number' ? Math.round(event.screenX) : null,
+    screen_y: typeof event.screenY === 'number' ? Math.round(event.screenY) : null
+  });
+}
+for (const auditName of [
+  'pointerdown', 'pointerup', 'pointermove',
+  'mousedown', 'mouseup', 'mousemove',
+  'click', 'input', 'change', 'focus', 'blur'
+]) {
+  document.addEventListener(auditName, emitBrowserAudit, true);
+}
+sendBrowserAudit({
+  event: 'audit_ready',
+  event_time_stamp_ms: null,
+  is_trusted: null,
+  default_prevented: null,
+  target: null,
+  target_checked: null,
+  button: null,
+  buttons: null,
+  pointer_type: null,
+  client_x: null,
+  client_y: null,
+  screen_x: null,
+  screen_y: null,
+  page_time_origin_ms: performance.timeOrigin,
+  url: location.href
+});
+""".strip()
+    return script.replace("__AUDIT_ENDPOINT__", endpoint)
+
+
 def _common_script(
     fixture: Fixture,
     generation: int,
     ready_payload_js: str,
     *,
     setup_js: str = "",
+    enable_browser_audit: bool = False,
 ) -> str:
     endpoint = f"/event/{urllib.parse.quote(fixture.id)}"
+    audit_script = _browser_audit_script(fixture) if enable_browser_audit else ""
     return f"""
 <script>
 const generation = {generation};
@@ -671,6 +855,7 @@ const rung1aDiagnostics = {{
   }}
 }};
 window.__RUNG1A_DIAGNOSTICS__ = rung1aDiagnostics;
+{audit_script}
 function boundedPush(items, value) {{
   items.push(value);
   if (items.length > diagnosticRingLimit) items.splice(0, items.length - diagnosticRingLimit);
@@ -816,7 +1001,9 @@ window.addEventListener('load', () => stabilizeGeometry().catch(error =>
 """
 
 
-def render_fixture_html(fixture: Fixture, generation: int) -> str:
+def render_fixture_html(
+    fixture: Fixture, generation: int, *, enable_browser_audit: bool = False
+) -> str:
     p = fixture.params
     accent = html.escape(str(p["accent"]), quote=True)
     base = f"""<!doctype html>
@@ -902,7 +1089,13 @@ window.addEventListener('scroll', () => {{ clearTimeout(scrollTimer); scrollTime
     return (
         base
         + content
-        + _common_script(fixture, generation, ready, setup_js=setup)
+        + _common_script(
+            fixture,
+            generation,
+            ready,
+            setup_js=setup,
+            enable_browser_audit=enable_browser_audit,
+        )
         + "</body></html>"
     )
 
