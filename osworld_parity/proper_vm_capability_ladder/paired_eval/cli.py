@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .aggregate import aggregate_results, load_jsonl
-from .manifest import EvaluationManifest, load_evaluation_manifest
+from .curriculum_adapter import load_curriculum_evaluation_manifest
+from .manifest import EvaluationManifest
 from .planning import build_plan
 from .readiness import ConsumedReadiness, consume_executor_ready
 from .runner import PairedEvaluationRunner, write_jsonl_atomic
@@ -75,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     aggregate.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
 
-    manifest = load_evaluation_manifest(
+    manifest = load_curriculum_evaluation_manifest(
         args.evaluation_manifest,
         args.task_manifest,
     )

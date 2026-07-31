@@ -6,6 +6,7 @@ consumed the executor integration marker.
 """
 
 from .aggregate import aggregate_results
+from .curriculum_adapter import load_curriculum_evaluation_manifest
 from .manifest import EvaluationManifest, ManifestError, load_evaluation_manifest
 from .planning import TrialSpec, build_plan
 from .readiness import ConsumedReadiness, ReadinessError, consume_executor_ready
@@ -21,5 +22,6 @@ __all__ = [
     "aggregate_results",
     "build_plan",
     "consume_executor_ready",
+    "load_curriculum_evaluation_manifest",
     "load_evaluation_manifest",
 ]

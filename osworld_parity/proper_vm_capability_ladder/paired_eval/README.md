@@ -3,6 +3,10 @@
 This package compares the native absolute control system with the compact
 raw-relative system on the same real-VM development tasks.  It is an evaluation
 scaffold, not a job launcher, model trainer, or source of held-out tasks.
+The production CLI accepts only the sealed
+`proper_vm_sameapp_semantic_curriculum_v1` `development.json` through that
+curriculum package's own loader. It does not discover task directories or fall
+back to another schema.
 
 The comparison is explicitly a **complete-system comparison**.  Checkpoint,
 prompt, generation settings, and action interface are recorded for each arm and
