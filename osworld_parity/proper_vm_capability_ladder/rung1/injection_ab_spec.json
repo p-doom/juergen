@@ -71,7 +71,7 @@
   "only_backend_difference": "release-side same-coordinate MotionNotify emitted by PyAutoGUI _mouseUp",
   "dwell_ms": 50,
   "observation_window_s": 3.0,
-  "audit_drain_s": 0.25,
+  "audit_drain_s": 0.75,
   "order_block": [
     "A",
     "B",
@@ -99,6 +99,14 @@
     "cdp_independent": true,
     "arm_neutral": true,
     "required_ready_event": "audit_ready",
+    "heartbeat_event": "audit_heartbeat",
+    "heartbeat_interval_ms": 500,
+    "require_heartbeat_received_after_observation_deadline": true,
+    "heartbeat_expected_sequence_fields": [
+      "expected_previous_audit_sequence",
+      "expected_audit_count_through_marker"
+    ],
+    "classification_uses_only_sequence_sealed_prefix": true,
     "dom_events": [
       "pointerdown",
       "pointerup",
@@ -146,7 +154,7 @@
     "assessment": "omitted_not_demonstrably_non_perturbing",
     "limitation": "not installed: a same-process XRecord/XI2 observer requires a second X connection and concurrent event consumption, which is not demonstrably non-perturbing for this timing experiment"
   },
-  "primary_success": "trusted independent-audit click, input, and change on target with target checked true and final pointer mask zero; serialized host reporter state is secondary evidence only",
+  "primary_success": "trusted independent-audit pointerdown, pointerup, click, input, and change on target with target checked true and final pointer mask zero; serialized host reporter state is secondary evidence only",
   "integrity_abort_conditions": [
     "spec, parent evidence, fixture, provider, source, or lock seal drift",
     "reset or fresh Chromium launch failure",

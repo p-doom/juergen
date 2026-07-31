@@ -705,8 +705,12 @@ class HttpVmTransport:
                 duration = record.get("duration_ns")
                 if (
                     not isinstance(started, int)
+                    or isinstance(started, bool)
                     or not isinstance(completed, int)
+                    or isinstance(completed, bool)
                     or completed < started
+                    or not isinstance(duration, int)
+                    or isinstance(duration, bool)
                     or duration != completed - started
                 ):
                     raise TransportError(
@@ -727,10 +731,41 @@ class HttpVmTransport:
                 "completed_guest_monotonic_ns",
             ),
         )
-        if [item.get("sequence") for item in raw_x_injections] != list(
-            range(1, len(raw_x_injections) + 1)
+        injection_sequences = [item.get("sequence") for item in raw_x_injections]
+        if (
+            not all(
+                isinstance(value, int) and not isinstance(value, bool)
+                for value in injection_sequences
+            )
+            or injection_sequences != list(range(1, len(raw_x_injections) + 1))
         ):
             raise TransportError("atomic guest action X injection sequence drifted")
+        x_event_names = {4: "button_press", 5: "button_release", 6: "motion_notify"}
+        for item in raw_x_injections:
+            event_type = item.get("event_type")
+            detail = item.get("detail")
+            x = item.get("x")
+            y = item.get("y")
+            if (
+                item.get("phase") not in {"outside_click", "press", "release"}
+                or not isinstance(event_type, int)
+                or isinstance(event_type, bool)
+                or event_type not in x_event_names
+                or item.get("event") != x_event_names[event_type]
+                or not isinstance(detail, int)
+                or isinstance(detail, bool)
+                or ((x is None) != (y is None))
+                or (
+                    x is not None
+                    and (
+                        not isinstance(x, int)
+                        or isinstance(x, bool)
+                        or not isinstance(y, int)
+                        or isinstance(y, bool)
+                    )
+                )
+            ):
+                raise TransportError("atomic guest action X injection identity drifted")
         expected_click_count = sum(
             operation.kind == "click" for operation in lower_guest_operations(operations)
         )
@@ -762,7 +797,8 @@ class HttpVmTransport:
                 raise TransportError("atomic guest action click primitive drifted")
         if len(raw_click_timings) != expected_click_count:
             raise TransportError("atomic guest action click timing count drifted")
-        for timing in raw_click_timings:
+        covered_controlled_sequences: set[int] = set()
+        for timing, primitive in zip(raw_click_timings, click_primitives):
             required_timestamps = (
                 "click_started_guest_monotonic_ns",
                 "press_call_before_guest_monotonic_ns",
@@ -793,6 +829,101 @@ class HttpVmTransport:
                 - timing.get("dwell_started_guest_monotonic_ns")
             ):
                 raise TransportError("atomic guest action click timing evidence drifted")
+            start_sequence = timing.get("x_injection_start_sequence")
+            button_detail = {"left": 1, "middle": 2, "right": 3}.get(
+                primitive.get("button")
+            )
+            expected_injections = [
+                ("press", "motion_notify", 6, 0),
+                ("press", "button_press", 4, button_detail),
+                *(
+                    [("release", "motion_notify", 6, 0)]
+                    if click_backend == PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND
+                    else []
+                ),
+                ("release", "button_release", 5, button_detail),
+            ]
+            if (
+                not isinstance(start_sequence, int)
+                or isinstance(start_sequence, bool)
+                or button_detail is None
+            ):
+                raise TransportError("atomic guest action click X sequence origin drifted")
+            controlled = [
+                item
+                for item in raw_x_injections
+                if start_sequence
+                < item["sequence"]
+                <= start_sequence + len(expected_injections)
+            ]
+            if [item["sequence"] for item in controlled] != list(
+                range(start_sequence + 1, start_sequence + 1 + len(expected_injections))
+            ):
+                raise TransportError("atomic guest action controlled X sequence drifted")
+            for item, expected in zip(controlled, expected_injections):
+                if (
+                    item.get("phase"),
+                    item.get("event"),
+                    item.get("event_type"),
+                    item.get("detail"),
+                ) != expected:
+                    raise TransportError("atomic guest action controlled X identity drifted")
+                covered_controlled_sequences.add(item["sequence"])
+            controlled_clock_values = [
+                value
+                for item in controlled
+                for value in (
+                    item["started_guest_monotonic_ns"],
+                    item["completed_guest_monotonic_ns"],
+                )
+            ]
+            if controlled_clock_values != sorted(controlled_clock_values):
+                raise TransportError("atomic guest action controlled X clock drifted")
+            press_motion = controlled[0]
+            press_coordinates = (press_motion.get("x"), press_motion.get("y"))
+            if not all(
+                isinstance(value, int) and not isinstance(value, bool)
+                for value in press_coordinates
+            ):
+                raise TransportError("atomic guest action press coordinates drifted")
+            for item in controlled:
+                if item["event"] in {"button_press", "button_release"} and (
+                    item.get("x") is not None or item.get("y") is not None
+                ):
+                    raise TransportError("atomic guest action button coordinates drifted")
+            release_motions = [
+                item
+                for item in controlled
+                if item["phase"] == "release" and item["event"] == "motion_notify"
+            ]
+            if release_motions and (
+                release_motions[0].get("x"), release_motions[0].get("y")
+            ) != press_coordinates:
+                raise TransportError(
+                    "atomic guest action release motion coordinates drifted"
+                )
+            if not (
+                timing["press_call_before_guest_monotonic_ns"]
+                <= controlled[0]["started_guest_monotonic_ns"]
+                <= controlled[1]["completed_guest_monotonic_ns"]
+                <= timing["press_call_after_guest_monotonic_ns"]
+                <= timing["press_sync_completed_guest_monotonic_ns"]
+                <= timing["dwell_started_guest_monotonic_ns"]
+                <= timing["dwell_completed_guest_monotonic_ns"]
+                <= timing["release_call_before_guest_monotonic_ns"]
+                <= controlled[2]["started_guest_monotonic_ns"]
+                <= controlled[-1]["completed_guest_monotonic_ns"]
+                <= timing["release_call_after_guest_monotonic_ns"]
+                <= timing["release_sync_completed_guest_monotonic_ns"]
+            ):
+                raise TransportError("atomic guest action X timing order drifted")
+        all_controlled_sequences = {
+            item["sequence"]
+            for item in raw_x_injections
+            if item.get("phase") in {"press", "release"}
+        }
+        if covered_controlled_sequences != all_controlled_sequences:
+            raise TransportError("atomic guest action unbound controlled X event")
 
         def parse_operations(raw: list[Any], label: str) -> tuple[Operation, ...]:
             parsed: list[Operation] = []

@@ -497,6 +497,10 @@ def test_browser_audit_is_opt_in_and_independent_of_semantic_reporter() -> None:
     audit_html = render_fixture_html(fixture, 1, enable_browser_audit=True)
     assert "navigator.sendBeacon(auditEndpoint" not in plain_html
     assert "navigator.sendBeacon(auditEndpoint" in audit_html
+    assert "event: 'audit_heartbeat'" in audit_html
+    assert "}), 500);" in audit_html
+    assert "expected_previous_audit_sequence" in audit_html
+    assert "expected_audit_count_through_marker" in audit_html
     for name in (
         "pointerdown",
         "pointerup",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import sys
 import time
 import traceback
@@ -35,7 +36,7 @@ from .vm import (
 
 
 SPEC_PATH = Path(__file__).with_name("injection_ab_spec.json")
-EXPECTED_SPEC_SHA256 = "087addd7318759f24db2cee0deb00877973df35a17812f0a9db00902d9f1a439"
+EXPECTED_SPEC_SHA256 = "36c804467519014d96310ae85608639a19ffe8b322e2529b7c90648784d0f176"
 ORDER_BLOCK = ("A", "B", "B", "A", "B", "A", "A", "B")
 TRIAL_ORDER = ORDER_BLOCK * 6
 BACKEND_BY_ARM = {
@@ -70,6 +71,24 @@ AUDIT_REQUIRED_FIELDS = (
     "document_has_focus",
     "visibility_state",
 )
+AUDIT_DETAIL_FIELDS = (
+    "button",
+    "buttons",
+    "pointer_type",
+    "client_x",
+    "client_y",
+    "screen_x",
+    "screen_y",
+)
+AUDIT_ENVELOPE_FIELDS = (
+    "schema_version",
+    "generation",
+    "audit_sequence",
+    "event",
+    "host_audit_request_id",
+    "host_monotonic_ns",
+    "host_wall_time_ns",
+)
 TIMESTAMP_STAGES = (
     "press_call_before",
     "press_call_after",
@@ -81,7 +100,10 @@ TIMESTAMP_STAGES = (
     "release_sync_completed",
 )
 OBSERVATION_WINDOW_S = 3.0
-AUDIT_DRAIN_S = 0.25
+AUDIT_DRAIN_S = 0.75
+X_BUTTON_PRESS = 4
+X_BUTTON_RELEASE = 5
+X_MOTION_NOTIFY = 6
 
 
 class InjectionAbIntegrityError(RuntimeError):
@@ -194,6 +216,16 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
     if not isinstance(audit, dict) or (
         audit.get("dom_events") != list(AUDIT_DOM_EVENTS)
         or audit.get("required_fields") != list(AUDIT_REQUIRED_FIELDS)
+        or audit.get("heartbeat_event") != "audit_heartbeat"
+        or audit.get("heartbeat_interval_ms") != 500
+        or audit.get("require_heartbeat_received_after_observation_deadline")
+        is not True
+        or audit.get("heartbeat_expected_sequence_fields")
+        != [
+            "expected_previous_audit_sequence",
+            "expected_audit_count_through_marker",
+        ]
+        or audit.get("classification_uses_only_sequence_sealed_prefix") is not True
         or audit.get("arm_neutral") is not True
         or audit.get("serialized_post_queue_independent") is not True
         or audit.get("cdp_independent") is not True
@@ -285,7 +317,14 @@ def validate_audit_trace(
     raw = snapshot.get("browser_audit_events")
     if not isinstance(raw, list) or not all(isinstance(item, dict) for item in raw):
         raise InjectionAbIntegrityError("browser audit trace malformed")
-    events = sorted(raw, key=lambda item: int(item.get("audit_sequence", -1)))
+    if not all(
+        isinstance(item.get("audit_sequence"), int)
+        and not isinstance(item.get("audit_sequence"), bool)
+        and item["audit_sequence"] >= 1
+        for item in raw
+    ):
+        raise InjectionAbIntegrityError("browser audit sequence type/range malformed")
+    events = sorted(raw, key=lambda item: item["audit_sequence"])
     sequences = [item.get("audit_sequence") for item in events]
     if sequences != list(range(1, len(events) + 1)):
         raise InjectionAbIntegrityError(
@@ -296,25 +335,228 @@ def validate_audit_trace(
     if len(ready) != 1 or ready[0].get("audit_sequence") != 1:
         raise InjectionAbIntegrityError("browser audit_ready identity mismatch")
     if (
-        not isinstance(ready[0].get("page_time_origin_ms"), (int, float))
-        or FIXTURE_ID not in str(ready[0].get("url", ""))
+        not _is_finite_number(ready[0].get("page_time_origin_ms"), minimum=0)
+        or not isinstance(ready[0].get("url"), str)
+        or FIXTURE_ID not in ready[0]["url"]
     ):
         raise InjectionAbIntegrityError("fresh browser audit identity malformed")
+    prior_browser_wall_time_ms = -1.0
+    prior_client_monotonic_ms = -1.0
     for event in events:
-        if event.get("generation") != generation:
+        if (
+            not isinstance(event.get("generation"), int)
+            or isinstance(event.get("generation"), bool)
+            or event.get("generation") != generation
+        ):
             raise InjectionAbIntegrityError("browser audit generation crossed reset")
+        if type(event.get("schema_version")) is not int or event["schema_version"] != 1:
+            raise InjectionAbIntegrityError("browser audit schema version drifted")
         if event.get("event") not in BROWSER_AUDIT_EVENTS:
             raise InjectionAbIntegrityError("browser audit event set drifted")
+        expected_fields = set(AUDIT_ENVELOPE_FIELDS + AUDIT_REQUIRED_FIELDS + AUDIT_DETAIL_FIELDS)
+        if event["event"] == "audit_ready":
+            expected_fields.update({"page_time_origin_ms", "url"})
+        elif event["event"] == "audit_heartbeat":
+            expected_fields.update(
+                {
+                    "expected_previous_audit_sequence",
+                    "expected_audit_count_through_marker",
+                }
+            )
+        if set(event) != expected_fields:
+            raise InjectionAbIntegrityError("browser audit exact field set drifted")
         missing = [field for field in AUDIT_REQUIRED_FIELDS if field not in event]
         if missing:
             raise InjectionAbIntegrityError(
                 f"browser audit required fields missing: {missing}"
             )
+        for field in (
+            "host_audit_request_id",
+            "host_monotonic_ns",
+            "host_wall_time_ns",
+        ):
+            value = event.get(field)
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 1
+            ):
+                raise InjectionAbIntegrityError(
+                    f"browser audit host field malformed: {field}"
+                )
+        browser_wall_time_ms = event.get("browser_wall_time_ms")
+        client_monotonic_ms = event.get("client_monotonic_ms")
+        if (
+            not _is_finite_number(browser_wall_time_ms, minimum=0)
+            or not _is_finite_number(client_monotonic_ms, minimum=0)
+            or float(browser_wall_time_ms) < prior_browser_wall_time_ms
+            or float(client_monotonic_ms) < prior_client_monotonic_ms
+        ):
+            raise InjectionAbIntegrityError("browser audit clocks malformed or reordered")
+        prior_browser_wall_time_ms = float(browser_wall_time_ms)
+        prior_client_monotonic_ms = float(client_monotonic_ms)
+        checkbox_state = event.get("checkbox_state")
+        if (
+            not isinstance(checkbox_state, dict)
+            or set(checkbox_state) != {"target", "decoy"}
+            or not all(type(checkbox_state[key]) is bool for key in checkbox_state)
+        ):
+            raise InjectionAbIntegrityError("browser audit checkbox state malformed")
+        _validate_audit_element(event.get("active_element"), allow_none=True)
+        if not isinstance(event.get("document_has_focus"), bool):
+            raise InjectionAbIntegrityError("browser audit focus state malformed")
+        if event.get("visibility_state") not in {"visible", "hidden"}:
+            raise InjectionAbIntegrityError("browser audit visibility state malformed")
+        if event.get("event") in AUDIT_DOM_EVENTS:
+            if (
+                not _is_finite_number(event.get("event_time_stamp_ms"), minimum=0)
+                or float(event["event_time_stamp_ms"])
+                > float(client_monotonic_ms) + 1000.0
+                or type(event.get("is_trusted")) is not bool
+                or type(event.get("default_prevented")) is not bool
+            ):
+                raise InjectionAbIntegrityError("browser DOM audit fields malformed")
+            _validate_audit_element(event.get("target"), allow_none=False)
+            target_checked = event.get("target_checked")
+            if target_checked is not None and type(target_checked) is not bool:
+                raise InjectionAbIntegrityError("browser audit target state malformed")
+            if target_checked != event["target"]["checked"]:
+                raise InjectionAbIntegrityError("browser audit target state disagreed")
+            target_id = event["target"]["id"]
+            if target_id in checkbox_state and target_checked != checkbox_state[target_id]:
+                raise InjectionAbIntegrityError(
+                    "browser audit target and page checkbox state disagreed"
+                )
+            active_element = event.get("active_element")
+            if (
+                isinstance(active_element, dict)
+                and active_element["id"] in checkbox_state
+                and active_element["checked"]
+                != checkbox_state[active_element["id"]]
+            ):
+                raise InjectionAbIntegrityError(
+                    "browser audit active element and page state disagreed"
+                )
+            _validate_dom_event_details(event)
+        else:
+            if any(
+                event.get(field) is not None
+                for field in (
+                    "event_time_stamp_ms",
+                    "is_trusted",
+                    "default_prevented",
+                    "target",
+                    "target_checked",
+                    "button",
+                    "buttons",
+                    "pointer_type",
+                    "client_x",
+                    "client_y",
+                    "screen_x",
+                    "screen_y",
+                )
+            ):
+                raise InjectionAbIntegrityError("browser audit marker fields malformed")
+            if event["event"] == "audit_heartbeat" and (
+                type(event.get("expected_previous_audit_sequence")) is not int
+                or type(event.get("expected_audit_count_through_marker")) is not int
+                or event["expected_previous_audit_sequence"]
+                != event["audit_sequence"] - 1
+                or event["expected_audit_count_through_marker"]
+                != event["audit_sequence"]
+            ):
+                raise InjectionAbIntegrityError(
+                    "browser audit heartbeat sequence/count malformed"
+                )
+    request_ids = [int(event["host_audit_request_id"]) for event in events]
+    if sorted(request_ids) != list(range(1, len(events) + 1)):
+        raise InjectionAbIntegrityError(
+            "browser audit host request identities omitted or duplicated"
+        )
     return events
 
 
+def _is_finite_number(value: Any, *, minimum: float) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and float(value) >= minimum
+    )
+
+
+def _validate_audit_element(value: Any, *, allow_none: bool) -> None:
+    if value is None and allow_none:
+        return
+    if not isinstance(value, dict) or set(value) != {"id", "tag", "checked"}:
+        raise InjectionAbIntegrityError("browser audit element identity malformed")
+    if not isinstance(value["id"], str) or not isinstance(value["tag"], str):
+        raise InjectionAbIntegrityError("browser audit element identity malformed")
+    if value["checked"] is not None and type(value["checked"]) is not bool:
+        raise InjectionAbIntegrityError("browser audit element checked state malformed")
+
+
+def _validate_dom_event_details(event: dict[str, Any]) -> None:
+    for field in ("button", "buttons", "client_x", "client_y", "screen_x", "screen_y"):
+        value = event.get(field)
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+            raise InjectionAbIntegrityError(f"browser DOM audit field malformed: {field}")
+    button = event.get("button")
+    buttons = event.get("buttons")
+    if button is not None and not -1 <= button <= 4:
+        raise InjectionAbIntegrityError("browser DOM audit button range malformed")
+    if buttons is not None and not 0 <= buttons <= 31:
+        raise InjectionAbIntegrityError("browser DOM audit buttons range malformed")
+    pointer_type = event.get("pointer_type")
+    if pointer_type is not None and pointer_type not in {"", "mouse", "pen", "touch"}:
+        raise InjectionAbIntegrityError("browser DOM audit pointer type malformed")
+    name = event["event"]
+    pointer_or_mouse = name.startswith(("pointer", "mouse")) or name == "click"
+    coordinates = tuple(event.get(field) for field in ("client_x", "client_y", "screen_x", "screen_y"))
+    if pointer_or_mouse:
+        if button is None or buttons is None or any(value is None for value in coordinates):
+            raise InjectionAbIntegrityError("browser pointer/mouse audit details missing")
+        if name.startswith("pointer") and pointer_type not in {"mouse", "pen", "touch"}:
+            raise InjectionAbIntegrityError("browser pointer audit type missing")
+    elif any(
+        event.get(field) is not None
+        for field in AUDIT_DETAIL_FIELDS
+    ):
+        raise InjectionAbIntegrityError("browser non-pointer audit details malformed")
+
+
+def validate_post_window_audit_heartbeat(
+    audit_events: list[dict[str, Any]], observation_deadline_ns: int
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    heartbeats = [
+        event
+        for event in audit_events
+        if event.get("event") == "audit_heartbeat"
+        and isinstance(event.get("host_monotonic_ns"), int)
+        and event["host_monotonic_ns"] > observation_deadline_ns
+    ]
+    if not heartbeats:
+        raise InjectionAbIntegrityError(
+            "independent browser audit has no post-window heartbeat"
+        )
+    marker = min(heartbeats, key=lambda event: int(event["audit_sequence"]))
+    marker_sequence = marker["audit_sequence"]
+    if (
+        marker.get("expected_previous_audit_sequence") != marker_sequence - 1
+        or marker.get("expected_audit_count_through_marker") != marker_sequence
+        or marker_sequence > len(audit_events)
+    ):
+        raise InjectionAbIntegrityError(
+            "independent browser audit marker sequence/count mismatch"
+        )
+    sealed = audit_events[:marker_sequence]
+    if len(sealed) != marker_sequence or sealed[-1] is not marker:
+        raise InjectionAbIntegrityError("independent browser audit tail was not sealed")
+    return sealed, marker
+
+
 def validate_atomic_contract(
-    atomic: dict[str, Any], *, arm: str
+    atomic: dict[str, Any], *, arm: str, expected_endpoint: tuple[int, int] | None = None
 ) -> dict[str, Any]:
     semantic = atomic.get("semantic_operations")
     lowered = atomic.get("lowered_operations")
@@ -328,6 +570,8 @@ def validate_atomic_contract(
         raise InjectionAbIntegrityError("atomic action used other than one guest process")
     if atomic.get("pointer_button_mask") != 0 or atomic.get("ok") is not True:
         raise InjectionAbIntegrityError("atomic action failed or ended with held button")
+    if atomic.get("click_backend") != BACKEND_BY_ARM[arm]:
+        raise InjectionAbIntegrityError("atomic action backend identity drifted")
     timestamps = atomic.get("x_injection_timestamps")
     if (
         not isinstance(timestamps, list)
@@ -361,6 +605,7 @@ def validate_atomic_contract(
     )
     if (
         not isinstance(click, dict)
+        or click.get("button") != "left"
         or click.get("click_backend") != BACKEND_BY_ARM[arm]
         or click.get("dwell_ms") != 50
         or click.get("release_side_motion_notify")
@@ -382,6 +627,26 @@ def validate_atomic_contract(
         isinstance(item, dict) for item in evidence
     ):
         raise InjectionAbIntegrityError("X injection evidence missing")
+    sequences = [item.get("sequence") for item in evidence]
+    if (
+        not all(isinstance(value, int) and not isinstance(value, bool) for value in sequences)
+        or sequences != list(range(1, len(evidence) + 1))
+    ):
+        raise InjectionAbIntegrityError("X injection global sequence drifted")
+    for item in evidence:
+        if (
+            item.get("phase") not in {"outside_click", "press", "release"}
+            or not isinstance(item.get("event_type"), int)
+            or isinstance(item.get("event_type"), bool)
+            or not isinstance(item.get("detail"), int)
+            or isinstance(item.get("detail"), bool)
+            or not isinstance(item.get("started_guest_monotonic_ns"), int)
+            or not isinstance(item.get("completed_guest_monotonic_ns"), int)
+            or item["completed_guest_monotonic_ns"] < item["started_guest_monotonic_ns"]
+            or item.get("duration_ns")
+            != item["completed_guest_monotonic_ns"] - item["started_guest_monotonic_ns"]
+        ):
+            raise InjectionAbIntegrityError("X injection evidence schema drifted")
     controlled = [
         item for item in evidence if item.get("phase") in {"press", "release"}
     ]
@@ -402,6 +667,93 @@ def validate_atomic_contract(
     ]
     if bool(motion_events) is not RELEASE_MOTION_BY_ARM[arm]:
         raise InjectionAbIntegrityError("release-side MotionNotify delta drifted")
+    start_sequence = timestamp.get("x_injection_start_sequence")
+    expected_events = [
+        ("press", "motion_notify", X_MOTION_NOTIFY, 0),
+        ("press", "button_press", X_BUTTON_PRESS, 1),
+        *(
+            [("release", "motion_notify", X_MOTION_NOTIFY, 0)]
+            if arm == "A"
+            else []
+        ),
+        ("release", "button_release", X_BUTTON_RELEASE, 1),
+    ]
+    if (
+        not isinstance(start_sequence, int)
+        or isinstance(start_sequence, bool)
+        or start_sequence != 1
+        or len(evidence) != start_sequence + len(expected_events)
+        or [item["sequence"] for item in controlled]
+        != list(range(start_sequence + 1, start_sequence + 1 + len(expected_events)))
+    ):
+        raise InjectionAbIntegrityError("controlled XTest event order drifted")
+    for item, (phase, name, event_type, detail) in zip(controlled, expected_events):
+        if (
+            item.get("phase") != phase
+            or item.get("event") != name
+            or item.get("event_type") != event_type
+            or item.get("detail") != detail
+        ):
+            raise InjectionAbIntegrityError("controlled XTest event identity drifted")
+    controlled_clock_values = [
+        value
+        for item in controlled
+        for value in (
+            item["started_guest_monotonic_ns"],
+            item["completed_guest_monotonic_ns"],
+        )
+    ]
+    if controlled_clock_values != sorted(controlled_clock_values):
+        raise InjectionAbIntegrityError("controlled XTest event clock order drifted")
+    press_motion = controlled[0]
+    press_coordinates = (press_motion.get("x"), press_motion.get("y"))
+    if not all(isinstance(value, int) and not isinstance(value, bool) for value in press_coordinates):
+        raise InjectionAbIntegrityError("press MotionNotify coordinates malformed")
+    if expected_endpoint is not None and press_coordinates != expected_endpoint:
+        raise InjectionAbIntegrityError("press MotionNotify missed the fixed endpoint")
+    outside_motion = evidence[0]
+    if (
+        outside_motion.get("phase") != "outside_click"
+        or outside_motion.get("event") != "motion_notify"
+        or outside_motion.get("event_type") != X_MOTION_NOTIFY
+        or outside_motion.get("detail") != 0
+        or (outside_motion.get("x"), outside_motion.get("y")) != press_coordinates
+    ):
+        raise InjectionAbIntegrityError("canonical move XTest evidence drifted")
+    cursor_after = atomic.get("cursor_after")
+    if (
+        not isinstance(cursor_after, list)
+        or len(cursor_after) != 2
+        or not all(isinstance(value, int) and not isinstance(value, bool) for value in cursor_after)
+        or list(press_coordinates) != cursor_after
+    ):
+        raise InjectionAbIntegrityError("XTest click coordinates disagree with cursor readback")
+    for item in controlled:
+        if item["event"] in {"button_press", "button_release"} and (
+            item.get("x") is not None or item.get("y") is not None
+        ):
+            raise InjectionAbIntegrityError("XTest button event coordinates drifted")
+    if arm == "A" and (
+        motion_events[0].get("x"), motion_events[0].get("y")
+    ) != press_coordinates:
+        raise InjectionAbIntegrityError(
+            "release MotionNotify was not at the same cursor coordinates"
+        )
+    if not (
+        timestamp["press_call_before_guest_monotonic_ns"]
+        <= controlled[0]["started_guest_monotonic_ns"]
+        <= controlled[1]["completed_guest_monotonic_ns"]
+        <= timestamp["press_call_after_guest_monotonic_ns"]
+        <= timestamp["press_sync_completed_guest_monotonic_ns"]
+        <= timestamp["dwell_started_guest_monotonic_ns"]
+        <= timestamp["dwell_completed_guest_monotonic_ns"]
+        <= timestamp["release_call_before_guest_monotonic_ns"]
+        <= controlled[2]["started_guest_monotonic_ns"]
+        <= controlled[-1]["completed_guest_monotonic_ns"]
+        <= timestamp["release_call_after_guest_monotonic_ns"]
+        <= timestamp["release_sync_completed_guest_monotonic_ns"]
+    ):
+        raise InjectionAbIntegrityError("XTest event/timestamp ordering drifted")
     actual_dwell_ns = timestamp.get("dwell_duration_ns")
     if (
         not isinstance(actual_dwell_ns, int)
@@ -435,7 +787,9 @@ def validate_atomic_contract(
 def classify_trial_outcome(
     audit_events: list[dict[str, Any]], snapshot: dict[str, Any]
 ) -> dict[str, Any]:
-    dom_events = [event for event in audit_events if event["event"] != "audit_ready"]
+    dom_events = [
+        event for event in audit_events if event["event"] in AUDIT_DOM_EVENTS
+    ]
 
     def trusted_target(name: str) -> list[dict[str, Any]]:
         return [
@@ -450,12 +804,14 @@ def classify_trial_outcome(
     clicks = trusted_target("click")
     inputs = trusted_target("input")
     changes = trusted_target("change")
-    primary_success = bool(clicks and inputs and changes) and all(
+    pointer_down = trusted_target("pointerdown")
+    pointer_up = trusted_target("pointerup")
+    primary_success = bool(
+        pointer_down and pointer_up and clicks and inputs and changes
+    ) and all(
         events[-1].get("checkbox_state", {}).get("target") is True
         for events in (clicks, inputs, changes)
     )
-    pointer_down = trusted_target("pointerdown")
-    pointer_up = trusted_target("pointerup")
     if primary_success:
         outcome = "trusted_click_input_change"
     elif pointer_down and pointer_up and not clicks:
@@ -672,7 +1028,9 @@ def run_vm_injection_ab(
                 raise InjectionAbIntegrityError("dispatch count drifted")
             atomic = journal["atomic_action_states"][0]
             atomic_contract = validate_atomic_contract(
-                atomic, arm=scheduled["arm"]
+                atomic,
+                arm=scheduled["arm"],
+                expected_endpoint=trajectory.expected_endpoint,
             )
             observation_deadline_ns = dispatch_completed_ns + int(
                 OBSERVATION_WINDOW_S * 1_000_000_000
@@ -683,7 +1041,10 @@ def run_vm_injection_ab(
             time.sleep(AUDIT_DRAIN_S)
             snapshot = server.store.snapshot(fixture.id)
             audit_events = validate_audit_trace(snapshot, generation)
-            outcome = classify_trial_outcome(audit_events, snapshot)
+            sealed_audit_events, audit_heartbeat = validate_post_window_audit_heartbeat(
+                audit_events, observation_deadline_ns
+            )
+            outcome = classify_trial_outcome(sealed_audit_events, snapshot)
             trial = {
                 **scheduled,
                 "status": "observed",
@@ -707,6 +1068,8 @@ def run_vm_injection_ab(
                     "final_pointer_button_mask"
                 ],
                 "audit_events": audit_events,
+                "sealed_audit_events": sealed_audit_events,
+                "post_window_audit_heartbeat": audit_heartbeat,
                 "outcome": outcome,
                 "timings": {
                     "dispatch_started_host_monotonic_ns": dispatch_started_ns,

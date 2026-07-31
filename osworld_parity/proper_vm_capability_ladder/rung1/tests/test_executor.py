@@ -109,6 +109,7 @@ class SingleProcessHttpTransport(HttpVmTransport):
             "backend_primitives": [
                 {
                     "kind": "click",
+                    "button": "left",
                     "click_backend": PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
                     "release_side_motion_notify": True,
                     "injection_attempt_count": 1,
@@ -123,7 +124,68 @@ class SingleProcessHttpTransport(HttpVmTransport):
             ],
             "x_event_sync_evidence": [],
             "click_backend": PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
-            "x_injection_evidence": [],
+            "x_injection_evidence": [
+                {
+                    "sequence": 1,
+                    "phase": "outside_click",
+                    "event": "motion_notify",
+                    "event_type": 6,
+                    "detail": 0,
+                    "x": 300,
+                    "y": 400,
+                    "started_guest_monotonic_ns": 0,
+                    "completed_guest_monotonic_ns": 0,
+                    "duration_ns": 0,
+                },
+                {
+                    "sequence": 2,
+                    "phase": "press",
+                    "event": "motion_notify",
+                    "event_type": 6,
+                    "detail": 0,
+                    "x": 300,
+                    "y": 400,
+                    "started_guest_monotonic_ns": 2,
+                    "completed_guest_monotonic_ns": 2,
+                    "duration_ns": 0,
+                },
+                {
+                    "sequence": 3,
+                    "phase": "press",
+                    "event": "button_press",
+                    "event_type": 4,
+                    "detail": 1,
+                    "x": None,
+                    "y": None,
+                    "started_guest_monotonic_ns": 2,
+                    "completed_guest_monotonic_ns": 2,
+                    "duration_ns": 0,
+                },
+                {
+                    "sequence": 4,
+                    "phase": "release",
+                    "event": "motion_notify",
+                    "event_type": 6,
+                    "detail": 0,
+                    "x": 300,
+                    "y": 400,
+                    "started_guest_monotonic_ns": 7,
+                    "completed_guest_monotonic_ns": 7,
+                    "duration_ns": 0,
+                },
+                {
+                    "sequence": 5,
+                    "phase": "release",
+                    "event": "button_release",
+                    "event_type": 5,
+                    "detail": 1,
+                    "x": None,
+                    "y": None,
+                    "started_guest_monotonic_ns": 7,
+                    "completed_guest_monotonic_ns": 7,
+                    "duration_ns": 0,
+                },
+            ],
             "x_injection_timestamps": [
                 {
                     "click_backend": PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
@@ -131,6 +193,7 @@ class SingleProcessHttpTransport(HttpVmTransport):
                     "release_side_motion_notify": True,
                     "clock": "time.monotonic_ns",
                     "dwell_requested_ns": 50_000_000,
+                    "x_injection_start_sequence": 1,
                     "click_started_guest_monotonic_ns": 1,
                     "press_call_before_guest_monotonic_ns": 2,
                     "press_call_after_guest_monotonic_ns": 3,
@@ -505,6 +568,40 @@ def test_unknown_click_backend_fails_before_guest_dispatch() -> None:
             click_backend="unknown",
         )
     assert transport.execute_calls == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "value"),
+    [
+        ("coordinates", (9999, -9999)),
+        ("detail", 17),
+        ("event_type", 5),
+        ("sequence", 400),
+    ],
+)
+def test_http_transport_rejects_corrupt_release_motion_identity(
+    mutation: str, value
+) -> None:
+    class CorruptReleaseMotionTransport(SingleProcessHttpTransport):
+        def execute_argv(self, argv: list[str], *, check: bool = True) -> dict:
+            result = super().execute_argv(argv, check=check)
+            payload = json.loads(result["output"][len(ATOMIC_RESULT_PREFIX) :])
+            release_motion = payload["x_injection_evidence"][3]
+            if mutation == "coordinates":
+                release_motion["x"], release_motion["y"] = value
+            else:
+                release_motion[mutation] = value
+            result["output"] = ATOMIC_RESULT_PREFIX + json.dumps(payload)
+            return result
+
+    with pytest.raises(TransportError):
+        CorruptReleaseMotionTransport().execute_atomic(
+            (
+                Operation("move_relative", (290, 380)),
+                Operation("mouse_down", ("left",)),
+                Operation("mouse_up", ("left",)),
+            )
+        )
 
 
 def test_atomic_exception_releases_preexisting_and_new_buttons() -> None:

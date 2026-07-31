@@ -22,6 +22,7 @@ MAX_GEOMETRY_ANIMATION_FRAMES = 120
 HOST_DIAGNOSTIC_JOURNAL_LIMIT = 1024
 BROWSER_AUDIT_EVENT_LIMIT = 512
 BROWSER_AUDIT_EVENTS = {
+    "audit_heartbeat",
     "audit_ready",
     "pointerdown",
     "pointerup",
@@ -100,9 +101,12 @@ class FixtureStateStore:
         """
         with self._condition:
             state = self._states[fixture.id]
-            if payload.get("schema_version") != 1:
+            if type(payload.get("schema_version")) is not int or payload["schema_version"] != 1:
                 raise FixtureServerError("browser audit schema mismatch")
-            if payload.get("generation") != state["generation"]:
+            if (
+                type(payload.get("generation")) is not int
+                or payload["generation"] != state["generation"]
+            ):
                 raise FixtureServerError("stale browser audit generation")
             event_name = payload.get("event")
             if event_name not in BROWSER_AUDIT_EVENTS:
@@ -764,7 +768,12 @@ function auditPageState() {
 function sendBrowserAudit(payload) {
   payload.schema_version = 1;
   payload.generation = generation;
+  const priorAuditSequence = browserAuditSequence;
   payload.audit_sequence = ++browserAuditSequence;
+  if (payload.event === 'audit_heartbeat') {
+    payload.expected_previous_audit_sequence = priorAuditSequence;
+    payload.expected_audit_count_through_marker = browserAuditSequence;
+  }
   payload.browser_wall_time_ms = Date.now();
   payload.client_monotonic_ms = Math.round(performance.now() * 1000) / 1000;
   Object.assign(payload, auditPageState());
@@ -813,6 +822,21 @@ sendBrowserAudit({
   page_time_origin_ms: performance.timeOrigin,
   url: location.href
 });
+setInterval(() => sendBrowserAudit({
+  event: 'audit_heartbeat',
+  event_time_stamp_ms: null,
+  is_trusted: null,
+  default_prevented: null,
+  target: null,
+  target_checked: null,
+  button: null,
+  buttons: null,
+  pointer_type: null,
+  client_x: null,
+  client_y: null,
+  screen_x: null,
+  screen_y: null
+}), 500);
 """.strip()
     return script.replace("__AUDIT_ENDPOINT__", endpoint)
 
