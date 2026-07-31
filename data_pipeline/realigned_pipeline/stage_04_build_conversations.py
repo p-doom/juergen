@@ -73,6 +73,32 @@ via the formatter is byte-identical to ``sampled`` only on dead-zone-free
 stretches. Per-segment dead-zone counters land on every row
 (``dead_zone_counters`` / ``dead_zone_flagged``) as a realignment health signal.
 
+TYPING COALESCING (``--coalesce-typing``, ``ordered_events_v3`` only): v3 collapses
+typing into ``type("...")`` PER FRAME; this fuses it ACROSS frames. A maximal run of
+typing-only frames becomes ONE turn -- the run's first frame (its screenshot) carrying
+the whole run's text as a single ``type()`` -- and the run's other frames are DROPPED
+from the conversation. This is the only place in the pipeline that drops frames after
+stage 03; the stage-03 artifact is untouched (dropped frames' images simply stop being
+referenced), so it is an ablation flag, not a re-sample.
+
+Implementation: labels are derived TWICE from the one keylog/manifest read. Pass 1
+labels the per-frame windows and only CLASSIFIES them (``lib/action_format
+.plan_typing_coalesce``); pass 2 re-derives every label over the MERGED windows, which
+is what yields one ``type("abcd")`` instead of ``type("ab"); type("cd")`` and what
+repairs typing no single window could balance (key rollover across a frame boundary,
+a Shift held across frames). What breaks a run: any non-typing primitive (mouse,
+scroll, Return/Backspace/Tab/arrows -- backtracking is supervision worth keeping per
+frame -- chords, non-Shift modifiers), a trailing idle frame (idle frames INSIDE a run
+are absorbed), a dead zone in the gap between two frames (its keystrokes are discarded
+by the label policy, so a merged label would have a silent hole), a goal-window
+boundary (``--goal-index``), and ``--max-coalesce-frames`` (the staleness bound: the
+turn shows the run's first screenshot). A run never ends a conversation: on reaching a
+goal's last frame or the segment's last frame, that frame is kept as a trailing
+``NO_OP`` turn (so ``--terminate-token`` overwrites an idle turn, never a merged typing
+run). ``--min-frames`` gates on the PRE-coalesce frame count. Provenance:
+``n_coalesced_turns`` / ``n_frames_pre_coalesce`` / ``n_frames_coalesced_away`` per row,
+totals in the summary.
+
 One conversation per segment (no windowing): a long, high-fps segment becomes a
 long conversation -- watch the trainee's context window at high --target-fps.
 
@@ -124,8 +150,11 @@ from realigned_pipeline.lib import config  # noqa: E402
 from realigned_pipeline.lib.action_format import (  # noqa: E402
     DEFAULT_CONTINUOUS_ACTION_HZ,
     FORMATTERS,
+    ORDERED_IDLE_LABEL,
+    TYPING_COALESCE_FORMATS,
     ActionFormatter,
     get_formatter,
+    plan_typing_coalesce,
 )
 from realigned_pipeline.lib.common import ensure_dir, read_jsonl, write_json, write_jsonl  # noqa: E402
 from realigned_pipeline.lib.events import DeadZone, Window, load_events  # noqa: E402
@@ -181,6 +210,15 @@ def default_system_prompt(formatter: ActionFormatter, *, goal_conditioned: bool)
     return GOAL_FREE_PROMPT_PREFIX + formatter.reply_contract.format(
         what="the next action"
     )
+
+
+def _str2bool(s: str | bool) -> bool:
+    """Parse a boolean CLI value. Accepts the labctl ``--flag=value`` form (labctl
+    renders every arg as ``--key=value``, so a valueless flag can't be expressed);
+    truthy = 1/true/yes/on, everything else False. Same helper as stage 03."""
+    if isinstance(s, bool):
+        return s
+    return str(s).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _text_block(text: str) -> dict[str, Any]:
@@ -291,6 +329,65 @@ def _master_manifest_path(
     )
 
 
+def _tile_windows(ticks: list[int], axis_end: int) -> list[Window]:
+    """Label-ownership windows for ``ticks``: each tick owns up to the next one,
+    the last runs to the end of master coverage. Contiguous by construction --
+    ``lib/events._Locator`` requires the tiling to have no holes."""
+    return [
+        Window(t, t, ticks[i + 1] if i + 1 < len(ticks) else axis_end)
+        for i, t in enumerate(ticks)
+    ]
+
+
+def _goal_coalesce_bounds(
+    frames: list[dict[str, Any]], goal_spans: list[tuple[int, int]]
+) -> tuple[set[int], set[int]]:
+    """(barrier_start, terminal) FRAME-INDEX sets for a coalesce plan, from the
+    goal windows' source-frame spans (stage-03b ``coll_source_frame_idx_lo/hi``).
+
+    A goal's first frame must start a fresh run and its last frame must never be
+    a run's interior: coalescing is computed once per SEGMENT (the frame list all
+    of its goals slice), so without these a run could straddle a goal boundary --
+    moving one goal's opening keystrokes into a turn that goal doesn't contain, or
+    leaking post-goal keystrokes into its final turn. Spans may overlap; both sets
+    only ever REDUCE merging, so conservatism is safe."""
+    barriers: set[int] = set()
+    terminals: set[int] = set()
+    src = [f.get("source_frame_idx") for f in frames]
+    for lo, hi in goal_spans:
+        first = next(
+            (i for i, s in enumerate(src) if s is not None and lo <= int(s) <= hi), None
+        )
+        if first is None:  # goal window holds none of our frames
+            continue
+        last = next(
+            i for i in range(len(src) - 1, -1, -1)
+            if src[i] is not None and lo <= int(src[i]) <= hi
+        )
+        barriers.add(first)
+        terminals.add(last)
+    return barriers, terminals
+
+
+def _dead_zone_breaks(ticks: list[int], dead_zones: list[DeadZone]) -> set[int]:
+    """Frame indices whose gap from the previous frame contains a dead zone.
+
+    Stage 03 drops black frames, so no KEPT frame sits inside a zone -- but two
+    consecutive kept frames can straddle one, and the label policy discards or
+    clamps the keystrokes in it. Coalescing across that would concatenate text
+    with a silent hole in the middle, so it is a hard run breaker."""
+    zones = sorted(dead_zones, key=lambda z: z.start)
+    breaks: set[int] = set()
+    zi = 0
+    for i in range(1, len(ticks)):
+        prev, cur = ticks[i - 1], ticks[i]
+        while zi < len(zones) and zones[zi].end <= prev:
+            zi += 1  # ticks ascend, so zones behind us stay behind
+        if zi < len(zones) and zones[zi].start < cur:
+            breaks.add(i)
+    return breaks
+
+
 def reformat_segment_actions(
     frames: list[dict[str, Any]],
     index_row: dict[str, Any],
@@ -298,12 +395,23 @@ def reformat_segment_actions(
     formatter: ActionFormatter,
     sample_cfg: dict[str, Any],
     dead_zone_flag_frac: float,
+    coalesce_typing: bool = False,
+    max_coalesce_frames: int = 0,
+    goal_spans: list[tuple[int, int]] | None = None,
 ) -> dict[str, Any]:
     """Replace every kept frame's ``action`` IN PLACE with ``formatter``'s label,
     re-derived from the segment's realigned keylog under the shared dead-zone
     policy (see the module docstring). Windows are the kept frames' master ticks
     tiled to the end of master coverage; dead zones are the pre-first-frame span
     plus black master ticks (when the sample was built with drop_black_frames).
+
+    ``coalesce_typing`` additionally DROPS frames from ``frames`` (in place):
+    runs of typing-only windows fuse into their first frame's turn, and every
+    label is then re-derived over the merged windows -- so the surviving turn
+    carries one ``type()`` for the whole run (see ``plan_typing_coalesce``; the
+    two passes share the keylog/manifest read, the second is a pure in-memory
+    fold). ``goal_spans`` are the segment's goal windows, whose boundaries clamp
+    the runs. Coalesced frames gain ``coalesced_n_frames`` provenance.
 
     Returns segment-level accounting: ``action_format`` / ``dead_zone_counters`` /
     ``dead_zone_flagged`` (row fields) + ``primitive_counts`` (summary totals)."""
@@ -323,10 +431,7 @@ def reformat_segment_actions(
     # Windows tile from each kept tick to the next; the last runs to the end of
     # master coverage (events past it resolve to the implicit no_coverage zone).
     axis_end = max(n_records, ticks[-1] + 1)
-    windows = [
-        Window(t, t, ticks[i + 1] if i + 1 < len(ticks) else axis_end)
-        for i, t in enumerate(ticks)
-    ]
+    windows = _tile_windows(ticks, axis_end)
 
     first_tick = ticks[0]
     dead_zones: list[DeadZone] = []
@@ -358,8 +463,61 @@ def reformat_segment_actions(
 
     master_fps = float(index_row.get("master_fps") or sample_cfg["master_fps"])
     result = formatter.format_segment(events, windows, dead_zones, master_fps=master_fps)
-    for f, label in zip(frames, result.labels, strict=True):
-        f["action"] = label
+
+    coalesce_fields: dict[str, Any] = {}
+    plan = None
+    if coalesce_typing:
+        if result.primitives is None:
+            raise ValueError(
+                f"{seg}: --coalesce-typing needs a primitive-emitting formatter, "
+                f"{formatter.name} renders none"
+            )
+        barriers, terminals = _goal_coalesce_bounds(frames, goal_spans or [])
+        terminals.add(len(frames) - 1)  # a segment end is a terminal window too
+        plan = plan_typing_coalesce(
+            result.primitives,
+            barrier_start=barriers,
+            terminal=terminals,
+            break_before=_dead_zone_breaks(ticks, dead_zones),
+            max_frames=max_coalesce_frames,
+        )
+
+    if plan is not None and plan.spans:
+        # PASS 2: re-derive every label over the MERGED windows. forced-idle
+        # frames are left out of the tiling so the run's window extends across
+        # them (no keystroke is lost -- the text lands on the run's first turn).
+        forced = set(plan.forced_idle)
+        win_frames = [i for i in plan.keep if i not in forced]
+        result = formatter.format_segment(
+            events, _tile_windows([ticks[i] for i in win_frames], axis_end),
+            dead_zones, master_fps=master_fps,
+        )
+        label_of = dict(zip(win_frames, result.labels, strict=True))
+        for i in plan.keep:
+            f = frames[i]
+            f["action"] = ORDERED_IDLE_LABEL if i in forced else label_of[i]
+            end = plan.spans.get(i)
+            if end is not None:
+                f["coalesced_n_frames"] = end - i + 1
+                f["coalesced_master_record_index_end"] = ticks[end]
+                f["coalesced_source_frame_idx_end"] = frames[end].get("source_frame_idx")
+            if i in forced:
+                f["coalesce_forced_idle"] = True
+        coalesce_fields = {
+            "coalesced_turns": len(plan.spans),
+            "coalesced_frames_dropped": plan.n_dropped,
+            "coalesce_forced_idle_turns": len(plan.forced_idle),
+        }
+        frames[:] = [frames[i] for i in plan.keep]
+    else:
+        for f, label in zip(frames, result.labels, strict=True):
+            f["action"] = label
+        if coalesce_typing:
+            coalesce_fields = {
+                "coalesced_turns": 0,
+                "coalesced_frames_dropped": 0,
+                "coalesce_forced_idle_turns": 0,
+            }
 
     counters = result.counters
     n_discarded = (
@@ -373,7 +531,26 @@ def reformat_segment_actions(
         "action_format": formatter.name,
         "dead_zone_counters": asdict(counters),
         "dead_zone_flagged": len(events) > 0 and (n_discarded / len(events)) > dead_zone_flag_frac,
+        **coalesce_fields,
         "primitive_counts": result.primitive_counts,
+    }
+
+
+def _coalesce_counts(frames: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per-CONVERSATION coalescing provenance (the segment-level counters can't
+    serve goal mode, where one segment's frames feed many goals). Empty when
+    nothing in this conversation was coalesced."""
+    spans = [int(f["coalesced_n_frames"]) for f in frames if f.get("coalesced_n_frames")]
+    if not spans:
+        return {}
+    # A forced-idle tail is inside its run's span AND kept as its own turn, so
+    # it would otherwise be counted twice.
+    n_forced = sum(1 for f in frames if f.get("coalesce_forced_idle"))
+    n_pre = sum(spans) + sum(1 for f in frames if not f.get("coalesced_n_frames")) - n_forced
+    return {
+        "n_coalesced_turns": len(spans),
+        "n_frames_pre_coalesce": n_pre,
+        "n_frames_coalesced_away": n_pre - len(frames),
     }
 
 
@@ -419,6 +596,7 @@ def build_conversation(
         "instruction": seg_instruction,
         "goal_conditioned": seg_instruction is not None,
         **(fmt_fields or {}),
+        **_coalesce_counts(frames),
         "n_frames": len(frames),
         "n_turns": len(frames),  # one user+assistant pair per frame
         "n_non_noop": sum(1 for f in frames if not idle_fn(str(f.get("action")))),
@@ -438,6 +616,7 @@ def build_goal_conversation(
     idle_fn: Callable[[str], bool],
     terminate_token: str | None = None,
     fmt_fields: dict[str, Any] | None = None,
+    precoalesce_source_idx: list[int] | None = None,
 ) -> dict[str, Any] | None:
     """One goal-conditioned conversation: OUR ``--sample-dir`` frames for the goal's
     segment, windowed to its source-frame span ``[lo, hi]`` (from stage-03b), with the
@@ -445,6 +624,10 @@ def build_goal_conversation(
     carries one (non-first chunks of a split goal) -- as the first user turn. Returns
     None if the window holds fewer than ``min_frames`` frames (e.g. an all-idle goal
     ``noop_mode=none`` dropped).
+
+    ``precoalesce_source_idx`` (``--coalesce-typing``): the segment's source-frame
+    indices BEFORE frames were coalesced away, so ``min_frames`` gates on the goal's
+    original frame count -- coalescing must not decide which goals exist.
 
     ``terminate_token`` marks the window's end as goal-complete: the final assistant
     turn's action is overwritten with the token (see ``build_messages``)."""
@@ -456,7 +639,11 @@ def build_goal_conversation(
         f for f in seg_frames
         if f.get("source_frame_idx") is not None and lo <= int(f["source_frame_idx"]) <= hi
     ]
-    if len(frames) < min_frames:
+    n_gate = (
+        sum(1 for s in precoalesce_source_idx if lo <= s <= hi)
+        if precoalesce_source_idx is not None else len(frames)
+    )
+    if n_gate < min_frames or not frames:
         return None
     frames.sort(key=lambda r: int(r["source_frame_idx"]))
     instruction = goal.get("instruction")
@@ -487,6 +674,7 @@ def build_goal_conversation(
         "status": goal.get("status"),
         "split": goal.get("split"),
         **(fmt_fields or {}),  # segment-level formatter provenance (dead-zone counters)
+        **_coalesce_counts(frames),
         "n_frames": len(frames),
         "n_turns": len(frames),  # one user+assistant pair per frame
         "n_non_noop": sum(1 for f in frames if not idle_fn(str(f.get("action")))),
@@ -518,6 +706,24 @@ def parse_args() -> argparse.Namespace:
                    help="ordered_events_* only: internal motor-grid rate for accumulating "
                         "move/scroll deltas within a window (NOT a frame rate; recorded as "
                         "null for formats that ignore it).")
+    p.add_argument("--coalesce-typing", nargs="?", const=True, type=_str2bool,
+                   default=False, metavar="BOOL",
+                   help="ordered_events_v3 ONLY: fuse consecutive typing-only frames "
+                        "into ONE turn -- the first frame's screenshot keeps the whole "
+                        "run's typing as a single type(\"...\"), the rest are DROPPED "
+                        "from the conversation. Idle frames inside a run are absorbed; "
+                        "trailing idle frames, keypresses (Return/Backspace/Tab/arrows), "
+                        "mouse actions, chords, dead zones and goal boundaries all break "
+                        "a run, and a run never ends a conversation (its last frame is "
+                        "kept as a NO_OP turn). Bare --coalesce-typing = on; "
+                        "--coalesce-typing=false is off (labctl's --key=value arg form). "
+                        "See --max-coalesce-frames.")
+    p.add_argument("--max-coalesce-frames", type=int, default=8,
+                   help="--coalesce-typing: how many original frames ONE turn may span "
+                        "(0 = unlimited). The turn shows the run's FIRST screenshot, so "
+                        "this bounds how stale that screenshot may be relative to the "
+                        "typing it is labeled with; longer runs split into consecutive "
+                        "chunks, each keeping its own screenshot.")
     p.add_argument("--dead-zone-flag-frac", type=float, default=0.05,
                    help="Formatter modes: flag a segment (dead_zone_flagged) when more than "
                         "this fraction of its keylog events were discarded by the dead-zone "
@@ -580,6 +786,15 @@ def main() -> None:
             args.action_format, continuous_action_hz=args.continuous_action_hz
         )
         sample_cfg = _load_sample_config(args.sample_dir)
+    # Coalescing needs a format where "this window is typing and nothing else" is
+    # a decidable question -- i.e. one with a type() primitive.
+    if args.coalesce_typing and args.action_format not in TYPING_COALESCE_FORMATS:
+        raise SystemExit(
+            f"--coalesce-typing requires --action-format "
+            f"{'/'.join(sorted(TYPING_COALESCE_FORMATS))} (got {args.action_format!r}): "
+            "the other formats spell typing as bare key transitions, indistinguishable "
+            "from a chord."
+        )
     idle_fn: Callable[[str], bool] = (
         formatter.is_idle_label if formatter is not None else (lambda a: a == "NO_OP")
     )
@@ -630,16 +845,28 @@ def main() -> None:
     dz_totals: Counter = Counter()
     prim_totals: Counter = Counter()
     n_dz_flagged = 0
+    n_coalesced_turns = 0
+    n_coalesced_dropped = 0
+    n_forced_idle_turns = 0
 
-    def _reformat(frames: list[dict[str, Any]], row: dict[str, Any]) -> dict[str, Any] | None:
+    def _reformat(
+        frames: list[dict[str, Any]],
+        row: dict[str, Any],
+        goal_spans: list[tuple[int, int]] | None = None,
+    ) -> dict[str, Any] | None:
         """Re-derive one segment's labels (formatter modes) and fold its
-        accounting into the run totals; returns the per-row provenance fields."""
-        nonlocal n_dz_flagged
+        accounting into the run totals; returns the per-row provenance fields.
+        With --coalesce-typing this also DROPS coalesced frames from ``frames``
+        in place, so the caller's list is the post-coalesce conversation."""
+        nonlocal n_dz_flagged, n_coalesced_turns, n_coalesced_dropped, n_forced_idle_turns
         if formatter is None or not frames:
             return None
         info = reformat_segment_actions(
             frames, row, formatter=formatter, sample_cfg=sample_cfg,
             dead_zone_flag_frac=args.dead_zone_flag_frac,
+            coalesce_typing=args.coalesce_typing,
+            max_coalesce_frames=args.max_coalesce_frames,
+            goal_spans=goal_spans,
         )
         for k, v in info["dead_zone_counters"].items():
             if k != "max_simultaneous_keys":
@@ -648,6 +875,9 @@ def main() -> None:
             prim_totals[k] += int(v)
         if info["dead_zone_flagged"]:
             n_dz_flagged += 1
+        n_coalesced_turns += int(info.get("coalesced_turns") or 0)
+        n_coalesced_dropped += int(info.get("coalesced_frames_dropped") or 0)
+        n_forced_idle_turns += int(info.get("coalesce_forced_idle_turns") or 0)
         return info
 
     if args.goal_index:
@@ -672,7 +902,17 @@ def main() -> None:
                 continue
             try:
                 seg_frames = _load_segment_frames(row) or []
-                fmt_fields = _reformat(seg_frames, row)  # once per segment, all its goals share it
+                # --min-frames gates on the ORIGINAL frame count, so capture the
+                # source-frame indices before coalescing drops any.
+                pre_src = [int(f["source_frame_idx"]) for f in seg_frames
+                           if f.get("source_frame_idx") is not None]
+                # Goal boundaries clamp the coalesce runs (a run must not straddle
+                # a goal window); computed once per segment, shared by its goals.
+                spans = [(int(g["coll_source_frame_idx_lo"]), int(g["coll_source_frame_idx_hi"]))
+                         for g in seg_goals
+                         if g.get("coll_source_frame_idx_lo") is not None
+                         and g.get("coll_source_frame_idx_hi") is not None]
+                fmt_fields = _reformat(seg_frames, row, goal_spans=spans)
             except Exception as exc:  # noqa: BLE001 - one bad segment must not abort the run
                 n_failed += len(seg_goals)
                 print(f"  FAIL {segment_id}: {exc}", flush=True)
@@ -682,6 +922,7 @@ def main() -> None:
                     g, seg_frames, row, system_prompt=system_prompt,
                     min_frames=args.min_frames, idle_fn=idle_fn,
                     terminate_token=terminate_token, fmt_fields=fmt_fields,
+                    precoalesce_source_idx=pre_src if args.coalesce_typing else None,
                 )
                 if conv is None:
                     n_skipped += 1
@@ -735,6 +976,11 @@ def main() -> None:
         "goal_index": str(args.goal_index) if args.goal_index else None,
         "action_format": args.action_format,
         "continuous_action_hz": getattr(formatter, "continuous_action_hz", None),
+        "coalesce_typing": bool(args.coalesce_typing),
+        "max_coalesce_frames": args.max_coalesce_frames if args.coalesce_typing else None,
+        "n_coalesced_turns": n_coalesced_turns if args.coalesce_typing else None,
+        "n_frames_coalesced_away": n_coalesced_dropped if args.coalesce_typing else None,
+        "n_coalesce_forced_idle_turns": n_forced_idle_turns if args.coalesce_typing else None,
         "primitive_counts": dict(prim_totals) if prim_totals else None,
         "dead_zone_totals": dict(dz_totals) if formatter is not None else None,
         "n_dead_zone_flagged": n_dz_flagged if formatter is not None else None,
@@ -753,10 +999,14 @@ def main() -> None:
         "chat": "chat.jsonl",  # split-agnostic drop-in source_path for stages 05/06
         **summary,
     })
+    coalesce_note = (
+        f" | coalesced {n_coalesced_turns} turns (-{n_coalesced_dropped} frames)"
+        if args.coalesce_typing else ""
+    )
     print(
         f"[conversations] {len(records)} conversations, {n_turns_total} turns, "
         f"{n_frames_total} frames, {n_skipped} skipped, {n_failed} failed "
-        f"| format={args.action_format} -> {out_dir}",
+        f"| format={args.action_format}{coalesce_note} -> {out_dir}",
         flush=True,
     )
 
