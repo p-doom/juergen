@@ -1,0 +1,48 @@
+name = "phaseb_normalized_v2_export_A_to_A_r256_s900_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+test "$REPO" = "$PWD"
+case "$REPO" in "$LABCTL_RUN_DIR"/source/juergen_rft) ;; *) exit 90;; esac
+test "$(sha256sum "$REPO/experiments/phaseb_normalized_v2/export.sh" | awk '{print $1}')" = "2c80442a688e0143fc9983bd5f89aec36139f9685c240b60fa1a03c76d99ec75"
+test "$(git -C /fast/home/franz.srambical/omegalax rev-parse HEAD)" = "b3f32c002998a1134c78845847a53ca9cc17fb10"
+test "$(git -C /fast/home/franz.srambical/omegalax diff --binary | sha256sum | awk '{print $1}')" = "329d339f7211042e21c57346d7181374fca0593c939f770960f6f6741e793401"
+bash "$REPO/experiments/phaseb_normalized_v2/export.sh" "$@"
+''', "--"]
+
+[resources]
+cpus = 16
+mem = "180GB"
+time = "00:12:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001", "--deadline=2026-07-31T09:50:00"]
+
+[inputs.source]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/phaseb_normalized_v2_A_to_A_r256_s900_manifest_recovery_v1"
+
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+
+[outputs.model]
+type = "checkpoint"
+marker = "export_manifest.json"
+alias = "phaseb_normalized_v2_A_to_A_r256_s900_hf_v1"
+
+[args]
+source = "{inputs.source.path}"
+output = "{outputs.model.path}"
+omegalax_repo = "{inputs.omegalax.path}"
+model_id = "Qwen/Qwen3-VL-8B-Instruct"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+JAX_PLATFORMS = "cpu"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

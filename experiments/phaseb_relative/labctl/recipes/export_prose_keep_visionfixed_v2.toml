@@ -1,0 +1,46 @@
+name = "phaseb_relative_export_prose_keep_visionfixed_v2"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+test "$REPO" = "$PWD"
+case "$REPO" in "$LABCTL_RUN_DIR"/source/juergen_rft) ;; *) exit 90;; esac
+bash "$REPO/experiments/phaseb_relative/export_stage.sh" "$@"
+''', "--"]
+
+[resources]
+cpus = 16
+mem = "180GB"
+time = "01:30:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.source]
+type = "artifact"
+artifact = "phaseb_relative_prose_keep_r32_s900_visionfixed_v2_run_019fb4cbe728789086b8a63931c9979e"
+
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+
+[outputs.model]
+type = "checkpoint"
+marker = "export_manifest.json"
+alias = "phaseb_relative_prose_keep_r32_s900_visionfixed_v2_hf_v1"
+
+[args]
+source = "{inputs.source.path}"
+output = "{outputs.model.path}"
+omegalax_repo = "{inputs.omegalax.path}"
+model_id = "Qwen/Qwen3-VL-8B-Instruct"
+arm = "prose_keep"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+JAX_PLATFORMS = "cpu"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

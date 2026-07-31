@@ -1,0 +1,47 @@
+name = "phaseb_relative_build_tokenize_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/phaseb_relative/build_tokenize.sh" "$@"
+''', "--"]
+[resources]
+cpus = 16
+mem = "96GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--signal=USR1@600", "--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+[inputs.source]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand/phaseb"
+[inputs.audit]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand"
+[inputs.onpolicy_scripts]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/scripts"
+[inputs.collected]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/rollouts/teacher_8b_osworld_train_v1"
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+[outputs.dataset]
+type = "dataset"
+marker = "build_tokenize_manifest.json"
+alias = "phaseb_relative_twins_v1_{run.id}"
+[args]
+source = "{inputs.source.path}"
+audit_dir = "{inputs.audit.path}"
+onpolicy_scripts = "{inputs.onpolicy_scripts.path}"
+collected_root = "{inputs.collected.path}"
+omegalax_repo = "{inputs.omegalax.path}"
+out = "{outputs.dataset.path}"
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

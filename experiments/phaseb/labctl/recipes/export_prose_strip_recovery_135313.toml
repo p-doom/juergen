@@ -1,0 +1,50 @@
+name = "phaseb_export_prose_strip_recovery_135313_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/phaseb/export_stage.sh" "$@"
+''', "--"]
+
+[resources]
+cpus = 16
+mem = "180GB"
+time = "01:30:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.source]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand/ckpt/pb_prose_strip_r32"
+
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+
+[inputs.training_log]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand/logs/r3sft_135313.log"
+
+[outputs.model]
+type = "checkpoint"
+marker = "export_manifest.json"
+alias = "phaseb_absolute_prose_strip_r32_s900_recovery_135313_hf_v1"
+
+[args]
+arm = "prose_strip"
+source_job_id = "135313"
+source_checkpoint_root = "{inputs.source.path}"
+training_log = "{inputs.training_log.path}"
+omegalax_repo = "{inputs.omegalax.path}"
+model_id = "Qwen/Qwen3-VL-8B-Instruct"
+output = "{outputs.model.path}"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+JAX_PLATFORMS = "cpu"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

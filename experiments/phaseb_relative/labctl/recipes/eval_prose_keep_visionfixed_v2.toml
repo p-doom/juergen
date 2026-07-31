@@ -1,0 +1,51 @@
+name = "phaseb_relative_eval_prose_keep_visionfixed_v2"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+test "$REPO" = "$PWD"
+case "$REPO" in "$LABCTL_RUN_DIR"/source/juergen_rft) ;; *) exit 90;; esac
+bash "$REPO/experiments/phaseb_relative/eval_stage.sh" "$@" \
+    "--experiment_dir=$REPO/experiments/phaseb_relative"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 16
+mem = "150GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--signal=USR1@600", "--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001", "--nodelist=hai003,hai007,hai008"]
+
+[inputs.model]
+type = "artifact"
+artifact = "phaseb_relative_prose_keep_r32_s900_visionfixed_v2_hf_v1"
+
+[inputs.dataset]
+type = "artifact"
+artifact = "phaseb_relative_twins_v1_run_019fb4c0e52e77e286e84d7ea9319f94"
+
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+
+[outputs.result]
+type = "eval_result"
+marker = "eval_manifest.json"
+alias = "phaseb_relative_eval_prose_keep_visionfixed_v2_{run.id}"
+
+[args]
+model = "{inputs.model.path}"
+dataset = "{inputs.dataset.path}"
+out = "{outputs.result.path}"
+runtime_dir = "{inputs.runtime.path}"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"
+LD_PRELOAD = "/fast/home/franz.srambical/.tmp_suite/mihir_ablation/nccl_2.28.3/libnccl.so.2"

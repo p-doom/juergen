@@ -1,0 +1,41 @@
+name = "phaseb_relative_train_prose_keep_pinned_019fb4c0_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/phaseb_relative/train_stage.sh" "$@"
+''', "--"]
+[resources]
+gpus = 1
+cpus = 12
+mem = "150GB"
+time = "06:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--signal=USR1@600", "--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001", "--nodelist=hai003,hai007,hai008"]
+[inputs.dataset]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/datasets/franz.srambical/phaseb_relative_twins_v1_run_019fb4c0e52e77e286e84d7ea9319f94"
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+[outputs.model]
+type = "checkpoint"
+marker = "train_manifest.json"
+alias = "phaseb_relative_prose_keep_r32_s900_pinned_v1_{run.id}"
+[args]
+dataset = "{inputs.dataset.path}"
+arm = "prose_keep"
+output = "{outputs.model.path}"
+omegalax_repo = "{inputs.omegalax.path}"
+model_id = "Qwen/Qwen3-VL-8B-Instruct"
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+WANDB_MODE = "offline"
+PYTHONUNBUFFERED = "1"
+XLA_PYTHON_CLIENT_ALLOCATOR = "cuda_async"
+XLA_PYTHON_CLIENT_MEM_FRACTION = "0.8"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

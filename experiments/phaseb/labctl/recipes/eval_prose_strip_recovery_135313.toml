@@ -1,0 +1,58 @@
+name = "phaseb_eval_prose_strip_recovery_135313_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/phaseb/eval_recovery_stage.sh" "$@" "--experiment_dir=$REPO/experiments/phaseb"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 16
+mem = "150GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--signal=USR1@600", "--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001", "--nodelist=hai003,hai004,hai007"]
+
+[inputs.model]
+type = "artifact"
+artifact = "phaseb_absolute_prose_strip_r32_s900_recovery_135313_hf_v1"
+
+[inputs.audit]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand"
+
+[inputs.source]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand/ckpt/pb_prose_strip_r32"
+
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+
+[outputs.result]
+type = "eval_result"
+marker = "eval_manifest.json"
+alias = "phaseb_eval_prose_strip_recovery_135313_v1_{run.id}"
+
+[args]
+arm = "prose_strip"
+source_job_id = "135313"
+source_checkpoint_root = "{inputs.source.path}"
+model_artifact = "{inputs.model.path}"
+val_chat = "{inputs.audit.path}/phaseb/prose_strip/_normalized/val/chat.jsonl"
+training_log = "{inputs.audit.path}/logs/r3sft_135313.log"
+training_script = "{inputs.audit.path}/rung3_sft.sbatch"
+audit_dir = "{inputs.audit.path}"
+runtime_dir = "{inputs.runtime.path}"
+out = "{outputs.result.path}"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"
+LD_PRELOAD = "/fast/home/franz.srambical/.tmp_suite/mihir_ablation/nccl_2.28.3/libnccl.so.2"

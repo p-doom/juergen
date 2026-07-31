@@ -1,0 +1,9 @@
+name = "phaseb_relative_prose_keep_v1"
+[stages.build_tokenize]
+recipe = "../recipes/build_tokenize.toml"
+[stages.train_prose_keep]
+recipe = "../recipes/train_prose_keep.toml"
+[stages.export_prose_keep]
+recipe = "../recipes/export_prose_keep.toml"
+[stages.eval_prose_keep]
+recipe = "../recipes/eval_prose_keep.toml"

@@ -1,0 +1,49 @@
+name = "phaseb_cleanup_relative_orbax_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+test "$REPO" = "$PWD"
+case "$REPO" in "$LABCTL_RUN_DIR"/source/juergen_rft) ;; *) exit 90;; esac
+/opt/miniforge3/bin/python "$REPO/experiments/phaseb/cleanup_relative_orbax.py" "$@"
+''', "--"]
+
+[resources]
+cpus = 4
+mem = "8GB"
+time = "00:20:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--no-requeue"]
+
+[inputs.source]
+type = "artifact"
+artifact = "phaseb_relative_prose_keep_r32_s900_visionfixed_v2_run_019fb4cbe728789086b8a63931c9979e"
+
+[inputs.model]
+type = "artifact"
+artifact = "phaseb_relative_prose_keep_r32_s900_visionfixed_v2_hf_v1"
+
+[inputs.evaluation]
+type = "artifact"
+artifact = "phaseb_relative_eval_prose_keep_visionfixed_v2_run_019fb5dfdd5e7a6093545ce3ae58e50a"
+
+[inputs.analysis]
+type = "artifact"
+artifact = "phaseb_matched_natural_prose_analysis_v1_run_019fb5e3e8147330aed22be6e2e6d800"
+
+[outputs.cleanup]
+type = "dataset"
+marker = "cleanup_manifest.json"
+alias = "phaseb_relative_source_orbax_cleanup_v1"
+
+[args]
+source = "{inputs.source.path}"
+model = "{inputs.model.path}"
+evaluation = "{inputs.evaluation.path}"
+analysis = "{inputs.analysis.path}"
+out = "{outputs.cleanup.path}"
+
+[env]
+PYTHONUNBUFFERED = "1"

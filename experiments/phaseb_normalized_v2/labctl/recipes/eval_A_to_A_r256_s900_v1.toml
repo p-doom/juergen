@@ -1,0 +1,63 @@
+name = "phaseb_normalized_v2_eval_A_to_A_r256_s900_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+test "$REPO" = "$PWD"
+case "$REPO" in "$LABCTL_RUN_DIR"/source/juergen_rft) ;; *) exit 90;; esac
+test "$(sha256sum "$REPO/experiments/phaseb_normalized_v2/eval.sh" | awk '{print $1}')" = "6dc24fda4fb561bc0dc79c6e3baa163c44f2df1233d37020000db21b20b87086"
+test "$(sha256sum "$REPO/experiments/phaseb_oracle_eval.py" | awk '{print $1}')" = "13ac5d8731d375d833359e750ca0608bf869449177df3047f1955413b915d7c6"
+test "$(sha256sum "$REPO/experiments/phaseb_canonical_eval.py" | awk '{print $1}')" = "08bad72ba5b63b2a1f36c1622535cb4022d5856b95d86fb11e91f93a8ffaacc2"
+test "$(sha256sum "$REPO/experiments/phaseb_relative/relative_eval.py" | awk '{print $1}')" = "006bddca38ad7304adbe50c9956b03fe2feb3ae8bcb34e89412825842f38000f"
+test "$(sha256sum "$REPO/experiments/phaseb_deltatype_raw_v2/action_v2.py" | awk '{print $1}')" = "1ded3d5a7e51da71cf3082049fbdd404971ebf72a95d93f333ebb3ee3075ccb7"
+bash "$REPO/experiments/phaseb_normalized_v2/eval.sh" "$@" \
+  "--experiment_dir=$REPO/experiments/phaseb_normalized_v2"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 16
+mem = "150GB"
+time = "00:05:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--dependency=afterok:135682", "--ntasks=1", "--ntasks-per-node=1", "--nodelist=hai003,hai007,hai008", "--deadline=2026-07-31T09:50:00"]
+
+[inputs.model]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/phaseb_normalized_v2_A_to_A_r256_s900_hf_v1"
+
+[inputs.dataset]
+type = "artifact"
+artifact = "phaseb_normalized_v2_fullcall_A_to_A_r256_v1"
+
+[inputs.raw_gold]
+type = "artifact"
+artifact = "phaseb_raw_deltatype_v2_build_audit_v1_run_019fb5a5564e7a71b3ad6e55426af463"
+
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+
+[outputs.result]
+type = "eval_result"
+marker = "eval_manifest.json"
+alias = "phaseb_normalized_v2_eval_A_to_A_r256_s900_v1_{run.id}"
+
+[args]
+model = "{inputs.model.path}"
+model_manifest = "{inputs.model.path}/export_manifest.json"
+model_stage = "phaseb_final"
+dataset = "{inputs.dataset.path}"
+raw_gold = "{inputs.raw_gold.path}"
+out = "{outputs.result.path}"
+runtime_dir = "{inputs.runtime.path}"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"
+LD_PRELOAD = "/fast/home/franz.srambical/.tmp_suite/mihir_ablation/nccl_2.28.3/libnccl.so.2"

@@ -1,0 +1,69 @@
+name = "phaseb_normalized_v2_build_tokenize_A_to_A_r256_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+test "$REPO" = "$PWD"
+case "$REPO" in "$LABCTL_RUN_DIR"/source/juergen_rft) ;; *) exit 90;; esac
+bash "$REPO/experiments/phaseb_normalized_v2/build_tokenize.sh" "$@" \
+  "--experiment_dir=$REPO/experiments/phaseb_normalized_v2"
+''', "--"]
+
+[resources]
+cpus = 16
+mem = "96GB"
+time = "00:18:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--no-requeue", "--signal=B:TERM@120", "--deadline=2026-07-31T04:35:00"]
+
+[inputs.source_root]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand/phaseb"
+
+[inputs.raw_twin]
+type = "artifact"
+artifact = "phaseb_raw_deltatype_v2_build_audit_v1_run_019fb5a5564e7a71b3ad6e55426af463"
+
+[inputs.collected_root]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/rollouts/teacher_8b_osworld_train_v1"
+
+[inputs.audit_dir]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand"
+
+[inputs.onpolicy_scripts]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/scripts"
+
+[inputs.source_model]
+type = "artifact"
+artifact = "relative_factorial_reltool_pre_r256_s750_capacity_v1_run_019fb4beda3472b289ae60fc612c1cea"
+
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+
+[outputs.dataset]
+type = "dataset"
+marker = "tokenization_manifest.json"
+alias = "phaseb_normalized_v2_fullcall_A_to_A_r256_v1"
+
+[args]
+source_root = "{inputs.source_root.path}"
+raw_twin = "{inputs.raw_twin.path}"
+collected_root = "{inputs.collected_root.path}"
+audit_dir = "{inputs.audit_dir.path}"
+onpolicy_scripts = "{inputs.onpolicy_scripts.path}"
+source_model = "{inputs.source_model.path}"
+omegalax = "{inputs.omegalax.path}"
+output = "{outputs.dataset.path}"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

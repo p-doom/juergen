@@ -1,0 +1,50 @@
+name = "phaseb_matched_natural_prose_analysis_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+test "$REPO" = "$PWD"
+case "$REPO" in "$LABCTL_RUN_DIR"/source/juergen_rft) ;; *) exit 90;; esac
+bash "$REPO/experiments/phaseb/matched_analysis_stage.sh" "$@" \
+  "--experiment_dir=$REPO/experiments/phaseb"
+''', "--"]
+
+[resources]
+cpus = 4
+mem = "16GB"
+time = "00:30:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--no-requeue"]
+
+[inputs.absolute_eval]
+type = "artifact"
+artifact = "phaseb_eval_prose_keep_recovery_135312_v1_run_019fb56b2f8379d1a98671befabd0eca"
+
+[inputs.relative_eval]
+type = "artifact"
+artifact = "phaseb_relative_eval_prose_keep_visionfixed_v2_run_019fb5dfdd5e7a6093545ce3ae58e50a"
+
+[inputs.absolute_dataset]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand/phaseb"
+
+[inputs.relative_dataset]
+type = "artifact"
+artifact = "phaseb_relative_twins_v1_run_019fb4c0e52e77e286e84d7ea9319f94"
+
+[outputs.analysis]
+type = "eval_result"
+marker = "matched_report.json"
+alias = "phaseb_matched_natural_prose_analysis_v1_{run.id}"
+
+[args]
+absolute_eval = "{inputs.absolute_eval.path}"
+relative_eval = "{inputs.relative_eval.path}"
+absolute_dataset = "{inputs.absolute_dataset.path}"
+relative_dataset = "{inputs.relative_dataset.path}"
+output = "{outputs.analysis.path}"
+
+[env]
+PYTHONUNBUFFERED = "1"
