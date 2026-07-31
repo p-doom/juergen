@@ -72,11 +72,22 @@
   },
   "post_window_heartbeat_wait_basis": {
     "wait_bound_s": 3.0,
+    "deadline_basis": "observation_deadline_host_monotonic_ns",
+    "absolute_cap": true,
+    "marker_host_receipt_must_not_exceed_cap": true,
     "nominal_heartbeat_interval_ms": 500,
     "observed_successful_trial_count": 5,
     "max_observed_post_deadline_marker_arrival_lag_ns": 460922709,
     "max_observed_heartbeat_host_interarrival_ns": 999610841,
     "rationale": "3.0 seconds is more than three times the maximum observed host interarrival and more than six times the maximum observed post-deadline marker lag in v2 job 136178"
+  },
+  "science_window_contract": {
+    "duration_s": 3.0,
+    "deadline_basis": "dispatch_completed_host_monotonic_ns",
+    "audit_event_inclusion_rule": "host_monotonic_ns <= observation_deadline_host_monotonic_ns",
+    "host_reporter_event_inclusion_rule": "host_monotonic_ns <= observation_deadline_host_monotonic_ns",
+    "post_window_sequence_prefix_retained_as_evidence": true,
+    "post_window_events_are_not_outcome_bearing": true
   },
   "failure_evidence_contract": {
     "schema_version": "rung1_atomic_output_failure_v2",
@@ -259,6 +270,7 @@
     "heartbeat_event": "audit_heartbeat",
     "heartbeat_interval_ms": 500,
     "require_heartbeat_causally_generated_after_observation_deadline": true,
+    "acknowledged_host_record_must_precede_marker": true,
     "heartbeat_acknowledgement_fields": [
       "acknowledged_heartbeat_audit_sequence",
       "acknowledged_host_audit_request_id",

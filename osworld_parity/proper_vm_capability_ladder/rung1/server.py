@@ -191,7 +191,9 @@ class FixtureStateStore:
 
     @staticmethod
     def _causal_post_window_marker_sequences(
-        state: dict[str, Any], observation_deadline_host_monotonic_ns: int
+        state: dict[str, Any],
+        observation_deadline_host_monotonic_ns: int,
+        wait_deadline_host_monotonic_ns: int,
     ) -> list[int]:
         events = state["browser_audit_events"]
         by_sequence: dict[int, list[dict[str, Any]]] = {}
@@ -209,6 +211,8 @@ class FixtureStateStore:
                 "acknowledged_host_audit_request_id"
             )
             acknowledged_host_ns = event.get("acknowledged_host_monotonic_ns")
+            marker_request_id = event.get("host_audit_request_id")
+            marker_host_ns = event.get("host_monotonic_ns")
             if (
                 event.get("event") != "audit_heartbeat"
                 or not isinstance(sequence, int)
@@ -219,8 +223,15 @@ class FixtureStateStore:
                 or isinstance(acknowledged_request_id, bool)
                 or not isinstance(acknowledged_host_ns, int)
                 or isinstance(acknowledged_host_ns, bool)
+                or not isinstance(marker_request_id, int)
+                or isinstance(marker_request_id, bool)
+                or not isinstance(marker_host_ns, int)
+                or isinstance(marker_host_ns, bool)
                 or acknowledged_host_ns
                 <= observation_deadline_host_monotonic_ns
+                or marker_host_ns > wait_deadline_host_monotonic_ns
+                or acknowledged_host_ns >= marker_host_ns
+                or acknowledged_request_id >= marker_request_id
                 or any(
                     len(by_sequence.get(index, [])) != 1
                     for index in range(1, sequence + 1)
@@ -251,7 +262,9 @@ class FixtureStateStore:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Wait for a contiguous marker causally generated after the deadline."""
         wait_started_ns = time.monotonic_ns()
-        wait_deadline_ns = wait_started_ns + int(timeout_s * 1_000_000_000)
+        wait_deadline_ns = observation_deadline_host_monotonic_ns + int(
+            timeout_s * 1_000_000_000
+        )
         with self._condition:
             state = self._states[fixture_id]
             self._append_diagnostic_locked(
@@ -275,7 +288,9 @@ class FixtureStateStore:
                         f"{fixture_id}: fixture reset while awaiting causal audit heartbeat"
                     )
                 candidate_sequences = self._causal_post_window_marker_sequences(
-                    state, observation_deadline_host_monotonic_ns
+                    state,
+                    observation_deadline_host_monotonic_ns,
+                    wait_deadline_ns,
                 )
                 now_ns = time.monotonic_ns()
                 if candidate_sequences or now_ns >= wait_deadline_ns:

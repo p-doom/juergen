@@ -40,7 +40,7 @@ from .vm import (
 
 
 SPEC_PATH = Path(__file__).with_name("injection_ab_spec.json")
-EXPECTED_SPEC_SHA256 = "68c612969e88ae7f2122c3321be98286fff7b02818c80e07fb4d49f33ad444e4"
+EXPECTED_SPEC_SHA256 = "0d0a6679dfc536d16825953f12adf46eb6f98b10e2d262dcb7e1420ee7d4b039"
 SUITE = "rung1_click_release_injection_ab_v3"
 ORDER_BLOCK = ("A", "B", "B", "A", "B", "A", "A", "B")
 TRIAL_ORDER = ORDER_BLOCK * 6
@@ -263,6 +263,9 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         raise InjectionAbIntegrityError("common click premove contract drifted")
     if spec.get("post_window_heartbeat_wait_basis") != {
         "wait_bound_s": POST_WINDOW_HEARTBEAT_WAIT_S,
+        "deadline_basis": "observation_deadline_host_monotonic_ns",
+        "absolute_cap": True,
+        "marker_host_receipt_must_not_exceed_cap": True,
         "nominal_heartbeat_interval_ms": 500,
         "observed_successful_trial_count": 5,
         "max_observed_post_deadline_marker_arrival_lag_ns": 460_922_709,
@@ -274,6 +277,19 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         ),
     }:
         raise InjectionAbIntegrityError("post-window heartbeat wait basis drifted")
+    if spec.get("science_window_contract") != {
+        "duration_s": OBSERVATION_WINDOW_S,
+        "deadline_basis": "dispatch_completed_host_monotonic_ns",
+        "audit_event_inclusion_rule": (
+            "host_monotonic_ns <= observation_deadline_host_monotonic_ns"
+        ),
+        "host_reporter_event_inclusion_rule": (
+            "host_monotonic_ns <= observation_deadline_host_monotonic_ns"
+        ),
+        "post_window_sequence_prefix_retained_as_evidence": True,
+        "post_window_events_are_not_outcome_bearing": True,
+    }:
+        raise InjectionAbIntegrityError("science window contract drifted")
     if spec.get("failure_evidence_contract") != {
         "schema_version": "rung1_atomic_output_failure_v2",
         "lifecycle_global_attempt_hooks": True,
@@ -384,6 +400,7 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         or audit.get("heartbeat_interval_ms") != 500
         or audit.get("require_heartbeat_causally_generated_after_observation_deadline")
         is not True
+        or audit.get("acknowledged_host_record_must_precede_marker") is not True
         or audit.get("heartbeat_acknowledgement_fields")
         != [
             "acknowledged_heartbeat_audit_sequence",
@@ -806,6 +823,9 @@ def validate_audit_trace(
             != event.get("acknowledged_host_audit_request_id")
             or acknowledged.get("host_monotonic_ns")
             != event.get("acknowledged_host_monotonic_ns")
+            or acknowledged["host_audit_request_id"]
+            >= event["host_audit_request_id"]
+            or acknowledged["host_monotonic_ns"] >= event["host_monotonic_ns"]
         ):
             raise InjectionAbIntegrityError(
                 "browser audit heartbeat acknowledgement identity drifted"
@@ -863,10 +883,13 @@ def _validate_dom_event_details(event: dict[str, Any]) -> None:
 
 
 def validate_post_window_audit_heartbeat(
-    audit_events: list[dict[str, Any]], observation_deadline_ns: int
+    audit_events: list[dict[str, Any]],
+    observation_deadline_ns: int,
+    wait_deadline_ns: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     heartbeat_timing_evidence = {
         "observation_deadline_host_monotonic_ns": observation_deadline_ns,
+        "wait_deadline_host_monotonic_ns": wait_deadline_ns,
         "heartbeats": [
             {
                 "audit_sequence": event.get("audit_sequence"),
@@ -910,6 +933,13 @@ def validate_post_window_audit_heartbeat(
         and isinstance(event.get("acknowledged_host_monotonic_ns"), int)
         and not isinstance(event.get("acknowledged_host_monotonic_ns"), bool)
         and event["acknowledged_host_monotonic_ns"] > observation_deadline_ns
+        and isinstance(event.get("host_monotonic_ns"), int)
+        and not isinstance(event.get("host_monotonic_ns"), bool)
+        and event["host_monotonic_ns"] <= wait_deadline_ns
+        and event["acknowledged_host_monotonic_ns"]
+        < event["host_monotonic_ns"]
+        and event["acknowledged_host_audit_request_id"]
+        < event["host_audit_request_id"]
     ]
     if not heartbeats:
         raise InjectionAbIntegrityError(
@@ -1321,10 +1351,15 @@ def validate_atomic_contract(
 
 
 def classify_trial_outcome(
-    audit_events: list[dict[str, Any]], snapshot: dict[str, Any]
+    audit_events: list[dict[str, Any]],
+    snapshot: dict[str, Any],
+    observation_deadline_ns: int,
 ) -> dict[str, Any]:
     dom_events = [
-        event for event in audit_events if event["event"] in AUDIT_DOM_EVENTS
+        event
+        for event in audit_events
+        if event["event"] in AUDIT_DOM_EVENTS
+        and event["host_monotonic_ns"] <= observation_deadline_ns
     ]
 
     def trusted_target(name: str) -> list[dict[str, Any]]:
@@ -1362,10 +1397,14 @@ def classify_trial_outcome(
         event
         for event in snapshot.get("events", [])
         if event.get("kind") in {"pointer", "click"}
+        and isinstance(event.get("host_monotonic_ns"), int)
+        and not isinstance(event.get("host_monotonic_ns"), bool)
+        and event["host_monotonic_ns"] <= observation_deadline_ns
     ]
     return {
         "primary_success": primary_success,
         "outcome": outcome,
+        "observation_deadline_host_monotonic_ns": observation_deadline_ns,
         "audit_event_sequence": [event["event"] for event in dom_events],
         "audit_target_event_sequence": [
             event["event"]
@@ -1682,9 +1721,20 @@ def run_vm_injection_ab(
                 allow_request_id_gaps_after_sequence_seal=True,
             )
             sealed_audit_events, audit_heartbeat = validate_post_window_audit_heartbeat(
-                audit_events, observation_deadline_ns
+                audit_events,
+                observation_deadline_ns,
+                heartbeat_wait["wait_deadline_host_monotonic_ns"],
             )
-            outcome = classify_trial_outcome(sealed_audit_events, snapshot)
+            science_window_audit_events = [
+                event
+                for event in sealed_audit_events
+                if event["host_monotonic_ns"] <= observation_deadline_ns
+            ]
+            outcome = classify_trial_outcome(
+                sealed_audit_events,
+                snapshot,
+                observation_deadline_ns,
+            )
             trial = {
                 **scheduled,
                 "status": "observed",
@@ -1709,6 +1759,7 @@ def run_vm_injection_ab(
                 ],
                 "audit_events": audit_events,
                 "sealed_audit_events": sealed_audit_events,
+                "science_window_audit_events": science_window_audit_events,
                 "post_window_audit_heartbeat": audit_heartbeat,
                 "post_window_heartbeat_wait": heartbeat_wait,
                 "outcome": outcome,

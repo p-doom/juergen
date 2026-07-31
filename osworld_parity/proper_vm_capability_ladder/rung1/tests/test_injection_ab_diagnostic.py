@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import osworld_parity.proper_vm_capability_ladder.rung1.injection_ab_diagnostic as injection_ab
+import osworld_parity.proper_vm_capability_ladder.rung1.server as server_module
 
 from osworld_parity.proper_vm_capability_ladder.rung1.injection_ab_diagnostic import (
     AUDIT_REQUIRED_FIELDS,
@@ -65,6 +66,25 @@ def test_preregistration_and_schedule_are_exact_and_development_only() -> None:
     assert spec["browser_audit"][
         "require_heartbeat_causally_generated_after_observation_deadline"
     ] is True
+    assert spec["browser_audit"][
+        "acknowledged_host_record_must_precede_marker"
+    ] is True
+    assert spec["post_window_heartbeat_wait_basis"]["absolute_cap"] is True
+    assert spec["post_window_heartbeat_wait_basis"][
+        "deadline_basis"
+    ] == "observation_deadline_host_monotonic_ns"
+    assert spec["science_window_contract"] == {
+        "duration_s": 3.0,
+        "deadline_basis": "dispatch_completed_host_monotonic_ns",
+        "audit_event_inclusion_rule": (
+            "host_monotonic_ns <= observation_deadline_host_monotonic_ns"
+        ),
+        "host_reporter_event_inclusion_rule": (
+            "host_monotonic_ns <= observation_deadline_host_monotonic_ns"
+        ),
+        "post_window_sequence_prefix_retained_as_evidence": True,
+        "post_window_events_are_not_outcome_bearing": True,
+    }
     assert spec["browser_failure_evidence_contract"][
         "checkpoint_before_validation"
     ] is True
@@ -190,10 +210,63 @@ def test_audit_trace_is_independent_ordered_and_primary() -> None:
     # HTTP request completion can reorder; browser audit_sequence is canonical.
     trace = validate_audit_trace(_audit_snapshot(list(reversed(events))), 7)
     assert [event["audit_sequence"] for event in trace] == list(range(1, 10))
-    outcome = classify_trial_outcome(trace, _audit_snapshot(events))
+    outcome = classify_trial_outcome(trace, _audit_snapshot(events), 10_000)
     assert outcome["primary_success"] is True
     assert outcome["outcome"] == "trusted_click_input_change"
     assert outcome["host_reporter_event_sequence"] == []
+
+
+@pytest.mark.parametrize(
+    ("arrival_delta_ns", "expected_success"),
+    [(0, True), (1, False)],
+)
+def test_classifier_enforces_exact_science_deadline_boundary(
+    arrival_delta_ns: int, expected_success: bool
+) -> None:
+    deadline = 1_000
+    events = [_audit_event(1, "audit_ready")]
+    for sequence, name in enumerate(
+        ("pointerdown", "pointerup", "click", "input", "change"), start=2
+    ):
+        event = _audit_event(sequence, name, checked=True)
+        event["host_monotonic_ns"] = deadline + arrival_delta_ns
+        events.append(event)
+
+    outcome = classify_trial_outcome(
+        events,
+        _audit_snapshot(events),
+        deadline,
+    )
+
+    assert outcome["primary_success"] is expected_success
+    assert outcome["audit_event_sequence"] == (
+        ["pointerdown", "pointerup", "click", "input", "change"]
+        if expected_success
+        else []
+    )
+
+
+def test_classifier_filters_secondary_reporter_at_science_deadline() -> None:
+    deadline = 1_000
+    snapshot = _audit_snapshot([_audit_event(1, "audit_ready")])
+    snapshot["events"] = [
+        {
+            "kind": "pointer",
+            "event": "pointerdown",
+            "host_monotonic_ns": deadline,
+        },
+        {
+            "kind": "pointer",
+            "event": "pointerup",
+            "host_monotonic_ns": deadline + 1,
+        },
+    ]
+
+    outcome = classify_trial_outcome(
+        snapshot["browser_audit_events"], snapshot, deadline
+    )
+
+    assert outcome["host_reporter_event_sequence"] == ["pointerdown"]
 
 
 def test_post_window_heartbeat_seals_independent_audit_completeness() -> None:
@@ -201,18 +274,23 @@ def test_post_window_heartbeat_seals_independent_audit_completeness() -> None:
     acknowledged = _audit_event(2, "audit_heartbeat")
     acknowledged["host_monotonic_ns"] = 3_000_000_001
     heartbeat = _audit_event(3, "audit_heartbeat")
+    heartbeat["host_monotonic_ns"] = 3_000_000_002
     _acknowledge_heartbeat(heartbeat, acknowledged)
     trace = validate_audit_trace(
         _audit_snapshot([ready, acknowledged, heartbeat]), 7
     )
-    sealed, marker = validate_post_window_audit_heartbeat(trace, 3_000_000_000)
+    sealed, marker = validate_post_window_audit_heartbeat(
+        trace, 3_000_000_000, 3_000_000_100
+    )
     assert sealed == [ready, acknowledged, heartbeat]
     assert marker == heartbeat
     with pytest.raises(
         InjectionAbIntegrityError,
         match="causally generated post-window heartbeat",
     ) as caught:
-        validate_post_window_audit_heartbeat(trace, 3_000_000_001)
+        validate_post_window_audit_heartbeat(
+            trace, 3_000_000_001, 3_000_000_100
+        )
     assert caught.value.evidence["heartbeats"][-1][
         "acknowledged_receipt_lag_ns"
     ] == 0
@@ -223,17 +301,18 @@ def test_post_window_marker_detects_lost_tail_and_excludes_post_marker_events() 
     acknowledged = _audit_event(2, "audit_heartbeat")
     acknowledged["host_monotonic_ns"] = 101
     heartbeat = _audit_event(3, "audit_heartbeat")
+    heartbeat["host_monotonic_ns"] = 102
     _acknowledge_heartbeat(heartbeat, acknowledged)
     post_marker_click = _audit_event(4, "click", checked=True)
     trace = validate_audit_trace(
         _audit_snapshot([ready, acknowledged, heartbeat, post_marker_click]), 7
     )
-    sealed, marker = validate_post_window_audit_heartbeat(trace, 100)
+    sealed, marker = validate_post_window_audit_heartbeat(trace, 100, 200)
     assert marker == heartbeat
     assert sealed == [ready, acknowledged, heartbeat]
     heartbeat["expected_audit_count_through_marker"] = 4
     with pytest.raises(InjectionAbIntegrityError, match="sequence/count"):
-        validate_post_window_audit_heartbeat(trace, 100)
+        validate_post_window_audit_heartbeat(trace, 100, 200)
 
     lost_sendbeacon_marker = _audit_event(4, "audit_heartbeat")
     _acknowledge_heartbeat(lost_sendbeacon_marker, acknowledged)
@@ -241,6 +320,27 @@ def test_post_window_marker_detects_lost_tail_and_excludes_post_marker_events() 
         validate_audit_trace(
             _audit_snapshot([ready, acknowledged, lost_sendbeacon_marker]), 7
         )
+
+
+def test_post_window_validator_rejects_marker_after_absolute_wait_cap() -> None:
+    ready = _audit_event(1, "audit_ready")
+    acknowledged = _audit_event(2, "audit_heartbeat")
+    acknowledged["host_monotonic_ns"] = 101
+    marker = _audit_event(3, "audit_heartbeat")
+    marker["host_monotonic_ns"] = 201
+    _acknowledge_heartbeat(marker, acknowledged)
+    trace = validate_audit_trace(
+        _audit_snapshot([ready, acknowledged, marker]), 7
+    )
+
+    with pytest.raises(
+        InjectionAbIntegrityError,
+        match="causally generated post-window heartbeat",
+    ) as caught:
+        validate_post_window_audit_heartbeat(trace, 100, 200)
+
+    assert caught.value.evidence["wait_deadline_host_monotonic_ns"] == 200
+    assert caught.value.evidence["heartbeats"][-1]["host_monotonic_ns"] == 201
 
 
 def _apply_store_audit(
@@ -322,7 +422,9 @@ def test_causal_wait_accepts_batched_out_of_order_arrival_after_gap_fills() -> N
         allow_request_id_gaps_after_sequence_seal=True,
     )
     sealed, selected = validate_post_window_audit_heartbeat(
-        trace, acknowledged["host_monotonic_ns"] - 1
+        trace,
+        acknowledged["host_monotonic_ns"] - 1,
+        wait["wait_deadline_host_monotonic_ns"],
     )
     assert selected["audit_sequence"] == 4
     assert [event["audit_sequence"] for event in sealed] == [1, 2, 3, 4]
@@ -369,7 +471,15 @@ def test_causal_wait_times_out_with_exact_raw_evidence(
 
 @pytest.mark.parametrize(
     "mutation",
-    ["partial", "future", "wrong_request", "wrong_host", "nonheartbeat"],
+    [
+        "partial",
+        "future",
+        "wrong_request",
+        "wrong_host",
+        "nonheartbeat",
+        "request_order",
+        "host_order",
+    ],
 )
 def test_heartbeat_acknowledgement_identity_corruption_aborts(
     mutation: str,
@@ -388,14 +498,93 @@ def test_heartbeat_acknowledgement_identity_corruption_aborts(
         marker["acknowledged_host_audit_request_id"] += 1
     elif mutation == "wrong_host":
         marker["acknowledged_host_monotonic_ns"] += 1
+    elif mutation == "request_order":
+        marker["host_audit_request_id"] = marker[
+            "acknowledged_host_audit_request_id"
+        ]
+    elif mutation == "host_order":
+        marker["host_monotonic_ns"] = marker[
+            "acknowledged_host_monotonic_ns"
+        ]
     else:
         marker["acknowledged_heartbeat_audit_sequence"] = 1
         marker["acknowledged_host_audit_request_id"] = 1
         marker["acknowledged_host_monotonic_ns"] = 1
-    with pytest.raises(InjectionAbIntegrityError, match="acknowledgement"):
+    expected_error = (
+        "host request identities|acknowledgement"
+        if mutation == "request_order"
+        else "acknowledgement"
+    )
+    with pytest.raises(InjectionAbIntegrityError, match=expected_error):
         validate_audit_trace(
             _audit_snapshot([ready, acknowledged, marker]), 7
         )
+
+
+def test_late_prestored_marker_is_rejected_by_absolute_wait_cap() -> None:
+    observation_deadline = 100
+    wait_deadline = 200
+    acknowledged = {
+        "audit_sequence": 2,
+        "event": "audit_heartbeat",
+        "host_audit_request_id": 2,
+        "host_monotonic_ns": 150,
+    }
+
+    def state(marker_host_ns: int) -> dict:
+        return {
+            "browser_audit_events": [
+                {
+                    "audit_sequence": 1,
+                    "event": "audit_ready",
+                    "host_audit_request_id": 1,
+                    "host_monotonic_ns": 90,
+                },
+                acknowledged,
+                {
+                    "audit_sequence": 3,
+                    "event": "audit_heartbeat",
+                    "host_audit_request_id": 3,
+                    "host_monotonic_ns": marker_host_ns,
+                    "acknowledged_heartbeat_audit_sequence": 2,
+                    "acknowledged_host_audit_request_id": 2,
+                    "acknowledged_host_monotonic_ns": 150,
+                },
+            ]
+        }
+
+    assert FixtureStateStore._causal_post_window_marker_sequences(
+        state(wait_deadline), observation_deadline, wait_deadline
+    ) == [3]
+    assert FixtureStateStore._causal_post_window_marker_sequences(
+        state(wait_deadline + 1), observation_deadline, wait_deadline
+    ) == []
+
+
+def test_overslept_waiter_uses_absolute_observation_deadline_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = next(
+        item
+        for item in load_manifest().select(split="development")
+        if item.id == injection_ab.FIXTURE_ID
+    )
+    store = FixtureStateStore(load_manifest())
+    generation = store.snapshot(fixture.id)["generation"]
+    observation_deadline = 100
+    monkeypatch.setattr(server_module.time, "monotonic_ns", lambda: 4_000_000_100)
+
+    _snapshot, wait = store.wait_for_causal_post_window_heartbeat(
+        fixture.id,
+        generation=generation,
+        observation_deadline_host_monotonic_ns=observation_deadline,
+        timeout_s=3.0,
+    )
+
+    assert wait["wait_started_host_monotonic_ns"] == 4_000_000_100
+    assert wait["wait_deadline_host_monotonic_ns"] == 3_000_000_100
+    assert wait["timed_out"] is True
+    assert wait["wait_duration_ns"] == 0
 
 
 @pytest.mark.parametrize(
