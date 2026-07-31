@@ -67,6 +67,29 @@ identity. Thus a future CPU/KVM retry can distinguish baseline drift, endpoint
 error, wrong hit element, and oracle/reporting delay. These diagnostics do not
 alter fixture contents, hashes, evaluation exposure, or model policy inputs.
 
+Development-only job 135830 then falsified baseline drift for its failing cell:
+the compact baseline and endpoint both matched, and browser `elementFromPoint`
+confirmed that pointer-down hit the target. The separate guest mouse-up command
+reported success, but no pointer-up or click acknowledgement reached the
+browser, whose final button state remained held. The failure was therefore at
+the split-process release/browser-ack boundary.
+
+Compact actions now execute in one guest Python process. That process preserves
+the raw move/scroll/event order, synchronizes with X11, and returns its final
+cursor plus actual pointer-button mask. If an operation or mask check fails, it
+releases all supported buttons and touched keys before returning a fail-loud
+result. The host journals one guest-process result per compact action and
+requires a zero button mask before any near-miss or gold oracle. Intentional
+button-hold reset probes declare and verify the left-button mask instead.
+
+Fixed post-action sleeps were replaced with a bounded host wait keyed to the
+browser's monotonic client sequence. A click trajectory must causally report
+both pointer-up with zero buttons and the checkbox-change event; other templates
+likewise require their state event, and pointer templates require release. The
+wait returns only after the acknowledged sequence is quiescent, and stale or
+missing acknowledgements fail loudly. There is no input retry, state correction,
+or oracle-dependent action: the original compact action executes exactly once.
+
 Every development cell performs:
 
 1. restore the full-RAM/disk `osworld_ready` QMP snapshot and deterministic setup;
