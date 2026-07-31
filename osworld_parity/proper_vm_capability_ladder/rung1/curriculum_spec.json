@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "suite": "rung1_synthetic_capability_curriculum",
+  "status": "preregistered_not_launched",
+  "official_osworld_reuse": false,
+  "policy_observation_contract": "instruction_and_screenshot_only",
+  "source": "newly_authored_deterministic_raster_controls",
+  "base_model": "Qwen/Qwen3-VL-8B-Instruct",
+  "formats": [
+    "native_absolute_control",
+    "compact_raw_phaseb"
+  ],
+  "splits": {
+    "train": {
+      "seed_start": 310000,
+      "records_per_format": 1664
+    },
+    "validation": {
+      "seed_start": 410000,
+      "records_per_format": 208
+    }
+  },
+  "matrix": [
+    {
+      "capability": "click",
+      "high_level_steps": 1,
+      "train": 256,
+      "validation": 32
+    },
+    {
+      "capability": "focus_type",
+      "high_level_steps": 1,
+      "train": 256,
+      "validation": 32
+    },
+    {
+      "capability": "scroll",
+      "high_level_steps": 1,
+      "train": 128,
+      "validation": 16
+    },
+    {
+      "capability": "drag",
+      "high_level_steps": 1,
+      "train": 256,
+      "validation": 32
+    },
+    {
+      "capability": "composition_2",
+      "high_level_steps": 2,
+      "train": 256,
+      "validation": 32
+    },
+    {
+      "capability": "composition_3",
+      "high_level_steps": 3,
+      "train": 256,
+      "validation": 32
+    },
+    {
+      "capability": "composition_4",
+      "high_level_steps": 4,
+      "train": 256,
+      "validation": 32
+    }
+  ],
+  "format_matching": {
+    "same_seed": true,
+    "same_instruction": true,
+    "same_initial_pixels": true,
+    "same_control_parameters": true,
+    "same_final_oracle": true,
+    "allowed_differences": [
+      "system_prompt",
+      "assistant_action_encoding",
+      "drag_low_level_turn_count"
+    ]
+  },
+  "optimization": {
+    "lora_rank": 32,
+    "lora_alpha": 32,
+    "max_length": 16384,
+    "num_steps": 750,
+    "batch_size": 1,
+    "grad_accum_steps": 8,
+    "learning_rate": 0.0001,
+    "seed": 0
+  },
+  "required_prelaunch_gates": [
+    "sealed_fixture_seed_overlap_zero",
+    "sealed_fixture_parameter_fingerprint_overlap_zero",
+    "train_validation_seed_overlap_zero",
+    "train_validation_scene_fingerprint_overlap_zero",
+    "native_action_round_trip_100_percent",
+    "compact_action_round_trip_100_percent",
+    "format_twin_identity_100_percent",
+    "positive_oracle_100_percent",
+    "near_miss_oracle_rejection_100_percent",
+    "final_pointer_mask_zero_100_percent",
+    "unicode_exactness_100_percent",
+    "tokenization_count_exact",
+    "tokenization_truncation_zero"
+  ],
+  "spec_payload_sha256": "eaafddd735ca9b4d1fbdf31ef67cf5eb5e5b254cb83cb2288c9d467d7e3e8e86"
+}

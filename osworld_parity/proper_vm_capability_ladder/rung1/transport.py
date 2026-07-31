@@ -44,6 +44,8 @@ class AtomicExecutionResult:
     cleanup_attempted: bool
     error: str | None
     operations: tuple[Operation, ...]
+    backend_primitives: tuple[dict[str, Any], ...] = ()
+    x_event_sync_evidence: tuple[dict[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -59,6 +61,8 @@ class AtomicExecutionResult:
                 {"kind": item.kind, "args": list(item.args)}
                 for item in self.operations
             ],
+            "backend_primitives": list(self.backend_primitives),
+            "x_event_sync_evidence": list(self.x_event_sync_evidence),
         }
 
 
@@ -150,19 +154,47 @@ def pointer_mask_for_buttons(buttons: set[str]) -> int:
     return sum(BUTTON_MASKS[button] for button in buttons)
 
 
+def lower_guest_operations(
+    operations: tuple[Operation, ...],
+) -> tuple[Operation, ...]:
+    """Lower only an adjacent same-button press/release to one click primitive.
+
+    The input remains the canonical semantic event stream.  In particular, a
+    move, key event, type, or any other operation between the transitions
+    prevents coalescing, which keeps drag/hold trajectories explicit.
+    """
+    lowered: list[Operation] = []
+    index = 0
+    while index < len(operations):
+        operation = operations[index]
+        if operation.kind == "mouse_down" and index + 1 < len(operations):
+            following = operations[index + 1]
+            if (
+                following.kind == "mouse_up"
+                and following.args == operation.args
+            ):
+                lowered.append(Operation("click", operation.args))
+                index += 2
+                continue
+        lowered.append(operation)
+        index += 1
+    return tuple(lowered)
+
+
 def compile_atomic_guest_program(
     operations: tuple[Operation, ...],
     *,
     initial_buttons: set[str],
     initial_keys: set[str],
 ) -> tuple[str, int]:
-    """Compile one compact action to exactly one ordered guest process."""
+    """Compile one adapter action to exactly one ordered guest process."""
     final_buttons, _ = expected_atomic_input_state(
         operations,
         initial_buttons=initial_buttons,
         initial_keys=initial_keys,
     )
     expected_mask = pointer_mask_for_buttons(final_buttons)
+    guest_operations = lower_guest_operations(operations)
     lines = [
         "import json, traceback, pyautogui",
         "pyautogui.FAILSAFE=False",
@@ -174,6 +206,47 @@ def compile_atomic_guest_program(
         "_r1a_error=None",
         "_r1a_cleanup=False",
         "_r1a_observed_mask=-1",
+        "_r1a_backend_primitives=[]",
+        "_r1a_x_event_sync=[]",
+        "def _r1a_sync_after_x_event(_event):",
+        "    _backend=pyautogui.platformModule",
+        "    _display=getattr(_backend,'_display',None)",
+        "    _flush=getattr(_display,'flush',None)",
+        "    _sync=getattr(_display,'sync',None)",
+        "    _supported=callable(_flush) and callable(_sync)",
+        "    if _supported:",
+        "        _flush()",
+        "        _sync()",
+        "    _r1a_x_event_sync.append({'event':_event,'backend':getattr(_backend,'__name__',type(_backend).__name__),'flush':_supported,'sync':_supported})",
+        "def _r1a_click(_button):",
+        "    _backend=pyautogui.platformModule",
+        "    _display=getattr(_backend,'_display',None)",
+        "    _down=getattr(_backend,'_mouseDown',None)",
+        "    _up=getattr(_backend,'_mouseUp',None)",
+        "    _hooked=callable(_down) and callable(_up) and callable(getattr(_display,'flush',None)) and callable(getattr(_display,'sync',None))",
+        "    _r1a_backend_primitives.append({'kind':'click','button':_button,'call':'pyautogui.click(clicks=1, interval=0.05)','x11_per_event_sync_hooked':_hooked})",
+        "    if not _hooked:",
+        "        pyautogui.click(clicks=1,interval=0.05,button=_button)",
+        "        _r1a_trace.extend(({'kind':'mouse_down','args':[_button]},{'kind':'mouse_up','args':[_button]}))",
+        "        _r1a_x_event_sync.extend(({'event':'mouse_down','backend':getattr(_backend,'__name__',type(_backend).__name__),'flush':False,'sync':False},{'event':'mouse_up','backend':getattr(_backend,'__name__',type(_backend).__name__),'flush':False,'sync':False}))",
+        "        return",
+        "    def _r1a_down(*_args,**_kwargs):",
+        "        _result=_down(*_args,**_kwargs)",
+        "        _r1a_sync_after_x_event('mouse_down')",
+        "        _r1a_trace.append({'kind':'mouse_down','args':[_button]})",
+        "        return _result",
+        "    def _r1a_up(*_args,**_kwargs):",
+        "        _result=_up(*_args,**_kwargs)",
+        "        _r1a_sync_after_x_event('mouse_up')",
+        "        _r1a_trace.append({'kind':'mouse_up','args':[_button]})",
+        "        return _result",
+        "    _backend._mouseDown=_r1a_down",
+        "    _backend._mouseUp=_r1a_up",
+        "    try:",
+        "        pyautogui.click(clicks=1,interval=0.05,button=_button)",
+        "    finally:",
+        "        _backend._mouseDown=_down",
+        "        _backend._mouseUp=_up",
         "def _r1a_pointer_state():",
         "    _backend=pyautogui.platformModule",
         "    _backend._display.sync()",
@@ -182,7 +255,7 @@ def compile_atomic_guest_program(
         "try:",
     ]
     indent = "    "
-    for index, operation in enumerate(operations):
+    for index, operation in enumerate(guest_operations):
         kind, args = operation.kind, operation.args
         lines.append(f"{indent}# RUNG1A_ATOMIC_STEP_{index}:{kind}")
         if kind == "move_relative":
@@ -205,6 +278,14 @@ def compile_atomic_guest_program(
                     f"{indent}_r1a_trace.append({{'kind':'scroll','args':[{clicks}]}})",
                 ]
             )
+        elif kind == "click":
+            button = str(args[0])
+            lines.extend(
+                [
+                    f"{indent}_r1a_touched_buttons.add({button!r})",
+                    f"{indent}_r1a_click({button!r})",
+                ]
+            )
         elif kind in {"mouse_down", "mouse_up"}:
             button = str(args[0])
             method = "mouseDown" if kind == "mouse_down" else "mouseUp"
@@ -212,6 +293,8 @@ def compile_atomic_guest_program(
                 [
                     f"{indent}_r1a_touched_buttons.add({button!r})",
                     f"{indent}pyautogui.{method}(button={button!r})",
+                    f"{indent}_r1a_sync_after_x_event({kind!r})",
+                    f"{indent}_r1a_backend_primitives.append({{'kind':{kind!r},'button':{button!r},'call':'pyautogui.{method}'}})",
                     f"{indent}_r1a_trace.append({{'kind':{kind!r},'args':[{button!r}]}})",
                 ]
             )
@@ -258,7 +341,9 @@ def compile_atomic_guest_program(
             " 'observed_pointer_button_mask':_r1a_observed_mask,",
             " 'expected_pointer_button_mask':_r1a_expected_mask,",
             " 'guest_process_count':1,'cleanup_attempted':_r1a_cleanup,",
-            " 'error':_r1a_error,'operations':_r1a_trace}",
+            " 'error':_r1a_error,'operations':_r1a_trace,",
+            " 'backend_primitives':_r1a_backend_primitives,",
+            " 'x_event_sync_evidence':_r1a_x_event_sync}",
             f"print({ATOMIC_RESULT_PREFIX!r}+json.dumps(_r1a_payload,separators=(',',':'),ensure_ascii=False))",
         ]
     )
@@ -306,7 +391,7 @@ class HttpVmTransport:
     def execute_pyautogui(self, code: str) -> None:
         self.execute_argv(["python", "-c", self._PREFIX + code])
 
-    def execute_compact_atomic(
+    def execute_atomic(
         self, operations: tuple[Operation, ...]
     ) -> AtomicExecutionResult:
         program, expected_mask = compile_atomic_guest_program(
@@ -334,10 +419,16 @@ class HttpVmTransport:
             raise TransportError("atomic guest action returned an invalid schema")
         cursor = payload.get("cursor")
         raw_operations = payload.get("operations")
+        raw_primitives = payload.get("backend_primitives", [])
+        raw_sync_evidence = payload.get("x_event_sync_evidence", [])
         if (
             not isinstance(cursor, list)
             or len(cursor) != 2
             or not isinstance(raw_operations, list)
+            or not isinstance(raw_primitives, list)
+            or not isinstance(raw_sync_evidence, list)
+            or not all(isinstance(item, dict) for item in raw_primitives)
+            or not all(isinstance(item, dict) for item in raw_sync_evidence)
         ):
             raise TransportError("atomic guest action returned invalid state")
         traced: list[Operation] = []
@@ -361,6 +452,8 @@ class HttpVmTransport:
             cleanup_attempted=bool(payload.get("cleanup_attempted")),
             error=None if payload.get("error") is None else str(payload["error"]),
             operations=tuple(traced),
+            backend_primitives=tuple(dict(item) for item in raw_primitives),
+            x_event_sync_evidence=tuple(dict(item) for item in raw_sync_evidence),
         )
         self.audit.operations.extend(traced)
         self.audit.held_buttons = {
@@ -446,6 +539,7 @@ class RecordingTransport:
         self._screen = screen
         self.audit = InputAudit()
         self.atomic_invocations = 0
+        self.atomic_inputs: list[tuple[Operation, ...]] = []
 
     def cursor_position(self) -> tuple[int, int]:
         return self._cursor
@@ -487,10 +581,11 @@ class RecordingTransport:
     def wait(self, seconds: float) -> None:
         self.audit.operations.append(Operation("wait", (float(seconds),)))
 
-    def execute_compact_atomic(
+    def execute_atomic(
         self, operations: tuple[Operation, ...]
     ) -> AtomicExecutionResult:
         self.atomic_invocations += 1
+        self.atomic_inputs.append(operations)
         before = len(self.audit.operations)
         initial_buttons = set(self.audit.held_buttons)
         initial_keys = set(self.audit.held_keys)
@@ -504,7 +599,7 @@ class RecordingTransport:
         cleanup_attempted = False
         error: str | None = None
         try:
-            for operation in operations:
+            for operation in lower_guest_operations(operations):
                 kind, args = operation.kind, operation.args
                 if kind == "move_relative":
                     self.move_to(
@@ -516,6 +611,9 @@ class RecordingTransport:
                 elif kind == "mouse_down":
                     self.mouse_down(str(args[0]))
                 elif kind == "mouse_up":
+                    self.mouse_up(str(args[0]))
+                elif kind == "click":
+                    self.mouse_down(str(args[0]))
                     self.mouse_up(str(args[0]))
                 elif kind == "key_down":
                     key = str(args[0])
@@ -564,4 +662,12 @@ class RecordingTransport:
             cleanup_attempted=cleanup_attempted,
             error=error,
             operations=tuple(self.audit.operations[before:]),
+            backend_primitives=tuple(
+                {
+                    "kind": operation.kind,
+                    "args": list(operation.args),
+                    "backend": "recording",
+                }
+                for operation in lower_guest_operations(operations)
+            ),
         )

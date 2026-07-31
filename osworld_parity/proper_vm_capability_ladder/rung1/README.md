@@ -42,6 +42,17 @@ Both adapters compile to the same transport primitives. In particular,
 performs one exact UTF-8 clipboard write and one Ctrl+V in a single guest
 process. `pyautogui.write` is not used.
 
+Adjacent same-button press/release semantics now lower through one shared guest
+primitive for both adapters:
+`pyautogui.click(clicks=1, interval=0.05, button=...)`, matching the pinned
+native computer-use client. The durable semantic trace remains `mouse_down`,
+`mouse_up`; lowering is forbidden if any operation intervenes. Holds and drags
+therefore continue to use explicit press, movement, and release operations. On
+the X11 backend, the click wrapper explicitly flushes and synchronizes the
+display after each backend press/release and records per-event support/evidence
+in the atomic result. Unsupported backends are reported rather than silently
+claiming that evidence.
+
 ### Pre-science compact-dispatch diagnostic amendment
 
 Development-only job 135826 established that the v2 geometry contract itself
@@ -110,6 +121,26 @@ snapshots but are not confused with the exact final-state components. Any future
 reset mismatch therefore fails before dispatch with the precise differing
 component and both values already durable in `progress.json`.
 
+Development-only job 135850 confirmed that the stabilized Reset A/Reset B path
+and the native click cell pass, then stopped on the first compact cell. Its
+single compact process reported ordered `mouseDown`/`mouseUp` calls and final X
+mask zero, but Chrome observed only pointer-down. The backend differential was
+that the pinned native computer-use path uses `pyautogui.click(...)`, whereas
+the compact compiler emitted adjacent `pyautogui.mouseDown(...)` and
+`pyautogui.mouseUp(...)`. The shared lowering above removes precisely that
+difference without a retry, sleep, state correction, or oracle-dependent action.
+
+Before another 16-cell ladder run, the preregistered narrow transport diagnostic
+is one development click page only, CPU/KVM and zero GPU. For five matched pairs,
+restore the ready snapshot, load the same fixture, and issue exactly one native
+click; restore again and issue its endpoint-identical compact click. Each trial
+must record the semantic trace, lowered backend primitive, per-X-event sync
+evidence, cursor endpoint, final mask zero, and causal browser pointer-down,
+pointer-up, change/click sequence. Stop on the first mismatch. Success requires
+10/10 trials, identical operation-level contracts across arms, no retry, and no
+oracle-conditioned dispatch. This diagnostic is proposed only and requires
+explicit authorization before launch.
+
 Every development cell performs:
 
 1. restore the full-RAM/disk `osworld_ready` QMP snapshot and deterministic setup;
@@ -136,7 +167,9 @@ Matched rung-1a model evaluation is authorized only after all of the following:
 Model evaluation must then pair every evaluation fixture in
 `native_absolute_control` and `compact_raw_phaseb`, enforce the preregistered
 horizon, and refuse unmatched fixture hashes/seeds. No GPU model job is part of
-this implementation.
+the mechanics selfcheck or authorized by it. A separate, not-launched synthetic
+warm-start curriculum is preregistered in `CURRICULUM_PREREGISTRATION.md`; it
+does not open or authorize the sealed ladder fixtures.
 
 ### Declared rung 1b real-application transfer gate
 

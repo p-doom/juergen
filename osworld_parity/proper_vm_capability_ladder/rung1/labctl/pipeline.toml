@@ -1,0 +1,10 @@
+name = "rung1_synthetic_capability_curriculum_v1"
+
+[stages.build_tokenize]
+recipe = "recipes/build_tokenize.toml"
+
+[stages.train_native]
+recipe = "recipes/train_native.toml"
+
+[stages.train_compact]
+recipe = "recipes/train_compact.toml"

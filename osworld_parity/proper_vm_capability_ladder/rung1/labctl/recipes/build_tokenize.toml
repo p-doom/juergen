@@ -1,0 +1,98 @@
+name = "rung1_synthetic_curriculum_build_tokenize_v1"
+repo = "juergen_rung1a"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+OUT="$1"
+OMX="$2"
+cd "$REPO"
+if [[ ! -f "$OUT/build_manifest.json" ]]; then
+    python3 -m osworld_parity.proper_vm_capability_ladder.rung1.curriculum --output "$OUT"
+else
+    python3 - "$OUT/invariant_report.json" <<'PY'
+import json, sys
+report = json.load(open(sys.argv[1]))
+if report.get("status") != "pass":
+    raise SystemExit(f"FATAL existing curriculum build failed invariants: {report}")
+print("reusing invariant-passing curriculum source build")
+PY
+fi
+for arm in native_absolute_control compact_raw_phaseb; do
+    for split in train val; do
+        uv run --project="$OMX" -- \
+            python "$OMX/scripts/build_sft_records_from_chat.py" \
+            --data_path="$OUT/$arm/_normalized/$split/chat.jsonl" \
+            --out_dir="$OUT/$arm/$split" \
+            --model_id=Qwen/Qwen3-VL-8B-Instruct \
+            --tokenizer=Qwen/Qwen3-VL-8B-Instruct \
+            --processor=Qwen/Qwen3-VL-8B-Instruct \
+            --max_length=16384 --overflow_mode=drop \
+            --records_per_shard=2048 --num_workers=8 --overwrite
+    done
+done
+python3 - "$OUT" "$(git -C "$OMX" rev-parse HEAD)" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+out, omegalax_commit = Path(sys.argv[1]), sys.argv[2]
+expected = {"train": 1664, "val": 208}
+for arm in ("native_absolute_control", "compact_raw_phaseb"):
+    for split, count in expected.items():
+        root = out / arm / split
+        meta = json.loads((root / "metadata.json").read_text())
+        trunc = json.loads((root / "truncation_stats.json").read_text())
+        sessions = trunc["sessions"]
+        if meta.get("num_records") != count or meta.get("max_length") != 16384:
+            raise SystemExit(f"FATAL tokenization count/length gate {arm}/{split}: {meta}")
+        forbidden = (
+            sessions.get("split_into_multiple_chunks", 0),
+            sessions.get("truncated_total", 0),
+            sessions.get("dropped_whole_session", 0),
+            sessions.get("dropped_entirely", 0),
+            trunc.get("messages", {}).get("dropped", 0),
+        )
+        if any(forbidden):
+            raise SystemExit(f"FATAL tokenization truncation/drop gate {arm}/{split}: {trunc}")
+invariants = json.loads((out / "invariant_report.json").read_text())
+if invariants.get("status") != "pass":
+    raise SystemExit(f"FATAL curriculum invariants: {invariants}")
+payload = {
+    "artifact_type": "rung1_synthetic_curriculum_tokenized",
+    "schema_version": 1,
+    "status": "complete",
+    "all_prelaunch_gates_passed": True,
+    "arms": ["native_absolute_control", "compact_raw_phaseb"],
+    "records_per_arm": expected,
+    "max_length": 16384,
+    "omegalax_commit": omegalax_commit,
+    "source_invariant_report_sha256": hashlib.sha256((out / "invariant_report.json").read_bytes()).hexdigest(),
+}
+(out / "build_tokenize_manifest.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
+''', "--", "{outputs.dataset.path}", "{inputs.omegalax.path}"]
+
+[resources]
+gpus = 0
+cpus = 16
+mem = "96GB"
+time = "08:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--signal=USR1@600", "--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+
+[outputs.dataset]
+type = "dataset"
+marker = "build_tokenize_manifest.json"
+alias = "rung1_synthetic_curriculum_v1_{run.id}"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

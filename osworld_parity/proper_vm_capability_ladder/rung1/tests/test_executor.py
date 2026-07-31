@@ -23,6 +23,7 @@ from osworld_parity.proper_vm_capability_ladder.rung1.transport import (
     TransportError,
     compile_atomic_guest_program,
     compile_unicode_coalesced_type,
+    lower_guest_operations,
 )
 
 
@@ -88,11 +89,11 @@ class SingleProcessHttpTransport(HttpVmTransport):
 
 def test_click_adapters_match_cursor_and_button_transitions() -> None:
     native_transport = RecordingTransport(cursor=(10, 20))
-    NativeAbsoluteExecutor(native_transport).execute(
+    native_result = NativeAbsoluteExecutor(native_transport).execute(
         {"action": "left_click", "coordinate": [300, 400]}
     )
     raw_transport = RecordingTransport(cursor=(10, 20))
-    CompactRawExecutor(raw_transport).execute("290 380 0 ; +LMB -LMB")
+    raw_result = CompactRawExecutor(raw_transport).execute("290 380 0 ; +LMB -LMB")
     assert native_transport.cursor_position() == raw_transport.cursor_position() == (300, 400)
     assert _kinds(native_transport) == _kinds(raw_transport) == [
         "move_to",
@@ -101,6 +102,25 @@ def test_click_adapters_match_cursor_and_button_transitions() -> None:
     ]
     assert not native_transport.audit.held_buttons
     assert not raw_transport.audit.held_buttons
+    assert native_result.atomic_state is not None
+    assert raw_result.atomic_state is not None
+    assert native_result.atomic_state["pointer_button_mask"] == 0
+    assert raw_result.atomic_state["pointer_button_mask"] == 0
+    expected_semantics = (
+        Operation("mouse_down", ("left",)),
+        Operation("mouse_up", ("left",)),
+    )
+    assert native_transport.atomic_inputs == [expected_semantics]
+    assert raw_transport.atomic_inputs == [
+        (Operation("move_relative", (290, 380)),) + expected_semantics
+    ]
+    assert lower_guest_operations(native_transport.atomic_inputs[0]) == (
+        Operation("click", ("left",)),
+    )
+    assert lower_guest_operations(raw_transport.atomic_inputs[0]) == (
+        Operation("move_relative", (290, 380)),
+        Operation("click", ("left",)),
+    )
 
 
 def test_compact_click_is_one_guest_process_with_compiled_order() -> None:
@@ -112,8 +132,12 @@ def test_compact_click_is_one_guest_process_with_compiled_order() -> None:
     program = argv[2]
     compile(program, "<rung1a-atomic>", "exec")
     assert program.index("RUNG1A_ATOMIC_STEP_0:move_relative") < program.index(
-        "RUNG1A_ATOMIC_STEP_1:mouse_down"
-    ) < program.index("RUNG1A_ATOMIC_STEP_2:mouse_up")
+        "RUNG1A_ATOMIC_STEP_1:click"
+    )
+    assert "pyautogui.click(clicks=1,interval=0.05,button=_button)" in program
+    assert "_r1a_sync_after_x_event('mouse_down')" in program
+    assert "_r1a_sync_after_x_event('mouse_up')" in program
+    assert "'x_event_sync_evidence':_r1a_x_event_sync" in program
     assert result.executor_dispatch_status == "ok"
     assert result.atomic_state is not None
     assert result.atomic_state["guest_process_count"] == 1
@@ -123,7 +147,7 @@ def test_compact_click_is_one_guest_process_with_compiled_order() -> None:
 def test_atomic_exception_releases_preexisting_and_new_buttons() -> None:
     transport = RecordingTransport()
     transport.mouse_down("right")
-    result = transport.execute_compact_atomic(
+    result = transport.execute_atomic(
         (
             Operation("mouse_down", ("left",)),
             Operation("raise_for_test", ("injected failure",)),
@@ -145,6 +169,25 @@ def test_atomic_exception_releases_preexisting_and_new_buttons() -> None:
     )
     assert "except BaseException" in program
     assert "pyautogui.mouseUp(button=_button)" in program
+
+
+def test_intervening_move_prevents_click_coalescing() -> None:
+    semantic = (
+        Operation("mouse_down", ("left",)),
+        Operation("move_relative", (25, -10)),
+        Operation("mouse_up", ("left",)),
+    )
+    assert lower_guest_operations(semantic) == semantic
+    program, expected_mask = compile_atomic_guest_program(
+        semantic,
+        initial_buttons=set(),
+        initial_keys=set(),
+    )
+    assert expected_mask == 0
+    assert "RUNG1A_ATOMIC_STEP_0:mouse_down" in program
+    assert "RUNG1A_ATOMIC_STEP_1:move_relative" in program
+    assert "RUNG1A_ATOMIC_STEP_2:mouse_up" in program
+    assert "RUNG1A_ATOMIC_STEP_0:click" not in program
 
 
 def test_atomic_compiler_rejects_impossible_held_button_transitions() -> None:
@@ -253,6 +296,10 @@ def test_drag_adapters_match_hold_move_release_state() -> None:
     ]
     assert not native_transport.audit.held_buttons
     assert not raw_transport.audit.held_buttons
+    assert all(
+        Operation("click", ("left",)) not in lower_guest_operations(operations)
+        for operations in raw_transport.atomic_inputs
+    )
 
 
 def test_unicode_coalesced_type_is_one_shared_operation() -> None:

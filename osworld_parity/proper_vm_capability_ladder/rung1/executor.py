@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .transport import AtomicExecutionResult, InputAudit, Operation
+from .transport import AtomicExecutionResult, InputAudit, Operation, TransportError
 
 
 class GuiTransport(Protocol):
@@ -19,7 +19,7 @@ class GuiTransport(Protocol):
     def key_chord(self, keys: list[str]) -> None: ...
     def coalesced_type(self, text: str) -> None: ...
     def wait(self, seconds: float) -> None: ...
-    def execute_compact_atomic(
+    def execute_atomic(
         self, operations: tuple[Operation, ...]
     ) -> AtomicExecutionResult: ...
 
@@ -45,6 +45,7 @@ class NativeAbsoluteExecutor:
             raise TypeError("native absolute action must be an object")
         action = str(arguments.get("action", "")).strip().lower()
         before = len(self.transport.audit.operations)
+        atomic_result: AtomicExecutionResult | None = None
 
         def move_if_present(required: bool = False) -> None:
             coordinate = arguments.get("coordinate")
@@ -59,8 +60,16 @@ class NativeAbsoluteExecutor:
             action_class = "mouse_move"
         elif action == "left_click":
             move_if_present()
-            self.transport.mouse_down("left")
-            self.transport.mouse_up("left")
+            atomic_result = self.transport.execute_atomic(
+                (
+                    Operation("mouse_down", ("left",)),
+                    Operation("mouse_up", ("left",)),
+                )
+            )
+            if not atomic_result.ok:
+                raise TransportError(
+                    f"shared click primitive failed: {atomic_result.error}"
+                )
             action_class = "click"
         elif action == "mouse_down":
             move_if_present()
@@ -107,6 +116,9 @@ class NativeAbsoluteExecutor:
             executor_dispatch_status="ok",
             action_class=action_class,
             operations=tuple(self.transport.audit.operations[before:]),
+            atomic_state=(
+                atomic_result.as_dict() if atomic_result is not None else None
+            ),
         )
 
 
@@ -209,7 +221,7 @@ class CompactRawExecutor:
                 kind = "key_down" if element.pressed else "key_up"
                 operations.append(Operation(kind, (element.value,)))
                 classes.add("key_chord")
-        result = self.transport.execute_compact_atomic(tuple(operations))
+        result = self.transport.execute_atomic(tuple(operations))
         action_class = "+".join(sorted(classes)) if classes else "no_op"
         return DispatchResult(
             adapter=self.name,
