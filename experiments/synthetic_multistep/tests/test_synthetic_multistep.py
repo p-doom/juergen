@@ -510,8 +510,15 @@ def test_labctl_recipes_are_unique_bounded_and_do_not_submit():
     assert all("{run.id}" in alias for alias in aliases)
     for filename, recipe in recipes.items():
         hours, minutes, seconds = (int(x) for x in recipe["resources"]["time"].split(":"))
-        limit = (3 * 3600 if filename.startswith(("train_curriculum_", "train_typing_", "resume_typing_"))
-                 else 3600)
+        if filename.startswith("cleanup_postexport_"):
+            limit = 4 * 3600
+        elif filename.startswith((
+            "train_curriculum_", "train_typing_", "resume_typing_",
+            "proper_vm_roadmap_stage2_",
+        )):
+            limit = 3 * 3600
+        else:
+            limit = 3600
         assert hours * 3600 + minutes * 60 + seconds <= limit
         command = " ".join(recipe["command"])
         assert "sbatch" not in command and "labctl submit" not in command
