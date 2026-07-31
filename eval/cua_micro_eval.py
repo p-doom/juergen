@@ -367,9 +367,19 @@ def _upload_bytes(client: OSWorldClient, path: str, payload: bytes) -> None:
 def _active_title(client: OSWorldClient) -> str:
     try:
         return str(
-            client.run_command(["bash", "-lc", "xdotool getactivewindow getwindowname"]).get(
-                "output", ""
-            )
+            client.run_command(
+                [
+                    "bash",
+                    "-lc",
+                    "if command -v xdotool >/dev/null; then "
+                    "xdotool getactivewindow getwindowname; "
+                    "elif command -v gdbus >/dev/null; then "
+                    "gdbus call --session --dest org.gnome.Shell.Introspect "
+                    "--object-path /org/gnome/Shell/Introspect "
+                    "--method org.gnome.Shell.Introspect.GetWindows; "
+                    "else exit 127; fi",
+                ]
+            ).get("output", "")
         ).strip()
     except RuntimeError:
         return ""
@@ -478,14 +488,6 @@ def _launch_fixture(client: OSWorldClient, mode: str) -> dict[str, Any]:
         return value if value.get("ready") and value.get("mode") == mode else None
 
     state = _wait_until(ready_state, timeout_s=15)
-    client.run_command(
-        [
-            "bash",
-            "-lc",
-            "xdotool search --name 'CUA Micro Eval' | tail -n1 | "
-            "xargs -r xdotool windowactivate --sync",
-        ]
-    )
     time.sleep(0.3)
     return state
 
@@ -493,7 +495,16 @@ def _launch_fixture(client: OSWorldClient, mode: str) -> dict[str, Any]:
 def prepare_task(client: OSWorldClient, task: Task) -> dict[str, Any]:
     kind = task.setup.get("kind")
     if kind == "desktop":
-        client.run_command(["bash", "-lc", "wmctrl -k on || xdotool key super+d"])
+        try:
+            client.run_command(
+                [
+                    "bash",
+                    "-lc",
+                    "if command -v wmctrl >/dev/null; then wmctrl -k on; else exit 127; fi",
+                ],
+            )
+        except RuntimeError:
+            client.execute("pyautogui.hotkey('win', 'd')")
         time.sleep(0.8)
         return {}
     if kind == "chrome":
@@ -772,15 +783,14 @@ def validate_task_setup(
             "-lc",
             "printf 'xdotool=%s\\n' \"$(command -v xdotool || echo MISSING)\"; "
             "printf 'wmctrl=%s\\n' \"$(command -v wmctrl || echo MISSING)\"; "
+            "printf 'gdbus=%s\\n' \"$(command -v gdbus || echo MISSING)\"; "
             "printf 'tkinter=%s\\n' "
             "\"$(python3 -c 'import tkinter; print(tkinter.TkVersion)' "
             '2>/dev/null || echo MISSING)"',
         ]
     )
     dependency_lines = str(dependencies.get("output", "")).strip().splitlines()
-    required_missing = [
-        line for line in dependency_lines if line in {"xdotool=MISSING", "tkinter=MISSING"}
-    ]
+    required_missing = [line for line in dependency_lines if line == "tkinter=MISSING"]
     if required_missing:
         raise RuntimeError(f"missing required guest dependencies: {required_missing}")
     setup_state = prepare_task(client, task)

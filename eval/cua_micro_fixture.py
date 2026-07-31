@@ -209,6 +209,11 @@ class Fixture:
         ]
 
     def _ready(self) -> None:
+        self.root.deiconify()
+        self.root.lift()
+        self.root.attributes("-topmost", True)
+        self.root.after_idle(self.root.attributes, "-topmost", False)
+        self.root.focus_force()
         self.root.update_idletasks()
         self.write_state()
 
