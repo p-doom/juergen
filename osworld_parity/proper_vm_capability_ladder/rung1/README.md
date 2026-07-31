@@ -130,16 +130,17 @@ the compact compiler emitted adjacent `pyautogui.mouseDown(...)` and
 `pyautogui.mouseUp(...)`. The shared lowering above removes precisely that
 difference without a retry, sleep, state correction, or oracle-dependent action.
 
-Before another 16-cell ladder run, the preregistered narrow transport diagnostic
-is one development click page only, CPU/KVM and zero GPU. For five matched pairs,
+Before another 16-cell ladder run, the authorized preregistered narrow transport
+diagnostic is one development click page only, CPU/KVM and zero GPU. For five matched pairs,
 restore the ready snapshot, load the same fixture, and issue exactly one native
 click; restore again and issue its endpoint-identical compact click. Each trial
 must record the semantic trace, lowered backend primitive, per-X-event sync
 evidence, cursor endpoint, final mask zero, and causal browser pointer-down,
 pointer-up, change/click sequence. Stop on the first mismatch. Success requires
 10/10 trials, identical operation-level contracts across arms, no retry, and no
-oracle-conditioned dispatch. This diagnostic is proposed only and requires
-explicit authorization before launch.
+oracle-conditioned dispatch. The fixed driver is packaged as
+`transport_diagnostic.py`; its labctl recipe is
+`rung1a_click_transport_diagnostic_cpu_kvm.toml`.
 
 Every development cell performs:
 
