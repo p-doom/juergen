@@ -232,6 +232,14 @@ function screenRect(element) {{
            center_x: Math.round(window.screenX + r.left + r.width / 2),
            center_y: Math.round(window.screenY + topChrome + r.top + r.height / 2)}};
 }}
+function measuredGeometry(parts) {{
+  parts.window = {{screen_x: Math.round(window.screenX), screen_y: Math.round(window.screenY),
+    screen_width: Math.round(window.screen.width), screen_height: Math.round(window.screen.height),
+    outer_width: Math.round(window.outerWidth), outer_height: Math.round(window.outerHeight),
+    inner_width: Math.round(window.innerWidth), inner_height: Math.round(window.innerHeight),
+    chrome_top: Math.max(0, Math.round(window.outerHeight - window.innerHeight))}};
+  return parts;
+}}
 for (const name of ['pointerdown', 'pointerup', 'pointermove']) {{
   document.addEventListener(name, (e) => {{
     if (name !== 'pointermove' || e.buttons) post({{kind:'pointer', event:name,
@@ -262,8 +270,9 @@ label {{ font-size:21px; font-weight:600; }}
 <div class="banner"><h1>Browser control</h1><p>{html.escape(fixture.instruction)}</p></div>
 """
     if fixture.template == "click":
+        position = _card_position(p, width=360, height=180)
         content = f"""
-<div class="card" style="left:{int(p['left'])}px;top:{int(p['top'])}px;width:360px">
+<div class="card" style="{position};width:360px">
  <label><input id="target" type="checkbox" style="width:28px;height:28px;vertical-align:middle">
  {html.escape(str(p['label']))}</label>
  <hr><label style="font-weight:400"><input id="decoy" type="checkbox"> Preview only</label>
@@ -275,20 +284,23 @@ decoy.addEventListener('change', () => post({{kind:'click', checked:target.check
  decoy_checked:decoy.checked}}));
 </script>
 """
-        ready = "post({kind:'ready', geometry:{target:screenRect(target), decoy:screenRect(decoy)}, value:target.checked});"
+        ready = "post({kind:'ready', geometry:measuredGeometry({target:screenRect(target), decoy:screenRect(decoy)}), value:target.checked});"
     elif fixture.template == "focus_type":
+        position = _card_position(p, width=520, height=160)
         content = f"""
-<div class="card" style="left:{int(p['left'])}px;top:{int(p['top'])}px;width:520px">
+<div class="card" style="{position};width:520px">
  <label for="target">{html.escape(str(p['label']))}</label><br>
  <input id="target" value="{html.escape(str(p['initial_text']), quote=True)}"
   style="margin-top:14px;width:100%;height:52px;font-size:22px;padding:8px">
 </div>
 <script>target.addEventListener('input', () => post({{kind:'text', text:target.value}}));</script>
 """
-        ready = "post({kind:'ready', geometry:{target:screenRect(target)}, value:target.value});"
+        ready = "post({kind:'ready', geometry:measuredGeometry({target:screenRect(target)}), value:target.value});"
     elif fixture.template == "drag":
+        card_width = int(p["width"]) + 70
+        position = _card_position(p, width=card_width, height=180)
         content = f"""
-<div class="card" style="left:{int(p['left'])}px;top:{int(p['top'])}px;width:{int(p['width'])+70}px">
+<div class="card" style="{position};width:{card_width}px">
  <label for="target">{html.escape(str(p['label']))}</label><br>
  <input id="target" type="range" min="0" max="100" step="1" value="{int(p['initial_value'])}"
   style="margin-top:22px;width:{int(p['width'])}px;height:42px;accent-color:{accent}">
@@ -297,7 +309,7 @@ decoy.addEventListener('change', () => post({{kind:'click', checked:target.check
 <script>target.addEventListener('input', () => {{readout.value=target.value;
  post({{kind:'drag', value:Number(target.value)}});}});</script>
 """
-        ready = "post({kind:'ready', geometry:{target:screenRect(target)}, value:Number(target.value)});"
+        ready = "post({kind:'ready', geometry:measuredGeometry({target:screenRect(target)}), value:Number(target.value)});"
     elif fixture.template == "scroll":
         blocks = "".join(
             f'<section style="height:420px;padding:120px 80px;font-size:28px;background:{"#fff" if i % 2 else "#edf2f7"}">'
@@ -314,9 +326,23 @@ window.addEventListener('scroll', () => {{ clearTimeout(scrollTimer); scrollTime
 """
         ready = (
             f"window.scrollTo(0, {int(p['initial_y'])}); requestAnimationFrame(() => "
-            "post({kind:'ready', geometry:{viewport:{width:window.innerWidth,height:window.innerHeight}}, "
+            "post({kind:'ready', geometry:measuredGeometry({viewport:{width:window.innerWidth,height:window.innerHeight}}), "
             "value:Math.round(window.scrollY)}));"
         )
     else:
         raise FixtureServerError(f"unknown template {fixture.template!r}")
     return base + content + _common_script(fixture, generation, ready) + "</body></html>"
+
+
+def _card_position(params: dict[str, Any], *, width: int, height: int) -> str:
+    """Map sealed 1920x1080 design coordinates into the measured viewport.
+
+    The final CSS clamp keeps the whole card visible even when Chrome's actual
+    inner viewport is smaller than the QCOW's 1920x1080 desktop.
+    """
+    left_percent = 100.0 * int(params["left"]) / 1920.0
+    top_percent = 100.0 * int(params["top"]) / 1080.0
+    return (
+        f"left:clamp(24px,{left_percent:.6f}vw,calc(100vw - {width + 24}px));"
+        f"top:clamp(104px,{top_percent:.6f}vh,calc(100vh - {height + 24}px))"
+    )

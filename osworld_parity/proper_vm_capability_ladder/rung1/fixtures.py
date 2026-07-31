@@ -11,6 +11,7 @@ from typing import Any
 MANIFEST_PATH = Path(__file__).with_name("fixtures.json")
 TEMPLATES = ("click", "focus_type", "scroll", "drag")
 HORIZONS = {"click": 2, "focus_type": 3, "scroll": 2, "drag": 4}
+COORDINATE_CONTRACT = "design_1920x1080_scaled_clamped_v2"
 
 
 class FixtureManifestError(RuntimeError):
@@ -31,6 +32,7 @@ class Fixture:
     parameter_seed: int
     horizon: int
     instruction: str
+    coordinate_contract: str
     params: dict[str, Any]
     expected: dict[str, Any]
     fixture_sha256: str
@@ -47,6 +49,7 @@ class Fixture:
             "parameter_seed": self.parameter_seed,
             "horizon": self.horizon,
             "instruction": self.instruction,
+            "coordinate_contract": self.coordinate_contract,
             "params": self.params,
             "expected": self.expected,
         }
@@ -92,8 +95,11 @@ def load_manifest(path: Path = MANIFEST_PATH) -> FixtureManifest:
         raise FixtureManifestError(
             f"manifest payload hash mismatch: {observed_seal} != {seal}"
         )
-    if raw.get("schema_version") != 1:
+    if raw.get("schema_version") != 2:
         raise FixtureManifestError("unsupported fixture schema")
+    amendment = raw.get("amendment")
+    if not isinstance(amendment, dict) or amendment.get("kind") != "pre_science_coordinate_calibration":
+        raise FixtureManifestError("schema v2 coordinate amendment is missing")
     if raw.get("suite") != "rung1a_instrumented_browser_microbench":
         raise FixtureManifestError("suite must remain explicitly classified as rung1a")
     if raw.get("official_osworld_reuse") is not False:
@@ -130,6 +136,8 @@ def _validate_fixtures(fixtures: tuple[Fixture, ...]) -> None:
             raise FixtureManifestError(f"unknown split: {fixture.split}")
         if fixture.horizon != HORIZONS[fixture.template]:
             raise FixtureManifestError(f"horizon drift for {fixture.id}")
+        if fixture.coordinate_contract != COORDINATE_CONTRACT:
+            raise FixtureManifestError(f"coordinate contract drift for {fixture.id}")
         serialized = json.dumps(fixture.unsigned_payload(), ensure_ascii=False).lower()
         if uuid_pattern.search(serialized):
             raise FixtureManifestError(f"official-style UUID forbidden: {fixture.id}")

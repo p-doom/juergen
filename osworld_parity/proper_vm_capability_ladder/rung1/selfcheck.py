@@ -7,12 +7,13 @@ import os
 import sys
 import time
 import traceback
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from .executor import CompactRawExecutor, NativeAbsoluteExecutor
-from .fixtures import Fixture, load_manifest
+from .fixtures import Fixture, FixtureManifest, load_manifest
 from .oracle import evaluate_in_fresh_process
 from .server import FixtureHttpServer, render_fixture_html
 from .trajectory import Arm, build_trajectory
@@ -99,7 +100,8 @@ def _assert_positive(fixture: Fixture, state: dict[str, Any]) -> dict[str, Any]:
     result = evaluate_in_fresh_process(fixture, state)
     if result.oracle_status != "ok" or not result.MOUSE_SOLVED:
         raise SelfcheckError(
-            f"{fixture.id}: gold oracle rejected state: {result.reason}; state={state['current']}"
+            f"{fixture.id}: gold oracle rejected state: {result.reason}; "
+            f"state={json.dumps(state, ensure_ascii=False, sort_keys=True)}"
         )
     return asdict(result)
 
@@ -108,6 +110,161 @@ def _held_button_action(arm: Arm) -> dict[str, Any] | str:
     if arm == "native_absolute_control":
         return {"action": "mouse_down", "button": "left"}
     return "0 0 0 ; +LMB"
+
+
+def _card_size(fixture: Fixture) -> tuple[int, int] | None:
+    if fixture.template == "click":
+        return 360, 180
+    if fixture.template == "focus_type":
+        return 520, 160
+    if fixture.template == "drag":
+        return int(fixture.params["width"]) + 70, 180
+    return None
+
+
+def _validate_manifest_bounds(
+    manifest: FixtureManifest,
+    measured: dict[str, Any],
+    screen_size: tuple[int, int],
+) -> dict[str, Any]:
+    """Validate all 40 sealed rows against one measured Chrome viewport.
+
+    Evaluation rows are checked arithmetically from their sealed design
+    coordinates; they are never loaded in the browser or sent to an oracle.
+    """
+    required = (
+        "screen_x",
+        "screen_y",
+        "screen_width",
+        "screen_height",
+        "inner_width",
+        "inner_height",
+        "outer_width",
+        "outer_height",
+        "chrome_top",
+    )
+    if any(key not in measured for key in required):
+        raise SelfcheckError(f"measured Chrome geometry is incomplete: {measured}")
+    values = {key: int(measured[key]) for key in required}
+    sw, sh = screen_size
+    if (values["screen_width"], values["screen_height"]) != (sw, sh):
+        raise SelfcheckError(
+            f"browser/agent screen mismatch: {values['screen_width']}x{values['screen_height']} "
+            f"!= {sw}x{sh}"
+        )
+    iw, ih = values["inner_width"], values["inner_height"]
+    content_left = values["screen_x"]
+    content_top = values["screen_y"] + values["chrome_top"]
+    if iw <= 0 or ih <= 0 or content_left < 0 or content_top < 0:
+        raise SelfcheckError(f"invalid measured Chrome viewport: {values}")
+    if content_left + iw > sw or content_top + ih > sh:
+        raise SelfcheckError(f"Chrome viewport exceeds agent screen: {values}")
+    rows: dict[str, Any] = {}
+    transformed_by_template: dict[str, list[tuple[float, float]]] = {}
+    for fixture in manifest.fixtures:
+        size = _card_size(fixture)
+        if size is None:
+            rows[fixture.id] = {"kind": "scroll", "viewport_bounded": True}
+            continue
+        width, height = size
+        if iw < width + 48 or ih < height + 128:
+            raise SelfcheckError(
+                f"viewport too small for {fixture.id}: {iw}x{ih}, card {width}x{height}"
+            )
+        requested_x = int(fixture.params["left"]) * iw / 1920.0
+        requested_y = int(fixture.params["top"]) * ih / 1080.0
+        x = max(24.0, min(requested_x, iw - width - 24.0))
+        y = max(104.0, min(requested_y, ih - height - 24.0))
+        bounds = (
+            content_left + x,
+            content_top + y,
+            content_left + x + width,
+            content_top + y + height,
+        )
+        if not (0 <= bounds[0] < bounds[2] <= sw and 0 <= bounds[1] < bounds[3] <= sh):
+            raise SelfcheckError(f"computed card is off screen for {fixture.id}: {bounds}")
+        rows[fixture.id] = {
+            "kind": fixture.template,
+            "design_origin": [int(fixture.params["left"]), int(fixture.params["top"])],
+            "requested_viewport_origin": [round(requested_x, 3), round(requested_y, 3)],
+            "transformed_viewport_origin": [round(x, 3), round(y, 3)],
+            "clamped": [x != requested_x, y != requested_y],
+            "computed_card_screen_bounds": [round(value, 3) for value in bounds],
+        }
+        transformed_by_template.setdefault(fixture.template, []).append(
+            (round(x, 3), round(y, 3))
+        )
+    collision_audit: dict[str, Any] = {}
+    for template, origins in transformed_by_template.items():
+        counts = Counter(origins)
+        unique_count = len(counts)
+        max_multiplicity = max(counts.values())
+        if unique_count < 8 or max_multiplicity > 2:
+            raise SelfcheckError(
+                f"scaled placement collapse for {template}: "
+                f"unique={unique_count}/{len(origins)}, max multiplicity={max_multiplicity}"
+            )
+        collision_audit[template] = {
+            "row_count": len(origins),
+            "unique_origin_count": unique_count,
+            "max_origin_multiplicity": max_multiplicity,
+        }
+    return {
+        "screen_size": [sw, sh],
+        "window": values,
+        "rows": rows,
+        "placement_collision_audit": collision_audit,
+    }
+
+
+def _validate_loaded_geometry(
+    fixture: Fixture, state: dict[str, Any], screen_size: tuple[int, int]
+) -> None:
+    geometry = state.get("geometry")
+    if not isinstance(geometry, dict):
+        raise SelfcheckError(f"{fixture.id}: browser geometry missing")
+    names = ("target", "decoy") if fixture.template == "click" else ("target",)
+    if fixture.template == "scroll":
+        names = ()
+    sw, sh = screen_size
+    window = geometry.get("window")
+    if not isinstance(window, dict):
+        raise SelfcheckError(f"{fixture.id}: measured window geometry missing")
+    content_left = int(window["screen_x"])
+    content_top = int(window["screen_y"]) + int(window["chrome_top"])
+    content_right = content_left + int(window["inner_width"])
+    content_bottom = content_top + int(window["inner_height"])
+    rects: dict[str, tuple[int, int, int, int]] = {}
+    for name in names:
+        rect = geometry.get(name)
+        if not isinstance(rect, dict):
+            raise SelfcheckError(f"{fixture.id}: geometry lacks {name}")
+        left, top = int(rect["left"]), int(rect["top"])
+        right, bottom = int(rect["right"]), int(rect["bottom"])
+        center_x, center_y = int(rect["center_x"]), int(rect["center_y"])
+        if not (
+            0 <= left < right <= sw
+            and 0 <= top < bottom <= sh
+            and content_left <= left < right <= content_right
+            and content_top <= top < bottom <= content_bottom
+            and right - left >= 12
+            and bottom - top >= 12
+            and left <= center_x < right
+            and top <= center_y < bottom
+        ):
+            raise SelfcheckError(f"{fixture.id}: {name} off screen: {rect}")
+        rects[name] = (left, top, right, bottom)
+    if fixture.template == "click":
+        target = rects["target"]
+        decoy = rects["decoy"]
+        separated = (
+            target[2] <= decoy[0]
+            or decoy[2] <= target[0]
+            or target[3] <= decoy[1]
+            or decoy[3] <= target[1]
+        )
+        if not separated:
+            raise SelfcheckError(f"{fixture.id}: target and decoy hitboxes overlap")
 
 
 def run_vm_selfcheck(
@@ -126,6 +283,7 @@ def run_vm_selfcheck(
             f"KVM provider hash mismatch: {provider_sha256} != {expected_provider_sha256}"
         )
     cells: list[dict[str, Any]] = []
+    manifest_bounds: dict[str, Any] | None = None
     vm_log_dir = output / "vm_logs"
     with FixtureHttpServer(manifest) as server, KvmFixtureSession(
         qcow=qcow,
@@ -146,6 +304,13 @@ def run_vm_selfcheck(
                 # Reset A: deterministic setup and clean negative oracle.
                 transport = session.reset_to_ready()
                 first = session.launch_fixture(server, fixture)
+                screen_size = transport.screen_size()
+                _validate_loaded_geometry(fixture, first, screen_size)
+                if manifest_bounds is None:
+                    window = first["geometry"].get("window")
+                    if not isinstance(window, dict):
+                        raise SelfcheckError("first fixture did not report measured window geometry")
+                    manifest_bounds = _validate_manifest_bounds(manifest, window, screen_size)
                 first_cursor = transport.cursor_position()
                 cell["reset_oracle"] = _assert_negative(fixture, first, "reset")
                 first_signature = _initial_signature(first)
@@ -179,6 +344,7 @@ def run_vm_selfcheck(
                 # button state must match Reset A.
                 transport = session.reset_to_ready()
                 second = session.launch_fixture(server, fixture)
+                _validate_loaded_geometry(fixture, second, transport.screen_size())
                 second_cursor = transport.cursor_position()
                 cell["second_reset_oracle"] = _assert_negative(
                     fixture, second, "second reset"
@@ -230,6 +396,15 @@ def run_vm_selfcheck(
                         raise SelfcheckError(f"{fixture.id}: wrong signed scroll dispatch")
                 cell["status"] = "passed"
                 cells.append(cell)
+                _atomic_json(
+                    output / "progress.json",
+                    {
+                        "status": "running",
+                        "completed_cell_count": len(cells),
+                        "expected_cell_count": len(fixtures) * len(ARMS),
+                        "cells": cells,
+                    },
+                )
     return {
         "schema_version": 1,
         "status": "passed",
@@ -241,6 +416,7 @@ def run_vm_selfcheck(
         "evaluation_fixture_count": len(manifest.select(split="evaluation")),
         "selfcheck_cell_count": len(cells),
         "expected_selfcheck_cell_count": len(fixtures) * len(ARMS),
+        "manifest_bounds": manifest_bounds,
         "provider": {
             "path": str(provider_path.resolve()),
             "sha256": provider_sha256,

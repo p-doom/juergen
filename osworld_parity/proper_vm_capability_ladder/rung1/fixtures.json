@@ -1,10 +1,18 @@
 {
+  "amendment": {
+    "date": "2026-07-31",
+    "evaluation_outcomes_observed": false,
+    "kind": "pre_science_coordinate_calibration",
+    "official_osworld_material_used": false,
+    "reason": "development-only job 135823 showed an unbounded design-space card could fall outside the measured Chrome viewport"
+  },
   "fixtures": [
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "checked": true
       },
-      "fixture_sha256": "10009447826688043e21165fc784c15c3b24e43968d5efb8ffb68c59f4a91aa1",
+      "fixture_sha256": "0124b5dab062e69ed83c37f9b91396b152b1f27a6cd3b9de72a0f9fa18ff5c0e",
       "horizon": 2,
       "id": "r1a-click-dev-1101",
       "instruction": "Enable the Aurora setting.",
@@ -19,10 +27,11 @@
       "template": "click"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "checked": true
       },
-      "fixture_sha256": "654c4a592ca210efc0d51e778da158328ec83045201a841e5f350420e6a508c3",
+      "fixture_sha256": "dd7df036144e7bbee0350aaface831ea34d3d4064ed414fdaeb8e3f9d69e024f",
       "horizon": 2,
       "id": "r1a-click-dev-1102",
       "instruction": "Enable the Juniper setting.",
@@ -37,10 +46,11 @@
       "template": "click"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "checked": true
       },
-      "fixture_sha256": "a7a27bbc3c34d1066c4834dd03eb58d901d17f1e32f0e140fbde0a5fd8911eb4",
+      "fixture_sha256": "beccd7b0628f1ade9305d694520d08290fc08c4f369b407f63c4d456df87f261",
       "horizon": 2,
       "id": "r1a-click-eva-2101",
       "instruction": "Enable the Cobalt setting.",
@@ -55,10 +65,11 @@
       "template": "click"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "checked": true
       },
-      "fixture_sha256": "42d1191be83e3e841b7eb59e14d3314b3525554e674f3aa5000d527aa6c2e287",
+      "fixture_sha256": "b4231932562d4ece0a034a4a390d8848fdeb3d328c1982c3d7c26581dae70cd8",
       "horizon": 2,
       "id": "r1a-click-eva-2102",
       "instruction": "Enable the Marigold setting.",
@@ -73,10 +84,11 @@
       "template": "click"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "checked": true
       },
-      "fixture_sha256": "0d619657515783793c539dd5e298cb9b3a555639958cafd24d12ac2061d25bb7",
+      "fixture_sha256": "5ca4abc9c45d633502189cc9010ec1e6eb74220677e723b541d67e3f9cd3a9cc",
       "horizon": 2,
       "id": "r1a-click-eva-2103",
       "instruction": "Enable the Fern setting.",
@@ -91,10 +103,11 @@
       "template": "click"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "checked": true
       },
-      "fixture_sha256": "ef6627d5ee86402a0f7d6338aeaf3aca6e151f28ff1217e19cfbbdfd9b0d73ce",
+      "fixture_sha256": "2018ce1ce9efa734d42ed6f8a9aea7c4bfee960eeb759bbde50cdfecd8275fbd",
       "horizon": 2,
       "id": "r1a-click-eva-2104",
       "instruction": "Enable the Indigo setting.",
@@ -109,10 +122,11 @@
       "template": "click"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "checked": true
       },
-      "fixture_sha256": "b416ac980c40082dea7f0478e9ed87bfd2d3dc36f268ca83059987ccabbd1a1e",
+      "fixture_sha256": "15d339edc0206d87c448c889d9f39b08139dfff31fe1f4503c737e832186a160",
       "horizon": 2,
       "id": "r1a-click-eva-2105",
       "instruction": "Enable the Quartz setting.",
@@ -127,10 +141,11 @@
       "template": "click"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "checked": true
       },
-      "fixture_sha256": "bf1c5521b461eb9de4d90964f564ae22a8048df11e35ba4daaef0828c5d13c12",
+      "fixture_sha256": "440c9444816127545326ccb09665f03978e89a8a4f01d9c97d24cbb98b5193df",
       "horizon": 2,
       "id": "r1a-click-eva-2106",
       "instruction": "Enable the Lumen setting.",
@@ -145,10 +160,11 @@
       "template": "click"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "checked": true
       },
-      "fixture_sha256": "166eb058d1293a91706355291cefeed82751eac7d2cd69e9e1148af6aaeeb040",
+      "fixture_sha256": "b88fcc9804b5ed0acbd521c34cabfc1684718d0f142090445dee31015dba490d",
       "horizon": 2,
       "id": "r1a-click-eva-2107",
       "instruction": "Enable the Harbor setting.",
@@ -163,10 +179,11 @@
       "template": "click"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "checked": true
       },
-      "fixture_sha256": "1312232d26a81524f0c8dc8f9e4e8991930aa1047ca97104b0d4bb8ec12427a2",
+      "fixture_sha256": "6fbf67c84881c98701ee3df831f2a80cda601643a2f4740122d2e3ae804c649a",
       "horizon": 2,
       "id": "r1a-click-eva-2108",
       "instruction": "Enable the Saffron setting.",
@@ -181,10 +198,11 @@
       "template": "click"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "text": "Grüße λ 17"
       },
-      "fixture_sha256": "68510a7c209e3cce5ed94b6c445a02c4fe5a8cbe461015defa28f80aa467a7d3",
+      "fixture_sha256": "57383e42b2f88a3abb9faf57a65e76daa2d538d5f106fede497ccd2423ba321c",
       "horizon": 3,
       "id": "r1a-focus_type-dev-1201",
       "instruction": "Replace the field contents with exactly: Grüße λ 17",
@@ -201,10 +219,11 @@
       "template": "focus_type"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "text": "東京 café ✓"
       },
-      "fixture_sha256": "73b6336eb5a820e40f6ee7bcbbb348de633c6d4ca95a3271ef8931bcfed98483",
+      "fixture_sha256": "2fde935c03997865e15c698fcd16b6404e052facb4390e0311e968c4aa34db74",
       "horizon": 3,
       "id": "r1a-focus_type-dev-1202",
       "instruction": "Replace the field contents with exactly: 東京 café ✓",
@@ -221,10 +240,11 @@
       "template": "focus_type"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "text": "naïve Δ-41"
       },
-      "fixture_sha256": "da41e1295c65eb8f96b78cfa82ec4a48afea00d2810c74c67dcee78cd0b32a46",
+      "fixture_sha256": "786a7482eff0ea9d042cdefcd5c1d368f41277596faf8aaed79bd5f4b7ce8ed3",
       "horizon": 3,
       "id": "r1a-focus_type-eva-2201",
       "instruction": "Replace the field contents with exactly: naïve Δ-41",
@@ -241,10 +261,11 @@
       "template": "focus_type"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "text": "München 7✓"
       },
-      "fixture_sha256": "0415e78af09f980dab372da3ffbbbd138383238c03b5c3793c6bfc47d18013c6",
+      "fixture_sha256": "c2d68d5369275eff958dd66968b46f8b2f2ea6cd78f17808edf24cf08834b2d9",
       "horizon": 3,
       "id": "r1a-focus_type-eva-2202",
       "instruction": "Replace the field contents with exactly: München 7✓",
@@ -261,10 +282,11 @@
       "template": "focus_type"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "text": "κλειδί-29"
       },
-      "fixture_sha256": "97baa7fe44342ff0b5b1888da75493edae4c9db821e2b01381091745d0d0bd84",
+      "fixture_sha256": "b4c38d7179559cd7472542761c10cf20eb3162638897a638010b8b649f301a0d",
       "horizon": 3,
       "id": "r1a-focus_type-eva-2203",
       "instruction": "Replace the field contents with exactly: κλειδί-29",
@@ -281,10 +303,11 @@
       "template": "focus_type"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "text": "crème brûlée"
       },
-      "fixture_sha256": "9ef260c62e1b26c84b6888a55c7f28a5a517295a744ab6202e497ff078363af9",
+      "fixture_sha256": "64a1dcc584ebc3ecd28fd32cf1dc4ef456275cdf504b4c9c850888b8be07c3ac",
       "horizon": 3,
       "id": "r1a-focus_type-eva-2204",
       "instruction": "Replace the field contents with exactly: crème brûlée",
@@ -301,10 +324,11 @@
       "template": "focus_type"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "text": "São_Paulo#5"
       },
-      "fixture_sha256": "0911a7e88edada65d811ede30dda5ef880e520752b9758cc1a8ce656ec5ce547",
+      "fixture_sha256": "e5342c38bc4e9529432a648a63f2b6bb8b6ed3d1ad28a1a37d1b54b768f4ccdb",
       "horizon": 3,
       "id": "r1a-focus_type-eva-2205",
       "instruction": "Replace the field contents with exactly: São_Paulo#5",
@@ -321,10 +345,11 @@
       "template": "focus_type"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "text": "데이터 88"
       },
-      "fixture_sha256": "a384c39736088b7bc6c3c3f396e13b9e55f9f42cfd30d81558968bad7daf37d9",
+      "fixture_sha256": "0c66bb7d028b8c09762ec7ad4dfc3fcbd46146a4ed8bb83ad4fff02ac20e16e4",
       "horizon": 3,
       "id": "r1a-focus_type-eva-2206",
       "instruction": "Replace the field contents with exactly: 데이터 88",
@@ -341,10 +366,11 @@
       "template": "focus_type"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "text": "Español ¡sí!"
       },
-      "fixture_sha256": "a7275e3fd72ceb36e74161c52227c1d8deee4e6853932627524c8a3a9988a185",
+      "fixture_sha256": "3ff90c190df24115fa1b4fd0998ce3c1a2ebc1206f84e5a9e31a3009b65110c1",
       "horizon": 3,
       "id": "r1a-focus_type-eva-2207",
       "instruction": "Replace the field contents with exactly: Español ¡sí!",
@@ -361,10 +387,11 @@
       "template": "focus_type"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "text": "résumé Ω3"
       },
-      "fixture_sha256": "4418b254493f2a32e83b135abec9eb793160827820b43b7ffc46ed38433fc710",
+      "fixture_sha256": "ba4fe3dd58917b1f21cc06b4946af3e9e7e51a95193f802150e8647ff655ccdc",
       "horizon": 3,
       "id": "r1a-focus_type-eva-2208",
       "instruction": "Replace the field contents with exactly: résumé Ω3",
@@ -381,11 +408,12 @@
       "template": "focus_type"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "direction": "down",
         "min_delta": 180
       },
-      "fixture_sha256": "59638ddf83dd60756f72c16016476507dbf1d7bd362e8678ec522c1b10bb3188",
+      "fixture_sha256": "e25db93da17b6029dfa9c1155822b27c297f7abf769a9c01bbec024f72ce4df9",
       "horizon": 2,
       "id": "r1a-scroll-dev-1301",
       "instruction": "Scroll down until the Azure checkpoint enters the highlighted band.",
@@ -402,11 +430,12 @@
       "template": "scroll"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "direction": "up",
         "min_delta": 180
       },
-      "fixture_sha256": "3a1710d34bbfccfbcca382023196a702bd476288e2b4286c6feb1e5bdd7ee79d",
+      "fixture_sha256": "a64f46c242c977187ed3cd41e09317664456a76e2d9aa2ea1846349227b98ab8",
       "horizon": 2,
       "id": "r1a-scroll-dev-1302",
       "instruction": "Scroll up until the Juniper checkpoint enters the highlighted band.",
@@ -423,11 +452,12 @@
       "template": "scroll"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "direction": "down",
         "min_delta": 110
       },
-      "fixture_sha256": "1c8326a33e0bb0de7b97465cbddb7a67ed705a4e58e4675c80ce4548e1cd85d9",
+      "fixture_sha256": "5ae9f0702011f9eeed51ee326d61851b5af4b6276d516df55066e7542b209b67",
       "horizon": 2,
       "id": "r1a-scroll-eva-2301",
       "instruction": "Scroll down until the Cobalt checkpoint enters the highlighted band.",
@@ -444,11 +474,12 @@
       "template": "scroll"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "direction": "up",
         "min_delta": 240
       },
-      "fixture_sha256": "260f1893562d44aa5df561d0652a511693291bb3585b3243eb566855aadee522",
+      "fixture_sha256": "7e5354eded03e8f2e00f4732b55d3030050f3fc06a28fb884c6c77b919cb9232",
       "horizon": 2,
       "id": "r1a-scroll-eva-2302",
       "instruction": "Scroll up until the Marigold checkpoint enters the highlighted band.",
@@ -465,11 +496,12 @@
       "template": "scroll"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "direction": "down",
         "min_delta": 210
       },
-      "fixture_sha256": "743d0b547685527490913c3d907f33dc2be384295bdeb7f95c40a0101bb3d5a0",
+      "fixture_sha256": "17b6db1e50ff3faf28c1817885d95b92d727db9e0cf85ca2fbd0a9fb57285a32",
       "horizon": 2,
       "id": "r1a-scroll-eva-2303",
       "instruction": "Scroll down until the Fern checkpoint enters the highlighted band.",
@@ -486,11 +518,12 @@
       "template": "scroll"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "direction": "up",
         "min_delta": 140
       },
-      "fixture_sha256": "d600a9d7c6b832e62c745db1353d5095656bd961058401b98cd792a3638e64b1",
+      "fixture_sha256": "3c7484eacf423a76b1c35a76c324ac615f103b21d75d5a3dd3bdb095ccc5abef",
       "horizon": 2,
       "id": "r1a-scroll-eva-2304",
       "instruction": "Scroll up until the Indigo checkpoint enters the highlighted band.",
@@ -507,11 +540,12 @@
       "template": "scroll"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "direction": "down",
         "min_delta": 260
       },
-      "fixture_sha256": "d78878a197cf60bdbbce3f629c8e55aafca923acde70eb2462d8d2f16905629e",
+      "fixture_sha256": "5d3d991be79b0afbf67f058776c4a78b9d6156c96441b0a430a396e5076ae032",
       "horizon": 2,
       "id": "r1a-scroll-eva-2305",
       "instruction": "Scroll down until the Quartz checkpoint enters the highlighted band.",
@@ -528,11 +562,12 @@
       "template": "scroll"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "direction": "up",
         "min_delta": 110
       },
-      "fixture_sha256": "cf83a2c1833781ed226636f7d45367268cd9743d2e855d9316d6145827c0dd8b",
+      "fixture_sha256": "4aaaac48a8ea8fe5312a8c3a7b8c7103db3dc19c603879296065d9b44022dbbe",
       "horizon": 2,
       "id": "r1a-scroll-eva-2306",
       "instruction": "Scroll up until the Lumen checkpoint enters the highlighted band.",
@@ -549,11 +584,12 @@
       "template": "scroll"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "direction": "down",
         "min_delta": 140
       },
-      "fixture_sha256": "0229d2f4d6769673135c9bbbbe64edc284adf1f71980cccbb985666be5c8cb99",
+      "fixture_sha256": "310f1a2526ef560bfb42e153a5b962b9f15da551523121870b838be006df020d",
       "horizon": 2,
       "id": "r1a-scroll-eva-2307",
       "instruction": "Scroll down until the Harbor checkpoint enters the highlighted band.",
@@ -570,11 +606,12 @@
       "template": "scroll"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "direction": "up",
         "min_delta": 210
       },
-      "fixture_sha256": "0e6231cc3eeb950d40113fc381915a7c77bbc3b45f9131c8e4931e987ff7a68f",
+      "fixture_sha256": "52ea39be791d178d402755be56b9f391fa536b69124541b52f75fefcc9e2d8c0",
       "horizon": 2,
       "id": "r1a-scroll-eva-2308",
       "instruction": "Scroll up until the Saffron checkpoint enters the highlighted band.",
@@ -591,10 +628,11 @@
       "template": "scroll"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "value": 100
       },
-      "fixture_sha256": "b72775810a947051cfd66921c4c30b41afa7ea03408b1c8a146e14394bd33a37",
+      "fixture_sha256": "09de3487a7870db0a90bb6b5c304cb479a65247f7a8fcfd591f8b8edf6dd7169",
       "horizon": 4,
       "id": "r1a-drag-dev-1401",
       "instruction": "Drag the Aurora slider all the way to the right.",
@@ -613,10 +651,11 @@
       "template": "drag"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "value": 0
       },
-      "fixture_sha256": "9cd72495e19bbcadb2970194e241824358cb6a23794fa0511212f29e4e842c84",
+      "fixture_sha256": "c0df6518c0533042c1b244103df742b9528bba288d8217fd49d15e9bf16e9974",
       "horizon": 4,
       "id": "r1a-drag-dev-1402",
       "instruction": "Drag the Juniper slider all the way to the left.",
@@ -635,10 +674,11 @@
       "template": "drag"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "value": 100
       },
-      "fixture_sha256": "13ccca66c3d479f37dce8f78802f9495db490ac5ca29942d99fb3a74ec0ed80e",
+      "fixture_sha256": "8315fac814406d1dc247fcdc267aaed0d8a12eeae72f24d46be2a9747e7040ca",
       "horizon": 4,
       "id": "r1a-drag-eva-2401",
       "instruction": "Drag the Cobalt slider all the way to the right.",
@@ -657,10 +697,11 @@
       "template": "drag"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "value": 0
       },
-      "fixture_sha256": "40930c453f6df0388944dd470356ccd8efadad6fb0facef77fbba4c4468ccd3f",
+      "fixture_sha256": "d7fe8609d7103b55d0548f01f8abe0d93844561b74d4611b906296b80b2d34bc",
       "horizon": 4,
       "id": "r1a-drag-eva-2402",
       "instruction": "Drag the Marigold slider all the way to the left.",
@@ -679,10 +720,11 @@
       "template": "drag"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "value": 100
       },
-      "fixture_sha256": "8fa2e4885a4aa91d8e49b21d58efa18ddf15872328b88eed12b3146f731070a4",
+      "fixture_sha256": "3a85c65b01d71ecfc5988879bdec5e184fe9cb38e127a1f0f86fa1e8a8d5b83f",
       "horizon": 4,
       "id": "r1a-drag-eva-2403",
       "instruction": "Drag the Fern slider all the way to the right.",
@@ -701,10 +743,11 @@
       "template": "drag"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "value": 0
       },
-      "fixture_sha256": "c383b777707902358e98d3166e7183e863352f51f27966160474717c6fa327c8",
+      "fixture_sha256": "88ecec327c221988a13644fabf3db73561742f322b7cced37e57537ffe099397",
       "horizon": 4,
       "id": "r1a-drag-eva-2404",
       "instruction": "Drag the Indigo slider all the way to the left.",
@@ -723,10 +766,11 @@
       "template": "drag"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "value": 100
       },
-      "fixture_sha256": "af23c69f755ddbf6c99c502cf04293daf2ed4bb930b5e009f27f021dbf7697b0",
+      "fixture_sha256": "989f02f716785d54570b0426d278c018718908862ea3fbe61a8ad060d2e9666f",
       "horizon": 4,
       "id": "r1a-drag-eva-2405",
       "instruction": "Drag the Quartz slider all the way to the right.",
@@ -745,10 +789,11 @@
       "template": "drag"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "value": 0
       },
-      "fixture_sha256": "efc15365576750bdef0e7d553724f908b5617769684a03bfdc2f42bb26f228d8",
+      "fixture_sha256": "0b2dcdd13cf7772b92723bc5f6bc40b068e64e8512ff3ce25ff4fd43ae1c54a5",
       "horizon": 4,
       "id": "r1a-drag-eva-2406",
       "instruction": "Drag the Lumen slider all the way to the left.",
@@ -767,10 +812,11 @@
       "template": "drag"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "value": 100
       },
-      "fixture_sha256": "72b92ae570bab66ce596854f75c2cb3bce42069b7da19d5234dda77984717830",
+      "fixture_sha256": "86167ae3ffdd2ff21192e973aad212802445501acbdf62994e2d3696e3097552",
       "horizon": 4,
       "id": "r1a-drag-eva-2407",
       "instruction": "Drag the Harbor slider all the way to the right.",
@@ -789,10 +835,11 @@
       "template": "drag"
     },
     {
+      "coordinate_contract": "design_1920x1080_scaled_clamped_v2",
       "expected": {
         "value": 0
       },
-      "fixture_sha256": "a353f683a431a5ba47398929ea1fac5a5b48fc663b0521eee3cd1f2f89ad2b13",
+      "fixture_sha256": "962041840340ab7d594b7ea102617ade837e83253ce7e7ed22dfee16b2e8de99",
       "horizon": 4,
       "id": "r1a-drag-eva-2408",
       "instruction": "Drag the Saffron slider all the way to the left.",
@@ -811,9 +858,9 @@
       "template": "drag"
     }
   ],
-  "manifest_payload_sha256": "7a7068f8fc07fa37739ef7688a87d92e0e9f9d11f5e374a827dd402cc885a1aa",
+  "manifest_payload_sha256": "5d4ea3ab33c084f1a5de1b716429c242a97452416f5b74efc3654b7d4b338097",
   "official_osworld_reuse": false,
   "policy_observation_contract": "instruction_and_screenshot_only",
-  "schema_version": 1,
+  "schema_version": 2,
   "suite": "rung1a_instrumented_browser_microbench"
 }

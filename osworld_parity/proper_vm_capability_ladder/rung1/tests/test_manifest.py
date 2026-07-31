@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 
 from osworld_parity.proper_vm_capability_ladder.rung1.fixtures import (
+    COORDINATE_CONTRACT,
     HORIZONS,
     TEMPLATES,
     load_manifest,
 )
-from osworld_parity.proper_vm_capability_ladder.rung1.selfcheck import main
+from osworld_parity.proper_vm_capability_ladder.rung1.selfcheck import (
+    _validate_manifest_bounds,
+    main,
+)
 
 
 def test_frozen_fixture_counts_and_horizons() -> None:
@@ -20,6 +24,7 @@ def test_frozen_fixture_counts_and_horizons() -> None:
         assert len(cells) == 10
         assert sum(item.split == "evaluation" for item in cells) == 8
         assert {item.horizon for item in cells} == {HORIZONS[template]}
+        assert {item.coordinate_contract for item in cells} == {COORDINATE_CONTRACT}
 
 
 def test_manifest_has_no_official_task_material() -> None:
@@ -55,3 +60,30 @@ def test_labctl_rendered_underscore_argument_is_accepted(tmp_path) -> None:
         == 0
     )
     assert (tmp_path / "selfcheck.json").is_file()
+
+
+def test_every_manifest_row_fits_a_measured_smaller_viewport() -> None:
+    manifest = load_manifest()
+    report = _validate_manifest_bounds(
+        manifest,
+        {
+            "screen_x": 0,
+            "screen_y": 0,
+            "screen_width": 1280,
+            "screen_height": 720,
+            "outer_width": 1280,
+            "outer_height": 720,
+            "inner_width": 1280,
+            "inner_height": 640,
+            "chrome_top": 80,
+        },
+        (1280, 720),
+    )
+    assert len(report["rows"]) == 40
+    assert set(report["rows"]) == {fixture.id for fixture in manifest.fixtures}
+    for audit in report["placement_collision_audit"].values():
+        assert audit["unique_origin_count"] >= 8
+        assert audit["max_origin_multiplicity"] <= 2
+    click_row = report["rows"]["r1a-click-dev-1102"]
+    assert click_row["design_origin"] == [1320, 650]
+    assert len(click_row["transformed_viewport_origin"]) == 2
