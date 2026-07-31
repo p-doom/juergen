@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+import osworld_parity.proper_vm_capability_ladder.rung1.injection_ab_diagnostic as injection_ab
+
 from osworld_parity.proper_vm_capability_ladder.rung1.injection_ab_diagnostic import (
     AUDIT_REQUIRED_FIELDS,
     BACKEND_BY_ARM,
@@ -21,7 +23,11 @@ from osworld_parity.proper_vm_capability_ladder.rung1.injection_ab_diagnostic im
     validate_audit_trace,
     validate_injection_ab,
 )
-from osworld_parity.proper_vm_capability_ladder.rung1.transport import Operation
+from osworld_parity.proper_vm_capability_ladder.rung1.transport import (
+    PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
+    Operation,
+    compile_atomic_guest_program,
+)
 
 
 def test_preregistration_and_schedule_are_exact_and_development_only() -> None:
@@ -235,6 +241,25 @@ def test_backend_contract_varies_only_preregistered_release_motion() -> None:
     assert b["click_primitive"]["release_side_motion_notify"] is False
 
 
+def test_existing_default_compiles_identically_to_explicit_a_backend() -> None:
+    operations = (
+        Operation("move_relative", (1, 2)),
+        Operation("mouse_down", ("left",)),
+        Operation("mouse_up", ("left",)),
+    )
+    default, default_mask = compile_atomic_guest_program(
+        operations, initial_buttons=set(), initial_keys=set()
+    )
+    explicit, explicit_mask = compile_atomic_guest_program(
+        operations,
+        initial_buttons=set(),
+        initial_keys=set(),
+        click_backend=PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
+    )
+    assert default == explicit
+    assert default_mask == explicit_mask == 0
+
+
 @pytest.mark.parametrize(
     ("arm", "field", "value"),
     [
@@ -305,3 +330,29 @@ def test_backend_bound_transport_does_not_change_canonical_operations() -> None:
     )
     assert bound.execute_atomic(operations) == "result"
     assert base.seen == (operations, BACKEND_BY_ARM["B"])
+
+
+def test_vm_integrity_abort_always_persists_failure_and_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(**_kwargs):
+        raise InjectionAbIntegrityError("sealed test abort", evidence={"seal": "bad"})
+
+    monkeypatch.setattr(injection_ab, "run_vm_injection_ab", fail)
+    rc = injection_ab.main(
+        [
+            "--mode=vm",
+            f"--output={tmp_path}",
+            f"--qcow={tmp_path / 'vm.qcow2'}",
+            f"--qemu={tmp_path / 'qemu'}",
+            f"--provider={tmp_path / 'provider.py'}",
+        ]
+    )
+    assert rc == 2
+    failure = json.loads((tmp_path / "injection_ab_failure.json").read_text())
+    progress = json.loads((tmp_path / "injection_ab_progress.json").read_text())
+    assert failure["status"] == "integrity_abort"
+    assert failure["integrity_error"]["evidence"] == {"seal": "bad"}
+    assert progress["status"] == "integrity_abort"
+    assert progress["stage"] == "integrity_abort"
+    assert not (tmp_path / "injection_ab_result.json").exists()

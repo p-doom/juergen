@@ -33,7 +33,10 @@ fi
 
 test -f "$terminal_path"
 test -f "$OUTPUT/injection_ab_progress.json"
-test -f "$OUTPUT/vm_metadata.json"
+vm_metadata_args=()
+if test -f "$OUTPUT/vm_metadata.json"; then
+  vm_metadata_args+=("--vm-metadata=$OUTPUT/vm_metadata.json")
+fi
 set +e
 uv run --locked --no-dev python -m \
   osworld_parity.proper_vm_capability_ladder.validation.artifact_index \
@@ -49,7 +52,7 @@ uv run --locked --no-dev python -m \
   --qemu-component="wrapper=$QEMU/bin/qemu-system-x86_64-wrapped" \
   --qemu-component="binary=$QEMU/bin/qemu-system-x86_64" \
   --qemu-component="loader=$QEMU/lib/ld-linux-x86-64.so.2" \
-  --base-image="$VM/Ubuntu.qcow2" --vm-metadata="$OUTPUT/vm_metadata.json" \
+  --base-image="$VM/Ubuntu.qcow2" "${vm_metadata_args[@]}" \
   --build-result="$BUILD/build.json"
 index_rc=$?
 set -e

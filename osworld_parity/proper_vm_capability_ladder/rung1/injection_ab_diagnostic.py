@@ -543,7 +543,13 @@ def _checkpoint(
         {
             "schema_version": 1,
             "suite": "rung1_click_release_injection_ab_v1",
-            "status": "integrity_abort" if integrity_error else "running",
+            "status": (
+                "integrity_abort"
+                if integrity_error
+                else "completed"
+                if stage == "completed"
+                else "running"
+            ),
             "stage": stage,
             "expected_trial_count": len(TRIAL_ORDER),
             "completed_trial_count": len(trials),
@@ -793,6 +799,13 @@ def main(argv: list[str] | None = None) -> int:
     failure_path = args.output / "injection_ab_failure.json"
     result_path.unlink(missing_ok=True)
     failure_path.unlink(missing_ok=True)
+    if args.mode == "vm":
+        _checkpoint(
+            args.output,
+            trials=[],
+            active_trial=None,
+            stage="entry",
+        )
     try:
         result = (
             validate_injection_ab()
@@ -818,6 +831,15 @@ def main(argv: list[str] | None = None) -> int:
         progress = (
             json.loads(progress_path.read_text()) if progress_path.exists() else {}
         )
+        if progress:
+            progress.update(
+                {
+                    "status": "integrity_abort",
+                    "stage": "integrity_abort",
+                    "integrity_error": integrity_error,
+                }
+            )
+            _atomic_json(progress_path, progress)
         _atomic_json(
             failure_path,
             {
