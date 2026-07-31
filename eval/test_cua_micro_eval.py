@@ -164,6 +164,18 @@ class ActionAndAggregationTests(unittest.TestCase):
         self.assertEqual(len(parsed.primitives), 2)
         self.assertFalse(micro.action_matches_expected(parsed, {"kind": "click", "button": "left"}))
 
+    def test_chrome_tab_activation_uses_exact_cdp_target(self) -> None:
+        client = mock.Mock()
+        client.run_command.return_value = {"status": "success"}
+
+        result = micro._activate_chrome_target(client, "BETA")
+
+        self.assertEqual(result, {"status": "success"})
+        command = client.run_command.call_args.args[0]
+        self.assertEqual(command[:2], ["python3", "-c"])
+        self.assertIn("t.get('title') == 'BETA'", command[2])
+        self.assertIn("/json/activate/", command[2])
+
     def test_expected_action_is_strict_about_payload(self) -> None:
         click = parse_computer_use_rel_step_action(_tool({"action": "left_click"}))
         double = parse_computer_use_rel_step_action(_tool({"action": "double_click"}))

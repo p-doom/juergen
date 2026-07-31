@@ -441,9 +441,23 @@ def _chrome_html(variant: str) -> dict[str, str]:
     return {"/tmp/cua_micro.html": f"<!doctype html><style>{style}</style>{body}"}
 
 
+def _activate_chrome_target(client: OSWorldClient, title: str) -> dict[str, Any]:
+    """Activate the exact CDP page target instead of relying on CLI tab order."""
+    code = (
+        "import json, urllib.request; "
+        "targets=json.load(urllib.request.urlopen('http://127.0.0.1:9222/json')); "
+        f"target=next(t for t in targets if t.get('title') == {title!r}); "
+        "urllib.request.urlopen("
+        "'http://127.0.0.1:9222/json/activate/' + target['id']"
+        ").read()"
+    )
+    return client.run_command(["python3", "-c", code])
+
+
 def _launch_chrome(client: OSWorldClient, variant: str) -> None:
     files = _chrome_html(variant)
     urls: list[str]
+    activate_title: str | None = None
     if variant == "tabs":
         files = {
             "/tmp/cua_alpha.html": "<title>ALPHA</title><h1>ALPHA tab</h1>",
@@ -451,6 +465,7 @@ def _launch_chrome(client: OSWorldClient, variant: str) -> None:
         }
         urls = ["file:///tmp/cua_alpha.html", "file:///tmp/cua_beta.html"]
         expected_title = "BETA"
+        activate_title = expected_title
     else:
         urls = ["file:///tmp/cua_micro.html"]
         expected_title = {
@@ -472,6 +487,8 @@ def _launch_chrome(client: OSWorldClient, variant: str) -> None:
         f"{quoted_urls} >/tmp/cua_micro_chrome.log 2>&1 &"
     )
     client.run_command(command, shell=True)
+    if activate_title is not None:
+        _wait_until(lambda: _activate_chrome_target(client, activate_title), timeout_s=20)
     _wait_until(lambda: expected_title in _active_title(client), timeout_s=20)
 
 
