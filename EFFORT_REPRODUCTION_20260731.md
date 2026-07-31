@@ -26,6 +26,9 @@ Phase-B pipelines, synthetic multistep/typing evaluation, and proper-task probes
 
 - `experiments/phaseb_deltatype_raw_v2/`: still an input to the active raw
   continuation/export chain when this bundle was cut;
+- `experiments/phaseb/tests/test_final_export_eval_readiness.py`: a cross-arm
+  contract test that pins files in that active raw subtree, to be added with the
+  frozen raw handoff rather than left failing in this branch;
 - `experiments/compact_scale_ablation/` and
   `experiments/typing_prose_factorial/`: still actively authored and tokenizing;
 - `experiments/phaseb_deltatype_raw_inactive/`: superseded recovery material,
