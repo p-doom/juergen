@@ -4,6 +4,8 @@ from osworld_parity.proper_vm_capability_ladder.rung1.executor import (
     CompactRawExecutor,
     NativeAbsoluteExecutor,
 )
+from osworld_parity.proper_vm_capability_ladder.rung1.trajectory import GoldTrajectory
+from osworld_parity.proper_vm_capability_ladder.rung1.selfcheck import _execute
 from osworld_parity.proper_vm_capability_ladder.rung1.transport import (
     RecordingTransport,
     compile_unicode_coalesced_type,
@@ -12,6 +14,33 @@ from osworld_parity.proper_vm_capability_ladder.rung1.transport import (
 
 def _kinds(transport: RecordingTransport) -> list[str]:
     return [operation.kind for operation in transport.audit.operations]
+
+
+class StatefulClickTransport(RecordingTransport):
+    """Tiny GUI-state model: a click requires down/up on the same hitbox."""
+
+    def __init__(self, *, cursor: tuple[int, int]) -> None:
+        super().__init__(cursor=cursor)
+        self.target = (290, 390, 310, 410)
+        self.checked = False
+        self._down_hit = ""
+
+    def _hit(self) -> str:
+        x, y = self.cursor_position()
+        left, top, right, bottom = self.target
+        return "target" if left <= x < right and top <= y < bottom else ""
+
+    def mouse_down(self, button: str = "left") -> None:
+        super().mouse_down(button)
+        if button == "left":
+            self._down_hit = self._hit()
+
+    def mouse_up(self, button: str = "left") -> None:
+        up_hit = self._hit()
+        super().mouse_up(button)
+        if button == "left" and self._down_hit == up_hit == "target":
+            self.checked = not self.checked
+        self._down_hit = ""
 
 
 def test_click_adapters_match_cursor_and_button_transitions() -> None:
@@ -29,6 +58,48 @@ def test_click_adapters_match_cursor_and_button_transitions() -> None:
     ]
     assert not native_transport.audit.held_buttons
     assert not raw_transport.audit.held_buttons
+
+
+def test_stateful_raw_click_requires_observed_baseline_and_endpoint() -> None:
+    observed = (10, 20)
+    exact = StatefulClickTransport(cursor=observed)
+    trajectory = GoldTrajectory(
+        arm="compact_raw_phaseb",
+        actions=("290 380 0 ; +LMB -LMB",),
+        observed_cursor_baseline=observed,
+        expected_endpoint=(300, 400),
+    )
+    _, journal = _execute("compact_raw_phaseb", exact, trajectory)
+    assert journal["baseline_matches"] is True
+    assert journal["endpoint_matches"] is True
+    assert exact.checked is True
+
+    # The same raw delta is a genuine negative when it was compiled against an
+    # assumed/stale baseline rather than the cursor observed at dispatch.
+    stale = StatefulClickTransport(cursor=(100, 100))
+    CompactRawExecutor(stale).execute("290 380 0 ; +LMB -LMB")
+    assert stale.cursor_position() == (390, 480)
+    assert stale.checked is False
+
+    # The production selfcheck now catches that mismatch before dispatch.
+    guarded = StatefulClickTransport(cursor=(100, 100))
+    records, stale_journal = _execute("compact_raw_phaseb", guarded, trajectory)
+    assert records == []
+    assert stale_journal["dispatch_status"] == "blocked_baseline_drift"
+    assert stale_journal["baseline_matches"] is False
+    assert stale_journal["endpoint_matches"] is False
+    assert guarded.cursor_position() == (100, 100)
+    assert guarded.checked is False
+
+
+def test_stateful_click_rejects_button_down_before_move() -> None:
+    transport = StatefulClickTransport(cursor=(10, 20))
+    raw = CompactRawExecutor(transport)
+    raw.execute("0 0 0 ; +LMB")
+    raw.execute("290 380 0")
+    raw.execute("0 0 0 ; -LMB")
+    assert transport.cursor_position() == (300, 400)
+    assert transport.checked is False
 
 
 def test_drag_adapters_match_hold_move_release_state() -> None:

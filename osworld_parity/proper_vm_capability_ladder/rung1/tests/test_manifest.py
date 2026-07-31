@@ -9,6 +9,7 @@ from osworld_parity.proper_vm_capability_ladder.rung1.fixtures import (
     load_manifest,
 )
 from osworld_parity.proper_vm_capability_ladder.rung1.selfcheck import (
+    _checkpoint_progress,
     _validate_manifest_bounds,
     main,
 )
@@ -87,3 +88,34 @@ def test_every_manifest_row_fits_a_measured_smaller_viewport() -> None:
     click_row = report["rows"]["r1a-click-dev-1102"]
     assert click_row["design_origin"] == [1320, 650]
     assert len(click_row["transformed_viewport_origin"]) == 2
+
+
+def test_active_dispatch_journal_is_durable_before_oracle(tmp_path) -> None:
+    cell = {
+        "fixture_id": "r1a-click-dev-1101",
+        "arm": "compact_raw_phaseb",
+        "gold_cursor_journal": {
+            "planned_observed_baseline": [1730, 973],
+            "dispatch_cursor_before": [1730, 973],
+            "expected_endpoint": [365, 345],
+            "final_cursor": [365, 345],
+        },
+        "gold_state_before_oracle": {"current": {"checked": False}},
+    }
+    _checkpoint_progress(
+        tmp_path,
+        cells=[],
+        expected_cell_count=16,
+        active_cell=cell,
+        stage="gold_state_recorded_before_oracle",
+    )
+    payload = json.loads((tmp_path / "progress.json").read_text())
+    assert payload["completed_cell_count"] == 0
+    assert payload["active_cell"]["arm"] == "compact_raw_phaseb"
+    assert payload["active_cell"]["journal_stage"] == (
+        "gold_state_recorded_before_oracle"
+    )
+    assert payload["active_cell"]["gold_cursor_journal"]["final_cursor"] == [
+        365,
+        345,
+    ]

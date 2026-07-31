@@ -15,6 +15,8 @@ from osworld_parity.proper_vm_capability_ladder.rung1.oracle import (
 from osworld_parity.proper_vm_capability_ladder.rung1.server import (
     FixtureHttpServer,
     FixtureStateStore,
+    FixtureServerError,
+    render_fixture_html,
 )
 
 
@@ -101,7 +103,52 @@ def test_two_consecutive_fixture_resets_are_equivalent() -> None:
         second = store.snapshot(fixture.id)
         for state in (first, second):
             state.pop("generation")
+            for event in state["events"]:
+                event.pop("host_monotonic_ns")
         assert first == second
+
+
+def test_pointer_diagnostics_are_ordered_and_record_exact_hit_coordinates() -> None:
+    manifest = load_manifest()
+    fixture = next(
+        item
+        for item in manifest.select(split="development")
+        if item.template == "click"
+    )
+    store = FixtureStateStore(manifest)
+    generation = store.reset(fixture)
+    store.apply_event(fixture, _ready_event(fixture, generation))
+    pointer = {
+        "kind": "pointer",
+        "generation": generation,
+        "client_sequence": 1,
+        "client_monotonic_ms": 123.75,
+        "event": "pointerdown",
+        "button": 0,
+        "buttons": 1,
+        "client_x": 295,
+        "client_y": 313,
+        "screen_x": 365,
+        "screen_y": 345,
+        "hit_id": "target",
+        "hit_tag": "input",
+    }
+    store.apply_event(fixture, pointer)
+    event = store.snapshot(fixture.id)["events"][-1]
+    assert event["client_sequence"] == 1
+    assert event["client_monotonic_ms"] == 123.75
+    assert (event["screen_x"], event["screen_y"]) == (365, 345)
+    assert (event["hit_id"], event["hit_tag"]) == ("target", "input")
+    assert isinstance(event["host_monotonic_ns"], int)
+    with pytest.raises(FixtureServerError, match="non-monotonic"):
+        store.apply_event(fixture, pointer)
+
+    html = render_fixture_html(fixture, generation)
+    assert "postQueue = postQueue.then(send, send)" in html
+    assert "client_sequence" in html
+    assert "client_monotonic_ms" in html
+    assert "document.elementFromPoint" in html
+    assert "screen_x:" in html and "screen_y:" in html
 
 
 def test_http_surface_exposes_fixture_but_no_oracle_state() -> None:

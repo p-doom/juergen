@@ -16,7 +16,7 @@ from .executor import CompactRawExecutor, NativeAbsoluteExecutor
 from .fixtures import Fixture, FixtureManifest, load_manifest
 from .oracle import evaluate_in_fresh_process
 from .server import FixtureHttpServer, render_fixture_html
-from .trajectory import Arm, build_trajectory
+from .trajectory import Arm, GoldTrajectory, build_trajectory
 from .transport import Operation
 from .vm import (
     DEFAULT_PROVIDER,
@@ -48,6 +48,28 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _checkpoint_progress(
+    output: Path,
+    *,
+    cells: list[dict[str, Any]],
+    expected_cell_count: int,
+    active_cell: dict[str, Any] | None,
+    stage: str,
+) -> None:
+    if active_cell is not None:
+        active_cell["journal_stage"] = stage
+    _atomic_json(
+        output / "progress.json",
+        {
+            "status": "running",
+            "completed_cell_count": len(cells),
+            "expected_cell_count": expected_cell_count,
+            "active_cell": active_cell,
+            "cells": cells,
+        },
+    )
+
+
 def _operations(values: tuple[Operation, ...]) -> list[dict[str, Any]]:
     return [{"kind": item.kind, "args": list(item.args)} for item in values]
 
@@ -67,16 +89,33 @@ def _initial_signature(state: dict[str, Any]) -> str:
 
 
 def _execute(
-    arm: Arm, transport: Any, trajectory: tuple[dict[str, Any] | str, ...]
-) -> list[dict[str, Any]]:
+    arm: Arm, transport: Any, trajectory: GoldTrajectory
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     executor = (
         NativeAbsoluteExecutor(transport)
         if arm == "native_absolute_control"
         else CompactRawExecutor(transport)
     )
+    dispatch_cursor_before = transport.cursor_position()
+    expected = trajectory.expected_endpoint
+    baseline_matches = dispatch_cursor_before == trajectory.observed_cursor_baseline
+    if arm == "compact_raw_phaseb" and not baseline_matches:
+        return [], {
+            "dispatch_status": "blocked_baseline_drift",
+            "planned_observed_baseline": list(trajectory.observed_cursor_baseline),
+            "dispatch_cursor_before": list(dispatch_cursor_before),
+            "baseline_matches": False,
+            "expected_endpoint": list(expected) if expected is not None else None,
+            "final_cursor": list(dispatch_cursor_before),
+            "endpoint_matches": expected is None or dispatch_cursor_before == expected,
+            "actions": [],
+        }
     records: list[dict[str, Any]] = []
-    for action in trajectory:
+    action_cursors: list[dict[str, Any]] = []
+    for index, action in enumerate(trajectory.actions):
+        cursor_before = transport.cursor_position()
         result = executor.execute(action)  # type: ignore[arg-type]
+        cursor_after = transport.cursor_position()
         records.append(
             {
                 "parse_status": result.parse_status,
@@ -85,8 +124,42 @@ def _execute(
                 "operations": _operations(result.operations),
             }
         )
+        action_cursors.append(
+            {
+                "action_index": index,
+                "cursor_before": list(cursor_before),
+                "cursor_after": list(cursor_after),
+            }
+        )
         time.sleep(0.2)
-    return records
+    final_cursor = transport.cursor_position()
+    journal = {
+        "dispatch_status": "dispatched",
+        "planned_observed_baseline": list(trajectory.observed_cursor_baseline),
+        "dispatch_cursor_before": list(dispatch_cursor_before),
+        "baseline_matches": baseline_matches,
+        "expected_endpoint": list(expected) if expected is not None else None,
+        "final_cursor": list(final_cursor),
+        "endpoint_matches": expected is None or final_cursor == expected,
+        "actions": action_cursors,
+    }
+    return records, journal
+
+
+def _assert_dispatch_journal(
+    fixture: Fixture, arm: Arm, stage: str, journal: dict[str, Any]
+) -> None:
+    if arm == "compact_raw_phaseb" and not journal["baseline_matches"]:
+        raise SelfcheckError(
+            f"{fixture.id}: {stage} raw delta baseline drifted: "
+            f"planned={journal['planned_observed_baseline']} "
+            f"dispatch={journal['dispatch_cursor_before']}"
+        )
+    if not journal["endpoint_matches"]:
+        raise SelfcheckError(
+            f"{fixture.id}: {stage} cursor missed expected endpoint: "
+            f"expected={journal['expected_endpoint']} final={journal['final_cursor']}"
+        )
 
 
 def _assert_negative(fixture: Fixture, state: dict[str, Any], stage: str) -> dict[str, Any]:
@@ -284,6 +357,17 @@ def run_vm_selfcheck(
         )
     cells: list[dict[str, Any]] = []
     manifest_bounds: dict[str, Any] | None = None
+    expected_cell_count = len(fixtures) * len(ARMS)
+
+    def checkpoint(active_cell: dict[str, Any] | None, stage: str) -> None:
+        _checkpoint_progress(
+            output,
+            cells=cells,
+            expected_cell_count=expected_cell_count,
+            active_cell=active_cell,
+            stage=stage,
+        )
+
     vm_log_dir = output / "vm_logs"
     with FixtureHttpServer(manifest) as server, KvmFixtureSession(
         qcow=qcow,
@@ -300,6 +384,7 @@ def run_vm_selfcheck(
                     "arm": arm,
                     "horizon": fixture.horizon,
                 }
+                checkpoint(cell, "cell_started")
 
                 # Reset A: deterministic setup and clean negative oracle.
                 transport = session.reset_to_ready()
@@ -316,25 +401,46 @@ def run_vm_selfcheck(
                 first_signature = _initial_signature(first)
                 if session.probe_pointer_buttons(server, fixture) != 0:
                     raise SelfcheckError(f"{fixture.id}: button held after first reset")
+                checkpoint(cell, "first_reset_verified")
 
                 # Scripted near miss must be rejected.
+                near_baseline = transport.cursor_position()
                 near = build_trajectory(
                     fixture,
                     first,
                     arm=arm,
-                    cursor=transport.cursor_position(),
+                    cursor=near_baseline,
                     near_miss=True,
                 )
-                cell["near_miss_dispatch"] = _execute(arm, transport, near.actions)
+                (
+                    cell["near_miss_dispatch"],
+                    cell["near_miss_cursor_journal"],
+                ) = _execute(arm, transport, near)
+                checkpoint(cell, "near_miss_dispatched")
+                _assert_dispatch_journal(
+                    fixture, arm, "near miss", cell["near_miss_cursor_journal"]
+                )
                 time.sleep(0.5)
                 cell["near_miss_oracle"] = _assert_negative(
                     fixture, server.store.snapshot(fixture.id), "near miss"
                 )
+                checkpoint(cell, "near_miss_rejected")
 
                 # Deliberately leave LMB held, then prove the VM snapshot—not a
                 # host-side cleanup helper—removes it on the second reset.
-                cell["leak_injection"] = _execute(
-                    arm, transport, (_held_button_action(arm),)
+                leak_baseline = transport.cursor_position()
+                leak_trajectory = GoldTrajectory(
+                    arm=arm,
+                    actions=(_held_button_action(arm),),
+                    observed_cursor_baseline=leak_baseline,
+                    expected_endpoint=leak_baseline,
+                )
+                cell["leak_injection"], cell["leak_cursor_journal"] = _execute(
+                    arm, transport, leak_trajectory
+                )
+                checkpoint(cell, "held_button_injected")
+                _assert_dispatch_journal(
+                    fixture, arm, "held-button injection", cell["leak_cursor_journal"]
                 )
                 time.sleep(0.3)
                 if server.store.snapshot(fixture.id)["last_pointer_buttons"] != 1:
@@ -368,18 +474,29 @@ def run_vm_selfcheck(
                     "pointer_buttons": 0,
                     "current": second["current"],
                 }
+                checkpoint(cell, "second_reset_verified")
 
                 # Scripted gold must pass a fresh host oracle process.
+                gold_baseline = transport.cursor_position()
                 gold = build_trajectory(
                     fixture,
                     second,
                     arm=arm,
-                    cursor=transport.cursor_position(),
+                    cursor=gold_baseline,
                 )
-                cell["gold_dispatch"] = _execute(arm, transport, gold.actions)
+                cell["gold_dispatch"], cell["gold_cursor_journal"] = _execute(
+                    arm, transport, gold
+                )
+                checkpoint(cell, "gold_dispatched")
+                _assert_dispatch_journal(
+                    fixture, arm, "gold", cell["gold_cursor_journal"]
+                )
                 time.sleep(0.8)
                 final_state = server.store.snapshot(fixture.id)
+                cell["gold_state_before_oracle"] = final_state
+                checkpoint(cell, "gold_state_recorded_before_oracle")
                 cell["gold_oracle"] = _assert_positive(fixture, final_state)
+                checkpoint(cell, "gold_oracle_passed")
                 if transport.audit.held_buttons:
                     raise SelfcheckError(
                         f"{fixture.id}: gold left held buttons: {transport.audit.held_buttons}"
@@ -395,16 +512,9 @@ def run_vm_selfcheck(
                     if transport.audit.scroll_total * expected_sign <= 0:
                         raise SelfcheckError(f"{fixture.id}: wrong signed scroll dispatch")
                 cell["status"] = "passed"
+                cell["journal_stage"] = "cell_passed"
                 cells.append(cell)
-                _atomic_json(
-                    output / "progress.json",
-                    {
-                        "status": "running",
-                        "completed_cell_count": len(cells),
-                        "expected_cell_count": len(fixtures) * len(ARMS),
-                        "cells": cells,
-                    },
-                )
+                checkpoint(None, "cell_passed")
     return {
         "schema_version": 1,
         "status": "passed",
@@ -415,7 +525,7 @@ def run_vm_selfcheck(
         "development_fixture_count": len(fixtures),
         "evaluation_fixture_count": len(manifest.select(split="evaluation")),
         "selfcheck_cell_count": len(cells),
-        "expected_selfcheck_cell_count": len(fixtures) * len(ARMS),
+        "expected_selfcheck_cell_count": expected_cell_count,
         "manifest_bounds": manifest_bounds,
         "provider": {
             "path": str(provider_path.resolve()),
