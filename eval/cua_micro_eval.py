@@ -691,7 +691,9 @@ def resolve_target_bbox(
     raise ValueError(f"unknown target kind {kind!r}")
 
 
-def read_verifier_state(client: OSWorldClient, verifier: dict[str, Any]) -> Any:
+def read_verifier_state(  # noqa: PLR0911
+    client: OSWorldClient, verifier: dict[str, Any]
+) -> Any:
     kind = verifier.get("kind")
     if kind == "bbox_hit":
         return None
@@ -720,6 +722,11 @@ def read_verifier_state(client: OSWorldClient, verifier: dict[str, Any]) -> Any:
             "print(r.clipboard_get()); r.destroy()"
         )
         return str(client.run_command(["python3", "-c", code]).get("output", "")).strip()
+    if kind == "guest_command_regex":
+        try:
+            return str(client.run_command(str(verifier["command"]), shell=True).get("output", ""))
+        except RuntimeError:
+            return ""
     raise ValueError(f"unknown verifier kind {kind!r}")
 
 
@@ -736,6 +743,8 @@ def verifier_passed(client: OSWorldClient, verifier: dict[str, Any]) -> tuple[bo
             return {"matched": True, "value": state} if state == verifier.get("value") else None
         if kind in {"guest_json_equals", "saved_file_equals", "calculator_clipboard_equals"}:
             return {"matched": True, "value": state} if state == verifier.get("value") else None
+        if kind == "guest_command_regex":
+            return state if re.search(str(verifier["pattern"]), str(state), re.IGNORECASE) else None
         return None
 
     try:

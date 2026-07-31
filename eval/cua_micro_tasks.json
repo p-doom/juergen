@@ -52,7 +52,7 @@
       "target": {"kind": "fixed_norm", "bbox": [50, 100, 950, 900], "label": "Desktop"},
       "cursor": {"kind": "target_center"},
       "expected": {"kind": "key", "keys": ["CTRL", "ALT", "T"]},
-      "verifier": {"kind": "active_title_regex", "pattern": "Terminal|user-virtual-machine"}
+      "verifier": {"kind": "guest_command_regex", "command": "pgrep -a -f 'gnome-terminal-server'", "pattern": "gnome-terminal-server"}
     },
     {
       "id": "type.terminal.native_exact",

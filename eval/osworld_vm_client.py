@@ -491,7 +491,9 @@ class OSWorldClient:
                 self.execute(cmd)
                 executed.append(cmd)
             elif p.kind == "key_combo":
-                py_keys = [_cua_v4_key_to_pyautogui(k) for k in p.keys]
+                py_keys = [
+                    _cua_v4_key_to_pyautogui(_computer_use_key_to_pyautogui(k)) for k in p.keys
+                ]
                 for key in py_keys:
                     cmd = f"pyautogui.keyDown({key!r})"
                     self.execute(cmd)
