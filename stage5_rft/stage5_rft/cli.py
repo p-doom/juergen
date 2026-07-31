@@ -22,6 +22,7 @@ from stage5_rft.replay import (
 )
 from stage5_rft.relative_mouse_records import build_pure_relative_mouse_records
 from stage5_rft.relative_mouse_batch import seal_relative_mouse_batch
+from stage5_rft.relative_mouse_compare import compare_relative_mouse_eval
 from stage5_rft.rft import RFTConfig, build_rft_dataset
 from stage5_rft.schema import PolicyProvenance, TaskSpec
 from stage5_rft.util import (
@@ -190,6 +191,16 @@ def _cmd_seal_relative_mouse_batch(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _cmd_compare_relative_mouse_eval(args: argparse.Namespace) -> dict[str, Any]:
+    return compare_relative_mouse_eval(
+        baseline_probe_path=args.baseline_probe,
+        candidate_probe_path=args.candidate_probe,
+        baseline_sacct_path=args.baseline_sacct,
+        candidate_sacct_path=args.candidate_sacct,
+        candidate_manifest_path=args.candidate_manifest,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="stage5-rft")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -299,6 +310,18 @@ def build_parser() -> argparse.ArgumentParser:
     seal_batch.add_argument("--minimum-accepted", type=int, required=True)
     seal_batch.add_argument("--expected-train-seed", type=int, required=True)
     seal_batch.set_defaults(func=_cmd_seal_relative_mouse_batch)
+
+    compare_eval = sub.add_parser(
+        "compare-relative-mouse-eval",
+        help="compare the pilot with the frozen synthetic-validation baseline",
+    )
+    compare_eval.add_argument("--baseline-probe", required=True)
+    compare_eval.add_argument("--candidate-probe", required=True)
+    compare_eval.add_argument("--baseline-sacct", required=True)
+    compare_eval.add_argument("--candidate-sacct", required=True)
+    compare_eval.add_argument("--candidate-manifest", required=True)
+    compare_eval.add_argument("--out")
+    compare_eval.set_defaults(func=_cmd_compare_relative_mouse_eval)
     return parser
 
 

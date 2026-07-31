@@ -1,0 +1,36 @@
+name = "stage5_relative_mouse_eval_candidate_v1"
+repo = "juergen_relative_onpolicy_postcollection"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -er '.provenance.repo_path' "$LABCTL_CONTEXT")"
+MODEL="$(jq -er '.inputs[] | select(.role == "model") | .resolved_path' "$LABCTL_CONTEXT")"
+OUT="$(jq -er '.outputs.result.path' "$LABCTL_CONTEXT")"
+bash "$REPO/stage5_rft/scripts/eval_relative_mouse_pilot.sh" "$MODEL" "$OUT" "$REPO"
+''']
+
+[resources]
+gpus = 1
+cpus = 16
+mem = "100GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.model]
+type = "stage"
+stage = "train_pilot"
+role = "model"
+
+[outputs.result]
+type = "eval_result"
+marker = "eval_manifest.json"
+alias = "relative_mouse_rft_pilot_eval_{run.id}"
+
+[env]
+HF_HUB_OFFLINE = "1"
+TRANSFORMERS_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+

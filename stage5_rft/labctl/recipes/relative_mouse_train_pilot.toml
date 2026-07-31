@@ -1,5 +1,5 @@
 name = "stage5_relative_mouse_train_pilot_v1"
-repo = "omegalax"
+repo = "omegalax_relative_onpolicy_pilot"
 
 command = ["bash", "-c", '''
 set -euo pipefail
@@ -18,7 +18,8 @@ test "$(jq -r '.binding.checkpoint_uri' "$GATE")" = "$PARENT"
 test "$(jq -r '.binding.checkpoint_sha256' "$GATE")" = "013f6c62d00d8c101a82d6ecc983f9ddadd5bca8b91664bd4bcf47bc8ddc25c3"
 
 VAL_RECORDS="$(jq -r '.val_records' "$DATASET/manifest.json")"
-VAL_STEPS="$(( (VAL_RECORDS + 7) / 8 ))"
+VAL_STEPS="$VAL_RECORDS"
+if [ "$VAL_STEPS" -gt 32 ]; then VAL_STEPS=32; fi
 test "$VAL_STEPS" -ge 1
 SAVE="$LABCTL_RUN_DIR/orbax"
 JAX_CACHE=/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/jax_cache/relative_mouse_pilot_v1
@@ -67,12 +68,14 @@ json.dump(out, open(sys.argv[2], "w"), indent=2)
 PY
 test -f "$OUT/model.safetensors" -o -f "$OUT/model.safetensors.index.json"
 cp "$DATASET/manifest.json" "$OUT/training_dataset_manifest.json"
-python3 - "$OUT" "$PARENT" "$VAL_STEPS" <<'PY'
+python3 - "$OUT" "$PARENT" "$VAL_RECORDS" "$VAL_STEPS" <<'PY'
 import json, pathlib, sys
 out = pathlib.Path(sys.argv[1])
 payload = {"schema_version": "stage5.relative_mouse_pilot_model.v1", "status": "complete",
            "method": "pure_rejection_sft", "training_steps": 100, "gpus": 1,
-           "parent_checkpoint": sys.argv[2], "val_steps_full_split": int(sys.argv[3]),
+           "parent_checkpoint": sys.argv[2], "validation_records": int(sys.argv[3]),
+           "validation_steps_per_eval": int(sys.argv[4]),
+           "validation_step_cap": 32,
            "contains_official_heldout": False, "contains_crowd_cast": False}
 (out / "pilot_manifest.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY

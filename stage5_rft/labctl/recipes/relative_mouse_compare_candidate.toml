@@ -1,0 +1,55 @@
+name = "stage5_relative_mouse_compare_candidate_v1"
+repo = "juergen_relative_onpolicy_postcollection"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -er '.provenance.repo_path' "$LABCTL_CONTEXT")"
+CANDIDATE="$(jq -er '.inputs[] | select(.role == "candidate") | .resolved_path' "$LABCTL_CONTEXT")"
+BASELINE="$(jq -er '.inputs[] | select(.role == "baseline") | .resolved_path' "$LABCTL_CONTEXT")"
+OUT="$(jq -er '.outputs.report.path' "$LABCTL_CONTEXT")"
+mkdir -p "$OUT"
+CANDIDATE_JOB="$(jq -er '.slurm_job_id' "$CANDIDATE/eval_manifest.json")"
+sacct -j 135215 --starttime 2026-07-29 --endtime 2026-08-02 -X -n -P \
+  --format=JobIDRaw,State,ElapsedRaw,ExitCode,AllocTRES >"$OUT/baseline_sacct.psv"
+sacct -j "$CANDIDATE_JOB" --starttime 2026-07-31 --endtime 2026-08-02 -X -n -P \
+  --format=JobIDRaw,State,ElapsedRaw,ExitCode,AllocTRES >"$OUT/candidate_sacct.psv"
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli compare-relative-mouse-eval \
+  --baseline-probe "$BASELINE" --candidate-probe "$CANDIDATE/candidate_probe.json" \
+  --baseline-sacct "$OUT/baseline_sacct.psv" --candidate-sacct "$OUT/candidate_sacct.psv" \
+  --candidate-manifest "$CANDIDATE/eval_manifest.json" --out "$OUT/comparison.json"
+jq -e '.status == "complete" and .promotion_authorized == false
+  and .contains_official_heldout == false and .contains_real_vm_eval == false
+  and .contains_crowd_cast == false
+  and (.baseline.metrics["pass@1"] | type == "number")
+  and (.candidate.metrics["pass@1"] | type == "number")
+  and (.baseline.metrics.accepted_per_allocated_gpu_hour | type == "number")
+  and (.candidate.metrics.accepted_per_allocated_gpu_hour | type == "number")' \
+  "$OUT/comparison.json"
+''']
+
+[resources]
+gpus = 0
+cpus = 2
+mem = "8GB"
+time = "00:15:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+
+[inputs.candidate]
+type = "stage"
+stage = "eval_candidate"
+role = "result"
+
+[inputs.baseline]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/rl_scratch/osworld_rl/rft_star/out/probe_r0_seed.json"
+
+[outputs.report]
+type = "eval_result"
+marker = "comparison.json"
+alias = "relative_mouse_rft_pilot_comparison_{run.id}"
+
+[env]
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"

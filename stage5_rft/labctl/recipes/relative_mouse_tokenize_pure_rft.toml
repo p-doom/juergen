@@ -1,5 +1,5 @@
 name = "stage5_relative_mouse_tokenize_pure_rft_v1"
-repo = "omegalax"
+repo = "omegalax_relative_onpolicy_pilot"
 
 command = ["bash", "-c", '''
 set -euo pipefail
