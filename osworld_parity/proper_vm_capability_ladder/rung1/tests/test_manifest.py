@@ -7,6 +7,7 @@ from osworld_parity.proper_vm_capability_ladder.rung1.fixtures import (
     TEMPLATES,
     load_manifest,
 )
+from osworld_parity.proper_vm_capability_ladder.rung1.selfcheck import main
 
 
 def test_frozen_fixture_counts_and_horizons() -> None:
@@ -40,3 +41,17 @@ def test_manifest_has_no_official_task_material() -> None:
 def test_every_fixture_hash_is_sealed() -> None:
     for fixture in load_manifest().fixtures:
         fixture.verify_hash()
+
+
+def test_labctl_rendered_underscore_argument_is_accepted(tmp_path) -> None:
+    assert (
+        main(
+            [
+                "--mode=build",
+                f"--output={tmp_path}",
+                "--expected_provider_sha256=unused-in-build-mode",
+            ]
+        )
+        == 0
+    )
+    assert (tmp_path / "selfcheck.json").is_file()
