@@ -22,8 +22,44 @@ from .states import base_state, drag_state, focus_state, scroll_state
 from .trajectory import UiGeometry
 
 
-GUEST_ROOT = PurePosixPath("/home/oai/share/.r1b_realapps_development")
+GUEST_ROOT_NAME = ".r1b_realapps_development"
 JSON_MARKER = "RUNG1B_JSON="
+
+# This program runs as the VM agent user.  The pinned image used to expose
+# /home/oai/share, but that is not part of the agent contract: some snapshots
+# have HOME=/home/oai while the directory itself is absent.  Pick only a
+# standard per-user application base that already exists and is writable, then
+# prove the private fixture root is owned and writable by this process.
+GUEST_ROOT_RESOLVER = f"""
+import json,os,pathlib,tempfile
+name={GUEST_ROOT_NAME!r}
+raw=[os.environ.get('XDG_RUNTIME_DIR'),os.environ.get('HOME'),tempfile.gettempdir()]
+seen=set(); errors=[]
+for item in raw:
+ try:
+  if not item: continue
+  base=pathlib.Path(item).resolve(strict=True)
+  if base in seen: continue
+  seen.add(base)
+  if not base.is_dir() or not os.access(base,os.R_OK|os.W_OK|os.X_OK):
+   errors.append(str(base)+':not-writable'); continue
+  root=base/name
+  root.mkdir(mode=0o700,parents=False,exist_ok=True)
+  resolved=root.resolve(strict=True)
+  if resolved.parent != base or resolved.name != name:
+   errors.append(str(root)+':escaped-base'); continue
+  if resolved.stat().st_uid != os.geteuid():
+   errors.append(str(resolved)+':wrong-owner'); continue
+  os.chmod(resolved,0o700)
+  fd,probe=tempfile.mkstemp(prefix='.write-probe-',dir=resolved)
+  os.close(fd); os.unlink(probe)
+  print({JSON_MARKER!r}+json.dumps({{'root':str(resolved)}},sort_keys=True))
+  break
+ except (OSError,RuntimeError) as exc:
+  errors.append(str(item)+':'+str(exc))
+else:
+ raise RuntimeError('no authorized writable guest app root: '+'; '.join(errors))
+""".strip()
 
 
 @dataclass(frozen=True)
@@ -54,12 +90,26 @@ def _run_json(transport: HttpVmTransport, argv: list[str]) -> dict[str, Any]:
     return value
 
 
-def _guest_dir(fixture: Fixture) -> PurePosixPath:
-    return GUEST_ROOT / fixture.id
+def resolve_guest_root(transport: HttpVmTransport) -> PurePosixPath:
+    cached = getattr(transport, "_r1b_guest_root", None)
+    if isinstance(cached, PurePosixPath):
+        return cached
+    value = _run_json(transport, ["python3", "-c", GUEST_ROOT_RESOLVER])
+    raw = value.get("root")
+    if not isinstance(raw, str):
+        raise TransportError("guest root resolver returned no root")
+    root = PurePosixPath(raw)
+    if not root.is_absolute() or root.name != GUEST_ROOT_NAME or ".." in root.parts:
+        raise TransportError(f"guest root resolver returned an unsafe path: {raw!r}")
+    setattr(transport, "_r1b_guest_root", root)
+    return root
 
 
-def _focus_setup_script(fixture: Fixture) -> str:
-    root = _guest_dir(fixture)
+def _guest_dir(transport: HttpVmTransport, fixture: Fixture) -> PurePosixPath:
+    return resolve_guest_root(transport) / fixture.id
+
+
+def _focus_setup_script(fixture: Fixture, root: PurePosixPath) -> str:
     path = root / str(fixture.params["file_name"])
     encoded = _b64(str(fixture.params["initial_text"]))
     return f"""
@@ -98,8 +148,9 @@ addEventListener('load',()=>requestAnimationFrame(()=>{{scrollTo(0,{initial_y});
 </script>"""
 
 
-def _scroll_server_source(fixture: Fixture, token: str) -> str:
-    root = str(_guest_dir(fixture))
+def _scroll_server_source(
+    fixture: Fixture, token: str, root: PurePosixPath
+) -> str:
     html_b64 = _b64(_scroll_html(fixture, token))
     return f"""
 import base64,json,os,tempfile
@@ -123,10 +174,9 @@ ThreadingHTTPServer(('127.0.0.1',{int(fixture.params['port'])}),H).serve_forever
 """.strip()
 
 
-def _scroll_setup_script(fixture: Fixture) -> str:
-    root = _guest_dir(fixture)
+def _scroll_setup_script(fixture: Fixture, root: PurePosixPath) -> str:
     token = f"dev-{fixture.parameter_seed}-{fixture.fixture_sha256[:16]}"
-    server_b64 = _b64(_scroll_server_source(fixture, token))
+    server_b64 = _b64(_scroll_server_source(fixture, token, root))
     port = int(fixture.params["port"])
     url = f"http://127.0.0.1:{port}/document/{token}"
     return f"""
@@ -149,8 +199,7 @@ nohup "$browser" --no-first-run --no-default-browser-check --disable-session-cra
 """.strip()
 
 
-def _drag_setup_script(fixture: Fixture) -> str:
-    root = _guest_dir(fixture)
+def _drag_setup_script(fixture: Fixture, root: PurePosixPath) -> str:
     encoded = _b64(str(fixture.params["content"]))
     source = str(fixture.params["source_name"])
     destination = str(fixture.params["destination_name"])
@@ -172,12 +221,13 @@ wmctrl -r :ACTIVE: -b add,maximized 2>/dev/null || true
 
 
 def setup_fixture(transport: HttpVmTransport, fixture: Fixture) -> GuestFixture:
+    root = _guest_dir(transport, fixture)
     if fixture.template == "vscode_focus_type":
-        script = _focus_setup_script(fixture)
+        script = _focus_setup_script(fixture, root)
     elif fixture.template == "local_document_scroll":
-        script = _scroll_setup_script(fixture)
+        script = _scroll_setup_script(fixture, root)
     else:
-        script = _drag_setup_script(fixture)
+        script = _drag_setup_script(fixture, root)
     transport.execute_argv(["bash", "-lc", script])
     deadline = time.monotonic() + 60.0
     last_error: Exception | None = None
@@ -193,7 +243,7 @@ def setup_fixture(transport: HttpVmTransport, fixture: Fixture) -> GuestFixture:
 
 
 def probe_fixture(transport: HttpVmTransport, fixture: Fixture) -> dict[str, Any]:
-    root = _guest_dir(fixture)
+    root = _guest_dir(transport, fixture)
     if fixture.template == "vscode_focus_type":
         path = root / str(fixture.params["file_name"])
         code = (
@@ -275,6 +325,9 @@ __all__ = [
     "KvmFixtureSession",
     "sha256_file",
     "GuestFixture",
+    "GUEST_ROOT_NAME",
+    "GUEST_ROOT_RESOLVER",
+    "resolve_guest_root",
     "setup_fixture",
     "probe_fixture",
     "probe_geometry",

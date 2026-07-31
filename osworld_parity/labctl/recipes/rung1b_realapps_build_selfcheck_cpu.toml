@@ -4,8 +4,10 @@ command = ["bash", "-c", '''
 set -euo pipefail
 SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
 cd "$SOURCE"
-python3 -m pytest -q osworld_parity/proper_vm_capability_ladder/rung1b_realapps/tests
-python3 -m osworld_parity.proper_vm_capability_ladder.rung1b_realapps.selfcheck \
+uv run --locked --group dev python -m pytest -q \
+  osworld_parity/proper_vm_capability_ladder/rung1b_realapps/tests
+uv run --locked --no-dev python -m \
+  osworld_parity.proper_vm_capability_ladder.rung1b_realapps.selfcheck \
   --mode=build "$@"
 ''', "--"]
 
@@ -30,4 +32,3 @@ output = "{outputs.result.path}"
 [env]
 PYTHONUNBUFFERED = "1"
 CUDA_VISIBLE_DEVICES = ""
-

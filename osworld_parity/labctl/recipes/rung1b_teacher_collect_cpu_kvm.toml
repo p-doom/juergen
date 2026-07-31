@@ -6,7 +6,8 @@ SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
 cd "$SOURCE"
 [[ -r /dev/kvm && -w /dev/kvm ]] || { echo "FATAL /dev/kvm unavailable" >&2; exit 2; }
 [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]] || { echo "FATAL GPU allocation is forbidden" >&2; exit 2; }
-python3 -m osworld_parity.proper_vm_capability_ladder.rung1b_realapps.training.collector \
+uv run --locked --no-dev python -m \
+  osworld_parity.proper_vm_capability_ladder.rung1b_realapps.training.collector \
   --mode=vm "$@"
 ''', "--"]
 

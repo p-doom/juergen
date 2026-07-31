@@ -5,7 +5,8 @@ set -euo pipefail
 SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
 cd "$SOURCE"
 [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]] || { echo "FATAL GPU allocation is forbidden" >&2; exit 2; }
-python3 -m osworld_parity.proper_vm_capability_ladder.rung1b_realapps.training.demonstrations "$@"
+uv run --locked --no-dev python -m \
+  osworld_parity.proper_vm_capability_ladder.rung1b_realapps.training.demonstrations "$@"
 ''', "--"]
 
 [resources]
@@ -30,4 +31,3 @@ output = "{outputs.result.path}"
 [env]
 PYTHONUNBUFFERED = "1"
 CUDA_VISIBLE_DEVICES = ""
-
