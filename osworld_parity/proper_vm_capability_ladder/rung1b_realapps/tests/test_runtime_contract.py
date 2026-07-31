@@ -9,6 +9,7 @@ from osworld_parity.proper_vm_capability_ladder.rung1b_realapps.fixtures import 
 from osworld_parity.proper_vm_capability_ladder.rung1b_realapps.vm import (
     GUEST_ROOT_NAME,
     _scroll_server_source,
+    _scroll_setup_script,
     resolve_guest_root,
 )
 
@@ -92,3 +93,7 @@ def test_scroll_server_serializes_guest_root_as_plain_path():
     )
     assert "PurePosixPath" not in source
     compile(source, "<scroll-server>", "exec")
+    setup = _scroll_setup_script(
+        fixture, PurePosixPath("/tmp/rung1b-scroll-test")
+    )
+    assert "wmctrl -a 'Local development scroll document'" in setup

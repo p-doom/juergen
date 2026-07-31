@@ -197,6 +197,12 @@ done
 nohup "$browser" --no-first-run --no-default-browser-check --disable-session-crashed-bubble \
   --disable-features=TranslateUI --start-maximized {shlex.quote(url)} \
   >"$root/chrome.log" 2>&1 </dev/null &
+for _ in $(seq 1 80); do
+  if wmctrl -l 2>/dev/null | grep -Fq 'Local development scroll document'; then break; fi
+  sleep 0.25
+done
+wmctrl -a 'Local development scroll document'
+wmctrl -r :ACTIVE: -b add,maximized 2>/dev/null || true
 """.strip()
 
 
