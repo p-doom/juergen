@@ -227,7 +227,6 @@ def validate_binding_receipt(
         for field in (
             "sequence",
             "provider_reset_sequence",
-            "prior_provider_transition_index",
             "new_provider_transition_index",
             "reset_started_monotonic_ns",
             "provider_reset_completed_monotonic_ns",
@@ -235,6 +234,11 @@ def validate_binding_receipt(
             "captured_wall_time_ns",
         ):
             _integer(row[field], f"reset-cycle {field}", minimum=1)
+        _integer(
+            row["prior_provider_transition_index"],
+            "reset-cycle prior_provider_transition_index",
+            minimum=0,
+        )
         labels = row["provider_transition_labels"]
         if not isinstance(labels, (list, tuple)) or tuple(labels[:2]) != (
             f"loadvm[{snapshot_id}]",
