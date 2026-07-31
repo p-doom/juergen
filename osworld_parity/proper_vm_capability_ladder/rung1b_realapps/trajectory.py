@@ -4,7 +4,12 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from ..rung1.executor import CompactRawExecutor, DispatchResult, NativeAbsoluteExecutor
+from ..rung1.executor import (
+    CompactRawExecutor,
+    DispatchResult,
+    NativeAbsoluteExecutor,
+    parse_compact_raw,
+)
 from .fixtures import Fixture
 
 
@@ -25,6 +30,7 @@ class ScriptedTrajectory:
     arm: str
     actions: tuple[dict[str, Any] | str, ...]
     action_classes: tuple[str, ...]
+    compact_targets: tuple[tuple[int, int] | None, ...] = ()
 
 
 def _compact_move_click(cursor: tuple[int, int], target: tuple[int, int]) -> str:
@@ -38,6 +44,26 @@ def _compact_move(cursor: tuple[int, int], target: tuple[int, int], suffix: str 
 
 def _compact_type(text: str) -> str:
     return f"0 0 0; type({json.dumps(text, ensure_ascii=False)})"
+
+
+def _recompile_compact_cursor(
+    action: str,
+    *,
+    cursor: tuple[int, int],
+    target: tuple[int, int] | None,
+) -> str:
+    """Rebase a compact turn from a fresh real cursor observation."""
+    parsed = parse_compact_raw(action)
+    if target is None:
+        dx, dy = parsed.dx, parsed.dy
+    else:
+        dx, dy = target[0] - cursor[0], target[1] - cursor[1]
+    _, separator, tail = action.partition(";")
+    compiled = f"{dx} {dy} {parsed.scroll}"
+    if separator:
+        compiled += ";" + tail
+    parse_compact_raw(compiled)
+    return compiled
 
 
 def build_trajectory(
@@ -70,6 +96,7 @@ def build_trajectory(
                 _compact_type(text),
                 "0 0 0; +ControlLeft +KeyS -KeyS -ControlLeft",
             )
+        compact_targets = (geometry.editor, None, None, None)
         classes = ("click", "key_chord", "coalesced_type", "key_chord")
     elif fixture.template == "local_document_scroll":
         direction = str(fixture.near_miss["direction"] if near_miss else fixture.params["direction"])
@@ -84,6 +111,7 @@ def build_trajectory(
                 _compact_move(cursor, geometry.scroll_surface),
                 f"0 0 {clicks}",
             )
+        compact_targets = (geometry.scroll_surface, None)
         classes = ("mouse_move", "scroll")
     else:
         target = geometry.drag_decoy if near_miss else geometry.drag_destination
@@ -99,10 +127,11 @@ def build_trajectory(
                 _compact_move(geometry.drag_source, target),
                 "0 0 0; -LMB",
             )
+        compact_targets = (geometry.drag_source, target, None)
         classes = ("button_hold", "mouse_move", "button_release")
     if len(actions) != fixture.horizon:
         raise AssertionError(f"trajectory/horizon mismatch for {fixture.id}")
-    return ScriptedTrajectory(arm, actions, classes)
+    return ScriptedTrajectory(arm, actions, classes, compact_targets)
 
 
 def execute_trajectory(
@@ -111,7 +140,7 @@ def execute_trajectory(
     compact: CompactRawExecutor,
 ) -> list[DispatchResult]:
     results: list[DispatchResult] = []
-    for action in trajectory.actions:
+    for index, action in enumerate(trajectory.actions):
         if trajectory.arm == "native_absolute_control":
             if not isinstance(action, dict):
                 raise TypeError("native action was not an object")
@@ -119,7 +148,15 @@ def execute_trajectory(
         else:
             if not isinstance(action, str):
                 raise TypeError("compact action was not text")
-            result = compact.execute(action)
+            if len(trajectory.compact_targets) != len(trajectory.actions):
+                raise ValueError("compact trajectory lacks cursor compilation targets")
+            cursor = compact.transport.cursor_position()
+            compiled = _recompile_compact_cursor(
+                action,
+                cursor=cursor,
+                target=trajectory.compact_targets[index],
+            )
+            result = compact.execute(compiled)
         if result.executor_dispatch_status != "ok":
             raise RuntimeError(f"scripted dispatch failed: {result}")
         results.append(result)

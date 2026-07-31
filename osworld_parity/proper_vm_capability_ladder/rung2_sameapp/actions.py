@@ -105,6 +105,18 @@ def compile_compact(
     geometry: dict[str, tuple[int, int]],
     cursor: tuple[int, int],
 ) -> tuple[str, tuple[int, int]]:
+    text, target_cursor, _ = compile_compact_with_cursor_evidence(
+        turn, geometry, cursor
+    )
+    return text, target_cursor
+
+
+def compile_compact_with_cursor_evidence(
+    turn: ActionTurn,
+    geometry: dict[str, tuple[int, int]],
+    cursor: tuple[int, int],
+) -> tuple[str, tuple[int, int], dict[str, Any]]:
+    """Compile from one fresh cursor read and retain the requested delta."""
     dx = dy = scroll = 0
     tail: list[str] = []
     target_cursor = cursor
@@ -139,7 +151,33 @@ def compile_compact(
     if tail:
         text += "; " + " ".join(tail)
     parse_compact_raw(text)
-    return text, target_cursor
+    return (
+        text,
+        target_cursor,
+        {
+            "cursor_before": list(cursor),
+            "requested_delta": [dx, dy],
+            "expected_cursor_after": list(target_cursor),
+        },
+    )
+
+
+def verify_compact_cursor_readback(
+    evidence: dict[str, Any], observed: tuple[int, int]
+) -> dict[str, Any]:
+    expected = evidence.get("expected_cursor_after")
+    verified = expected == list(observed)
+    result = {
+        **evidence,
+        "cursor_after_readback": list(observed),
+        "readback_verified": verified,
+    }
+    if not verified:
+        raise RuntimeError(
+            "compact cursor readback mismatch: "
+            f"expected {expected}, observed {list(observed)}"
+        )
+    return result
 
 
 def _button_token(button: str | None) -> str:

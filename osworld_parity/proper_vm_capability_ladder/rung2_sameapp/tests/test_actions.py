@@ -6,8 +6,10 @@ from pathlib import Path
 from osworld_parity.proper_vm_capability_ladder.rung1.executor import parse_compact_raw
 from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.actions import (
     compile_compact,
+    compile_compact_with_cursor_evidence,
     compile_native,
     validate_native,
+    verify_compact_cursor_readback,
 )
 from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.fixtures import (
     load_all_manifests,
@@ -48,3 +50,16 @@ def test_checked_in_schema_names_match_compilers() -> None:
     schemas = json.loads(path.read_text(encoding="utf-8"))
     assert schemas["schema_version"] == 1
     assert set(schemas) >= {"native_absolute_sequence_v1", "compact_raw_phaseb_v1"}
+
+
+def test_compact_compilation_records_and_verifies_fresh_cursor() -> None:
+    fixture = load_all_manifests()["development"].fixtures[0]
+    turn = build_trajectory(fixture).turns[0]
+    action, expected, evidence = compile_compact_with_cursor_evidence(
+        turn, _dummy_geometry(fixture.app), (123, 234)
+    )
+    parsed = parse_compact_raw(action)
+    assert evidence["cursor_before"] == [123, 234]
+    assert evidence["requested_delta"] == [parsed.dx, parsed.dy]
+    verified = verify_compact_cursor_readback(evidence, expected)
+    assert verified["readback_verified"] is True

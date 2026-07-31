@@ -16,6 +16,7 @@ from .selfcheck import (
     _validate_loaded_geometry,
 )
 from .server import FixtureHttpServer
+from .transport import ATOMIC_RESULT_PREFIX
 from .trajectory import Arm, build_trajectory
 from .vm import (
     DEFAULT_PROVIDER,
@@ -28,12 +29,17 @@ from .vm import (
 
 
 SPEC_PATH = Path(__file__).with_name("transport_diagnostic_spec.json")
+CERTIFICATION_SPEC_PATH = Path(__file__).with_name(
+    "transport_certification_spec.json"
+)
 FIXTURE_ID = "r1a-click-dev-1101"
 FIXTURE_SHA256 = "0124b5dab062e69ed83c37f9b91396b152b1f27a6cd3b9de72a0f9fa18ff5c0e"
 MANIFEST_PAYLOAD_SHA256 = (
     "5d4ea3ab33c084f1a5de1b716429c242a97452416f5b74efc3654b7d4b338097"
 )
 PAIR_COUNT = 5
+CERTIFICATION_SHARD_COUNT = 4
+CERTIFICATION_PAIRS_PER_SHARD = 25
 ARM_ORDER: tuple[Arm, ...] = (
     "native_absolute_control",
     "compact_raw_phaseb",
@@ -46,7 +52,9 @@ CLICK_CALL = "pyautogui.click(clicks=1, interval=0.05)"
 
 
 class TransportDiagnosticError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, evidence: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.evidence = evidence
 
 
 def _payload_sha256(payload: Any) -> str:
@@ -54,6 +62,25 @@ def _payload_sha256(payload: Any) -> str:
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def certification_trial_identity(
+    spec_sha256: str, shard_index: int, pair_index: int, arm: Arm
+) -> tuple[int, str, str]:
+    if len(spec_sha256) != 64:
+        raise TransportDiagnosticError("certification identity requires a spec SHA256")
+    if shard_index not in range(CERTIFICATION_SHARD_COUNT):
+        raise TransportDiagnosticError("certification shard index must be in [0, 3]")
+    if pair_index not in range(1, CERTIFICATION_PAIRS_PER_SHARD + 1):
+        raise TransportDiagnosticError("certification pair index must be in [1, 25]")
+    if arm not in ARM_ORDER:
+        raise TransportDiagnosticError(f"unsupported certification arm: {arm}")
+    global_pair_index = shard_index * CERTIFICATION_PAIRS_PER_SHARD + pair_index
+    pair_id = (
+        f"cert-{spec_sha256[:12]}-s{shard_index}-pair-{global_pair_index:03d}"
+    )
+    arm_slug = "native" if arm == ARM_ORDER[0] else "compact"
+    return global_pair_index, pair_id, f"{pair_id}-{arm_slug}"
 
 
 def load_transport_diagnostic_spec(
@@ -98,6 +125,56 @@ def load_transport_diagnostic_spec(
         )
         raise TransportDiagnosticError(
             f"transport diagnostic spec drifted in fields: {differing}"
+        )
+    return spec, hashlib.sha256(raw_bytes).hexdigest()
+
+
+def load_transport_certification_spec(
+    path: Path = CERTIFICATION_SPEC_PATH,
+) -> tuple[dict[str, Any], str]:
+    raw_bytes = path.read_bytes()
+    try:
+        spec = json.loads(raw_bytes)
+    except json.JSONDecodeError as exc:
+        raise TransportDiagnosticError(
+            "transport certification spec is invalid JSON"
+        ) from exc
+    expected = {
+        "schema_version": 1,
+        "suite": "rung1_shared_click_transport_certification",
+        "status": "authorized_full_certification",
+        "manifest_payload_sha256": MANIFEST_PAYLOAD_SHA256,
+        "fixture_id": FIXTURE_ID,
+        "fixture_sha256": FIXTURE_SHA256,
+        "shard_count": CERTIFICATION_SHARD_COUNT,
+        "pairs_per_shard": CERTIFICATION_PAIRS_PER_SHARD,
+        "total_pair_count": 100,
+        "trials_per_shard": 50,
+        "total_trial_count": 200,
+        "arm_order": list(ARM_ORDER),
+        "reset_before_every_trial": True,
+        "stop_on_first_mismatch": True,
+        "required_browser_sequence": list(BROWSER_SEQUENCE),
+        "required_semantic_operations": list(SEMANTIC_KINDS),
+        "required_lowered_operations": list(LOWERED_KINDS),
+        "required_backend_primitive": CLICK_CALL,
+        "required_x_event_sync": list(X_EVENT_SEQUENCE),
+        "required_final_pointer_mask": 0,
+        "dispatches_per_trial": 1,
+        "retry_count": 0,
+        "oracle_conditioned_dispatch": False,
+        "gpu_count": 0,
+        "model_access": False,
+        "sealed_evaluation_access": False,
+    }
+    if spec != expected:
+        differing = sorted(
+            key
+            for key in set(spec) | set(expected)
+            if spec.get(key) != expected.get(key)
+        )
+        raise TransportDiagnosticError(
+            f"transport certification spec drifted in fields: {differing}"
         )
     return spec, hashlib.sha256(raw_bytes).hexdigest()
 
@@ -152,8 +229,10 @@ def _atomic_contract(journal: dict[str, Any]) -> dict[str, Any]:
         "observed_pointer_button_mask": 0,
         "expected_pointer_button_mask": 0,
         "guest_process_count": 1,
+        "guest_returncode": 0,
         "cleanup_attempted": False,
         "error": None,
+        "failure_kind": None,
     }
     mismatches = {
         key: {"observed": state.get(key), "expected": value}
@@ -162,11 +241,34 @@ def _atomic_contract(journal: dict[str, Any]) -> dict[str, Any]:
     }
     if mismatches:
         raise TransportDiagnosticError(f"atomic state contract mismatch: {mismatches}")
+    if not str(state.get("raw_result_marker", "")).startswith(ATOMIC_RESULT_PREFIX):
+        raise TransportDiagnosticError("atomic state lacks raw result marker evidence")
+
+    for field in (
+        "cursor_before",
+        "cursor_after",
+        "semantic_operations",
+        "lowered_operations",
+    ):
+        if not isinstance(state.get(field), list):
+            raise TransportDiagnosticError(f"atomic state lacks {field} evidence")
+    if state.get("cursor") != state.get("cursor_after"):
+        raise TransportDiagnosticError("atomic cursor alias/readback mismatch")
+    lowered = state["lowered_operations"]
+    if [item.get("kind") for item in lowered][-1:] != ["click"]:
+        raise TransportDiagnosticError(f"semantic click was not lowered once: {lowered}")
 
     primitives = state.get("backend_primitives")
-    if not isinstance(primitives, list) or len(primitives) != 1:
+    if not isinstance(primitives, list):
+        raise TransportDiagnosticError("atomic state lacks backend primitives")
+    click_primitives = [
+        item
+        for item in primitives
+        if isinstance(item, dict) and item.get("kind") == "click"
+    ]
+    if len(click_primitives) != 1:
         raise TransportDiagnosticError("click did not lower to exactly one backend primitive")
-    primitive = primitives[0]
+    primitive = click_primitives[0]
     if not isinstance(primitive, dict) or {
         "kind": primitive.get("kind"),
         "button": primitive.get("button"),
@@ -195,8 +297,10 @@ def _atomic_contract(journal: dict[str, Any]) -> dict[str, Any]:
             raise TransportDiagnosticError(f"unsupported X event sync evidence: {item}")
     return {
         "lowered_operations": [str(primitive["kind"])],
-        "backend_primitives": primitives,
+        "backend_primitives": click_primitives,
         "x_event_sync_evidence": sync,
+        "real_cursor_before": list(state["cursor_before"]),
+        "real_cursor_after": list(state["cursor_after"]),
         "final_pointer_button_mask": int(state["pointer_button_mask"]),
     }
 
@@ -267,6 +371,9 @@ def _run_trial(
     pair_index: int,
     trial_index: int,
     arm: Arm,
+    pair_id: str,
+    trial_id: str,
+    global_pair_index: int,
 ) -> dict[str, Any]:
     transport = session.reset_to_ready()
     initial = session.launch_fixture(server, fixture)
@@ -281,6 +388,16 @@ def _run_trial(
         raise TransportDiagnosticError("fixed click trajectory contract drifted")
     after_sequence = int(server.store.snapshot(fixture.id)["last_client_sequence"])
     dispatch, journal = _execute(arm, transport, trajectory)
+    failed_atomic_states = [
+        state
+        for state in journal.get("atomic_action_states", [])
+        if isinstance(state, dict) and state.get("ok") is not True
+    ]
+    if failed_atomic_states:
+        raise TransportDiagnosticError(
+            "atomic guest action failed during the transport diagnostic",
+            evidence={"dispatch": dispatch, "journal": journal},
+        )
     _assert_dispatch_journal(fixture, arm, "transport diagnostic", journal)
     endpoint = trajectory.expected_endpoint
     semantic = _semantic_contract(dispatch, endpoint)
@@ -301,7 +418,10 @@ def _run_trial(
         )
     return {
         "pair_index": pair_index,
+        "global_pair_index": global_pair_index,
+        "pair_id": pair_id,
         "trial_index": trial_index,
+        "trial_id": trial_id,
         "arm": arm,
         "status": "passed",
         "reset_snapshot": READY_SNAPSHOT,
@@ -328,6 +448,8 @@ def _matching_contract(trial: dict[str, Any]) -> dict[str, Any]:
         "lowered_operations": trial["lowered_operations"],
         "backend_primitives": trial["backend_primitives"],
         "x_event_sync_evidence": trial["x_event_sync_evidence"],
+        "real_cursor_before": trial["real_cursor_before"],
+        "real_cursor_after": trial["real_cursor_after"],
         "browser_sequence": trial["browser_contract"]["sequence"],
         "pointer_hits": trial["browser_contract"]["pointer_hits"],
         "final_pointer_button_mask": trial["final_pointer_button_mask"],
@@ -342,16 +464,28 @@ def _checkpoint(
     pairs: list[dict[str, Any]],
     active_trial: dict[str, Any] | None,
     stage: str,
+    expected_pair_count: int = PAIR_COUNT,
+    suite: str = "rung1_shared_click_transport_diagnostic",
+    shard_index: int | None = None,
 ) -> None:
     _atomic_json(
         output / "transport_diagnostic_progress.json",
         {
             "status": "running",
-            "expected_pair_count": PAIR_COUNT,
-            "expected_trial_count": PAIR_COUNT * len(ARM_ORDER),
+            "suite": suite,
+            "shard_index": shard_index,
+            "expected_pair_count": expected_pair_count,
+            "expected_trial_count": expected_pair_count * len(ARM_ORDER),
             "completed_pair_count": len(pairs),
             "completed_trial_count": len(trials),
             "stop_on_first_mismatch": True,
+            "retry_count": 0,
+            "infrastructure_error_count": 0,
+            "verifier_failure_count": 0,
+            "injected_failure_count": 0,
+            "gpu_count": 0,
+            "model_access": False,
+            "sealed_evaluation_access": False,
             "stage": stage,
             "active_trial": active_trial,
             "pairs": pairs,
@@ -375,6 +509,48 @@ def validate_transport_diagnostic() -> dict[str, Any]:
         "fixture_sha256": fixture.fixture_sha256,
         "pair_count": PAIR_COUNT,
         "trial_count": PAIR_COUNT * len(ARM_ORDER),
+        "arm_trial_counts": {arm: PAIR_COUNT for arm in ARM_ORDER},
+        "retry_count": 0,
+        "infrastructure_error_count": 0,
+        "verifier_failure_count": 0,
+        "injected_failure_count": 0,
+        "gpu_count": 0,
+        "model_access": False,
+        "sealed_evaluation_access": False,
+    }
+
+
+def validate_transport_certification(shard_index: int) -> dict[str, Any]:
+    if shard_index not in range(CERTIFICATION_SHARD_COUNT):
+        raise TransportDiagnosticError("certification shard index must be in [0, 3]")
+    spec, spec_sha256 = load_transport_certification_spec()
+    manifest = load_manifest()
+    fixture = _select_fixture(manifest, spec)
+    first_global_pair = shard_index * CERTIFICATION_PAIRS_PER_SHARD + 1
+    return {
+        "schema_version": 1,
+        "status": "passed",
+        "suite": spec["suite"],
+        "mode": "validate",
+        "spec_sha256": spec_sha256,
+        "shard_index": shard_index,
+        "shard_count": CERTIFICATION_SHARD_COUNT,
+        "global_pair_range": [
+            first_global_pair,
+            first_global_pair + CERTIFICATION_PAIRS_PER_SHARD - 1,
+        ],
+        "manifest_payload_sha256": manifest.manifest_payload_sha256,
+        "fixture_id": fixture.id,
+        "fixture_sha256": fixture.fixture_sha256,
+        "pair_count": CERTIFICATION_PAIRS_PER_SHARD,
+        "trial_count": CERTIFICATION_PAIRS_PER_SHARD * len(ARM_ORDER),
+        "arm_trial_counts": {
+            arm: CERTIFICATION_PAIRS_PER_SHARD for arm in ARM_ORDER
+        },
+        "retry_count": 0,
+        "infrastructure_error_count": 0,
+        "verifier_failure_count": 0,
+        "injected_failure_count": 0,
         "gpu_count": 0,
         "model_access": False,
         "sealed_evaluation_access": False,
@@ -388,8 +564,23 @@ def run_vm_transport_diagnostic(
     qemu: Path,
     provider_path: Path,
     expected_provider_sha256: str | None,
+    certification_shard_index: int | None = None,
 ) -> dict[str, Any]:
-    spec, spec_sha256 = load_transport_diagnostic_spec()
+    if certification_shard_index is None:
+        spec, spec_sha256 = load_transport_diagnostic_spec()
+        pair_count = PAIR_COUNT
+        shard_index = None
+        global_pair_offset = 0
+        identity_prefix = "preflight"
+    else:
+        if certification_shard_index not in range(CERTIFICATION_SHARD_COUNT):
+            raise TransportDiagnosticError(
+                "certification shard index must be in [0, 3]"
+            )
+        spec, spec_sha256 = load_transport_certification_spec()
+        pair_count = CERTIFICATION_PAIRS_PER_SHARD
+        shard_index = certification_shard_index
+        global_pair_offset = shard_index * pair_count
     manifest = load_manifest()
     fixture = _select_fixture(manifest, spec)
     provider_sha256 = sha256_file(provider_path)
@@ -401,7 +592,14 @@ def run_vm_transport_diagnostic(
     pairs: list[dict[str, Any]] = []
     vm_log_dir = output / "vm_logs"
     _checkpoint(
-        output, trials=trials, pairs=pairs, active_trial=None, stage="starting_vm"
+        output,
+        trials=trials,
+        pairs=pairs,
+        active_trial=None,
+        stage="starting_vm",
+        expected_pair_count=pair_count,
+        suite=str(spec["suite"]),
+        shard_index=shard_index,
     )
     with FixtureHttpServer(manifest) as server, KvmFixtureSession(
         qcow=qcow,
@@ -409,13 +607,30 @@ def run_vm_transport_diagnostic(
         provider_path=provider_path,
         vm_log_dir=vm_log_dir,
     ) as session:
-        for pair_index in range(1, PAIR_COUNT + 1):
+        for pair_index in range(1, pair_count + 1):
+            if shard_index is None:
+                global_pair_index = global_pair_offset + pair_index
+                pair_id = f"{identity_prefix}-pair-{global_pair_index:03d}"
+            else:
+                global_pair_index, pair_id, _ = certification_trial_identity(
+                    spec_sha256, shard_index, pair_index, ARM_ORDER[0]
+                )
             pair_trials: list[dict[str, Any]] = []
             for arm in ARM_ORDER:
                 trial_index = len(trials) + 1
+                if shard_index is None:
+                    arm_slug = "native" if arm == ARM_ORDER[0] else "compact"
+                    trial_id = f"{pair_id}-{arm_slug}"
+                else:
+                    _, _, trial_id = certification_trial_identity(
+                        spec_sha256, shard_index, pair_index, arm
+                    )
                 active = {
                     "pair_index": pair_index,
+                    "global_pair_index": global_pair_index,
+                    "pair_id": pair_id,
                     "trial_index": trial_index,
+                    "trial_id": trial_id,
                     "arm": arm,
                     "fixture_id": fixture.id,
                 }
@@ -425,6 +640,9 @@ def run_vm_transport_diagnostic(
                     pairs=pairs,
                     active_trial=active,
                     stage="resetting_trial",
+                    expected_pair_count=pair_count,
+                    suite=str(spec["suite"]),
+                    shard_index=shard_index,
                 )
                 trial = _run_trial(
                     session=session,
@@ -433,6 +651,9 @@ def run_vm_transport_diagnostic(
                     pair_index=pair_index,
                     trial_index=trial_index,
                     arm=arm,
+                    pair_id=pair_id,
+                    trial_id=trial_id,
+                    global_pair_index=global_pair_index,
                 )
                 pair_trials.append(trial)
                 trials.append(trial)
@@ -442,6 +663,9 @@ def run_vm_transport_diagnostic(
                     pairs=pairs,
                     active_trial=active,
                     stage="trial_passed",
+                    expected_pair_count=pair_count,
+                    suite=str(spec["suite"]),
+                    shard_index=shard_index,
                 )
             native_contract = _matching_contract(pair_trials[0])
             compact_contract = _matching_contract(pair_trials[1])
@@ -452,9 +676,12 @@ def run_vm_transport_diagnostic(
                 )
             pair = {
                 "pair_index": pair_index,
+                "global_pair_index": global_pair_index,
+                "pair_id": pair_id,
                 "status": "passed",
                 "arm_order": list(ARM_ORDER),
                 "trial_indices": [item["trial_index"] for item in pair_trials],
+                "trial_ids": [item["trial_id"] for item in pair_trials],
                 "matched_contract_sha256": _payload_sha256(native_contract),
                 "matched_contract": native_contract,
             }
@@ -465,15 +692,30 @@ def run_vm_transport_diagnostic(
                 pairs=pairs,
                 active_trial=None,
                 stage="pair_passed",
+                expected_pair_count=pair_count,
+                suite=str(spec["suite"]),
+                shard_index=shard_index,
             )
-    if len(trials) != 10 or len(pairs) != 5:
-        raise TransportDiagnosticError("diagnostic ended before its fixed 10-trial horizon")
+    expected_trials = pair_count * len(ARM_ORDER)
+    if len(trials) != expected_trials or len(pairs) != pair_count:
+        raise TransportDiagnosticError(
+            "diagnostic ended before its fixed pair/trial horizon"
+        )
     return {
         "schema_version": 1,
         "status": "passed",
         "suite": spec["suite"],
         "mode": "vm",
         "spec_sha256": spec_sha256,
+        "shard_index": shard_index,
+        "shard_count": (
+            CERTIFICATION_SHARD_COUNT if shard_index is not None else None
+        ),
+        "global_pair_range": (
+            [global_pair_offset + 1, global_pair_offset + pair_count]
+            if shard_index is not None
+            else None
+        ),
         "snapshot_name": READY_SNAPSHOT,
         "manifest_payload_sha256": manifest.manifest_payload_sha256,
         "fixture_id": fixture.id,
@@ -481,9 +723,18 @@ def run_vm_transport_diagnostic(
         "pair_count": len(pairs),
         "trial_count": len(trials),
         "passed_trial_count": len(trials),
+        "arm_trial_counts": {
+            arm: sum(trial["arm"] == arm for trial in trials)
+            for arm in ARM_ORDER
+        },
+        "ordered_pair_ids": [pair["pair_id"] for pair in pairs],
+        "ordered_trial_ids": [trial["trial_id"] for trial in trials],
         "reset_count": len(trials),
         "dispatch_count": len(trials),
         "retry_count": 0,
+        "infrastructure_error_count": 0,
+        "verifier_failure_count": 0,
+        "injected_failure_count": 0,
         "oracle_invocation_count": 0,
         "oracle_conditioned_dispatch": False,
         "stop_on_first_mismatch": True,
@@ -504,6 +755,10 @@ def run_vm_transport_diagnostic(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("validate", "vm"), required=True)
+    parser.add_argument(
+        "--suite", choices=("preflight", "certification"), default="preflight"
+    )
+    parser.add_argument("--shard-index", type=int)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--qcow", type=Path, default=DEFAULT_QCOW)
     parser.add_argument("--qemu", type=Path, default=DEFAULT_QEMU)
@@ -515,11 +770,28 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     args.output.mkdir(parents=True, exist_ok=True)
-    marker = args.output / "transport_diagnostic.json"
+    certification = args.suite == "certification"
+    marker = (
+        args.output / f"transport_certification_shard_{args.shard_index}.json"
+        if certification
+        else args.output / "transport_diagnostic.json"
+    )
     marker.unlink(missing_ok=True)
     try:
+        if certification and args.shard_index not in range(CERTIFICATION_SHARD_COUNT):
+            raise TransportDiagnosticError(
+                "certification requires --shard-index in [0, 3]"
+            )
+        if not certification and args.shard_index is not None:
+            raise TransportDiagnosticError(
+                "--shard-index is only valid for the certification suite"
+            )
         payload = (
-            validate_transport_diagnostic()
+            (
+                validate_transport_certification(args.shard_index)
+                if certification
+                else validate_transport_diagnostic()
+            )
             if args.mode == "validate"
             else run_vm_transport_diagnostic(
                 output=args.output,
@@ -527,21 +799,54 @@ def main(argv: list[str] | None = None) -> int:
                 qemu=args.qemu,
                 provider_path=args.provider,
                 expected_provider_sha256=args.expected_provider_sha256,
+                certification_shard_index=(
+                    args.shard_index if certification else None
+                ),
             )
         )
         _atomic_json(marker, payload)
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
     except Exception as exc:
+        evidence = getattr(exc, "evidence", None)
+        evidence_failure_kind = (
+            evidence.get("failure_kind") if isinstance(evidence, dict) else None
+        )
+        failure_kind = (
+            evidence_failure_kind
+            if evidence_failure_kind in {"verification", "infrastructure", "injected"}
+            else (
+                "verification"
+                if isinstance(exc, TransportDiagnosticError)
+                else "infrastructure"
+            )
+        )
         failure = {
             "schema_version": 1,
             "status": "failed",
             "mode": args.mode,
+            "suite": args.suite,
+            "shard_index": args.shard_index,
+            "retry_count": 0,
+            "infrastructure_error_count": int(failure_kind == "infrastructure"),
+            "verifier_failure_count": int(failure_kind == "verification"),
+            "injected_failure_count": int(failure_kind == "injected"),
+            "gpu_count": 0,
+            "model_access": False,
+            "sealed_evaluation_access": False,
             "error_type": type(exc).__name__,
+            "failure_kind": failure_kind,
             "message": str(exc),
+            "evidence": evidence,
             "traceback": traceback.format_exc(),
         }
-        _atomic_json(args.output / "failure.json", failure)
+        failure_marker = (
+            args.output
+            / f"transport_certification_failure_shard_{args.shard_index}.json"
+            if certification
+            else args.output / "failure.json"
+        )
+        _atomic_json(failure_marker, failure)
         print(json.dumps(failure, ensure_ascii=False, sort_keys=True), file=sys.stderr)
         return 2
 

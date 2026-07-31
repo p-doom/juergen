@@ -64,24 +64,43 @@ class SingleProcessHttpTransport(HttpVmTransport):
     def __init__(self) -> None:
         super().__init__("http://not-used.invalid")
         self.execute_calls: list[list[str]] = []
+        self.cursor = (10, 20)
 
-    def execute_argv(self, argv: list[str]) -> dict:
+    def cursor_position(self) -> tuple[int, int]:
+        return self.cursor
+
+    def execute_argv(self, argv: list[str], *, check: bool = True) -> dict:
         self.execute_calls.append(argv)
+        self.cursor = (300, 400)
         payload = {
             "_r1a_schema": 1,
             "ok": True,
             "cursor": [300, 400],
+            "cursor_before": [10, 20],
+            "cursor_after": [300, 400],
             "pointer_button_mask": 0,
             "observed_pointer_button_mask": 0,
             "expected_pointer_button_mask": 0,
             "guest_process_count": 1,
             "cleanup_attempted": False,
             "error": None,
+            "failure_kind": None,
             "operations": [
                 {"kind": "move_to", "args": [300, 400]},
                 {"kind": "mouse_down", "args": ["left"]},
                 {"kind": "mouse_up", "args": ["left"]},
             ],
+            "semantic_operations": [
+                {"kind": "move_relative", "args": [290, 380]},
+                {"kind": "mouse_down", "args": ["left"]},
+                {"kind": "mouse_up", "args": ["left"]},
+            ],
+            "lowered_operations": [
+                {"kind": "move_relative", "args": [290, 380]},
+                {"kind": "click", "args": ["left"]},
+            ],
+            "backend_primitives": [],
+            "x_event_sync_evidence": [],
         }
         return {
             "status": "success",
@@ -112,11 +131,14 @@ def test_click_adapters_match_cursor_and_button_transitions() -> None:
         Operation("mouse_down", ("left",)),
         Operation("mouse_up", ("left",)),
     )
-    assert native_transport.atomic_inputs == [expected_semantics]
+    assert native_transport.atomic_inputs == [
+        (Operation("move_to", (300, 400)),) + expected_semantics
+    ]
     assert raw_transport.atomic_inputs == [
         (Operation("move_relative", (290, 380)),) + expected_semantics
     ]
     assert lower_guest_operations(native_transport.atomic_inputs[0]) == (
+        Operation("move_to", (300, 400)),
         Operation("click", ("left",)),
     )
     assert lower_guest_operations(raw_transport.atomic_inputs[0]) == (
@@ -145,6 +167,7 @@ def test_compact_click_is_one_guest_process_with_compiled_order() -> None:
     assert result.atomic_state is not None
     assert result.atomic_state["guest_process_count"] == 1
     assert result.atomic_state["pointer_button_mask"] == 0
+    assert result.atomic_state["cursor_readback_verified"] is True
 
 
 def test_atomic_exception_releases_preexisting_and_new_buttons() -> None:
@@ -159,6 +182,9 @@ def test_atomic_exception_releases_preexisting_and_new_buttons() -> None:
     assert result.ok is False
     assert result.cleanup_attempted is True
     assert result.pointer_button_mask == 0
+    assert result.guest_returncode == 1
+    assert result.failure_kind == "injected"
+    assert result.raw_result_marker.startswith(ATOMIC_RESULT_PREFIX)
     assert transport.audit.held_buttons == set()
     assert "injected failure" in (result.error or "")
 
@@ -172,6 +198,52 @@ def test_atomic_exception_releases_preexisting_and_new_buttons() -> None:
     )
     assert "except BaseException" in program
     assert "pyautogui.mouseUp(button=_button)" in program
+    assert "sys.exit(1)" in program
+
+
+def test_http_atomic_failure_preserves_nonzero_marker_evidence() -> None:
+    class FailedHttpTransport(HttpVmTransport):
+        def __init__(self) -> None:
+            super().__init__("http://not-used.invalid")
+
+        def execute_argv(self, argv: list[str], *, check: bool = True) -> dict:
+            payload = {
+                "_r1a_schema": 1,
+                "ok": False,
+                "cursor": [10, 20],
+                "cursor_before": [10, 20],
+                "cursor_after": [10, 20],
+                "pointer_button_mask": 0,
+                "observed_pointer_button_mask": -1,
+                "expected_pointer_button_mask": 0,
+                "guest_process_count": 1,
+                "cleanup_attempted": True,
+                "error": "RuntimeError: injected failure",
+                "failure_kind": "injected",
+                "operations": [],
+                "semantic_operations": [
+                    {"kind": "raise_for_test", "args": ["injected failure"]}
+                ],
+                "lowered_operations": [
+                    {"kind": "raise_for_test", "args": ["injected failure"]}
+                ],
+                "backend_primitives": [],
+                "x_event_sync_evidence": [],
+            }
+            return {
+                "status": "error",
+                "returncode": 1,
+                "output": ATOMIC_RESULT_PREFIX + json.dumps(payload),
+                "error": "",
+            }
+
+    result = FailedHttpTransport().execute_atomic(
+        (Operation("raise_for_test", ("injected failure",)),)
+    )
+    assert result.ok is False
+    assert result.guest_returncode == 1
+    assert result.failure_kind == "injected"
+    assert result.raw_result_marker.startswith(ATOMIC_RESULT_PREFIX)
 
 
 def test_intervening_move_prevents_click_coalescing() -> None:
@@ -191,6 +263,72 @@ def test_intervening_move_prevents_click_coalescing() -> None:
     assert "RUNG1A_ATOMIC_STEP_1:move_relative" in program
     assert "RUNG1A_ATOMIC_STEP_2:mouse_up" in program
     assert "RUNG1A_ATOMIC_STEP_0:click" not in program
+
+
+def test_nonzero_clamped_compact_delta_remains_auditable() -> None:
+    transport = RecordingTransport(cursor=(1919, 100), screen=(1920, 1080))
+    result = CompactRawExecutor(transport).execute("10 0 0")
+    assert result.executor_dispatch_status == "ok"
+    assert result.atomic_state is not None
+    state = result.atomic_state
+    assert state["semantic_operations"] == [
+        {"kind": "move_relative", "args": [10, 0]}
+    ]
+    assert state["lowered_operations"] == state["semantic_operations"]
+    assert state["requested_relative_delta"] == [10, 0]
+    assert state["executed_cursor_delta"] == [0, 0]
+    assert state["backend_primitives"] == [
+        {
+            "kind": "move_to",
+            "call": "recording.move_to",
+            "requested_delta": [10, 0],
+            "cursor_before": [1919, 100],
+            "cursor_after": [1919, 100],
+            "actual_delta": [0, 0],
+            "clamped": True,
+        }
+    ]
+
+
+def test_compact_turn_fails_cursor_readback_verification() -> None:
+    class StaleReadbackTransport(RecordingTransport):
+        def __init__(self) -> None:
+            super().__init__(cursor=(10, 20))
+            self.read_count = 0
+
+        def cursor_position(self) -> tuple[int, int]:
+            self.read_count += 1
+            if self.read_count == 1:
+                return self._cursor
+            return self._cursor[0] + 1, self._cursor[1]
+
+    transport = StaleReadbackTransport()
+    result = CompactRawExecutor(transport).execute("5 0 0")
+    assert transport.read_count == 2
+    assert result.executor_dispatch_status == "error"
+    assert result.atomic_state is not None
+    assert result.atomic_state["cursor_readback_verified"] is False
+    assert result.atomic_state["failure_kind"] == "verification"
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"action": "mouse_move", "coordinate": [20, 30]},
+        {"action": "left_click", "coordinate": [20, 30]},
+        {"action": "left_click_drag", "coordinate": [20, 30]},
+        {"action": "scroll", "clicks": -3},
+        {"action": "key", "keys": ["ControlLeft", "KeyA"]},
+        {"action": "type", "text": "λ"},
+        {"action": "wait", "time": 0},
+    ],
+)
+def test_each_native_logical_action_uses_one_guest_process(action) -> None:
+    transport = RecordingTransport(cursor=(10, 20))
+    result = NativeAbsoluteExecutor(transport).execute(action)
+    assert transport.atomic_invocations == 1
+    assert result.atomic_state is not None
+    assert result.atomic_state["guest_process_count"] == 1
 
 
 def test_atomic_compiler_rejects_impossible_held_button_transitions() -> None:

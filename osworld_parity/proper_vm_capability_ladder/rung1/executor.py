@@ -44,8 +44,7 @@ class NativeAbsoluteExecutor:
         if not isinstance(arguments, dict):
             raise TypeError("native absolute action must be an object")
         action = str(arguments.get("action", "")).strip().lower()
-        before = len(self.transport.audit.operations)
-        atomic_result: AtomicExecutionResult | None = None
+        operations: list[Operation] = []
 
         def move_if_present(required: bool = False) -> None:
             coordinate = arguments.get("coordinate")
@@ -53,43 +52,55 @@ class NativeAbsoluteExecutor:
                 return
             if not isinstance(coordinate, (list, tuple)) or len(coordinate) != 2:
                 raise ValueError(f"{action} requires coordinate [x, y]")
-            self.transport.move_to(int(round(coordinate[0])), int(round(coordinate[1])))
+            operations.append(
+                Operation(
+                    "move_to",
+                    (int(round(coordinate[0])), int(round(coordinate[1]))),
+                )
+            )
 
         if action == "mouse_move":
             move_if_present(required=True)
             action_class = "mouse_move"
         elif action == "left_click":
             move_if_present()
-            atomic_result = self.transport.execute_atomic(
+            operations.extend(
                 (
                     Operation("mouse_down", ("left",)),
                     Operation("mouse_up", ("left",)),
                 )
             )
-            if not atomic_result.ok:
-                raise TransportError(
-                    f"shared click primitive failed: {atomic_result.error}"
-                )
             action_class = "click"
         elif action == "mouse_down":
             move_if_present()
-            self.transport.mouse_down(str(arguments.get("button", "left")))
+            operations.append(
+                Operation("mouse_down", (str(arguments.get("button", "left")),))
+            )
             action_class = "button_hold"
         elif action == "mouse_up":
             move_if_present()
-            self.transport.mouse_up(str(arguments.get("button", "left")))
+            operations.append(
+                Operation("mouse_up", (str(arguments.get("button", "left")),))
+            )
             action_class = "button_release"
         elif action in {"left_click_drag", "drag_to"}:
             coordinate = arguments.get("coordinate")
             if not isinstance(coordinate, (list, tuple)) or len(coordinate) != 2:
                 raise ValueError(f"{action} requires coordinate [x, y]")
-            self.transport.mouse_down("left")
-            self.transport.move_to(int(round(coordinate[0])), int(round(coordinate[1])))
-            self.transport.mouse_up("left")
+            operations.extend(
+                (
+                    Operation("mouse_down", ("left",)),
+                    Operation(
+                        "move_to",
+                        (int(round(coordinate[0])), int(round(coordinate[1]))),
+                    ),
+                    Operation("mouse_up", ("left",)),
+                )
+            )
             action_class = "drag"
         elif action == "scroll":
             clicks = int(round(float(arguments.get("clicks", arguments.get("pixels", 0)))))
-            self.transport.scroll(clicks)
+            operations.append(Operation("scroll", (clicks,)))
             action_class = "scroll"
         elif action == "key":
             keys = arguments.get("keys")
@@ -97,28 +108,34 @@ class NativeAbsoluteExecutor:
                 keys = [keys]
             if not isinstance(keys, list) or not all(isinstance(key, str) for key in keys):
                 raise ValueError("key action requires string keys")
-            self.transport.key_chord(keys)
+            operations.extend(Operation("key_down", (key,)) for key in keys)
+            operations.extend(Operation("key_up", (key,)) for key in reversed(keys))
             action_class = "key_chord"
         elif action == "type":
             text = arguments.get("text")
             if not isinstance(text, str):
                 raise ValueError("type action requires string text")
-            self.transport.coalesced_type(text)
+            operations.append(Operation("coalesced_type", (text,)))
             action_class = "coalesced_type"
         elif action == "wait":
-            self.transport.wait(float(arguments.get("time", 1.0)))
+            seconds = max(0.0, min(10.0, float(arguments.get("time", 1.0))))
+            operations.append(Operation("wait", (seconds,)))
             action_class = "wait"
         else:
             raise ValueError(f"unsupported native absolute action {action!r}")
+        atomic_result = self.transport.execute_atomic(tuple(operations))
+        if not atomic_result.ok:
+            raise TransportError(
+                f"shared atomic input primitive failed: {atomic_result.error}",
+                evidence=atomic_result.as_dict(),
+            )
         return DispatchResult(
             adapter=self.name,
             parse_status="ok",
             executor_dispatch_status="ok",
             action_class=action_class,
-            operations=tuple(self.transport.audit.operations[before:]),
-            atomic_state=(
-                atomic_result.as_dict() if atomic_result is not None else None
-            ),
+            operations=atomic_result.operations,
+            atomic_state=atomic_result.as_dict(),
         )
 
 
@@ -192,6 +209,7 @@ class CompactRawExecutor:
         self.transport = transport
 
     def execute(self, text: str) -> DispatchResult:
+        cursor_before_read = self.transport.cursor_position()
         action = parse_compact_raw(text)
         operations: list[Operation] = []
         if action.dx or action.dy:
@@ -222,12 +240,45 @@ class CompactRawExecutor:
                 operations.append(Operation(kind, (element.value,)))
                 classes.add("key_chord")
         result = self.transport.execute_atomic(tuple(operations))
+        cursor_after_read = self.transport.cursor_position()
+        before_verified = cursor_before_read == result.cursor_before
+        after_verified = cursor_after_read == result.cursor_after
+        readback_verified = before_verified and after_verified
+        atomic_state = result.as_dict()
+        atomic_state.update(
+            {
+                "compact_cursor_before_read": list(cursor_before_read),
+                "compact_cursor_after_read": list(cursor_after_read),
+                "cursor_before_verified": before_verified,
+                "cursor_after_verified": after_verified,
+                "cursor_readback_verified": readback_verified,
+                "requested_relative_delta": [action.dx, action.dy],
+                "executed_cursor_delta": [
+                    result.cursor_after[0] - result.cursor_before[0],
+                    result.cursor_after[1] - result.cursor_before[1],
+                ],
+            }
+        )
+        if result.ok and not readback_verified:
+            atomic_state.update(
+                {
+                    "ok": False,
+                    "failure_kind": "verification",
+                    "error": (
+                        "compact cursor readback mismatch: "
+                        f"host {cursor_before_read}->{cursor_after_read}, "
+                        f"guest {result.cursor_before}->{result.cursor_after}"
+                    ),
+                }
+            )
         action_class = "+".join(sorted(classes)) if classes else "no_op"
         return DispatchResult(
             adapter=self.name,
             parse_status="ok",
-            executor_dispatch_status="ok" if result.ok else "error",
+            executor_dispatch_status=(
+                "ok" if result.ok and readback_verified else "error"
+            ),
             action_class=action_class,
             operations=result.operations,
-            atomic_state=result.as_dict(),
+            atomic_state=atomic_state,
         )

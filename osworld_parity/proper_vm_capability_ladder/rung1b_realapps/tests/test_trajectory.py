@@ -8,6 +8,7 @@ from osworld_parity.proper_vm_capability_ladder.rung1.transport import Recording
 from osworld_parity.proper_vm_capability_ladder.rung1b_realapps.fixtures import load_manifest
 from osworld_parity.proper_vm_capability_ladder.rung1b_realapps.trajectory import (
     ARMS,
+    _recompile_compact_cursor,
     build_trajectory,
     execute_trajectory,
 )
@@ -44,3 +45,10 @@ def test_drag_uses_explicit_hold_move_release():
     for arm in ARMS:
         trajectory = build_trajectory(fixture, arm=arm, cursor=(71, 83))
         assert trajectory.action_classes == ("button_hold", "mouse_move", "button_release")
+
+
+def test_compact_cursor_is_recompiled_from_each_fresh_read() -> None:
+    action = "889 457 0; +LMB -LMB"
+    assert _recompile_compact_cursor(
+        action, cursor=(100, 200), target=(960, 540)
+    ) == "860 340 0; +LMB -LMB"

@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "suite": "rung1_shared_click_transport_certification",
+  "status": "authorized_full_certification",
+  "manifest_payload_sha256": "5d4ea3ab33c084f1a5de1b716429c242a97452416f5b74efc3654b7d4b338097",
+  "fixture_id": "r1a-click-dev-1101",
+  "fixture_sha256": "0124b5dab062e69ed83c37f9b91396b152b1f27a6cd3b9de72a0f9fa18ff5c0e",
+  "shard_count": 4,
+  "pairs_per_shard": 25,
+  "total_pair_count": 100,
+  "trials_per_shard": 50,
+  "total_trial_count": 200,
+  "arm_order": [
+    "native_absolute_control",
+    "compact_raw_phaseb"
+  ],
+  "reset_before_every_trial": true,
+  "stop_on_first_mismatch": true,
+  "required_browser_sequence": [
+    "pointerdown",
+    "pointerup",
+    "click"
+  ],
+  "required_semantic_operations": [
+    "move_to",
+    "mouse_down",
+    "mouse_up"
+  ],
+  "required_lowered_operations": [
+    "click"
+  ],
+  "required_backend_primitive": "pyautogui.click(clicks=1, interval=0.05)",
+  "required_x_event_sync": [
+    "mouse_down",
+    "mouse_up"
+  ],
+  "required_final_pointer_mask": 0,
+  "dispatches_per_trial": 1,
+  "retry_count": 0,
+  "oracle_conditioned_dispatch": false,
+  "gpu_count": 0,
+  "model_access": false,
+  "sealed_evaluation_access": false
+}
