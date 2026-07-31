@@ -1,0 +1,32 @@
+{
+  "comparison_claim": "complete_system_parity_not_interface_only_causal",
+  "comparison_phase": "pre_phaseb",
+  "models": {
+    "compact_raw_phaseb": {
+      "artifact_id": "artifact_e84082512c719044",
+      "artifact_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_multistep_curriculum_A_to_B_raw_pre_r256_lr5e5_s750_recovered_v1_run_019fb59ca7927631b332d44a4adc27f6",
+      "checkpoint_alias": "synthetic_multistep_curriculum_A_to_B_raw_pre_r256_lr5e5_s750_recovered_v1_run_019fb59ca7927631b332d44a4adc27f6",
+      "manifest_name": "curriculum_train_export_manifest.json",
+      "manifest_sha256": "44bb75ceb916e806d766233e402e1ef9ded2ce1a5716769dbe218fe333aca519",
+      "model_server_path": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_multistep_curriculum_A_to_B_raw_pre_r256_lr5e5_s750_recovered_v1_run_019fb59ca7927631b332d44a4adc27f6/hf",
+      "source_job_id": 136207,
+      "source_run_id": "run_019fba192d0378d3834aab102678b999",
+      "weights_name": "model.safetensors",
+      "weights_sha256": "1f36603999c05a644cd47af0bf5dd4472971df8fe45207bc27173f3817bd9237"
+    },
+    "native_absolute_control": {
+      "artifact_id": "artifact_43c240d8bf618871",
+      "artifact_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/relative_factorial_absraw_pre_hf_v1_run_019fb44ae67d76e1b022d43362ffd5d2",
+      "checkpoint_alias": "relative_factorial_absraw_pre_hf_v1_run_019fb44ae67d76e1b022d43362ffd5d2",
+      "manifest_name": "export_manifest.json",
+      "manifest_sha256": "f7c1d08e78f2a36f8aadb4df79ba671c570097d18620f832438799eee66f0bf7",
+      "model_server_path": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/relative_factorial_absraw_pre_hf_v1_run_019fb44ae67d76e1b022d43362ffd5d2/hf",
+      "source_job_id": 136209,
+      "source_run_id": "run_019fba193d3c79e2be1bcc60cebf8cac",
+      "weights_name": "model.safetensors",
+      "weights_sha256": "a065352ba79e43a5e5742d14f5e8589bbff2188a4e564a62e20dcca262656fb1"
+    }
+  },
+  "schema_version": 1,
+  "shared_click_backend": "pyautogui_release_motion"
+}

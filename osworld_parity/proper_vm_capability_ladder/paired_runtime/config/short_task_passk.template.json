@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "suite": "proper_vm_prephaseb_complete_system_short_passk_v1",
+  "comparison_phase": "pre_phaseb",
+  "comparison_claim": "complete_system_parity_not_interface_only_causal",
+  "shared_click_backend": "pyautogui_release_motion",
+  "split": "development",
+  "development_only": true,
+  "heldout_access": false,
+  "task_manifest_payload_sha256": "d07985e5e9ae6612a6ca829e7c7d9f9dfcdb1152e04fc821d159362071aa2ddc",
+  "expected_executor_ready_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "expected_executor_ready_artifact_id": "UNRESOLVED_PIN:executor_v4_ready_artifact_id",
+  "expected_executor_certification_schema": "proper_vm_executor_cert_v1",
+  "expected_task_setup_validation_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "expected_task_setup_validation_artifact_id": "UNRESOLVED_PIN:c603_task_setup_validation_artifact_id",
+  "expected_task_setup_validation_schema": "multistep_sameapp_task_setup_validation_v1",
+  "curriculum_commit": "c6039b7658e89ef6d1aae607bd0c19281b0354ef",
+  "curriculum_runtime_binding_schema": "proper_vm_sameapp_runtime_binding_receipt_v1",
+  "evaluator_commit": "2b6d2cc34ae20cf534ebfd3ebdb8d37b897ba5a4",
+  "arms": [
+    {
+      "name": "native_absolute_control",
+      "action_interface": "native_absolute_sequence_v1",
+      "checkpoint": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/relative_factorial_absraw_pre_hf_v1_run_019fb44ae67d76e1b022d43362ffd5d2/hf",
+      "checkpoint_sha256": "a065352ba79e43a5e5742d14f5e8589bbff2188a4e564a62e20dcca262656fb1",
+      "checkpoint_artifact_id": "artifact_43c240d8bf618871",
+      "checkpoint_manifest_sha256": "f7c1d08e78f2a36f8aadb4df79ba671c570097d18620f832438799eee66f0bf7",
+      "model_pin_source": "slurm_job_136209_run_019fba193d3c79e2be1bcc60cebf8cac",
+      "prompt_id": "prephaseb-native-absraw-r32-v1",
+      "prompt_sha256": "248c161d3b63dcbf5bffab979e34c7f11cdab4eef527e8e2f2cd71fe66afdc3f",
+      "generation": {
+        "do_sample": true,
+        "temperature": 0.7,
+        "seed_source": "trial_generation_seeds_by_arm_v1"
+      }
+    },
+    {
+      "name": "compact_raw_phaseb",
+      "action_interface": "compact_raw_phaseb_v1",
+      "checkpoint": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_multistep_curriculum_A_to_B_raw_pre_r256_lr5e5_s750_recovered_v1_run_019fb59ca7927631b332d44a4adc27f6/hf",
+      "checkpoint_sha256": "1f36603999c05a644cd47af0bf5dd4472971df8fe45207bc27173f3817bd9237",
+      "checkpoint_artifact_id": "artifact_e84082512c719044",
+      "checkpoint_manifest_sha256": "44bb75ceb916e806d766233e402e1ef9ded2ce1a5716769dbe218fe333aca519",
+      "model_pin_source": "slurm_job_136207_run_019fba192d0378d3834aab102678b999",
+      "prompt_id": "prephaseb-compact-relative-a-to-b-r256-lr5e5-v1",
+      "prompt_sha256": "3aaffcee592ef4c069183b2da5994b9fa971ab434d34a6708b078d2d27b402f5",
+      "generation": {
+        "do_sample": true,
+        "temperature": 0.7,
+        "seed_source": "trial_generation_seeds_by_arm_v1"
+      }
+    }
+  ],
+  "runtime": {
+    "runtime_id": "proper-vm-prephaseb-real-short-passk-v1",
+    "module": "osworld_parity.proper_vm_capability_ladder.paired_runtime.runtime",
+    "factory": "create_runtime",
+    "source_sha256": "b49d0d36a6e7a2b63fd02b43d9d509812a7a5531b3e95d474201663e7374438e",
+    "contract_schema": "proper_vm_paired_runtime_v1"
+  },
+  "budget": {
+    "max_model_turns_per_trial": 8,
+    "max_model_turns_per_semantic_step": 8,
+    "max_logical_semantic_steps": 4,
+    "max_primitive_actions_per_trial": 8,
+    "max_emitted_primitive_events_per_trial": 25,
+    "max_output_tokens_per_turn": 512,
+    "max_total_output_tokens": 4096,
+    "wall_time_seconds": 600
+  },
+  "modes": [
+    "gold_history_one_step",
+    "gold_prefix_horizon",
+    "natural_closed_loop"
+  ],
+  "gold_prefix_horizons": [2, 4, 8],
+  "attempts_per_cell": 8,
+  "order_seed": 20260801,
+  "shard_seed": 44,
+  "sampling_seed": 424242,
+  "sampling_seed_policy": "deterministic_unique_per_attempt_arm_v1",
+  "bootstrap_seed": 20260801,
+  "bootstrap_resamples": 10000,
+  "exclusions": [],
+  "manifest_payload_sha256": "f999a1b13e8842b0293331b0ba68afeedc4231458274d7da9b60c9fb2d72124f"
+}

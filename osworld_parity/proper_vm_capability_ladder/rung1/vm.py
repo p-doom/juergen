@@ -646,7 +646,8 @@ class KvmFixtureSession:
         after = self.provider.state(str(self.qcow))
         ports = after["ports"]
         port = int(ports["server"])
-        self._chromium_port = int(ports["chromium"])
+        if "chromium" in ports:
+            self._chromium_port = int(ports["chromium"])
         # Sessions and host-side input audits must never cross an episode reset.
         self.transport = HttpVmTransport(f"http://127.0.0.1:{port}")
         self._verify_reset_sentinel_removed(sentinel_path)

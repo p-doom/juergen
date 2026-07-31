@@ -1,0 +1,49 @@
+name = "proper_vm_prephaseb_short_passk_shard_3_gpu_kvm_v1"
+repo = "juergen_real_vm_passk"
+command = ["bash", "osworld_parity/proper_vm_capability_ladder/paired_runtime/run_shard.sh", "paired_eval run", "--shard-index=3", "--shard-count=5", "/dev/kvm", "CUDA_VISIBLE_DEVICES"]
+[resources]
+gpus = 2
+cpus = 16
+mem = "128GB"
+time = "1-00:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1", "--signal=B:TERM@180"]
+[inputs.executor_readiness]
+type = "external"
+path = "UNRESOLVED_PIN:executor_v4_ready_artifact"
+[inputs.task_setup_validation]
+type = "external"
+path = "UNRESOLVED_PIN:c603_task_setup_validation_artifact"
+[outputs.result]
+type = "eval_result"
+marker = "results.jsonl"
+alias = "proper_vm_prephaseb_short_passk_shard_3_{run.id}"
+[args]
+shard_index = "3"
+shard_count = "5"
+native_checkpoint = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/relative_factorial_absraw_pre_hf_v1_run_019fb44ae67d76e1b022d43362ffd5d2/hf"
+native_checkpoint_sha256 = "a065352ba79e43a5e5742d14f5e8589bbff2188a4e564a62e20dcca262656fb1"
+native_checkpoint_root = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/relative_factorial_absraw_pre_hf_v1_run_019fb44ae67d76e1b022d43362ffd5d2"
+native_checkpoint_artifact_id = "artifact_43c240d8bf618871"
+native_checkpoint_alias = "relative_factorial_absraw_pre_hf_v1_run_019fb44ae67d76e1b022d43362ffd5d2"
+native_checkpoint_manifest_name = "export_manifest.json"
+native_checkpoint_manifest_sha256 = "f7c1d08e78f2a36f8aadb4df79ba671c570097d18620f832438799eee66f0bf7"
+compact_checkpoint = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_multistep_curriculum_A_to_B_raw_pre_r256_lr5e5_s750_recovered_v1_run_019fb59ca7927631b332d44a4adc27f6/hf"
+compact_checkpoint_sha256 = "1f36603999c05a644cd47af0bf5dd4472971df8fe45207bc27173f3817bd9237"
+compact_checkpoint_root = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_multistep_curriculum_A_to_B_raw_pre_r256_lr5e5_s750_recovered_v1_run_019fb59ca7927631b332d44a4adc27f6"
+compact_checkpoint_artifact_id = "artifact_e84082512c719044"
+compact_checkpoint_alias = "synthetic_multistep_curriculum_A_to_B_raw_pre_r256_lr5e5_s750_recovered_v1_run_019fb59ca7927631b332d44a4adc27f6"
+compact_checkpoint_manifest_name = "curriculum_train_export_manifest.json"
+compact_checkpoint_manifest_sha256 = "44bb75ceb916e806d766233e402e1ef9ded2ce1a5716769dbe218fe333aca519"
+qcow = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_vm/Ubuntu.qcow2"
+qemu = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin/qemu-system-x86_64-wrapped"
+provider = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_fastreset/qemu_fast_reset.py"
+provider_sha256 = "76a8f44fab16c6dd38a4378a270e38758ba8d31885f244baedb95d8178f588d7"
+[env]
+PYTHONUNBUFFERED = "1"
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+OSWORLD_VM_SMP = "4"
+OSWORLD_VM_MEM = "8G"

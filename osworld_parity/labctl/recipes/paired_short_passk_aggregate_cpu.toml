@@ -1,0 +1,57 @@
+name = "proper_vm_prephaseb_short_passk_aggregate_cpu_v1"
+repo = "juergen_real_vm_passk"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+OUTPUT="$(jq -r '.outputs.result.path' "$LABCTL_CONTEXT")"
+input_path() { jq -er --arg role "$1" '.inputs[]|select(.role==$role)|.resolved_path' "$LABCTL_CONTEXT"; }
+export CUDA_VISIBLE_DEVICES=""; test -z "$CUDA_VISIBLE_DEVICES"
+cd "$SOURCE"
+python -m osworld_parity.proper_vm_capability_ladder.paired_eval aggregate \
+  --evaluation-manifest="$SOURCE/osworld_parity/proper_vm_capability_ladder/paired_runtime/config/short_task_passk.template.json" \
+  --task-manifest="$SOURCE/osworld_parity/proper_vm_capability_ladder/rung2_sameapp/curriculum/manifests/development.json" \
+  --shard-index=0 --shard-count=1 \
+  --results="$(input_path shard_0)/results.jsonl" \
+  --results="$(input_path shard_1)/results.jsonl" \
+  --results="$(input_path shard_2)/results.jsonl" \
+  --results="$(input_path shard_3)/results.jsonl" \
+  --results="$(input_path shard_4)/results.jsonl" \
+  --output="$OUTPUT/report.json"
+test -s "$OUTPUT/report.json"
+''', "--"]
+[resources]
+gpus = 0
+cpus = 4
+mem = "32GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1"]
+[inputs.shard_0]
+type = "stage"
+stage = "shard_0"
+role = "result"
+[inputs.shard_1]
+type = "stage"
+stage = "shard_1"
+role = "result"
+[inputs.shard_2]
+type = "stage"
+stage = "shard_2"
+role = "result"
+[inputs.shard_3]
+type = "stage"
+stage = "shard_3"
+role = "result"
+[inputs.shard_4]
+type = "stage"
+stage = "shard_4"
+role = "result"
+[outputs.result]
+type = "eval_result"
+marker = "report.json"
+alias = "proper_vm_prephaseb_short_passk_aggregate_{run.id}"
+[env]
+PYTHONUNBUFFERED = "1"
+CUDA_VISIBLE_DEVICES = ""

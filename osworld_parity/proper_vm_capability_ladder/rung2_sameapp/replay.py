@@ -53,6 +53,25 @@ ARM_SCHEMAS = {
 ARTIFACT_MARKER = "RUNG2_ARTIFACT_JSON="
 
 
+def _dummy_geometry(app: str) -> dict[str, tuple[int, int]]:
+    """Retain the executor-v4 deterministic compiler fixture for its unit tests."""
+
+    del app
+    return {
+        "editor": (820, 520),
+        "cell": (640, 420),
+        "source": (500, 300),
+        "destination": (500, 420),
+        "decoy": (500, 360),
+        "moved": (500, 300),
+        "nav": (260, 140),
+        "decoy_nav": (460, 140),
+        "toggle": (340, 760),
+        "decoy_toggle": (340, 820),
+        "scroll_surface": (960, 540),
+    }
+
+
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(
@@ -216,6 +235,22 @@ def _seal_dispatch_result(
     cursor_after: tuple[int, int],
 ) -> dict[str, Any]:
     value = dict(result)
+    if (
+        value.get("adapter") == "native_absolute_control"
+        and value.get("executor_dispatch_status") == "ok"
+    ):
+        operations, atomic_operations = _approved_native_receipt_view(
+            compiled_payload
+        )
+        value["executor_v4_dispatch_evidence"] = dict(result)
+        value["operations"] = operations
+        if atomic_operations is None:
+            value["atomic_state"] = None
+        else:
+            atomic = value.get("atomic_state")
+            if not isinstance(atomic, dict) or atomic.get("ok") is not True:
+                raise RuntimeError("executor v4 returned invalid atomic click evidence")
+            value["atomic_state"] = {**atomic, "operations": atomic_operations}
     value["compiled_payload_sha256"] = hashlib.sha256(
         canonical_json(compiled_payload)
     ).hexdigest()
@@ -232,6 +267,51 @@ def _seal_dispatch_result(
         canonical_json(value)
     ).hexdigest()
     return value
+
+
+def _approved_native_receipt_view(
+    operation: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
+    """Expose the c603 receipt vocabulary while retaining v4 evidence above it."""
+
+    if not isinstance(operation, dict):
+        raise TypeError("native compiled operation must be an object")
+    kind = operation.get("action")
+    coordinate = operation.get("coordinate")
+    rows: list[dict[str, Any]] = []
+    if coordinate is not None and kind in {
+        "click",
+        "mouse_down",
+        "mouse_move",
+        "mouse_up",
+    }:
+        rows.append({"kind": "move_to", "args": list(coordinate)})
+    atomic: list[dict[str, Any]] | None = None
+    if kind == "click":
+        atomic = [
+            {"kind": "mouse_down", "args": ["left"]},
+            {"kind": "mouse_up", "args": ["left"]},
+        ]
+        rows.extend(atomic)
+    elif kind == "mouse_down":
+        rows.append(
+            {"kind": "mouse_down", "args": [operation.get("button", "left")]}
+        )
+    elif kind == "mouse_up":
+        rows.append(
+            {"kind": "mouse_up", "args": [operation.get("button", "left")]}
+        )
+    elif kind == "mouse_move":
+        pass
+    elif kind == "scroll":
+        rows.append({"kind": "scroll", "args": [operation["clicks"]]})
+    elif kind == "key_chord":
+        rows.append({"kind": "key_chord", "args": list(operation["keys"])})
+    elif kind == "type":
+        rows.append({"kind": "coalesced_type", "args": [operation["text"]]})
+    else:
+        raise ValueError(f"unsupported native compiled operation: {kind!r}")
+    return rows, atomic
 
 
 def _dispatch_compiled_action(

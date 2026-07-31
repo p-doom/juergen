@@ -1,0 +1,14 @@
+name = "proper_vm_prephaseb_short_passk_v1"
+
+[stages.shard_0]
+recipe = "../recipes/paired_short_passk_shard_0_gpu_kvm.toml"
+[stages.shard_1]
+recipe = "../recipes/paired_short_passk_shard_1_gpu_kvm.toml"
+[stages.shard_2]
+recipe = "../recipes/paired_short_passk_shard_2_gpu_kvm.toml"
+[stages.shard_3]
+recipe = "../recipes/paired_short_passk_shard_3_gpu_kvm.toml"
+[stages.shard_4]
+recipe = "../recipes/paired_short_passk_shard_4_gpu_kvm.toml"
+[stages.aggregate]
+recipe = "../recipes/paired_short_passk_aggregate_cpu.toml"
