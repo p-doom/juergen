@@ -90,6 +90,26 @@ wait returns only after the acknowledged sequence is quiescent, and stale or
 missing acknowledgements fail loudly. There is no input retry, state correction,
 or oracle-dependent action: the original compact action executes exactly once.
 
+Development-only job 135839 stopped before compact dispatch because Reset A and
+Reset B produced different aggregate setup hashes. The old report did not retain
+both source snapshots, so it could not identify the differing component. Fixture
+readiness is now gated by an explicit layout handshake: after
+`document.fonts.ready`, the page samples rounded window and DOM geometry on
+distinct animation frames, reports every observation with its monotonic client
+sequence, and emits `ready` only after three consecutive observations are exactly
+identical. The host independently rejects early readiness. Stabilization is
+bounded at 120 animation frames; it uses neither a fixed sleep nor a coordinate
+tolerance.
+
+For each reset, the selfcheck now checkpoints the complete browser state, cursor,
+and button state. It separately hashes exact fixture identity, logical state,
+cursor/button state, window geometry, and DOM geometry, then persists both
+component payloads and a field-level hash diff before enforcing equality. Raw
+event timestamps and stabilization histories remain available in the full
+snapshots but are not confused with the exact final-state components. Any future
+reset mismatch therefore fails before dispatch with the precise differing
+component and both values already durable in `progress.json`.
+
 Every development cell performs:
 
 1. restore the full-RAM/disk `osworld_ready` QMP snapshot and deterministic setup;

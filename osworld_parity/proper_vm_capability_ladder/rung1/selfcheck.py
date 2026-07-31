@@ -73,18 +73,70 @@ def _operations(values: tuple[Operation, ...]) -> list[dict[str, Any]]:
     return [{"kind": item.kind, "args": list(item.args)} for item in values]
 
 
-def _initial_signature(state: dict[str, Any]) -> str:
-    payload = {
-        "fixture_id": state["fixture_id"],
-        "fixture_sha256": state["fixture_sha256"],
-        "ready": state["ready"],
-        "geometry": state["geometry"],
-        "current": state["current"],
-    }
+def _payload_sha256(payload: Any) -> str:
     encoded = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _reset_component_report(
+    state: dict[str, Any],
+    *,
+    cursor: tuple[int, int],
+    pointer_buttons: int,
+) -> dict[str, Any]:
+    geometry = state.get("geometry")
+    if not isinstance(geometry, dict):
+        raise SelfcheckError("reset state lacks geometry")
+    payloads = {
+        "fixture": {
+            "fixture_id": state["fixture_id"],
+            "fixture_sha256": state["fixture_sha256"],
+        },
+        "logical_state": {
+            "ready": state["ready"],
+            "current": state["current"],
+        },
+        "cursor_button": {
+            "cursor": [int(cursor[0]), int(cursor[1])],
+            "pointer_buttons": int(pointer_buttons),
+        },
+        "window_geometry": geometry.get("window"),
+        "dom_geometry": {
+            key: value for key, value in geometry.items() if key != "window"
+        },
+    }
+    hashes = {name: _payload_sha256(value) for name, value in payloads.items()}
+    return {
+        "payloads": payloads,
+        "hashes": hashes,
+        "aggregate_sha256": _payload_sha256(hashes),
+    }
+
+
+def _reset_component_diff(
+    reset_a: dict[str, Any], reset_b: dict[str, Any]
+) -> dict[str, Any]:
+    names = tuple(reset_a["payloads"])
+    if set(names) != set(reset_b["payloads"]):
+        raise SelfcheckError("reset component names changed")
+    components = {}
+    for name in names:
+        components[name] = {
+            "equal": reset_a["payloads"][name] == reset_b["payloads"][name],
+            "reset_a_sha256": reset_a["hashes"][name],
+            "reset_b_sha256": reset_b["hashes"][name],
+            "reset_a": reset_a["payloads"][name],
+            "reset_b": reset_b["payloads"][name],
+        }
+    return {
+        "all_equal": all(item["equal"] for item in components.values()),
+        "components": components,
+        "differing_components": [
+            name for name, item in components.items() if not item["equal"]
+        ],
+    }
 
 
 def _execute(
@@ -468,9 +520,18 @@ def run_vm_selfcheck(
                     manifest_bounds = _validate_manifest_bounds(manifest, window, screen_size)
                 first_cursor = transport.cursor_position()
                 cell["reset_oracle"] = _assert_negative(fixture, first, "reset")
-                first_signature = _initial_signature(first)
-                if session.probe_pointer_buttons(server, fixture) != 0:
+                first_buttons = session.probe_pointer_buttons(server, fixture)
+                if first_buttons != 0:
                     raise SelfcheckError(f"{fixture.id}: button held after first reset")
+                reset_a_components = _reset_component_report(
+                    first, cursor=first_cursor, pointer_buttons=first_buttons
+                )
+                cell["reset_a_snapshot"] = {
+                    "browser_state": first,
+                    "cursor": list(first_cursor),
+                    "pointer_buttons": first_buttons,
+                }
+                cell["reset_a_components"] = reset_a_components
                 checkpoint(cell, "first_reset_verified")
 
                 # Scripted near miss must be rejected.
@@ -544,23 +605,34 @@ def run_vm_selfcheck(
                 cell["second_reset_oracle"] = _assert_negative(
                     fixture, second, "second reset"
                 )
-                second_signature = _initial_signature(second)
-                if first_signature != second_signature:
-                    raise SelfcheckError(
-                        f"{fixture.id}: setup/reset signature changed "
-                        f"{first_signature} != {second_signature}"
-                    )
-                if first_cursor != second_cursor:
-                    raise SelfcheckError(
-                        f"{fixture.id}: cursor leaked across reset: "
-                        f"{first_cursor} != {second_cursor}"
-                    )
-                if session.probe_pointer_buttons(server, fixture) != 0:
+                second_buttons = session.probe_pointer_buttons(server, fixture)
+                if second_buttons != 0:
                     raise SelfcheckError(f"{fixture.id}: button leaked across reset")
-                cell["reset_leakage"] = {
-                    "initial_state_sha256": second_signature,
+                reset_b_components = _reset_component_report(
+                    second, cursor=second_cursor, pointer_buttons=second_buttons
+                )
+                reset_diff = _reset_component_diff(
+                    reset_a_components, reset_b_components
+                )
+                cell["reset_b_snapshot"] = {
+                    "browser_state": second,
                     "cursor": list(second_cursor),
-                    "pointer_buttons": 0,
+                    "pointer_buttons": second_buttons,
+                }
+                cell["reset_b_components"] = reset_b_components
+                cell["reset_component_diff"] = reset_diff
+                checkpoint(cell, "reset_comparison_recorded")
+                if not reset_diff["all_equal"]:
+                    raise SelfcheckError(
+                        f"{fixture.id}: exact reset components changed: "
+                        f"{reset_diff['differing_components']}; "
+                        f"diff={json.dumps(reset_diff, ensure_ascii=False, sort_keys=True)}"
+                    )
+                cell["reset_leakage"] = {
+                    "initial_state_sha256": reset_b_components["aggregate_sha256"],
+                    "component_hashes": reset_b_components["hashes"],
+                    "cursor": list(second_cursor),
+                    "pointer_buttons": second_buttons,
                     "current": second["current"],
                 }
                 checkpoint(cell, "second_reset_verified")
