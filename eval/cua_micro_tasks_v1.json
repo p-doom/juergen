@@ -69,7 +69,7 @@
       "category": "move",
       "instruction": "Move the cursor onto Chrome's Reload button. Do not click.",
       "setup": {"kind": "chrome", "variant": "reload"},
-      "target": {"kind": "fixed_norm", "bbox": [74, 48, 96, 76], "label": "Reload button"},
+      "target": {"kind": "fixed_norm", "bbox": [75, 65, 96, 100], "label": "Reload button"},
       "cursor": {"kind": "relative_to_target", "delta_norm": [0, 32]},
       "expected": {"kind": "move"},
       "verifier": {"kind": "bbox_hit"}
@@ -79,7 +79,7 @@
       "category": "move",
       "instruction": "Move the cursor onto Chrome's Back button. Do not click.",
       "setup": {"kind": "chrome", "variant": "history"},
-      "target": {"kind": "fixed_norm", "bbox": [34, 48, 56, 76], "label": "Back button"},
+      "target": {"kind": "fixed_norm", "bbox": [37, 65, 58, 100], "label": "Back button"},
       "cursor": {"kind": "relative_to_target", "delta_norm": [32, 0]},
       "expected": {"kind": "move"},
       "verifier": {"kind": "bbox_hit"}
@@ -89,7 +89,7 @@
       "category": "move",
       "instruction": "Move the cursor into Chrome's address bar. Do not click.",
       "setup": {"kind": "chrome", "variant": "blank"},
-      "target": {"kind": "fixed_norm", "bbox": [98, 47, 870, 75], "label": "Address bar"},
+      "target": {"kind": "fixed_norm", "bbox": [98, 70, 870, 97], "label": "Address bar"},
       "cursor": {"kind": "relative_to_target", "delta_norm": [0, 128]},
       "expected": {"kind": "move"},
       "verifier": {"kind": "bbox_hit"}
@@ -129,7 +129,7 @@
       "category": "click",
       "instruction": "Click Chrome's Back button under the cursor.",
       "setup": {"kind": "chrome", "variant": "history"},
-      "target": {"kind": "fixed_norm", "bbox": [34, 48, 56, 76], "label": "Back button"},
+      "target": {"kind": "fixed_norm", "bbox": [37, 65, 58, 100], "label": "Back button"},
       "cursor": {"kind": "target_center"},
       "expected": {"kind": "click", "button": "left"},
       "verifier": {"kind": "active_title_regex", "pattern": "PAGE_A.*Chrome"}
@@ -139,7 +139,7 @@
       "category": "click",
       "instruction": "Click Chrome's Reload button under the cursor.",
       "setup": {"kind": "chrome", "variant": "reload"},
-      "target": {"kind": "fixed_norm", "bbox": [74, 48, 96, 76], "label": "Reload button"},
+      "target": {"kind": "fixed_norm", "bbox": [75, 65, 96, 100], "label": "Reload button"},
       "cursor": {"kind": "target_center"},
       "expected": {"kind": "click", "button": "left"},
       "verifier": {"kind": "active_title_regex", "pattern": "LOAD_2.*Chrome"}
