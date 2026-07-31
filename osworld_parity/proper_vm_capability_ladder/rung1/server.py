@@ -21,6 +21,7 @@ STABLE_GEOMETRY_OBSERVATIONS = 3
 MAX_GEOMETRY_ANIMATION_FRAMES = 120
 HOST_DIAGNOSTIC_JOURNAL_LIMIT = 1024
 BROWSER_AUDIT_EVENT_LIMIT = 512
+BROWSER_AUDIT_SCHEMA_VERSION = 2
 BROWSER_AUDIT_EVENTS = {
     "audit_heartbeat",
     "audit_ready",
@@ -90,7 +91,7 @@ class FixtureStateStore:
 
     def apply_browser_audit(
         self, fixture: Fixture, payload: dict[str, Any]
-    ) -> None:
+    ) -> dict[str, int]:
         """Persist the arm-neutral DOM listener trace outside ``postQueue``.
 
         Audit reports use their own HTTP path, sequence, request identity, and
@@ -101,7 +102,10 @@ class FixtureStateStore:
         """
         with self._condition:
             state = self._states[fixture.id]
-            if type(payload.get("schema_version")) is not int or payload["schema_version"] != 1:
+            if (
+                type(payload.get("schema_version")) is not int
+                or payload["schema_version"] != BROWSER_AUDIT_SCHEMA_VERSION
+            ):
                 raise FixtureServerError("browser audit schema mismatch")
             if (
                 type(payload.get("generation")) is not int
@@ -133,6 +137,185 @@ class FixtureStateStore:
             else:
                 state["browser_audit_events"].append(event)
             self._condition.notify_all()
+            return {
+                "audit_sequence": int(event["audit_sequence"]),
+                "host_audit_request_id": request_id,
+                "host_monotonic_ns": int(event["host_monotonic_ns"]),
+            }
+
+    @staticmethod
+    def _causal_heartbeat_summaries(
+        state: dict[str, Any], observation_deadline_host_monotonic_ns: int
+    ) -> list[dict[str, Any]]:
+        summaries = []
+        for event in state["browser_audit_events"]:
+            if event.get("event") != "audit_heartbeat":
+                continue
+            host_ns = event.get("host_monotonic_ns")
+            acknowledged_host_ns = event.get("acknowledged_host_monotonic_ns")
+            summaries.append(
+                {
+                    "audit_sequence": event.get("audit_sequence"),
+                    "client_monotonic_ms": event.get("client_monotonic_ms"),
+                    "host_monotonic_ns": host_ns,
+                    "host_arrival_lag_ns": (
+                        host_ns - observation_deadline_host_monotonic_ns
+                        if isinstance(host_ns, int)
+                        and not isinstance(host_ns, bool)
+                        else None
+                    ),
+                    "acknowledged_heartbeat_audit_sequence": event.get(
+                        "acknowledged_heartbeat_audit_sequence"
+                    ),
+                    "acknowledged_host_audit_request_id": event.get(
+                        "acknowledged_host_audit_request_id"
+                    ),
+                    "acknowledged_host_monotonic_ns": acknowledged_host_ns,
+                    "acknowledged_receipt_lag_ns": (
+                        acknowledged_host_ns
+                        - observation_deadline_host_monotonic_ns
+                        if isinstance(acknowledged_host_ns, int)
+                        and not isinstance(acknowledged_host_ns, bool)
+                        else None
+                    ),
+                }
+            )
+        return sorted(
+            summaries,
+            key=lambda item: (
+                item["audit_sequence"]
+                if isinstance(item["audit_sequence"], int)
+                else -1
+            ),
+        )
+
+    @staticmethod
+    def _causal_post_window_marker_sequences(
+        state: dict[str, Any], observation_deadline_host_monotonic_ns: int
+    ) -> list[int]:
+        events = state["browser_audit_events"]
+        by_sequence: dict[int, list[dict[str, Any]]] = {}
+        for event in events:
+            sequence = event.get("audit_sequence")
+            if isinstance(sequence, int) and not isinstance(sequence, bool):
+                by_sequence.setdefault(sequence, []).append(event)
+        candidates = []
+        for event in events:
+            sequence = event.get("audit_sequence")
+            acknowledged_sequence = event.get(
+                "acknowledged_heartbeat_audit_sequence"
+            )
+            acknowledged_request_id = event.get(
+                "acknowledged_host_audit_request_id"
+            )
+            acknowledged_host_ns = event.get("acknowledged_host_monotonic_ns")
+            if (
+                event.get("event") != "audit_heartbeat"
+                or not isinstance(sequence, int)
+                or isinstance(sequence, bool)
+                or not isinstance(acknowledged_sequence, int)
+                or isinstance(acknowledged_sequence, bool)
+                or not isinstance(acknowledged_request_id, int)
+                or isinstance(acknowledged_request_id, bool)
+                or not isinstance(acknowledged_host_ns, int)
+                or isinstance(acknowledged_host_ns, bool)
+                or acknowledged_host_ns
+                <= observation_deadline_host_monotonic_ns
+                or any(
+                    len(by_sequence.get(index, [])) != 1
+                    for index in range(1, sequence + 1)
+                )
+            ):
+                continue
+            acknowledged = by_sequence.get(acknowledged_sequence, [])
+            if (
+                acknowledged_sequence >= sequence
+                or len(acknowledged) != 1
+                or acknowledged[0].get("event") != "audit_heartbeat"
+                or acknowledged[0].get("host_audit_request_id")
+                != acknowledged_request_id
+                or acknowledged[0].get("host_monotonic_ns")
+                != acknowledged_host_ns
+            ):
+                continue
+            candidates.append(sequence)
+        return sorted(candidates)
+
+    def wait_for_causal_post_window_heartbeat(
+        self,
+        fixture_id: str,
+        *,
+        generation: int,
+        observation_deadline_host_monotonic_ns: int,
+        timeout_s: float,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Wait for a contiguous marker causally generated after the deadline."""
+        wait_started_ns = time.monotonic_ns()
+        wait_deadline_ns = wait_started_ns + int(timeout_s * 1_000_000_000)
+        with self._condition:
+            state = self._states[fixture_id]
+            self._append_diagnostic_locked(
+                state,
+                "causal_audit_wait_started",
+                {
+                    "generation": generation,
+                    "observation_deadline_host_monotonic_ns": (
+                        observation_deadline_host_monotonic_ns
+                    ),
+                    "wait_started_host_monotonic_ns": wait_started_ns,
+                    "wait_timeout_s": timeout_s,
+                    "wait_deadline_host_monotonic_ns": wait_deadline_ns,
+                },
+            )
+            candidate_sequences: list[int] = []
+            while True:
+                state = self._states[fixture_id]
+                if state["generation"] != generation:
+                    raise FixtureServerError(
+                        f"{fixture_id}: fixture reset while awaiting causal audit heartbeat"
+                    )
+                candidate_sequences = self._causal_post_window_marker_sequences(
+                    state, observation_deadline_host_monotonic_ns
+                )
+                now_ns = time.monotonic_ns()
+                if candidate_sequences or now_ns >= wait_deadline_ns:
+                    break
+                self._condition.wait(
+                    timeout=max(0.001, min(0.05, (wait_deadline_ns - now_ns) / 1e9))
+                )
+            wait_completed_ns = time.monotonic_ns()
+            timed_out = not candidate_sequences
+            heartbeat_summaries = self._causal_heartbeat_summaries(
+                state, observation_deadline_host_monotonic_ns
+            )
+            self._append_diagnostic_locked(
+                state,
+                "causal_audit_wait_completed",
+                {
+                    "generation": generation,
+                    "timed_out": timed_out,
+                    "candidate_audit_sequences": candidate_sequences,
+                    "wait_completed_host_monotonic_ns": wait_completed_ns,
+                    "wait_duration_ns": wait_completed_ns - wait_started_ns,
+                    "heartbeat_summaries": heartbeat_summaries,
+                },
+            )
+            snapshot = copy.deepcopy(state)
+        return snapshot, {
+            "schema_version": 1,
+            "generation": generation,
+            "observation_deadline_host_monotonic_ns": (
+                observation_deadline_host_monotonic_ns
+            ),
+            "wait_started_host_monotonic_ns": wait_started_ns,
+            "wait_completed_host_monotonic_ns": wait_completed_ns,
+            "wait_duration_ns": wait_completed_ns - wait_started_ns,
+            "wait_timeout_s": timeout_s,
+            "wait_deadline_host_monotonic_ns": wait_deadline_ns,
+            "timed_out": timed_out,
+            "candidate_audit_sequences": candidate_sequences,
+            "heartbeat_summaries": heartbeat_summaries,
+        }
 
     @staticmethod
     def _append_diagnostic_locked(
@@ -601,7 +784,7 @@ class FixtureHttpServer:
                             raise FixtureServerError(
                                 "browser audit body must be an object"
                             )
-                        store.apply_browser_audit(fixture, payload)
+                        acknowledgement = store.apply_browser_audit(fixture, payload)
                     except Exception as exc:
                         self._send(
                             HTTPStatus.BAD_REQUEST,
@@ -609,7 +792,14 @@ class FixtureHttpServer:
                             "application/json",
                         )
                         return
-                    self._send(200, b'{"status":"accepted"}', "application/json")
+                    self._send(
+                        200,
+                        json.dumps(
+                            {"status": "accepted", **acknowledgement},
+                            separators=(",", ":"),
+                        ).encode("utf-8"),
+                        "application/json",
+                    )
                     return
                 prefix = "/event/"
                 if not path.startswith(prefix):
@@ -742,6 +932,7 @@ def _browser_audit_script(fixture: Fixture) -> str:
     script = r"""
 const auditEndpoint = __AUDIT_ENDPOINT__;
 let browserAuditSequence = 0;
+let browserHeartbeatAcknowledgement = null;
 function auditElement(element) {
   if (!element) return null;
   return {
@@ -765,8 +956,8 @@ function auditPageState() {
     visibility_state: document.visibilityState
   };
 }
-function sendBrowserAudit(payload) {
-  payload.schema_version = 1;
+function prepareBrowserAudit(payload) {
+  payload.schema_version = __AUDIT_SCHEMA_VERSION__;
   payload.generation = generation;
   const priorAuditSequence = browserAuditSequence;
   payload.audit_sequence = ++browserAuditSequence;
@@ -777,7 +968,59 @@ function sendBrowserAudit(payload) {
   payload.browser_wall_time_ms = Date.now();
   payload.client_monotonic_ms = Math.round(performance.now() * 1000) / 1000;
   Object.assign(payload, auditPageState());
+  return payload;
+}
+function sendBrowserAudit(payload) {
+  payload = prepareBrowserAudit(payload);
   navigator.sendBeacon(auditEndpoint, JSON.stringify(payload));
+}
+async function sendBrowserHeartbeat() {
+  const acknowledged = browserHeartbeatAcknowledgement;
+  const payload = prepareBrowserAudit({
+    event: 'audit_heartbeat',
+    event_time_stamp_ms: null,
+    is_trusted: null,
+    default_prevented: null,
+    target: null,
+    target_checked: null,
+    button: null,
+    buttons: null,
+    pointer_type: null,
+    client_x: null,
+    client_y: null,
+    screen_x: null,
+    screen_y: null,
+    acknowledged_heartbeat_audit_sequence:
+      acknowledged ? acknowledged.audit_sequence : null,
+    acknowledged_host_audit_request_id:
+      acknowledged ? acknowledged.host_audit_request_id : null,
+    acknowledged_host_monotonic_ns:
+      acknowledged ? acknowledged.host_monotonic_ns : null
+  });
+  try {
+    const response = await fetch(auditEndpoint, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      headers: {'Content-Type': 'text/plain;charset=UTF-8'},
+      cache: 'no-store',
+      keepalive: true
+    });
+    if (!response.ok) return;
+    const candidate = await response.json();
+    if (
+      candidate.audit_sequence === payload.audit_sequence &&
+      Number.isInteger(candidate.host_audit_request_id) &&
+      Number.isInteger(candidate.host_monotonic_ns) &&
+      (
+        browserHeartbeatAcknowledgement === null ||
+        candidate.audit_sequence > browserHeartbeatAcknowledgement.audit_sequence
+      )
+    ) {
+      browserHeartbeatAcknowledgement = candidate;
+    }
+  } catch (_error) {
+    // The host-side bounded causal wait owns timeout and raw failure evidence.
+  }
 }
 function emitBrowserAudit(event) {
   const target = event.target instanceof Element ? event.target : null;
@@ -822,23 +1065,11 @@ sendBrowserAudit({
   page_time_origin_ms: performance.timeOrigin,
   url: location.href
 });
-setInterval(() => sendBrowserAudit({
-  event: 'audit_heartbeat',
-  event_time_stamp_ms: null,
-  is_trusted: null,
-  default_prevented: null,
-  target: null,
-  target_checked: null,
-  button: null,
-  buttons: null,
-  pointer_type: null,
-  client_x: null,
-  client_y: null,
-  screen_x: null,
-  screen_y: null
-}), 500);
+setInterval(() => { void sendBrowserHeartbeat(); }, 500);
 """.strip()
-    return script.replace("__AUDIT_ENDPOINT__", endpoint)
+    return script.replace("__AUDIT_ENDPOINT__", endpoint).replace(
+        "__AUDIT_SCHEMA_VERSION__", str(BROWSER_AUDIT_SCHEMA_VERSION)
+    )
 
 
 def _common_script(

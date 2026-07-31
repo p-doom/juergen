@@ -1,4 +1,4 @@
-name = "proper_vm_executor_click_release_injection_ab_v2"
+name = "proper_vm_executor_click_release_injection_ab_v3"
 
 [stages.build]
 recipe = "../recipes/executor_injection_ab_build_cpu.toml"

@@ -498,7 +498,9 @@ def test_browser_audit_is_opt_in_and_independent_of_semantic_reporter() -> None:
     assert "navigator.sendBeacon(auditEndpoint" not in plain_html
     assert "navigator.sendBeacon(auditEndpoint" in audit_html
     assert "event: 'audit_heartbeat'" in audit_html
-    assert "}), 500);" in audit_html
+    assert "setInterval(() => { void sendBrowserHeartbeat(); }, 500);" in audit_html
+    assert "fetch(auditEndpoint" in audit_html
+    assert "acknowledged_host_monotonic_ns" in audit_html
     assert "expected_previous_audit_sequence" in audit_html
     assert "expected_audit_count_through_marker" in audit_html
     for name in (
@@ -530,7 +532,7 @@ def test_browser_audit_is_opt_in_and_independent_of_semantic_reporter() -> None:
     with FixtureHttpServer(manifest, enable_browser_audit=True) as server:
         state = server.store.snapshot(fixture.id)
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "generation": state["generation"],
             "audit_sequence": 2,
             "event": "pointerup",
@@ -561,6 +563,7 @@ def test_browser_audit_is_opt_in_and_independent_of_semantic_reporter() -> None:
         )
         with urllib.request.urlopen(request) as response:
             assert response.status == 200
+            acknowledgement = json.loads(response.read())
         snapshot = server.store.snapshot(fixture.id)
     assert snapshot["events"] == []
     assert snapshot["diagnostic_journal"] == []
@@ -571,6 +574,12 @@ def test_browser_audit_is_opt_in_and_independent_of_semantic_reporter() -> None:
     assert event["event"] == "pointerup"
     assert event["host_audit_request_id"] == 1
     assert isinstance(event["host_monotonic_ns"], int)
+    assert acknowledgement == {
+        "status": "accepted",
+        "audit_sequence": 2,
+        "host_audit_request_id": 1,
+        "host_monotonic_ns": event["host_monotonic_ns"],
+    }
 
 
 def test_browser_audit_endpoint_fails_closed_when_disabled_or_stale() -> None:
@@ -586,7 +595,7 @@ def test_browser_audit_endpoint_fails_closed_when_disabled_or_stale() -> None:
             f"http://127.0.0.1:{server.port}/audit/{fixture.id}",
             data=json.dumps(
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "generation": generation,
                     "audit_sequence": 1,
                     "event": "audit_ready",

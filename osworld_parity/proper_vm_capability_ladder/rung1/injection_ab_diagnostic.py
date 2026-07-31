@@ -17,7 +17,11 @@ from .selfcheck import (
     _execute,
     _validate_loaded_geometry,
 )
-from .server import BROWSER_AUDIT_EVENTS, FixtureHttpServer
+from .server import (
+    BROWSER_AUDIT_EVENTS,
+    BROWSER_AUDIT_SCHEMA_VERSION,
+    FixtureHttpServer,
+)
 from .transport import HttpVmTransport, Operation
 from .trajectory import build_trajectory
 from .transport_diagnostic import (
@@ -36,7 +40,8 @@ from .vm import (
 
 
 SPEC_PATH = Path(__file__).with_name("injection_ab_spec.json")
-EXPECTED_SPEC_SHA256 = "7a8bea3b23442e30b4b25de7262972b7a4019832f842ce26c4bf3e37b7c2d615"
+EXPECTED_SPEC_SHA256 = "68c612969e88ae7f2122c3321be98286fff7b02818c80e07fb4d49f33ad444e4"
+SUITE = "rung1_click_release_injection_ab_v3"
 ORDER_BLOCK = ("A", "B", "B", "A", "B", "A", "A", "B")
 TRIAL_ORDER = ORDER_BLOCK * 6
 BACKEND_BY_ARM = {
@@ -102,7 +107,7 @@ TIMESTAMP_STAGES = (
     "click_completed",
 )
 OBSERVATION_WINDOW_S = 3.0
-AUDIT_DRAIN_S = 0.75
+POST_WINDOW_HEARTBEAT_WAIT_S = 3.0
 X_BUTTON_PRESS = 4
 X_BUTTON_RELEASE = 5
 X_MOTION_NOTIFY = 6
@@ -148,7 +153,7 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         raise InjectionAbIntegrityError("injection A/B spec must be an object")
     exact = {
         "schema_version": 1,
-        "suite": "rung1_click_release_injection_ab_v2",
+        "suite": SUITE,
         "status": "preregistered_cpu_development_diagnostic",
         "manifest_payload_sha256": MANIFEST_PAYLOAD_SHA256,
         "fixture_id": FIXTURE_ID,
@@ -163,7 +168,7 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         "canonical_lowered_operations": ["move_relative", "click"],
         "dwell_ms": 50,
         "observation_window_s": OBSERVATION_WINDOW_S,
-        "audit_drain_s": AUDIT_DRAIN_S,
+        "post_window_heartbeat_wait_s": POST_WINDOW_HEARTBEAT_WAIT_S,
         "order_block": list(ORDER_BLOCK),
         "order_block_repetitions": 6,
         "trial_count": len(TRIAL_ORDER),
@@ -189,14 +194,15 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
             f"injection A/B preregistration drifted: {sorted(differing)}"
         )
     if spec.get("supersedes") != {
-        "suite": "rung1_click_release_injection_ab_v1",
-        "pipeline_id": "pipeline_019fb9aa926f7ba198bc237a383e9a49",
-        "run_id": "run_019fb9aa926f7ba198bc2362ead2f37a",
-        "job_id": "136152",
-        "terminal_state": "pre_science_integrity_abort",
+        "suite": "rung1_click_release_injection_ab_v2",
+        "pipeline_id": "pipeline_019fb9ebfdcf73e1af0eaf02b6a12c73",
+        "run_id": "run_019fb9ebfdcf73e1af0eaef40d8fbdff",
+        "job_id": "136178",
+        "terminal_state": "trial_6_integrity_abort",
         "reason": (
-            "v1 omitted the arm-neutral PyAutoGUI top-level same-coordinate "
-            "pre-click MotionNotify"
+            "v2 used best-effort heartbeat delivery followed by a fixed 750 ms "
+            "sleep and one-shot snapshot, and did not durably checkpoint the raw "
+            "active-trial browser snapshot before validation"
         ),
     }:
         raise InjectionAbIntegrityError("successor identity provenance drifted")
@@ -255,6 +261,19 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         "arm_neutral": True,
     }:
         raise InjectionAbIntegrityError("common click premove contract drifted")
+    if spec.get("post_window_heartbeat_wait_basis") != {
+        "wait_bound_s": POST_WINDOW_HEARTBEAT_WAIT_S,
+        "nominal_heartbeat_interval_ms": 500,
+        "observed_successful_trial_count": 5,
+        "max_observed_post_deadline_marker_arrival_lag_ns": 460_922_709,
+        "max_observed_heartbeat_host_interarrival_ns": 999_610_841,
+        "rationale": (
+            "3.0 seconds is more than three times the maximum observed host "
+            "interarrival and more than six times the maximum observed "
+            "post-deadline marker lag in v2 job 136178"
+        ),
+    }:
+        raise InjectionAbIntegrityError("post-window heartbeat wait basis drifted")
     if spec.get("failure_evidence_contract") != {
         "schema_version": "rung1_atomic_output_failure_v2",
         "lifecycle_global_attempt_hooks": True,
@@ -353,12 +372,24 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         raise InjectionAbIntegrityError("failure evidence contract drifted")
     audit = spec.get("browser_audit")
     if not isinstance(audit, dict) or (
-        audit.get("dom_events") != list(AUDIT_DOM_EVENTS)
+        audit.get("transport")
+        != (
+            "independent_navigator_sendBeacon_for_dom_events_and_"
+            "fetch_ack_chain_for_heartbeats"
+        )
+        or audit.get("dom_events") != list(AUDIT_DOM_EVENTS)
         or audit.get("required_fields") != list(AUDIT_REQUIRED_FIELDS)
+        or audit.get("wire_schema_version") != BROWSER_AUDIT_SCHEMA_VERSION
         or audit.get("heartbeat_event") != "audit_heartbeat"
         or audit.get("heartbeat_interval_ms") != 500
-        or audit.get("require_heartbeat_received_after_observation_deadline")
+        or audit.get("require_heartbeat_causally_generated_after_observation_deadline")
         is not True
+        or audit.get("heartbeat_acknowledgement_fields")
+        != [
+            "acknowledged_heartbeat_audit_sequence",
+            "acknowledged_host_audit_request_id",
+            "acknowledged_host_monotonic_ns",
+        ]
         or audit.get("heartbeat_expected_sequence_fields")
         != [
             "expected_previous_audit_sequence",
@@ -368,8 +399,33 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         or audit.get("arm_neutral") is not True
         or audit.get("serialized_post_queue_independent") is not True
         or audit.get("cdp_independent") is not True
+        or audit.get("bounded_condition_wait") is not True
+        or audit.get("raw_snapshot_checkpoint_before_validation") is not True
     ):
         raise InjectionAbIntegrityError("browser audit contract drifted")
+    if spec.get("browser_failure_evidence_contract") != {
+        "checkpoint_stage": "browser_audit_captured",
+        "checkpoint_before_validation": True,
+        "active_trial_fields": [
+            "raw_browser_snapshot",
+            "post_window_heartbeat_wait",
+        ],
+        "wait_evidence_fields": [
+            "schema_version",
+            "generation",
+            "observation_deadline_host_monotonic_ns",
+            "wait_started_host_monotonic_ns",
+            "wait_completed_host_monotonic_ns",
+            "wait_duration_ns",
+            "wait_timeout_s",
+            "wait_deadline_host_monotonic_ns",
+            "timed_out",
+            "candidate_audit_sequences",
+            "heartbeat_summaries",
+        ],
+        "timeout_remains_integrity_abort": True,
+    }:
+        raise InjectionAbIntegrityError("browser failure evidence contract drifted")
     passive = spec.get("passive_x_observer")
     if passive != {
         "enabled": False,
@@ -420,6 +476,68 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         },
     }:
         raise InjectionAbIntegrityError("pre-science failure provenance drifted")
+    if spec.get("alias_mismatch_abort_history") != {
+        "pipeline_id": "pipeline_019fb9e86a027952a8d3fd92795c7d1b",
+        "build_run_id": "run_019fb9e86a027952a8d3fd73687c5054",
+        "diagnostic_run_id": "run_019fb9e86a027952a8d3fd845f839cee",
+        "build_job_id": "136174",
+        "registered_git_commit": "4c523b798a0da4bbaf7c667374818eecfe3ca45e",
+        "required_git_commit": "aa7f7365012c23d8b79c02ffe509414cbf81f1c2",
+        "build_terminal_state": "cancelled",
+        "diagnostic_terminal_state": "failed_without_job",
+        "completed_trial_count": 0,
+        "retry_count": 0,
+        "replacement_count": 0,
+        "manual_reconcile_count": 0,
+    }:
+        raise InjectionAbIntegrityError("alias mismatch abort provenance drifted")
+    if spec.get("v2_integrity_abort_history") != {
+        "pipeline_id": "pipeline_019fb9ebfdcf73e1af0eaf02b6a12c73",
+        "build_run_id": "run_019fb9ebfdcf73e1af0eaee1baff7172",
+        "diagnostic_run_id": "run_019fb9ebfdcf73e1af0eaef40d8fbdff",
+        "build_job_id": "136177",
+        "diagnostic_job_id": "136178",
+        "artifact_id": "artifact_c7fa29e3aa080c44",
+        "artifact_index_sha256": (
+            "858b4b9f71c5b9f830cf76745f53ca5278f146189ab1c75509ead74a95d6c161"
+        ),
+        "content_address": (
+            "sha256:816d9388ff12ec865334a7bcee0ffec2f72b73f2bffd8c39cc4a491ec3d02b73"
+        ),
+        "failure_sha256": (
+            "a02afcf8ff14e642cf68a18f84123ef64e247e4cc1412d94723d5a4688bf73c8"
+        ),
+        "progress_sha256": (
+            "c35dea0115509aead7abac3356c776db365bb8c33ab93f0725b059a819e0b292"
+        ),
+        "git_commit": "aa7f7365012c23d8b79c02ffe509414cbf81f1c2",
+        "git_tree": "a61a5979e6d861631a5cfb04d8b1942f854b48ce",
+        "spec_sha256": (
+            "7a8bea3b23442e30b4b25de7262972b7a4019832f842ce26c4bf3e37b7c2d615"
+        ),
+        "lock_sha256": (
+            "391e50f4a1a0d2b0aa3776ca10ed2828e8d41cbc42ffc0ba84570729df4c3163"
+        ),
+        "completed_trial_count": 5,
+        "arm_completed_counts": {"A": 2, "B": 3},
+        "active_trial": "injection-ab-06-a",
+        "retry_count": 0,
+        "replacement_count": 0,
+        "integrity_error": (
+            "independent browser audit has no post-window heartbeat"
+        ),
+        "integrity_error_evidence": None,
+        "root_cause": (
+            "best-effort heartbeat delivery plus a fixed 750 ms sleep and "
+            "one-shot snapshot; raw active-trial browser state was not "
+            "checkpointed before validation"
+        ),
+        "vm_closed": True,
+        "overlay_removed": True,
+        "cleanup_errors": [],
+        "manual_reconcile_count": 0,
+    }:
+        raise InjectionAbIntegrityError("v2 integrity abort provenance drifted")
     return spec, digest
 
 
@@ -482,7 +600,10 @@ def _wait_for_audit_ready(
 
 
 def validate_audit_trace(
-    snapshot: dict[str, Any], generation: int
+    snapshot: dict[str, Any],
+    generation: int,
+    *,
+    allow_request_id_gaps_after_sequence_seal: bool = False,
 ) -> list[dict[str, Any]]:
     if snapshot.get("browser_audit_dropped") != 0:
         raise InjectionAbIntegrityError("browser audit ring overflowed")
@@ -521,7 +642,10 @@ def validate_audit_trace(
             or event.get("generation") != generation
         ):
             raise InjectionAbIntegrityError("browser audit generation crossed reset")
-        if type(event.get("schema_version")) is not int or event["schema_version"] != 1:
+        if (
+            type(event.get("schema_version")) is not int
+            or event["schema_version"] != BROWSER_AUDIT_SCHEMA_VERSION
+        ):
             raise InjectionAbIntegrityError("browser audit schema version drifted")
         if event.get("event") not in BROWSER_AUDIT_EVENTS:
             raise InjectionAbIntegrityError("browser audit event set drifted")
@@ -531,6 +655,9 @@ def validate_audit_trace(
         elif event["event"] == "audit_heartbeat":
             expected_fields.update(
                 {
+                    "acknowledged_heartbeat_audit_sequence",
+                    "acknowledged_host_audit_request_id",
+                    "acknowledged_host_monotonic_ns",
                     "expected_previous_audit_sequence",
                     "expected_audit_count_through_marker",
                 }
@@ -640,11 +767,49 @@ def validate_audit_trace(
                 raise InjectionAbIntegrityError(
                     "browser audit heartbeat sequence/count malformed"
                 )
+            if event["event"] == "audit_heartbeat":
+                acknowledgement = (
+                    event.get("acknowledged_heartbeat_audit_sequence"),
+                    event.get("acknowledged_host_audit_request_id"),
+                    event.get("acknowledged_host_monotonic_ns"),
+                )
+                if acknowledgement != (None, None, None) and any(
+                    not isinstance(value, int) or isinstance(value, bool)
+                    for value in acknowledgement
+                ):
+                    raise InjectionAbIntegrityError(
+                        "browser audit heartbeat acknowledgement malformed"
+                    )
     request_ids = [int(event["host_audit_request_id"]) for event in events]
-    if sorted(request_ids) != list(range(1, len(events) + 1)):
+    if len(set(request_ids)) != len(request_ids) or (
+        not allow_request_id_gaps_after_sequence_seal
+        and sorted(request_ids) != list(range(1, len(events) + 1))
+    ):
         raise InjectionAbIntegrityError(
             "browser audit host request identities omitted or duplicated"
         )
+    by_sequence = {int(event["audit_sequence"]): event for event in events}
+    for event in events:
+        if event.get("event") != "audit_heartbeat":
+            continue
+        acknowledged_sequence = event.get(
+            "acknowledged_heartbeat_audit_sequence"
+        )
+        if acknowledged_sequence is None:
+            continue
+        acknowledged = by_sequence.get(acknowledged_sequence)
+        if (
+            acknowledged_sequence >= event["audit_sequence"]
+            or not isinstance(acknowledged, dict)
+            or acknowledged.get("event") != "audit_heartbeat"
+            or acknowledged.get("host_audit_request_id")
+            != event.get("acknowledged_host_audit_request_id")
+            or acknowledged.get("host_monotonic_ns")
+            != event.get("acknowledged_host_monotonic_ns")
+        ):
+            raise InjectionAbIntegrityError(
+                "browser audit heartbeat acknowledgement identity drifted"
+            )
     return events
 
 
@@ -700,16 +865,56 @@ def _validate_dom_event_details(event: dict[str, Any]) -> None:
 def validate_post_window_audit_heartbeat(
     audit_events: list[dict[str, Any]], observation_deadline_ns: int
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    heartbeat_timing_evidence = {
+        "observation_deadline_host_monotonic_ns": observation_deadline_ns,
+        "heartbeats": [
+            {
+                "audit_sequence": event.get("audit_sequence"),
+                "client_monotonic_ms": event.get("client_monotonic_ms"),
+                "host_monotonic_ns": event.get("host_monotonic_ns"),
+                "host_arrival_lag_ns": (
+                    event["host_monotonic_ns"] - observation_deadline_ns
+                    if isinstance(event.get("host_monotonic_ns"), int)
+                    and not isinstance(event.get("host_monotonic_ns"), bool)
+                    else None
+                ),
+                "acknowledged_heartbeat_audit_sequence": event.get(
+                    "acknowledged_heartbeat_audit_sequence"
+                ),
+                "acknowledged_host_audit_request_id": event.get(
+                    "acknowledged_host_audit_request_id"
+                ),
+                "acknowledged_host_monotonic_ns": event.get(
+                    "acknowledged_host_monotonic_ns"
+                ),
+                "acknowledged_receipt_lag_ns": (
+                    event["acknowledged_host_monotonic_ns"]
+                    - observation_deadline_ns
+                    if isinstance(
+                        event.get("acknowledged_host_monotonic_ns"), int
+                    )
+                    and not isinstance(
+                        event.get("acknowledged_host_monotonic_ns"), bool
+                    )
+                    else None
+                ),
+            }
+            for event in audit_events
+            if event.get("event") == "audit_heartbeat"
+        ],
+    }
     heartbeats = [
         event
         for event in audit_events
         if event.get("event") == "audit_heartbeat"
-        and isinstance(event.get("host_monotonic_ns"), int)
-        and event["host_monotonic_ns"] > observation_deadline_ns
+        and isinstance(event.get("acknowledged_host_monotonic_ns"), int)
+        and not isinstance(event.get("acknowledged_host_monotonic_ns"), bool)
+        and event["acknowledged_host_monotonic_ns"] > observation_deadline_ns
     ]
     if not heartbeats:
         raise InjectionAbIntegrityError(
-            "independent browser audit has no post-window heartbeat"
+            "independent browser audit has no causally generated post-window heartbeat",
+            evidence=heartbeat_timing_evidence,
         )
     marker = min(heartbeats, key=lambda event: int(event["audit_sequence"]))
     marker_sequence = marker["audit_sequence"]
@@ -719,12 +924,37 @@ def validate_post_window_audit_heartbeat(
         or marker_sequence > len(audit_events)
     ):
         raise InjectionAbIntegrityError(
-            "independent browser audit marker sequence/count mismatch"
+            "independent browser audit marker sequence/count mismatch",
+            evidence=heartbeat_timing_evidence,
         )
     sealed = audit_events[:marker_sequence]
     if len(sealed) != marker_sequence or sealed[-1] is not marker:
-        raise InjectionAbIntegrityError("independent browser audit tail was not sealed")
+        raise InjectionAbIntegrityError(
+            "independent browser audit tail was not sealed",
+            evidence=heartbeat_timing_evidence,
+        )
     return sealed, marker
+
+
+def sequence_sealed_audit_snapshot(
+    snapshot: dict[str, Any], marker_sequence: int
+) -> dict[str, Any]:
+    if not isinstance(marker_sequence, int) or isinstance(marker_sequence, bool):
+        raise InjectionAbIntegrityError("causal audit marker sequence malformed")
+    raw = snapshot.get("browser_audit_events")
+    if not isinstance(raw, list):
+        raise InjectionAbIntegrityError("raw browser audit trace malformed")
+    sealed_events = [
+        event
+        for event in raw
+        if isinstance(event, dict)
+        and isinstance(event.get("audit_sequence"), int)
+        and not isinstance(event.get("audit_sequence"), bool)
+        and event["audit_sequence"] <= marker_sequence
+    ]
+    sealed_snapshot = dict(snapshot)
+    sealed_snapshot["browser_audit_events"] = sealed_events
+    return sealed_snapshot
 
 
 def validate_atomic_contract(
@@ -1204,7 +1434,7 @@ def _checkpoint(
         output / "injection_ab_progress.json",
         {
             "schema_version": 1,
-            "suite": "rung1_click_release_injection_ab_v2",
+            "suite": SUITE,
             "status": (
                 "integrity_abort"
                 if integrity_error
@@ -1280,6 +1510,28 @@ def _checkpoint_dispatched_trial(
         stage="atomic_validated",
     )
     return atomic_contract, active
+
+
+def _checkpoint_browser_audit_capture(
+    *,
+    output: Path,
+    trials: list[dict[str, Any]],
+    active: dict[str, Any],
+    snapshot: dict[str, Any],
+    wait_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    active = {
+        **active,
+        "raw_browser_snapshot": snapshot,
+        "post_window_heartbeat_wait": wait_evidence,
+    }
+    _checkpoint(
+        output,
+        trials=trials,
+        active_trial=active,
+        stage="browser_audit_captured",
+    )
+    return active
 
 
 def validate_injection_ab() -> dict[str, Any]:
@@ -1396,9 +1648,39 @@ def run_vm_injection_ab(
             remaining_ns = observation_deadline_ns - time.monotonic_ns()
             if remaining_ns > 0:
                 time.sleep(remaining_ns / 1_000_000_000)
-            time.sleep(AUDIT_DRAIN_S)
-            snapshot = server.store.snapshot(fixture.id)
-            audit_events = validate_audit_trace(snapshot, generation)
+            snapshot, heartbeat_wait = (
+                server.store.wait_for_causal_post_window_heartbeat(
+                    fixture.id,
+                    generation=generation,
+                    observation_deadline_host_monotonic_ns=(
+                        observation_deadline_ns
+                    ),
+                    timeout_s=POST_WINDOW_HEARTBEAT_WAIT_S,
+                )
+            )
+            active = _checkpoint_browser_audit_capture(
+                output=output,
+                trials=trials,
+                active=active,
+                snapshot=snapshot,
+                wait_evidence=heartbeat_wait,
+            )
+            if heartbeat_wait["timed_out"]:
+                raise InjectionAbIntegrityError(
+                    "bounded causal post-window heartbeat wait timed out",
+                    evidence=heartbeat_wait,
+                )
+            marker_sequence = min(
+                heartbeat_wait["candidate_audit_sequences"]
+            )
+            sealed_snapshot = sequence_sealed_audit_snapshot(
+                snapshot, marker_sequence
+            )
+            audit_events = validate_audit_trace(
+                sealed_snapshot,
+                generation,
+                allow_request_id_gaps_after_sequence_seal=True,
+            )
             sealed_audit_events, audit_heartbeat = validate_post_window_audit_heartbeat(
                 audit_events, observation_deadline_ns
             )
@@ -1428,6 +1710,7 @@ def run_vm_injection_ab(
                 "audit_events": audit_events,
                 "sealed_audit_events": sealed_audit_events,
                 "post_window_audit_heartbeat": audit_heartbeat,
+                "post_window_heartbeat_wait": heartbeat_wait,
                 "outcome": outcome,
                 "timings": {
                     "dispatch_started_host_monotonic_ns": dispatch_started_ns,
@@ -1435,7 +1718,9 @@ def run_vm_injection_ab(
                     "observation_deadline_host_monotonic_ns": observation_deadline_ns,
                     "audit_capture_completed_host_monotonic_ns": time.monotonic_ns(),
                     "observation_window_s": OBSERVATION_WINDOW_S,
-                    "audit_drain_s": AUDIT_DRAIN_S,
+                    "post_window_heartbeat_wait_s": (
+                        POST_WINDOW_HEARTBEAT_WAIT_S
+                    ),
                 },
             }
             trials.append(trial)
@@ -1566,7 +1851,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "schema_version": 1,
                 "status": "integrity_abort",
-                "suite": "rung1_click_release_injection_ab_v2",
+                "suite": SUITE,
                 "failure_kind": "infrastructure",
                 "integrity_error": integrity_error,
                 "progress": progress,

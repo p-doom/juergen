@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
-  "suite": "rung1_click_release_injection_ab_v2",
+  "suite": "rung1_click_release_injection_ab_v3",
   "status": "preregistered_cpu_development_diagnostic",
   "supersedes": {
-    "suite": "rung1_click_release_injection_ab_v1",
-    "pipeline_id": "pipeline_019fb9aa926f7ba198bc237a383e9a49",
-    "run_id": "run_019fb9aa926f7ba198bc2362ead2f37a",
-    "job_id": "136152",
-    "terminal_state": "pre_science_integrity_abort",
-    "reason": "v1 omitted the arm-neutral PyAutoGUI top-level same-coordinate pre-click MotionNotify"
+    "suite": "rung1_click_release_injection_ab_v2",
+    "pipeline_id": "pipeline_019fb9ebfdcf73e1af0eaf02b6a12c73",
+    "run_id": "run_019fb9ebfdcf73e1af0eaef40d8fbdff",
+    "job_id": "136178",
+    "terminal_state": "trial_6_integrity_abort",
+    "reason": "v2 used best-effort heartbeat delivery followed by a fixed 750 ms sleep and one-shot snapshot, and did not durably checkpoint the raw active-trial browser snapshot before validation"
   },
   "control_plane_guardrail": {
     "authoritative_host": "hai-login2.haicore.berlin",
@@ -69,6 +69,14 @@
     "detail": 0,
     "same_coordinates_as_press": true,
     "arm_neutral": true
+  },
+  "post_window_heartbeat_wait_basis": {
+    "wait_bound_s": 3.0,
+    "nominal_heartbeat_interval_ms": 500,
+    "observed_successful_trial_count": 5,
+    "max_observed_post_deadline_marker_arrival_lag_ns": 460922709,
+    "max_observed_heartbeat_host_interarrival_ns": 999610841,
+    "rationale": "3.0 seconds is more than three times the maximum observed host interarrival and more than six times the maximum observed post-deadline marker lag in v2 job 136178"
   },
   "failure_evidence_contract": {
     "schema_version": "rung1_atomic_output_failure_v2",
@@ -165,6 +173,28 @@
     ],
     "checkpoint_immediately_after_dispatch": true
   },
+  "browser_failure_evidence_contract": {
+    "checkpoint_stage": "browser_audit_captured",
+    "checkpoint_before_validation": true,
+    "active_trial_fields": [
+      "raw_browser_snapshot",
+      "post_window_heartbeat_wait"
+    ],
+    "wait_evidence_fields": [
+      "schema_version",
+      "generation",
+      "observation_deadline_host_monotonic_ns",
+      "wait_started_host_monotonic_ns",
+      "wait_completed_host_monotonic_ns",
+      "wait_duration_ns",
+      "wait_timeout_s",
+      "wait_deadline_host_monotonic_ns",
+      "timed_out",
+      "candidate_audit_sequences",
+      "heartbeat_summaries"
+    ],
+    "timeout_remains_integrity_abort": true
+  },
   "backend_arms": {
     "A": {
       "name": "pyautogui_release_motion",
@@ -197,7 +227,7 @@
   "only_backend_difference": "release-side same-coordinate MotionNotify emitted by PyAutoGUI _mouseUp",
   "dwell_ms": 50,
   "observation_window_s": 3.0,
-  "audit_drain_s": 0.75,
+  "post_window_heartbeat_wait_s": 3.0,
   "order_block": [
     "A",
     "B",
@@ -220,18 +250,26 @@
   "replacement_count": 0,
   "stop_policy": "integrity_abort_only",
   "browser_audit": {
-    "transport": "independent_navigator_sendBeacon_to_host_audit_endpoint",
+    "transport": "independent_navigator_sendBeacon_for_dom_events_and_fetch_ack_chain_for_heartbeats",
+    "wire_schema_version": 2,
     "serialized_post_queue_independent": true,
     "cdp_independent": true,
     "arm_neutral": true,
     "required_ready_event": "audit_ready",
     "heartbeat_event": "audit_heartbeat",
     "heartbeat_interval_ms": 500,
-    "require_heartbeat_received_after_observation_deadline": true,
+    "require_heartbeat_causally_generated_after_observation_deadline": true,
+    "heartbeat_acknowledgement_fields": [
+      "acknowledged_heartbeat_audit_sequence",
+      "acknowledged_host_audit_request_id",
+      "acknowledged_host_monotonic_ns"
+    ],
     "heartbeat_expected_sequence_fields": [
       "expected_previous_audit_sequence",
       "expected_audit_count_through_marker"
     ],
+    "bounded_condition_wait": true,
+    "raw_snapshot_checkpoint_before_validation": true,
     "classification_uses_only_sequence_sealed_prefix": true,
     "dom_events": [
       "pointerdown",
@@ -287,6 +325,7 @@
     "spec, parent evidence, fixture, provider, source, or lock seal drift",
     "reset or fresh Chromium launch failure",
     "missing or duplicate audit_ready, non-contiguous audit sequence, audit overflow, or malformed required audit fields",
+    "bounded post-window wait timeout or missing, stale, mismatched, or non-causal heartbeat acknowledgement",
     "canonical action format, semantic operations, endpoint, or only-backend-difference contract drift",
     "missing guest injection timestamps, one-process contract failure, nonzero final pointer mask, or dispatch count other than one"
   ],
@@ -310,6 +349,51 @@
       "result": "duplicate artifact primary key artifact_7143accb7e53783d",
       "effect": "no run revival, relabel, replacement, or additional Slurm job"
     }
+  },
+  "alias_mismatch_abort_history": {
+    "pipeline_id": "pipeline_019fb9e86a027952a8d3fd92795c7d1b",
+    "build_run_id": "run_019fb9e86a027952a8d3fd73687c5054",
+    "diagnostic_run_id": "run_019fb9e86a027952a8d3fd845f839cee",
+    "build_job_id": "136174",
+    "registered_git_commit": "4c523b798a0da4bbaf7c667374818eecfe3ca45e",
+    "required_git_commit": "aa7f7365012c23d8b79c02ffe509414cbf81f1c2",
+    "build_terminal_state": "cancelled",
+    "diagnostic_terminal_state": "failed_without_job",
+    "completed_trial_count": 0,
+    "retry_count": 0,
+    "replacement_count": 0,
+    "manual_reconcile_count": 0
+  },
+  "v2_integrity_abort_history": {
+    "pipeline_id": "pipeline_019fb9ebfdcf73e1af0eaf02b6a12c73",
+    "build_run_id": "run_019fb9ebfdcf73e1af0eaee1baff7172",
+    "diagnostic_run_id": "run_019fb9ebfdcf73e1af0eaef40d8fbdff",
+    "build_job_id": "136177",
+    "diagnostic_job_id": "136178",
+    "artifact_id": "artifact_c7fa29e3aa080c44",
+    "artifact_index_sha256": "858b4b9f71c5b9f830cf76745f53ca5278f146189ab1c75509ead74a95d6c161",
+    "content_address": "sha256:816d9388ff12ec865334a7bcee0ffec2f72b73f2bffd8c39cc4a491ec3d02b73",
+    "failure_sha256": "a02afcf8ff14e642cf68a18f84123ef64e247e4cc1412d94723d5a4688bf73c8",
+    "progress_sha256": "c35dea0115509aead7abac3356c776db365bb8c33ab93f0725b059a819e0b292",
+    "git_commit": "aa7f7365012c23d8b79c02ffe509414cbf81f1c2",
+    "git_tree": "a61a5979e6d861631a5cfb04d8b1942f854b48ce",
+    "spec_sha256": "7a8bea3b23442e30b4b25de7262972b7a4019832f842ce26c4bf3e37b7c2d615",
+    "lock_sha256": "391e50f4a1a0d2b0aa3776ca10ed2828e8d41cbc42ffc0ba84570729df4c3163",
+    "completed_trial_count": 5,
+    "arm_completed_counts": {
+      "A": 2,
+      "B": 3
+    },
+    "active_trial": "injection-ab-06-a",
+    "retry_count": 0,
+    "replacement_count": 0,
+    "integrity_error": "independent browser audit has no post-window heartbeat",
+    "integrity_error_evidence": null,
+    "root_cause": "best-effort heartbeat delivery plus a fixed 750 ms sleep and one-shot snapshot; raw active-trial browser state was not checkpointed before validation",
+    "vm_closed": true,
+    "overlay_removed": true,
+    "cleanup_errors": [],
+    "manual_reconcile_count": 0
   },
   "interpretation_table": [
     {
