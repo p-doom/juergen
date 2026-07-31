@@ -3,7 +3,7 @@ name = "juergen-stage5-rft"
 version = "0.1.0"
 description = "Fail-closed task-level VM rollout and rejection fine-tuning contracts"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = ["pillow>=11,<13"]
 
 [project.scripts]
 stage5-rft = "stage5_rft.cli:main"

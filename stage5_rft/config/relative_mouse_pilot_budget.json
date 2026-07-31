@@ -1,0 +1,45 @@
+{
+  "schema_version": "stage5.relative_mouse_pilot_budget.v1",
+  "status": "preregistered_before_pilot_collection",
+  "data": {
+    "class": "synthetic_training_only",
+    "environment": "movebox",
+    "train_seed": 1001,
+    "task_indices": {"start": 0, "stop_exclusive": 1536},
+    "validation_seed": 7777,
+    "validation_task_indices": {"start": 0, "stop_exclusive": 128},
+    "contains_official_heldout": false,
+    "contains_real_vm_eval": false,
+    "contains_crowd_cast": false
+  },
+  "collection": {
+    "tasks": 1536,
+    "k": 8,
+    "attempts": 12288,
+    "shards": 3,
+    "tasks_per_shard": 512,
+    "adaptive_resampling": false,
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "max_steps": 8,
+    "maximum_rollout_errors": 0,
+    "minimum_accepted_trajectories": 1200
+  },
+  "learner": {
+    "method": "pure_rejection_sft",
+    "synthetic_actions_allowed": 0,
+    "drop_no_op_actions": false,
+    "maximum_trajectories_per_task": 4,
+    "training_steps": 100,
+    "gpus": 1,
+    "seed": 0
+  },
+  "evaluation": {
+    "tasks": 128,
+    "k": 16,
+    "attempts": 2048,
+    "maximum_rollout_errors": 0,
+    "frozen_baseline_job_id": "135215"
+  }
+}

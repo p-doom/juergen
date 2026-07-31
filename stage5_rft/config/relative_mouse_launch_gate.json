@@ -1,0 +1,24 @@
+{
+  "schema_version": "stage5.relative_mouse_launch_gate.v1",
+  "status": "preregistered_before_relative_mouse_rft_launch",
+  "evidence": {
+    "minimum_tasks": 128,
+    "minimum_samples_per_task": 8,
+    "maximum_error_rate": 0.02
+  },
+  "posterior": {
+    "beta_prior_alpha": 0.25,
+    "beta_prior_beta": 2.25,
+    "draws": 20000,
+    "seed": 20260731,
+    "interval_mass": 0.9,
+    "scale_efficiency_haircut": 0.65,
+    "required_probability": 0.95
+  },
+  "thresholds": {
+    "pass@1": 0.1,
+    "pass@4": 0.24,
+    "pass@8": 0.3,
+    "accepted_per_gpu_hour": 350.0
+  }
+}

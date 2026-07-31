@@ -1,0 +1,34 @@
+name = "stage5_relative_mouse_collect_shard0_v1"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+bash "$REPO/stage5_rft/scripts/collect_relative_mouse_shard.sh" \
+  "$1/gate_report.json" "$2" "$3" 0 "$REPO"
+''', "--", "{inputs.gate.path}", "{inputs.parent.path}", "{outputs.rollouts.path}"]
+
+[resources]
+gpus = 1
+cpus = 16
+mem = "100GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.gate]
+type = "stage"
+stage = "feasibility_gate"
+role = "report"
+
+[inputs.parent]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/checkpoints/fmt_sft_8b_osw_moverel_hf"
+
+[outputs.rollouts]
+type = "dataset"
+marker = "sample_manifest.json"
+alias = "relative_mouse_pilot_shard0_{run.id}"
+

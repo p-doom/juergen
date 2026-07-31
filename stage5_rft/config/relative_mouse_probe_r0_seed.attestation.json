@@ -1,0 +1,31 @@
+{
+  "schema_version": "stage5.relative_mouse_evidence.v1",
+  "attested_at": "2026-07-31T23:20:00+02:00",
+  "probe_path": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/rl_scratch/osworld_rl/rft_star/out/probe_r0_seed.json",
+  "probe_sha256": "782e2fd0e4f6c3943c2cbc02f8e5fdb4028114090ec2ef7a44dfd234779f96e0",
+  "probe_log_path": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/rl_scratch/osworld_rl/rft_star/logs/probe_135215.log",
+  "probe_log_sha256": "1f950253331525b153f1787d2462b249cc89db07cdeaa705831f4768c56902d8",
+  "policy": {
+    "checkpoint_uri": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/checkpoints/fmt_sft_8b_osw_moverel_hf",
+    "checkpoint_file": "model.safetensors",
+    "checkpoint_sha256": "013f6c62d00d8c101a82d6ecc983f9ddadd5bca8b91664bd4bcf47bc8ddc25c3",
+    "served_model_name": "probe",
+    "action_schema": "native_relative_move_rel.v2"
+  },
+  "data": {
+    "class": "synthetic_train_adjacent_validation",
+    "environment": "movebox",
+    "task_pool_seed": 7777,
+    "task_pool_band": "uniform",
+    "contains_official_heldout": false,
+    "contains_crowd_cast": false
+  },
+  "resource_accounting": {
+    "source": "sacct -j 135215 -X",
+    "scheduler_job_id": "135215",
+    "node": "hai001",
+    "allocated_gpus": 1,
+    "elapsed_seconds": 1493,
+    "gpu_seconds": 1493
+  }
+}

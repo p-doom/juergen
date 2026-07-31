@@ -1,0 +1,107 @@
+name = "stage5_relative_mouse_train_pilot_v1"
+repo = "omegalax"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+GATE="$1/gate_report.json"
+DATASET="$2"
+PARENT="$3"
+OUT="$4"
+jq -e '.threshold_crossed == true and .launch_authorized == false' "$GATE"
+jq -e '.method == "pure_rejection_sft" and .tokenized == true
+  and .synthetic_actions_added == 0 and .synthetic_terminate_added == false
+  and .no_op_actions_dropped == 0 and .contains_official_heldout == false
+  and .contains_crowd_cast == false' "$DATASET/manifest.json"
+test "$(jq -r '.binding.checkpoint_uri' "$GATE")" = "$PARENT"
+test "$(jq -r '.binding.checkpoint_sha256' "$GATE")" = "013f6c62d00d8c101a82d6ecc983f9ddadd5bca8b91664bd4bcf47bc8ddc25c3"
+
+VAL_RECORDS="$(jq -r '.val_records' "$DATASET/manifest.json")"
+VAL_STEPS="$(( (VAL_RECORDS + 7) / 8 ))"
+test "$VAL_STEPS" -ge 1
+SAVE="$LABCTL_RUN_DIR/orbax"
+JAX_CACHE=/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/jax_cache/relative_mouse_pilot_v1
+mkdir -p "$SAVE" "$JAX_CACHE" "$OUT"
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONUNBUFFERED=1 WANDB_MODE=offline
+export XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async XLA_PYTHON_CLIENT_MEM_FRACTION=0.8
+export UV_CACHE_DIR=/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache
+export TMPDIR=/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp
+
+uv run --project="$REPO" -- srun python "$REPO/scripts/train_vlm_sft.py" \
+  --jax_cache_dir="$JAX_CACHE" \
+  --model_id="$PARENT" --processor=Qwen/Qwen3-VL-8B-Instruct \
+  --data_path="$DATASET/train" --val_data_path="$DATASET/val" --save_dir="$SAVE" \
+  --enable_lora=true --lora_rank=32 --lora_alpha=32 --freeze_vision_tower=false \
+  --tp_size=1 --fsdp_size=1 --dp_size=1 --batch_size=1 --grad_accum_steps=8 \
+  --learning_rate=1e-4 --lr_schedule=wsd --lr_stable_fraction=0.7 \
+  --lr_end_factor=0.0 --warmup_steps=10 --weight_decay=0.01 --max_grad_norm=1.0 \
+  --max_length=16384 --num_steps=100 --num_loss_tiles=16 \
+  --keep_latest=4 --keep_period=50 --save_every=50 --val_every=50 --val_steps="$VAL_STEPS" \
+  --log_every=10 --log_memory=true --resume=if_present --gc_period=3000 \
+  --pad_id=0 --seed=0 --text_attn_backend=mosaic_gpu --peak_tflops=h100_sxm \
+  --max_vision_images_per_sample=29 --max_vision_patches_per_sample=64000 \
+  --grain_read_threads=4 --grain_read_buffer_size=2 --grain_workers=2 --grain_worker_buffer_size=2 \
+  --wandb_entity=pdoom --wandb_project=omegalax \
+  --wandb_group=relative_mouse_rft_pilot_v1 --wandb_name="relative_mouse_rft_pilot_${LABCTL_RUN_ID}" \
+  --wandb_tags berlin rft pure_rejection relative_mouse bounded_pilot
+
+CKPT="$(find "$SAVE" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -n | tail -1)"
+test "$CKPT" = "100"
+STOCK="$(find /fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface/hub/models--Qwen--Qwen3-VL-8B-Instruct/snapshots -mindepth 1 -maxdepth 1 -type d | head -1)"
+JAX_PLATFORMS=cpu srun uv run --project="$REPO" -- python "$REPO/scripts/export_to_hf.py" \
+  --model_id=Qwen/Qwen3-VL-8B-Instruct --checkpoint_path="$SAVE/$CKPT" --out_dir="$OUT" \
+  --tp_size=1 --fsdp_size=1 --dp_size=1 --max_grad_norm=1.0 --grad_accum_steps=8
+for name in tokenizer.json tokenizer_config.json vocab.json merges.txt added_tokens.json \
+  special_tokens_map.json chat_template.json generation_config.json \
+  preprocessor_config.json video_preprocessor_config.json; do
+  if [ -f "$STOCK/$name" ] && [ ! -f "$OUT/$name" ]; then cp "$STOCK/$name" "$OUT/$name"; fi
+done
+python3 - "$STOCK/config.json" "$OUT/config.json" <<'PY'
+import json, sys
+base = json.load(open(sys.argv[1])); out = json.load(open(sys.argv[2]))
+for key in ("architectures", "transformers_version", "vision_end_token_id"):
+    if key in base and key not in out: out[key] = base[key]
+assert out.get("architectures")
+json.dump(out, open(sys.argv[2], "w"), indent=2)
+PY
+test -f "$OUT/model.safetensors" -o -f "$OUT/model.safetensors.index.json"
+cp "$DATASET/manifest.json" "$OUT/training_dataset_manifest.json"
+python3 - "$OUT" "$PARENT" "$VAL_STEPS" <<'PY'
+import json, pathlib, sys
+out = pathlib.Path(sys.argv[1])
+payload = {"schema_version": "stage5.relative_mouse_pilot_model.v1", "status": "complete",
+           "method": "pure_rejection_sft", "training_steps": 100, "gpus": 1,
+           "parent_checkpoint": sys.argv[2], "val_steps_full_split": int(sys.argv[3]),
+           "contains_official_heldout": False, "contains_crowd_cast": False}
+(out / "pilot_manifest.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
+''', "--", "{inputs.gate.path}", "{inputs.dataset.path}", "{inputs.parent.path}", "{outputs.model.path}"]
+
+[resources]
+gpus = 1
+cpus = 16
+mem = "150GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--signal=USR1@600", "--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.gate]
+type = "stage"
+stage = "feasibility_gate"
+role = "report"
+
+[inputs.dataset]
+type = "stage"
+stage = "tokenize_pure_rft"
+role = "dataset"
+
+[inputs.parent]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/checkpoints/fmt_sft_8b_osw_moverel_hf"
+
+[outputs.model]
+type = "checkpoint"
+marker = "config.json"
+alias = "relative_mouse_rft_pilot_model_{run.id}"

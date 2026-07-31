@@ -1,0 +1,51 @@
+name = "stage5_relative_mouse_tokenize_pure_rft_v1"
+repo = "omegalax"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+SRC="$1"
+OUT="$2"
+jq -e '.method == "pure_rejection_sft" and .synthetic_actions_added == 0
+  and .synthetic_terminate_added == false and .no_op_actions_dropped == 0' "$SRC/manifest.json"
+mkdir -p "$OUT"
+for split in train val; do
+  uv run --project="$REPO" -- python "$REPO/scripts/build_sft_records_from_chat.py" \
+    --data_path "$SRC/_normalized/$split/chat.jsonl" --out_dir "$OUT/$split" \
+    --model_id Qwen/Qwen3-VL-8B-Instruct \
+    --tokenizer Qwen/Qwen3-VL-8B-Instruct \
+    --processor Qwen/Qwen3-VL-8B-Instruct \
+    --max_length 16384 --overflow_mode truncate \
+    --records_per_shard 8000 --num_workers 8 --overwrite
+  test -f "$OUT/$split/metadata.json"
+done
+jq '. + {tokenized: true, tokenizer: "Qwen/Qwen3-VL-8B-Instruct", max_length: 16384}' \
+  "$SRC/manifest.json" >"$OUT/manifest.json"
+''', "--", "{inputs.records.path}", "{outputs.dataset.path}"]
+
+[resources]
+gpus = 0
+cpus = 16
+mem = "96GB"
+time = "02:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1"]
+
+[inputs.records]
+type = "stage"
+stage = "build_pure_rft"
+role = "records"
+
+[outputs.dataset]
+type = "dataset"
+marker = "manifest.json"
+alias = "relative_mouse_pure_rft_tokenized_{run.id}"
+
+[env]
+HF_HUB_OFFLINE = "1"
+TRANSFORMERS_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"

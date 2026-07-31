@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from stage5_rft.bayes_launch import evaluate_relative_mouse_launch
 from stage5_rft.collector import EpisodeCollector, EpisodeStore
 from stage5_rft.contamination import ContaminationBlocklist
 from stage5_rft.gates import construction_metrics, evaluate_gate_files
@@ -19,6 +20,8 @@ from stage5_rft.replay import (
     validate_collection,
     validate_deterministic_reset,
 )
+from stage5_rft.relative_mouse_records import build_pure_relative_mouse_records
+from stage5_rft.relative_mouse_batch import seal_relative_mouse_batch
 from stage5_rft.rft import RFTConfig, build_rft_dataset
 from stage5_rft.schema import PolicyProvenance, TaskSpec
 from stage5_rft.util import (
@@ -157,6 +160,36 @@ def _cmd_learner_plan(args: argparse.Namespace) -> dict[str, Any]:
     return plan.as_dict()
 
 
+def _cmd_relative_mouse_launch_gate(args: argparse.Namespace) -> dict[str, Any]:
+    return evaluate_relative_mouse_launch(
+        probe_path=args.probe,
+        attestation_path=args.attestation,
+        config_path=args.config,
+    )
+
+
+def _cmd_build_relative_mouse_rft(args: argparse.Namespace) -> dict[str, Any]:
+    return build_pure_relative_mouse_records(
+        rollout_glob=args.rollouts_glob,
+        output_dir=args.out,
+        approved_background_root=args.approved_background_root,
+        val_fraction=args.val_fraction,
+        split_salt=args.split_salt,
+        maximum_trajectories_per_task=args.maximum_trajectories_per_task,
+    )
+
+
+def _cmd_seal_relative_mouse_batch(args: argparse.Namespace) -> dict[str, Any]:
+    return seal_relative_mouse_batch(
+        shard_dirs=args.shard,
+        output_dir=args.out,
+        expected_tasks=args.expected_tasks,
+        expected_k=args.expected_k,
+        minimum_accepted=args.minimum_accepted,
+        expected_train_seed=args.expected_train_seed,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="stage5-rft")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -232,6 +265,40 @@ def build_parser() -> argparse.ArgumentParser:
     learner.add_argument("--seed", type=int, default=0)
     learner.add_argument("--out", required=True)
     learner.set_defaults(func=_cmd_learner_plan)
+
+    launch_gate = sub.add_parser(
+        "relative-mouse-launch-gate",
+        help="Bayesian pass@1/4/8 and accepted/GPU-hour feasibility gate",
+    )
+    launch_gate.add_argument("--probe", required=True)
+    launch_gate.add_argument("--attestation", required=True)
+    launch_gate.add_argument("--config", required=True)
+    launch_gate.add_argument("--out")
+    launch_gate.set_defaults(func=_cmd_relative_mouse_launch_gate)
+
+    relative_build = sub.add_parser(
+        "build-relative-mouse-rft",
+        help="build pure rejection-SFT records from verified move_rel successes",
+    )
+    relative_build.add_argument("--rollouts-glob", required=True)
+    relative_build.add_argument("--approved-background-root", required=True)
+    relative_build.add_argument("--out", required=True)
+    relative_build.add_argument("--val-fraction", type=float, default=0.05)
+    relative_build.add_argument("--split-salt", default="stage5-relative-mouse-pure-v1")
+    relative_build.add_argument("--maximum-trajectories-per-task", type=int, default=4)
+    relative_build.set_defaults(func=_cmd_build_relative_mouse_rft)
+
+    seal_batch = sub.add_parser(
+        "seal-relative-mouse-batch",
+        help="verify and combine fixed-budget zero-error rollout shards",
+    )
+    seal_batch.add_argument("--shard", action="append", required=True)
+    seal_batch.add_argument("--out", required=True)
+    seal_batch.add_argument("--expected-tasks", type=int, required=True)
+    seal_batch.add_argument("--expected-k", type=int, required=True)
+    seal_batch.add_argument("--minimum-accepted", type=int, required=True)
+    seal_batch.add_argument("--expected-train-seed", type=int, required=True)
+    seal_batch.set_defaults(func=_cmd_seal_relative_mouse_batch)
     return parser
 
 

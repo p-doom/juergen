@@ -1,0 +1,44 @@
+name = "stage5_relative_mouse_feasibility_gate_v1"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli relative-mouse-launch-gate \
+  --probe "$1" \
+  --attestation "$REPO/stage5_rft/config/relative_mouse_probe_r0_seed.attestation.json" \
+  --config "$REPO/stage5_rft/config/relative_mouse_launch_gate.json" \
+  --out "$2/gate_report.json"
+jq -e '.threshold_crossed == true and .launch_authorized == false' "$2/gate_report.json"
+''', "--", "{inputs.probe.path}", "{outputs.report.path}"]
+
+[resources]
+gpus = 0
+cpus = 2
+mem = "8GB"
+time = "00:15:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+
+[inputs.probe]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/rl_scratch/osworld_rl/rft_star/out/probe_r0_seed.json"
+
+[inputs.probe_log]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/rl_scratch/osworld_rl/rft_star/logs/probe_135215.log"
+
+[inputs.parent]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/checkpoints/fmt_sft_8b_osw_moverel_hf"
+
+[outputs.report]
+type = "dataset"
+marker = "gate_report.json"
+alias = "relative_mouse_feasibility_gate_{run.id}"
+
+[env]
+PYTHONUNBUFFERED = "1"
+HF_HUB_OFFLINE = "1"
+

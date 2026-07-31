@@ -1,0 +1,13 @@
+name = "stage5_relative_mouse_collection_v1"
+
+[stages.feasibility_gate]
+recipe = "../recipes/relative_mouse_feasibility_gate.toml"
+
+[stages.collect_shard0]
+recipe = "../recipes/relative_mouse_collect_shard0.toml"
+
+[stages.collect_shard1]
+recipe = "../recipes/relative_mouse_collect_shard1.toml"
+
+[stages.collect_shard2]
+recipe = "../recipes/relative_mouse_collect_shard2.toml"

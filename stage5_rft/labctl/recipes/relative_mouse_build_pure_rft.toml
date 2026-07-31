@@ -1,0 +1,43 @@
+name = "stage5_relative_mouse_build_pure_rft_v1"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+jq -e '.status == "complete" and .attempts == 12288 and .errors == 0
+  and .accepted >= 1200 and .adaptive_resampling == false' "$1/manifest.json"
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli build-relative-mouse-rft \
+  --rollouts-glob "$1/rollouts_shard*.jsonl" \
+  --approved-background-root "$2" --out "$3" \
+  --val-fraction 0.05 --split-salt stage5-relative-mouse-pilot-v1 \
+  --maximum-trajectories-per-task 4
+jq -e '.status == "complete" and .method == "pure_rejection_sft"
+  and .synthetic_actions_added == 0 and .synthetic_terminate_added == false
+  and .no_op_actions_dropped == 0 and .trajectories_kept > 0
+  and .contains_official_heldout == false and .contains_crowd_cast == false' "$3/manifest.json"
+''', "--", "{inputs.rollouts.path}", "{inputs.backgrounds.path}", "{outputs.records.path}"]
+
+[resources]
+gpus = 0
+cpus = 16
+mem = "96GB"
+time = "02:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1"]
+
+[inputs.rollouts]
+type = "stage"
+stage = "seal_rollouts"
+role = "rollouts"
+
+[inputs.backgrounds]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/converted/_osworld_images"
+
+[outputs.records]
+type = "dataset"
+marker = "manifest.json"
+alias = "relative_mouse_pure_rft_records_{run.id}"
+

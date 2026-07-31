@@ -1,0 +1,53 @@
+name = "stage5_relative_mouse_infra_dryrun_v1"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+WORK="$LABCTL_RUN_DIR/synthetic_evidence"
+mkdir -p "$WORK" "$1"
+python3 - "$WORK" <<'PY'
+import hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+rows = [{"task_key": f"val:{i}", "n": 8, "c": 6} for i in range(128)]
+probe = {"summary": {"status": "OK", "label": "infra_only_synthetic", "n_tasks": 128,
+          "n_rollouts_ok": 1024, "n_rollouts_err": 0, "n_accepted_rollouts": 768,
+          "error_rate": 0.0, "invalid_reasons": []}, "per_task": rows}
+(root / "probe.json").write_text(json.dumps(probe))
+(root / "probe.log").write_text("label=infra_only_synthetic ckpt=/synthetic/no-model-loaded\n")
+sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+att = {"schema_version": "stage5.relative_mouse_evidence.v1",
+       "probe_sha256": sha(root / "probe.json"),
+       "probe_log_path": str(root / "probe.log"),
+       "probe_log_sha256": sha(root / "probe.log"),
+       "policy": {"checkpoint_uri": "/synthetic/no-model-loaded", "checkpoint_sha256": "0" * 64},
+       "data": {"class": "synthetic_train_adjacent_validation",
+                "contains_official_heldout": False, "contains_crowd_cast": False},
+       "resource_accounting": {"gpu_seconds": 3600, "scheduler_job_id": "infra-only"}}
+(root / "attestation.json").write_text(json.dumps(att))
+PY
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli relative-mouse-launch-gate \
+  --probe "$WORK/probe.json" --attestation "$WORK/attestation.json" \
+  --config "$REPO/stage5_rft/config/relative_mouse_launch_gate.json" \
+  --out "$1/gate_report.json"
+jq -e '.threshold_crossed == true and .launch_authorized == false
+  and .binding.checkpoint_uri == "/synthetic/no-model-loaded"' "$1/gate_report.json"
+''', "--", "{outputs.report.path}"]
+
+[resources]
+gpus = 0
+cpus = 2
+mem = "8GB"
+time = "00:10:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+
+[outputs.report]
+type = "dataset"
+marker = "gate_report.json"
+alias = "relative_mouse_infra_dryrun_{run.id}"
+
+[env]
+PYTHONUNBUFFERED = "1"
+HF_HUB_OFFLINE = "1"

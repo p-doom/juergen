@@ -1,0 +1,46 @@
+name = "stage5_relative_mouse_seal_rollouts_v1"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli seal-relative-mouse-batch \
+  --shard "$1" --shard "$2" --shard "$3" --out "$4" \
+  --expected-tasks 1536 --expected-k 8 --minimum-accepted 1200 \
+  --expected-train-seed 1001
+jq -e '.status == "complete" and .attempts == 12288 and .errors == 0
+  and .accepted >= 1200 and .adaptive_resampling == false
+  and .contains_official_heldout == false
+  and .contains_real_vm_eval == false
+  and .contains_crowd_cast == false' "$4/manifest.json"
+''', "--", "{inputs.shard0.path}", "{inputs.shard1.path}", "{inputs.shard2.path}", "{outputs.rollouts.path}"]
+
+[resources]
+gpus = 0
+cpus = 4
+mem = "16GB"
+time = "00:20:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+
+[inputs.shard0]
+type = "stage"
+stage = "collect_shard0"
+role = "rollouts"
+
+[inputs.shard1]
+type = "stage"
+stage = "collect_shard1"
+role = "rollouts"
+
+[inputs.shard2]
+type = "stage"
+stage = "collect_shard2"
+role = "rollouts"
+
+[outputs.rollouts]
+type = "dataset"
+marker = "manifest.json"
+alias = "relative_mouse_pilot_rollouts_{run.id}"
+
