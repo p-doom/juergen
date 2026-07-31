@@ -288,6 +288,7 @@
     ],
     "journal_hash": "sha256_utf8_exact_json",
     "journal_records_exclude_only_prior_sealed_journal_json": true,
+    "overlapping_direct_heartbeat_journals_must_match_marker_prefix": true,
     "cross_check_every_direct_host_event": true,
     "recover_only_missing_transport_sequences": true,
     "duplicate_or_disagreeing_direct_host_event_is_integrity_abort": true,
@@ -349,7 +350,7 @@
   "integrity_abort_conditions": [
     "spec, parent evidence, fixture, provider, source, or lock seal drift",
     "reset or fresh Chromium launch failure",
-    "missing or duplicate audit_ready, audit overflow, malformed required audit fields, invalid journal seal, or a direct host event that disagrees with the sealed browser journal",
+    "missing or duplicate audit_ready, audit overflow, malformed required audit fields, invalid journal seal, non-append-only overlapping heartbeat journals, or a direct host event that disagrees with the sealed browser journal",
     "recovered DOM event without a causal host-before-deadline upper bound",
     "bounded post-window wait timeout or missing, stale, mismatched, or non-causal heartbeat acknowledgement",
     "canonical action format, semantic operations, endpoint, or only-backend-difference contract drift",

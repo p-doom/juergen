@@ -243,6 +243,7 @@ class FixtureStateStore:
                 or marker_host_ns > wait_deadline_host_monotonic_ns
                 or acknowledged_host_ns >= marker_host_ns
                 or acknowledged_request_id >= marker_request_id
+                or type(sealed_through_sequence) is not int
                 or sealed_through_sequence != sequence - 1
                 or not isinstance(sealed_journal_json, str)
                 or not isinstance(sealed_journal_sha256, str)

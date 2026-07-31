@@ -41,7 +41,7 @@ from .vm import (
 
 
 SPEC_PATH = Path(__file__).with_name("injection_ab_spec.json")
-EXPECTED_SPEC_SHA256 = "91b9c19ed545739a91eb071ff1166486581ea15815c9386b9f665b0e4a2a50e0"
+EXPECTED_SPEC_SHA256 = "3de94ee63e2e1231ef19f818d444560555caa00f5c1972345dfc0eb81c8488e3"
 SUITE = "rung1_click_release_injection_ab_v4"
 ORDER_BLOCK = ("A", "B", "B", "A", "B", "A", "A", "B")
 TRIAL_ORDER = ORDER_BLOCK * 6
@@ -434,6 +434,10 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         or audit.get("journal_hash") != "sha256_utf8_exact_json"
         or audit.get("journal_records_exclude_only_prior_sealed_journal_json")
         is not True
+        or audit.get(
+            "overlapping_direct_heartbeat_journals_must_match_marker_prefix"
+        )
+        is not True
         or audit.get("cross_check_every_direct_host_event") is not True
         or audit.get("recover_only_missing_transport_sequences") is not True
         or audit.get("duplicate_or_disagreeing_direct_host_event_is_integrity_abort")
@@ -747,6 +751,7 @@ def _decode_sealed_journal(marker: dict[str, Any]) -> tuple[list[dict[str, Any]]
     if (
         not isinstance(marker_sequence, int)
         or isinstance(marker_sequence, bool)
+        or type(marker.get("sealed_journal_through_sequence")) is not int
         or marker.get("sealed_journal_through_sequence") != marker_sequence - 1
         or not isinstance(journal_json, str)
         or not _is_sha256_hex(journal_sha256)
@@ -775,8 +780,11 @@ def _decode_sealed_journal(marker: dict[str, Any]) -> tuple[list[dict[str, Any]]
         not isinstance(journal, list)
         or len(journal) != marker_sequence - 1
         or not all(isinstance(event, dict) for event in journal)
-        or [event.get("audit_sequence") for event in journal]
-        != list(range(1, marker_sequence))
+        or any(
+            type(event.get("audit_sequence")) is not int
+            or event["audit_sequence"] != expected_sequence
+            for expected_sequence, event in enumerate(journal, start=1)
+        )
     ):
         raise InjectionAbIntegrityError(
             "browser audit journal sequence/count malformed"
@@ -848,6 +856,23 @@ def recover_sequence_sealed_audit_snapshot(
                     "journal_sha256": journal_sha256,
                 },
             )
+        if events[0].get("event") == "audit_heartbeat":
+            prior_journal, prior_journal_sha256 = _decode_sealed_journal(
+                events[0]
+            )
+            marker_prefix = journal[: sequence - 1]
+            if not _json_values_exactly_equal(
+                prior_journal, marker_prefix
+            ):
+                raise InjectionAbIntegrityError(
+                    "browser audit heartbeat journals are not append-only",
+                    evidence={
+                        "audit_sequence": sequence,
+                        "prior_journal_sha256": prior_journal_sha256,
+                        "marker_audit_sequence": marker_sequence,
+                        "marker_journal_sha256": journal_sha256,
+                    },
+                )
     normalized: list[dict[str, Any]] = []
     recovered_sequences: list[int] = []
     for sequence in range(1, marker_sequence):
@@ -1104,7 +1129,8 @@ def validate_audit_trace(
                 )
             if event["event"] == "audit_heartbeat":
                 if (
-                    event.get("sealed_journal_through_sequence")
+                    type(event.get("sealed_journal_through_sequence")) is not int
+                    or event.get("sealed_journal_through_sequence")
                     != event["audit_sequence"] - 1
                     or not _is_sha256_hex(event.get("sealed_journal_sha256"))
                 ):

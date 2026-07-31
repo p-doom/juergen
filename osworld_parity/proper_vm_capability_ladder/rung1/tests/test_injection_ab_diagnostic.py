@@ -455,6 +455,7 @@ def test_sealed_browser_journal_recovers_one_or_multiple_dropped_beacons(
         "hash",
         "direct_event",
         "json_type",
+        "seal_count_type",
         "sequence",
         "reserved_field",
         "duplicate_key",
@@ -489,6 +490,10 @@ def test_tampered_browser_journal_is_integrity_abort(mutation: str) -> None:
         marker["sealed_journal_sha256"] = hashlib.sha256(
             marker["sealed_journal_json"].encode()
         ).hexdigest()
+    elif mutation == "seal_count_type":
+        marker["sealed_journal_through_sequence"] = float(
+            marker["sealed_journal_through_sequence"]
+        )
     elif mutation == "sequence":
         journal[1]["audit_sequence"] = 9
         marker["sealed_journal_json"] = json.dumps(
@@ -602,7 +607,7 @@ def test_recovered_event_requires_exact_host_deadline_causal_bound(
             select_science_window_audit_events(trace, 100)
 
 
-def test_recovered_change_counts_only_with_causal_predeadline_witness() -> None:
+def _recovered_change_case() -> dict:
     ready = _audit_event(1, "audit_ready")
     events = [ready]
     for sequence, name in enumerate(
@@ -622,7 +627,11 @@ def test_recovered_change_counts_only_with_causal_predeadline_witness() -> None:
     _acknowledge_heartbeat(marker, acknowledged)
     _seal_heartbeat(marker, [*events, witness, acknowledged])
     raw = [ready, *events[1:-1], witness, acknowledged, marker]
-    snapshot = _audit_snapshot(raw)
+    return _audit_snapshot(raw)
+
+
+def test_recovered_change_counts_only_with_causal_predeadline_witness() -> None:
+    snapshot = _recovered_change_case()
 
     sealed_snapshot, recovery = recover_sequence_sealed_audit_snapshot(
         snapshot, 9
@@ -638,6 +647,27 @@ def test_recovered_change_counts_only_with_causal_predeadline_witness() -> None:
     assert trace[5]["event"] == "change"
     assert trace[5]["recovered_host_monotonic_upper_bound_ns"] == 100
     assert outcome["primary_success"] is True
+
+
+def test_conflicting_overlapping_heartbeat_journals_abort_recovery() -> None:
+    snapshot = _recovered_change_case()
+    marker = next(
+        event
+        for event in snapshot["browser_audit_events"]
+        if event["audit_sequence"] == 9
+    )
+    journal = json.loads(marker["sealed_journal_json"])
+    assert journal[5]["event"] == "change"
+    journal[5]["event"] = "input"
+    marker["sealed_journal_json"] = json.dumps(
+        journal, ensure_ascii=False, separators=(",", ":")
+    )
+    marker["sealed_journal_sha256"] = hashlib.sha256(
+        marker["sealed_journal_json"].encode("utf-8")
+    ).hexdigest()
+
+    with pytest.raises(InjectionAbIntegrityError, match="not append-only"):
+        recover_sequence_sealed_audit_snapshot(snapshot, 9)
 
 
 def _apply_store_audit(
@@ -854,6 +884,13 @@ def test_late_prestored_marker_is_rejected_by_absolute_wait_cap() -> None:
     )
     assert FixtureStateStore._causal_post_window_marker_sequences(
         duplicate_marker, observation_deadline, wait_deadline
+    ) == []
+    float_count_marker = state(wait_deadline)
+    float_count_marker["browser_audit_events"][-1][
+        "sealed_journal_through_sequence"
+    ] = 2.0
+    assert FixtureStateStore._causal_post_window_marker_sequences(
+        float_count_marker, observation_deadline, wait_deadline
     ) == []
 
 
