@@ -1,0 +1,18 @@
+{
+  "first_half_seconds": 6400,
+  "jobs": [
+    {"elapsed_raw": 2253, "exit_code": "0:0", "gpu_count": 1, "job_id": "135517", "role": "seed101", "state": "COMPLETED"},
+    {"elapsed_raw": 1292, "exit_code": "0:0", "gpu_count": 1, "job_id": "135518", "role": "seed211", "state": "COMPLETED"},
+    {"elapsed_raw": 1674, "exit_code": "0:0", "gpu_count": 1, "job_id": "135519", "role": "seed307", "state": "COMPLETED"},
+    {"elapsed_raw": 1181, "exit_code": "0:0", "gpu_count": 1, "job_id": "135520", "role": "seed401", "state": "COMPLETED"},
+    {"elapsed_raw": 897, "exit_code": "1:0", "gpu_count": 1, "job_id": "135555", "role": "seed503_failed_infra", "state": "FAILED"},
+    {"elapsed_raw": 1074, "exit_code": "0:0", "gpu_count": 1, "job_id": "135556", "role": "seed601", "state": "COMPLETED"},
+    {"elapsed_raw": 1409, "exit_code": "0:0", "gpu_count": 1, "job_id": "135558", "role": "seed701", "state": "COMPLETED"},
+    {"elapsed_raw": 1249, "exit_code": "0:0", "gpu_count": 1, "job_id": "135559", "role": "seed809", "state": "COMPLETED"},
+    {"elapsed_raw": 551, "exit_code": "1:0", "gpu_count": 1, "job_id": "135575", "role": "seed503_continuation_failed_infra", "state": "FAILED"}
+  ],
+  "payload_sha256": "31a8f573bc66c472972a2778b71a947a1d42b9c5d4d96c19741bccb867b7fb5a",
+  "schema_version": 1,
+  "status": "complete",
+  "total_gpu_seconds": 11580
+}

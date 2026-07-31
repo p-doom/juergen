@@ -1,0 +1,42 @@
+name = "phase2_move_rel_probe_first_half_barrier_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+python3 "$REPO/osworld_parity/proper_task_pilot/aggregate_probe.py" \
+  --tasks="$REPO/osworld_parity/proper_task_pilot/pilot_tasks.txt" "$@"
+''', "--"]
+
+[resources]
+cpus = 4
+mem = "16GB"
+time = "00:15:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--no-requeue", "--dependency=afterany:135517:135518:135519:135520", "--signal=B:TERM@60", "--deadline=2026-07-31T04:40:00"]
+
+[inputs.seed101]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/phase2_move_rel_probe_seed101_v1_run_019fb59634bc72428520f627c3dec1b8"
+[inputs.seed211]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/phase2_move_rel_probe_seed211_v1_run_019fb596f5507b028a0dde7b95b3e6a1"
+[inputs.seed307]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/phase2_move_rel_probe_seed307_v1_run_019fb5973b5b7c9289f5928f3d5df4e2"
+[inputs.seed401]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/phase2_move_rel_probe_seed401_v1_run_019fb5978c217cb185e864850de51d59"
+
+[outputs.result]
+type = "eval_result"
+marker = "decision.json"
+alias = "phase2_move_rel_probe_first_half_barrier_v1_{run.id}"
+
+[args]
+seed101 = "{inputs.seed101.path}"
+seed211 = "{inputs.seed211.path}"
+seed307 = "{inputs.seed307.path}"
+seed401 = "{inputs.seed401.path}"
+output = "{outputs.result.path}"

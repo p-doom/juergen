@@ -1,0 +1,102 @@
+name = "phase2_move_rel_probe_seed101_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+bash "$REPO/osworld_parity/proper_task_pilot/run_stage.sh" "$@"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 8
+mem = "32GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--no-requeue", "--exclude=hai001,hai005", "--signal=B:TERM@120", "--deadline=2026-07-31T04:40:00"]
+
+[inputs.model]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/relative_factorial_reltool_act_r256_s750_capacity_v1_run_019fb4becd3c75f0809cb9acce69ba5e"
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning"
+[inputs.tasks]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/rl_scratch/osworld_rl/train_tasks_259"
+[inputs.vm]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_vm"
+[inputs.provider]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_eval_pinned/code"
+[inputs.osworld]
+type = "external"
+path = "/fast/home/franz.srambical/OSWorld"
+[inputs.gate_absolute]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/proper_task_pilot_absolute_r32_v1_run_019fb5680a067e8299a45930cc302d0f"
+[inputs.gate_relative]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/proper_task_pilot_relative_r256_v1_run_019fb568add3714199fd295c9059a94e"
+
+[outputs.result]
+type = "eval_result"
+marker = "run_manifest.json"
+alias = "phase2_move_rel_probe_seed101_v1_{run.id}"
+
+[args]
+mode = "probe_seed"
+arm = "relative_r256"
+action_format = "move_rel"
+checkpoint = "{inputs.model.path}/hf"
+checkpoint_manifest = "{inputs.model.path}/train_export_manifest.json"
+checkpoint_manifest_sha256 = "996adabfcf22cf537f5727aa330d2468497bb5513b71f5db18de89193eaed483"
+expected_lora_rank = "256"
+expected_lora_alpha = "256"
+runtime_repo = "{inputs.runtime.path}"
+runtime_files_sha256 = "abc961f70ad2278ab5edc2822759ba1f00e4e6106dcf0ee944e5e14283aa0bb3"
+tasks_file = "pilot_tasks.txt"
+tasks_sha256 = "53c6750ec8bbc9d1705ea770bcc1c8216c028a88d008d45c040802e1fd96a100"
+canonical_tasks_file = "pilot_tasks.txt"
+reverse_tasks = "false"
+task_base = "{inputs.tasks.path}"
+train_split = "osworld_train.json"
+train_split_sha256 = "1a5cb5bf8f27079b50188a3735f5bb7f801b5fd812551d7f328281e6399700ae"
+heldout_split = "osworld_eval_heldout.json"
+heldout_split_sha256 = "9bdb3e466738c06d3f372d7ae4ebadb4d4b575175871cb63af0f4c89f8ba7e7c"
+output = "{outputs.result.path}"
+qcow_path = "{inputs.vm.path}/Ubuntu.qcow2"
+qemu_bin = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin/qemu-system-x86_64-wrapped"
+provider_source = "{inputs.provider.path}/qemu_kvm_provider.py"
+provider_sha256 = "8d7e4a2602a81895a712bb275b327bd3270d43675acf6e61484be5775caefafc"
+port_lock_dir = "/tmp/osworld_port_locks"
+port_base = "30000"
+osworld_root = "{inputs.osworld.path}"
+host_python = "/fast/home/franz.srambical/juergen/.venv/bin/python"
+apptainer_image = "{inputs.runtime.path}/apptainer/images/osworld.sif"
+screen_width = "1920"
+screen_height = "1080"
+snapshot_name = "osworld_ready"
+max_steps = "15"
+n_history_frames = "4"
+pause = "1.0"
+server_max_model_len = "16384"
+max_completion_tokens = "1024"
+temperature = "0.7"
+top_p = "0.95"
+sampling_seed = "101"
+gate_absolute_manifest = "{inputs.gate_absolute.path}/run_manifest.json"
+gate_absolute_manifest_sha256 = "01d7bfa16e0b49b29c4e59393ad47c4517036725af361c6c05e89b96f67b7e2a"
+gate_absolute_payload_sha256 = "7943bb047def1419014d21d2958cfdf2c1a91cc5e33911a5248200fbb24074c0"
+gate_relative_manifest = "{inputs.gate_relative.path}/run_manifest.json"
+gate_relative_manifest_sha256 = "838d3d2ed36c54cb47f365edf3da452fcc2a835e9788233d766599361e329d7a"
+gate_relative_payload_sha256 = "7dd248448078bf89508bdc1362353343964a4101288a54d8aa08ba51f35674a6"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"
+LD_PRELOAD = "/fast/home/franz.srambical/.tmp_suite/mihir_ablation/nccl_2.28.3/libnccl.so.2"
