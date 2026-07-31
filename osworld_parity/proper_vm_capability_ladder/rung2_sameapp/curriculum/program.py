@@ -8,7 +8,7 @@ objects, which the existing native and compact compilers can then encode.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from ..actions import (
@@ -36,21 +36,42 @@ class CompiledSegment:
     resolved_primitive_actions: int
     resolved_primitive_events: int
     resolved_budget_sha256: str
+    binding_revision: int
     binding_sha256: str
 
 
 @dataclass(frozen=True)
 class CompiledProgram:
-    """Aggregate receipt obtained by summing and re-hashing its segments."""
+    """Aggregate receipt obtained from already-executed segment receipts."""
 
     task_id: str
     fixture_sha256: str
     action_schema: str
-    segments: tuple[CompiledSegment, ...]
+    segments: tuple["ExecutedSegmentReceipt", ...]
     resolved_primitive_actions: int
     resolved_primitive_events: int
     resolved_budget_sha256: str
     binding_sha256: str
+
+
+@dataclass(frozen=True)
+class ExecutedSegmentReceipt:
+    """Immutable evidence tying one compiled segment to executor dispatches."""
+
+    schema_version: int
+    task_id: str
+    fixture_sha256: str
+    action_schema: str
+    semantic_step_index: int
+    resolved_primitive_actions: int
+    resolved_primitive_events: int
+    resolved_budget_sha256: str
+    binding_revision: int
+    binding_sha256: str
+    dispatch_receipt_sha256: str
+    execution_started_monotonic_ns: int
+    execution_completed_monotonic_ns: int
+    executed_receipt_sha256: str
 
 
 def _op(kind: str, **kwargs: object) -> SymbolicOperation:
@@ -323,6 +344,7 @@ def compile_semantic_step(
         "semantic_step_index": semantic_step_index,
         "resolved_primitive_actions": resolved_actions,
         "resolved_primitive_events": resolved_events,
+        "binding_revision": binding.binding_revision,
         "binding_sha256": binding.binding_sha256,
         "actions": actions,
     }
@@ -335,31 +357,100 @@ def compile_semantic_step(
         resolved_primitive_actions=resolved_actions,
         resolved_primitive_events=resolved_events,
         resolved_budget_sha256=hashlib.sha256(canonical_json(receipt)).hexdigest(),
+        binding_revision=binding.binding_revision,
         binding_sha256=binding.binding_sha256,
     )
 
 
-def compile_program(
+def record_executed_segment(
+    segment: CompiledSegment,
+    dispatches: tuple[tuple[dict[str, Any], ...], ...],
+    *,
+    execution_started_monotonic_ns: int,
+    execution_completed_monotonic_ns: int,
+) -> ExecutedSegmentReceipt:
+    if len(dispatches) != len(segment.actions) or not dispatches:
+        raise ValueError("dispatch evidence does not cover every compiled action")
+    if execution_completed_monotonic_ns <= execution_started_monotonic_ns:
+        raise ValueError("segment execution timestamps are not monotonic")
+    for action_results in dispatches:
+        if not action_results:
+            raise ValueError("compiled action has no executor dispatch receipt")
+        for result in action_results:
+            if result.get("executor_dispatch_status") != "ok":
+                raise ValueError("executor dispatch did not complete successfully")
+            atomic = result.get("atomic_state")
+            if isinstance(atomic, dict) and atomic.get("ok") is False:
+                raise ValueError("atomic executor dispatch reported failure")
+    dispatch_payload = {
+        "schema_version": 1,
+        "task_id": segment.task_id,
+        "semantic_step_index": segment.semantic_step_index,
+        "compiled_actions": segment.actions,
+        "dispatches": dispatches,
+    }
+    dispatch_sha = hashlib.sha256(canonical_json(dispatch_payload)).hexdigest()
+    receipt_payload = {
+        "schema_version": 1,
+        "task_id": segment.task_id,
+        "fixture_sha256": segment.fixture_sha256,
+        "action_schema": segment.action_schema,
+        "semantic_step_index": segment.semantic_step_index,
+        "resolved_primitive_actions": segment.resolved_primitive_actions,
+        "resolved_primitive_events": segment.resolved_primitive_events,
+        "resolved_budget_sha256": segment.resolved_budget_sha256,
+        "binding_revision": segment.binding_revision,
+        "binding_sha256": segment.binding_sha256,
+        "dispatch_receipt_sha256": dispatch_sha,
+        "execution_started_monotonic_ns": execution_started_monotonic_ns,
+        "execution_completed_monotonic_ns": execution_completed_monotonic_ns,
+    }
+    return ExecutedSegmentReceipt(
+        **receipt_payload,
+        executed_receipt_sha256=hashlib.sha256(
+            canonical_json(receipt_payload)
+        ).hexdigest(),
+    )
+
+
+def aggregate_executed_segments(
     task: SemanticTask,
     action_schema: str,
     *,
-    binding: Any,
-    near_miss: bool = False,
+    segments: tuple[ExecutedSegmentReceipt, ...] | list[ExecutedSegmentReceipt],
 ) -> CompiledProgram:
-    """Compile all segments and aggregate their live-resolved receipts."""
+    """Sum and hash receipts from execution; never recompile earlier segments."""
 
-    segments = tuple(
-        compile_semantic_step(
-            task,
-            action_schema,
-            binding=binding,
-            semantic_step_index=index,
-            near_miss=near_miss,
-        )
-        for index in range(1, task.semantic_step_count + 1)
-    )
-    resolved_actions = sum(item.resolved_primitive_actions for item in segments)
-    resolved_events = sum(item.resolved_primitive_events for item in segments)
+    values = tuple(segments)
+    if tuple(item.semantic_step_index for item in values) != tuple(
+        range(1, task.semantic_step_count + 1)
+    ):
+        raise ValueError(f"{task.task_id}: executed segment coverage/order mismatch")
+    if any(
+        (item.task_id, item.fixture_sha256, item.action_schema)
+        != (task.task_id, task.fixture_sha256, action_schema)
+        for item in values
+    ):
+        raise ValueError(f"{task.task_id}: executed segment identity mismatch")
+    revisions = tuple(item.binding_revision for item in values)
+    binding_hashes = tuple(item.binding_sha256 for item in values)
+    if task.app == "chrome":
+        if revisions != (1, 1, 2) or binding_hashes[0] != binding_hashes[1] or (
+            binding_hashes[2] == binding_hashes[1]
+        ):
+            raise ValueError(f"{task.task_id}: Chrome binding transition mismatch")
+    elif len(set(revisions)) != 1 or len(set(binding_hashes)) != 1:
+        raise ValueError(f"{task.task_id}: unexpected mid-trajectory binding change")
+    for item in values:
+        payload = {
+            key: value
+            for key, value in asdict(item).items()
+            if key != "executed_receipt_sha256"
+        }
+        if hashlib.sha256(canonical_json(payload)).hexdigest() != item.executed_receipt_sha256:
+            raise ValueError(f"{task.task_id}: executed segment receipt seal mismatch")
+    resolved_actions = sum(item.resolved_primitive_actions for item in values)
+    resolved_events = sum(item.resolved_primitive_events for item in values)
     if resolved_actions > task.budget_contract["primitive_action_caps"][action_schema]:
         raise ValueError(f"{task.task_id}: aggregate primitive actions exceed cap")
     if resolved_events > task.budget_contract["primitive_event_caps"][action_schema]:
@@ -369,18 +460,34 @@ def compile_program(
         "task_id": task.task_id,
         "fixture_sha256": task.fixture_sha256,
         "action_schema": action_schema,
-        "segment_budget_sha256": [item.resolved_budget_sha256 for item in segments],
+        "executed_segment_receipt_sha256": [
+            item.executed_receipt_sha256 for item in values
+        ],
+        "segment_budget_sha256": [item.resolved_budget_sha256 for item in values],
+        "segment_binding_sha256": [item.binding_sha256 for item in values],
+        "segment_binding_revisions": [item.binding_revision for item in values],
         "resolved_primitive_actions": resolved_actions,
         "resolved_primitive_events": resolved_events,
-        "binding_sha256": binding.binding_sha256,
     }
+    binding_chain_sha256 = hashlib.sha256(
+        canonical_json(payload["segment_binding_sha256"])
+    ).hexdigest()
+    payload["binding_sha256"] = binding_chain_sha256
     return CompiledProgram(
         task_id=task.task_id,
         fixture_sha256=task.fixture_sha256,
         action_schema=action_schema,
-        segments=segments,
+        segments=values,
         resolved_primitive_actions=resolved_actions,
         resolved_primitive_events=resolved_events,
         resolved_budget_sha256=hashlib.sha256(canonical_json(payload)).hexdigest(),
-        binding_sha256=binding.binding_sha256,
+        binding_sha256=binding_chain_sha256,
+    )
+
+
+def compile_program(*args: Any, **kwargs: Any) -> None:
+    """Bulk precompilation is forbidden: production compiles after each probe."""
+
+    raise RuntimeError(
+        "bulk compile_program is disabled; compile, execute, and receipt semantic segments sequentially"
     )

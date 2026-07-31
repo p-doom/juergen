@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tomllib
 from pathlib import Path
 
@@ -23,15 +22,6 @@ def test_cpu_collection_recipe_forbids_gpu_and_collects_train_only() -> None:
     assert "sealed_eval" not in command
 
 
-def test_build_collection_is_deterministic_and_train_only(tmp_path: Path) -> None:
-    first = collect(mode="build", split="train", output=tmp_path / "a")
-    second = collect(mode="build", split="train", output=tmp_path / "b")
-    assert first["dataset_sha256"] == second["dataset_sha256"]
-    assert first["gpu_used"] is False
-    assert first["training_ready"] is False
-    rows = [json.loads(line) for line in (tmp_path / "a" / "teacher_trajectories.jsonl").read_text().splitlines()]
-    assert rows and all(row["split"] == "train" for row in rows)
-    assert all(row["sealed_eval_material"] is False for row in rows)
-    assert all(row["training_ready"] is False for row in rows)
-    with pytest.raises(ValueError, match="train-only"):
-        collect(mode="build", split="development", output=tmp_path / "dev")
+def test_legacy_collection_cannot_bypass_hardened_replay(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="legacy rung2_sameapp collector is disabled"):
+        collect(mode="build", split="train", output=tmp_path / "a")

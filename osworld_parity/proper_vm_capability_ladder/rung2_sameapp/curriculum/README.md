@@ -28,10 +28,14 @@ Coordinates are never seeded or invented. Each task carries a versioned
 `geometry_contract` and live-cursor contract. Setup must return exact initial
 state plus all required targets from the existing VM probes. At least two exact
 reset probes must agree on geometry, cursor, and viewport before a sealed
-`ValidatedRuntimeBinding` can compile anything. Cursor history stores semantic
-refs, and evaluated rows log each ref with its resolved live value. Chrome is
-re-probed after its scroll step; its later click compiles only from the refreshed
-geometry and cursor.
+`ValidatedRuntimeBinding` can compile anything. They must also be distinct,
+single-use reset generations issued by the active VM session, with ordered
+monotonic timestamps, setup/snapshot provenance, content seals, and bounded
+freshness. Cursor history stores semantic refs, and evaluated rows log each ref
+with its resolved live value. Chrome is re-probed after its executed scroll
+receipt; its later click compiles only from a refreshed binding that proves the
+signed scroll delta, active generation, causal timestamps, and changed binding
+revision.
 
 The initial materialized matrix contains one train and one development seed for
 each family:
@@ -69,6 +73,15 @@ development-only, no-heldout, full-fixture coverage bound to the manifest hash,
 all fixture/asset hashes, `osworld_ready`, and a lowercase 40-hex setup commit.
 It reads an explicit immutable artifact path and never synthesizes or reruns
 setup. Evaluators separately pin its artifact ID and raw file SHA.
+
+`rung2_sameapp/replay.py` is the production boundary. It requires that pinned
+setup dependency, performs distinct reset cycles, exports actual guest files for
+the declared extractor/fresh-process oracle, and compiles one semantic segment
+at a time. Each successful executor dispatch becomes an executed segment
+receipt carrying the exact binding revision used. Aggregation hashes those
+ordered receipts and revisions without recompiling earlier Chrome segments
+against the post-scroll binding. The former build replay and direct teacher
+collector fail closed; neither is an alternate compiler/execution path.
 
 The upward Chrome fixture establishes its nonzero initial offset in page load
 with `scrollTo`, reports it through the local event endpoint, and cannot pass

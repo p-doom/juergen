@@ -41,3 +41,11 @@ Chrome refreshes geometry and cursor after scrolling before its final target is
 compiled. Fixture contract checks read application artifacts through the
 declared extractor and use isolated oracle processes rather than scripted
 expected-state echoes.
+
+The production replay no longer imports or calls the direct symbolic
+`compile_native`/`compile_compact` path. It consumes session-issued reset
+generation evidence, compiles and executes semantic segments sequentially, and
+aggregates only sealed executor receipts. The Chrome refresh transition records
+pre/post binding revisions and is tied to the actually executed step-2 receipt.
+The superseded build replay and legacy collector are disabled so these checks
+cannot be bypassed through a second production entry point.

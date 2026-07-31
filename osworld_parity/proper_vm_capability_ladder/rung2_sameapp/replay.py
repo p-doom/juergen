@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -9,24 +10,40 @@ import time
 import traceback
 import urllib.request
 from dataclasses import asdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..rung1.executor import CompactRawExecutor, NativeAbsoluteExecutor
 from ..rung1.vm import DEFAULT_PROVIDER, DEFAULT_QCOW, DEFAULT_QEMU, KvmFixtureSession
-from .actions import compile_compact, compile_native
-from .fixtures import assert_collectable_split, load_manifest
-from .oracle import (
-    evaluate_in_fresh_process,
-    initial_state,
-    reset_signature,
-    scripted_state,
+from .curriculum.manifests import TaskManifest, load_manifest
+from .curriculum.oracle import as_sameapp_fixture, as_vscode_fixture, verify_fixture_contract
+from .curriculum.program import (
+    CompiledProgram,
+    CompiledSegment,
+    ExecutedSegmentReceipt,
+    aggregate_executed_segments,
+    compile_semantic_step,
+    record_executed_segment,
 )
-from .trajectory import build_trajectory
-from .vm import AppReadinessError, probe_geometry, probe_state, reset_and_setup
+from .curriculum.runtime import (
+    RuntimeEvidenceLedger,
+    RuntimeProbe,
+    ValidatedRuntimeBinding,
+    bind_repeated_runtime_probes,
+    probe_runtime,
+    refresh_binding_after_step,
+)
+from .curriculum.schema import SemanticTask
+from .curriculum.setup_validation import load_task_setup_validation
+from .vm import AppReadinessError
 
 
 ARMS = ("native_absolute_control", "compact_raw_phaseb")
+ARM_SCHEMAS = {
+    "native_absolute_control": "native_absolute_sequence_v1",
+    "compact_raw_phaseb": "compact_raw_phaseb_v1",
+}
+ARTIFACT_MARKER = "RUNG2_ARTIFACT_JSON="
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -38,125 +55,134 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
-def _reset_with_readiness_evidence(
-    session: KvmFixtureSession, fixture: Any, output: Path
-) -> tuple[Any, Any]:
-    """Keep failure evidence before the VM context tears the guest down."""
-    try:
-        return reset_and_setup(session, fixture)
-    except AppReadinessError as exc:
-        evidence = dict(exc.evidence)
-        evidence.update(
-            {
-                "error_type": type(exc).__name__,
-                "failed_phase": exc.failed_phase,
-                "message": str(exc),
-            }
-        )
-        transport = session.transport
-        if transport is not None:
-            try:
-                with urllib.request.urlopen(
-                    transport.base_url + "/screenshot", timeout=15
-                ) as response:
-                    screenshot = response.read()
-                if not screenshot.startswith(b"\x89PNG\r\n\x1a\n"):
-                    raise RuntimeError("VM screenshot endpoint did not return PNG")
-                path = output / "readiness_failure.png"
-                path.write_bytes(screenshot)
-                evidence["screenshot"] = {
-                    "bytes": len(screenshot),
-                    "path": str(path),
-                    "sha256": hashlib.sha256(screenshot).hexdigest(),
-                }
-            except Exception as screenshot_exc:
-                evidence["screenshot_error"] = (
-                    f"{type(screenshot_exc).__name__}: {screenshot_exc}"
-                )
-        _atomic_json(output / "readiness_failure.json", evidence)
-        raise
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _dummy_geometry(app: str) -> dict[str, tuple[int, int]]:
-    common = {
-        "editor": (820, 520),
-        "cell": (640, 420),
-        "source": (500, 300),
-        "destination": (500, 420),
-        "decoy": (500, 360),
-        "moved": (500, 300),
-        "nav": (260, 140),
-        "decoy_nav": (460, 140),
-        "toggle": (340, 760),
-        "decoy_toggle": (340, 820),
-        "scroll_surface": (960, 540),
-    }
-    return common
+def _load_setup_dependency(
+    manifest: TaskManifest,
+    *,
+    path: Path,
+    expected_artifact_id: str,
+    expected_raw_sha256: str,
+) -> dict[str, Any]:
+    if len(expected_raw_sha256) != 64 or any(
+        value not in "0123456789abcdef" for value in expected_raw_sha256
+    ):
+        raise ValueError("task setup validation SHA must be lowercase 64-hex")
+    observed = _sha256_file(path)
+    if observed != expected_raw_sha256:
+        raise ValueError("task setup validation raw SHA mismatch")
+    artifact = load_task_setup_validation(path, manifest)
+    if artifact["artifact_id"] != expected_artifact_id:
+        raise ValueError("task setup validation artifact ID mismatch")
+    return artifact
 
 
-def _compiled_actions(fixture: Any, *, near_miss: bool) -> dict[str, list[Any]]:
-    trajectory = build_trajectory(fixture, near_miss=near_miss)
-    geometry = _dummy_geometry(fixture.app)
-    native = [compile_native(turn, geometry) for turn in trajectory.turns]
-    cursor = (960, 540)
-    compact: list[str] = []
-    for turn in trajectory.turns:
-        action, cursor = compile_compact(turn, geometry, cursor)
-        compact.append(action)
-    return {ARMS[0]: native, ARMS[1]: compact}
+def _setup_after_reset(transport: Any, task: SemanticTask) -> None:
+    if task.app == "vscode":
+        from ..rung1b_realapps.vm import setup_fixture
+
+        setup_fixture(transport, as_vscode_fixture(task))
+    else:
+        from .vm import setup_fixture
+
+        setup_fixture(transport, as_sameapp_fixture(task))
 
 
-def run_build_replay(split: str) -> dict[str, Any]:
-    assert_collectable_split(split)
-    manifest = load_manifest(split)
-    rows: list[dict[str, Any]] = []
-    for fixture in manifest.fixtures:
-        first = initial_state(fixture)
-        first_signature = reset_signature(fixture, first)
-        initial_oracle = evaluate_in_fresh_process(fixture, first)
-        if initial_oracle.MOUSE_SOLVED or initial_oracle.oracle_status != "ok":
-            raise RuntimeError(f"{fixture.id}: reset state was not a valid negative")
-        near_state = scripted_state(fixture, near_miss=True)
-        near_oracle = evaluate_in_fresh_process(fixture, near_state)
-        if near_oracle.MOUSE_SOLVED or near_oracle.oracle_status != "ok":
-            raise RuntimeError(f"{fixture.id}: scripted near miss was accepted")
-        second = initial_state(fixture)
-        second_signature = reset_signature(fixture, second)
-        if first_signature != second_signature:
-            raise RuntimeError(f"{fixture.id}: deterministic reset signature changed")
-        gold_state = scripted_state(fixture, near_miss=False)
-        gold_oracle = evaluate_in_fresh_process(fixture, gold_state)
-        if not gold_oracle.MOUSE_SOLVED or gold_oracle.oracle_status != "ok":
-            raise RuntimeError(f"{fixture.id}: scripted gold was rejected")
-        rows.append(
-            {
-                "fixture_id": fixture.id,
-                "app": fixture.app,
-                "fixture_sha256": fixture.fixture_sha256,
-                "horizon": fixture.horizon,
-                "semantic_steps": fixture.semantic_steps,
-                "reset_signature": first_signature,
-                "initial_oracle": asdict(initial_oracle),
-                "near_miss_oracle": asdict(near_oracle),
-                "gold_oracle": asdict(gold_oracle),
-                "gold_actions": _compiled_actions(fixture, near_miss=False),
-                "near_miss_actions": _compiled_actions(fixture, near_miss=True),
-            }
-        )
-    return {
-        "schema_version": 1,
-        "status": "passed",
-        "mode": "build",
-        "split": split,
-        "manifest_payload_sha256": manifest.manifest_payload_sha256,
-        "sealed_eval_executed": False,
-        "rows": rows,
-    }
+def _reset_probe(
+    session: KvmFixtureSession,
+    task: SemanticTask,
+    ledger: RuntimeEvidenceLedger,
+) -> tuple[Any, RuntimeProbe]:
+    reset_started = time.monotonic_ns()
+    transport = session.reset_to_ready()
+    _setup_after_reset(transport, task)
+    probe = probe_runtime(transport, task)
+    completed = time.monotonic_ns()
+    attributed = ledger.issue_reset_probe(
+        task,
+        probe,
+        reset_started_monotonic_ns=reset_started,
+        probe_completed_monotonic_ns=completed,
+        transport_endpoint=str(transport.base_url),
+    )
+    return transport, attributed
 
 
-def _execute_native(transport: Any, payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _guest_root(transport: Any, task: SemanticTask) -> PurePosixPath:
+    if task.app == "vscode":
+        from ..rung1b_realapps.vm import resolve_guest_root
+
+        return resolve_guest_root(transport) / task.task_id
+    from .vm import resolve_guest_root
+
+    return resolve_guest_root(transport) / task.task_id
+
+
+def _export_guest_artifact(
+    transport: Any, task: SemanticTask, destination: Path
+) -> Path:
+    """Copy real guest files to a host root for independent extraction."""
+
+    root = _guest_root(transport, task)
+    if task.app in {"writer", "calc", "vscode"}:
+        relative_paths = [str(task.params["file_name"])]
+        directory_paths: list[str] = []
+    elif task.app == "chrome":
+        relative_paths = ["state.json"]
+        directory_paths = []
+    else:
+        relative_paths = []
+        directory_paths = [
+            str(task.params["destination_name"]),
+            str(task.params["decoy_name"]),
+        ]
+    code = f"""
+import base64,json,pathlib
+root=pathlib.Path({str(root)!r}).resolve(strict=True)
+files={relative_paths!r}; dirs={directory_paths!r}
+for directory in dirs:
+ path=(root/directory).resolve(strict=True)
+ if path.parent != root: raise RuntimeError('artifact directory escaped root')
+ files.extend(str(item.relative_to(root)) for item in path.iterdir() if item.is_file())
+if {task.app!r} == 'files':
+ source=(root/{str(task.params.get('source_name', ''))!r}).resolve()
+ if source.is_file(): files.append(str(source.relative_to(root)))
+payload={{'directories':dirs,'files':{{}}}}
+for relative in sorted(set(files)):
+ path=(root/relative).resolve(strict=True)
+ if root not in path.parents: raise RuntimeError('artifact file escaped root')
+ payload['files'][relative]=base64.b64encode(path.read_bytes()).decode('ascii')
+print({ARTIFACT_MARKER!r}+json.dumps(payload,sort_keys=True))
+""".strip()
+    result = transport.execute_argv(["python3", "-c", code])
+    output = result.get("output")
+    if not isinstance(output, str):
+        raise RuntimeError("guest artifact export returned no output")
+    lines = [line for line in output.splitlines() if line.startswith(ARTIFACT_MARKER)]
+    if len(lines) != 1:
+        raise RuntimeError("guest artifact export marker mismatch")
+    payload = json.loads(lines[0][len(ARTIFACT_MARKER) :])
+    destination.mkdir(parents=True, exist_ok=False)
+    for relative in payload["directories"]:
+        path = Path(relative)
+        if path.is_absolute() or ".." in path.parts:
+            raise RuntimeError("unsafe exported artifact directory")
+        (destination / path).mkdir(parents=True, exist_ok=False)
+    for relative, encoded in payload["files"].items():
+        path = Path(relative)
+        if path.is_absolute() or ".." in path.parts:
+            raise RuntimeError("unsafe exported artifact file")
+        target = destination / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(base64.b64decode(encoded, validate=True))
+    return destination
+
+
+def _execute_native(transport: Any, payload: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     executor = NativeAbsoluteExecutor(transport)
-    results = []
+    results: list[dict[str, Any]] = []
     for operation in payload["operations"]:
         action = dict(operation)
         action["action"] = {
@@ -164,58 +190,148 @@ def _execute_native(transport: Any, payload: dict[str, Any]) -> list[dict[str, A
             "key_chord": "key",
         }.get(action["action"], action["action"])
         results.append(asdict(executor.execute(action)))
-    return results
+    return tuple(results)
 
 
-def _execute_vm_trajectory(
+def _dispatch_compiled_action(
+    transport: Any, action_schema: str, action: dict[str, Any] | str
+) -> tuple[dict[str, Any], ...]:
+    if action_schema == "native_absolute_sequence_v1":
+        if not isinstance(action, dict):
+            raise TypeError("native compiled action must be an object")
+        return _execute_native(transport, action)
+    if not isinstance(action, str):
+        raise TypeError("compact compiled action must be text")
+    return (asdict(CompactRawExecutor(transport).execute(action)),)
+
+
+def _screenshot(transport: Any, path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(transport.base_url + "/screenshot", timeout=15) as response:
+        payload = response.read()
+    if not payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise RuntimeError("VM screenshot endpoint did not return PNG")
+    path.write_bytes(payload)
+    return {
+        "path": str(path),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "bytes": len(payload),
+    }
+
+
+def _assert_released(transport: Any, task: SemanticTask) -> None:
+    audit = transport.audit
+    if audit.held_buttons or audit.held_keys:
+        raise RuntimeError(
+            f"{task.task_id}: execution left held inputs "
+            f"buttons={sorted(audit.held_buttons)} keys={sorted(audit.held_keys)}"
+        )
+
+
+def _execute_bound_trajectory(
     transport: Any,
-    fixture: Any,
-    geometry: dict[str, tuple[int, int]],
+    task: SemanticTask,
+    binding: ValidatedRuntimeBinding,
+    ledger: RuntimeEvidenceLedger,
     *,
-    arm: str,
+    action_schema: str,
     near_miss: bool,
     frame_dir: Path | None = None,
-) -> list[dict[str, Any]]:
-    trajectory = build_trajectory(fixture, near_miss=near_miss)
+) -> tuple[list[dict[str, Any]], CompiledProgram]:
+    """Compile, execute, and receipt segments in causal semantic-step order."""
+
     journal: list[dict[str, Any]] = []
-    cursor = transport.cursor_position()
-    for index, turn in enumerate(trajectory.turns):
-        frame: dict[str, Any] | None = None
-        if frame_dir is not None:
-            frame_dir.mkdir(parents=True, exist_ok=True)
-            with urllib.request.urlopen(
-                transport.base_url + "/screenshot", timeout=15
-            ) as response:
-                payload_bytes = response.read()
-            if not payload_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
-                raise RuntimeError("VM screenshot endpoint did not return PNG")
-            frame_path = frame_dir / f"turn_{index:02d}.png"
-            frame_path.write_bytes(payload_bytes)
-            frame = {
-                "path": str(frame_path),
-                "sha256": hashlib.sha256(payload_bytes).hexdigest(),
-                "bytes": len(payload_bytes),
-            }
-        if arm == ARMS[0]:
-            payload = compile_native(turn, geometry)
-            dispatched = _execute_native(transport, payload)
-        else:
-            payload, cursor = compile_compact(turn, geometry, cursor)
-            dispatched = [asdict(CompactRawExecutor(transport).execute(payload))]
+    executed: list[ExecutedSegmentReceipt] = []
+    for semantic_step in range(1, task.semantic_step_count + 1):
+        binding_receipt = binding.receipt()
+        segment: CompiledSegment = compile_semantic_step(
+            task,
+            action_schema,
+            binding=binding,
+            semantic_step_index=semantic_step,
+            near_miss=near_miss,
+        )
+        started = time.monotonic_ns()
+        dispatches: list[tuple[dict[str, Any], ...]] = []
+        action_rows: list[dict[str, Any]] = []
+        for action_index, action in enumerate(segment.actions):
+            screenshot = _screenshot(
+                transport,
+                (
+                    frame_dir / f"step_{semantic_step:02d}_action_{action_index:02d}.png"
+                    if frame_dir is not None
+                    else None
+                ),
+            )
+            result = _dispatch_compiled_action(transport, action_schema, action)
+            dispatches.append(result)
+            action_rows.append(
+                {
+                    "action_index": action_index,
+                    "screenshot": screenshot,
+                    "action": action,
+                    "dispatch": list(result),
+                }
+            )
+        completed = time.monotonic_ns()
+        receipt = record_executed_segment(
+            segment,
+            tuple(dispatches),
+            execution_started_monotonic_ns=started,
+            execution_completed_monotonic_ns=completed,
+        )
+        executed.append(receipt)
         journal.append(
             {
-                "turn": index,
-                "semantic_step": turn.semantic_step,
-                "screenshot": frame,
-                "action": payload,
-                "dispatch": dispatched,
+                "semantic_step": semantic_step,
+                "binding_receipt": binding_receipt,
+                "binding_sha256": segment.binding_sha256,
+                "compiled_segment": asdict(segment),
+                "executed_receipt": asdict(receipt),
+                "actions": action_rows,
             }
         )
-        time.sleep(0.35)
-        if fixture.app == "chrome" and turn.semantic_step == 2:
-            refreshed_state = probe_state(transport, fixture)
-            geometry.update(probe_geometry(transport, fixture, refreshed_state))
-    return journal
+        if task.app == "chrome" and semantic_step == 2:
+            time.sleep(0.35)
+            probe_started = time.monotonic_ns()
+            refreshed = probe_runtime(transport, task, expect_initial_state=False)
+            probe_completed = time.monotonic_ns()
+            refreshed = ledger.issue_refresh_probe(
+                task,
+                binding,
+                refreshed,
+                completed_step=2,
+                executed_segment_sha256=receipt.executed_receipt_sha256,
+                action_started_monotonic_ns=started,
+                action_completed_monotonic_ns=completed,
+                probe_started_monotonic_ns=probe_started,
+                probe_completed_monotonic_ns=probe_completed,
+            )
+            binding = refresh_binding_after_step(
+                task,
+                binding,
+                completed_step=2,
+                probe=refreshed,
+                executed_segment_sha256=receipt.executed_receipt_sha256,
+                ledger=ledger,
+            )
+            journal[-1]["post_scroll_refresh"] = asdict(refreshed.refresh_evidence)
+            journal[-1]["refreshed_binding_sha256"] = binding.binding_sha256
+            journal[-1]["refreshed_binding_receipt"] = binding.receipt()
+    _assert_released(transport, task)
+    aggregate = aggregate_executed_segments(
+        task, action_schema, segments=tuple(executed)
+    )
+    return journal, aggregate
+
+
+def run_build_replay(*args: Any, **kwargs: Any) -> None:
+    raise RuntimeError(
+        "build-only scripted replay is disabled; production requires live VM bindings, "
+        "real artifacts, and task_setup_validation.json"
+    )
 
 
 def run_vm_replay(
@@ -225,10 +341,20 @@ def run_vm_replay(
     qcow: Path,
     qemu: Path,
     provider: Path,
+    task_setup_validation: Path,
+    task_setup_validation_artifact_id: str,
+    task_setup_validation_sha256: str,
     fixture_id: str | None = None,
 ) -> dict[str, Any]:
-    assert_collectable_split(split)
+    if split != "development":
+        raise ValueError("hardened production replay is development-only")
     manifest = load_manifest(split)
+    setup = _load_setup_dependency(
+        manifest,
+        path=task_setup_validation,
+        expected_artifact_id=task_setup_validation_artifact_id,
+        expected_raw_sha256=task_setup_validation_sha256,
+    )
     rows: list[dict[str, Any]] = []
     with KvmFixtureSession(
         qcow=qcow,
@@ -238,103 +364,120 @@ def run_vm_replay(
         smp=int(os.environ.get("OSWORLD_VM_SMP", "4")),
         memory=os.environ.get("OSWORLD_VM_MEM", "8G"),
     ) as session:
-        fixtures = manifest.fixtures
+        tasks = manifest.tasks
         if fixture_id is not None:
-            fixtures = (manifest.by_id(fixture_id),)
-        for fixture in fixtures:
+            tasks = (manifest.by_id(fixture_id),)
+        ledger = RuntimeEvidenceLedger(
+            setup_commit=setup["setup_commit"],
+            vm_snapshot_id=setup["vm_snapshot_id"],
+            reset_provider=str(provider.resolve()),
+        )
+        for task in tasks:
             for arm in ARMS:
-                transport, first = _reset_with_readiness_evidence(
-                    session, fixture, output
+                action_schema = ARM_SCHEMAS[arm]
+                artifact_root = output / "artifacts" / task.task_id / arm
+
+                transport_a, probe_a = _reset_probe(session, task, ledger)
+                reset_root = _export_guest_artifact(
+                    transport_a, task, artifact_root / "reset"
                 )
-                initial_oracle = evaluate_in_fresh_process(fixture, first.state)
-                if initial_oracle.MOUSE_SOLVED or initial_oracle.oracle_status != "ok":
-                    raise RuntimeError(f"{fixture.id}/{arm}: invalid initial state")
-                near_journal = _execute_vm_trajectory(
-                    transport,
-                    fixture,
-                    first.geometry,
-                    arm=arm,
+                transport_b, probe_b = _reset_probe(session, task, ledger)
+                reset_repeat_root = _export_guest_artifact(
+                    transport_b, task, artifact_root / "reset_repeat"
+                )
+                near_binding = bind_repeated_runtime_probes(
+                    task, (probe_a, probe_b), ledger=ledger
+                )
+                near_journal, near_receipt = _execute_bound_trajectory(
+                    transport_b,
+                    task,
+                    near_binding,
+                    ledger,
+                    action_schema=action_schema,
                     near_miss=True,
                 )
-                near_state = probe_state(transport, fixture)
-                near_oracle = evaluate_in_fresh_process(fixture, near_state)
-                if near_oracle.MOUSE_SOLVED or near_oracle.oracle_status != "ok":
-                    _atomic_json(
-                        output / "failure_context.json",
-                        {
-                            "fixture_id": fixture.id,
-                            "arm": arm,
-                            "stage": "near_miss_oracle",
-                            "state": near_state,
-                            "oracle": asdict(near_oracle),
-                            "journal": near_journal,
-                        },
-                    )
-                    raise RuntimeError(f"{fixture.id}/{arm}: near miss accepted")
-                transport, second = _reset_with_readiness_evidence(
-                    session, fixture, output
+                near_root = _export_guest_artifact(
+                    transport_b, task, artifact_root / "near"
                 )
-                if first.reset_signature != second.reset_signature:
-                    raise RuntimeError(f"{fixture.id}/{arm}: reset signature changed")
-                gold_journal = _execute_vm_trajectory(
-                    transport,
-                    fixture,
-                    second.geometry,
-                    arm=arm,
+
+                _, probe_c = _reset_probe(session, task, ledger)
+                transport_d, probe_d = _reset_probe(session, task, ledger)
+                gold_binding = bind_repeated_runtime_probes(
+                    task, (probe_c, probe_d), ledger=ledger
+                )
+                gold_journal, gold_receipt = _execute_bound_trajectory(
+                    transport_d,
+                    task,
+                    gold_binding,
+                    ledger,
+                    action_schema=action_schema,
                     near_miss=False,
-                    frame_dir=(output / "frames" / fixture.id / arm / "gold"),
+                    frame_dir=output / "frames" / task.task_id / arm / "gold",
                 )
-                final_state = probe_state(transport, fixture)
-                gold_oracle = evaluate_in_fresh_process(fixture, final_state)
-                if not gold_oracle.MOUSE_SOLVED or gold_oracle.oracle_status != "ok":
-                    _atomic_json(
-                        output / "failure_context.json",
-                        {
-                            "fixture_id": fixture.id,
-                            "arm": arm,
-                            "stage": "gold_oracle",
-                            "reset_signature": second.reset_signature,
-                            "state": final_state,
-                            "oracle": asdict(gold_oracle),
-                            "journal": gold_journal,
-                        },
+                gold_root = _export_guest_artifact(
+                    transport_d, task, artifact_root / "gold"
+                )
+                fixture_contract = verify_fixture_contract(
+                    task,
+                    artifact_roots={
+                        "reset": reset_root,
+                        "reset_repeat": reset_repeat_root,
+                        "near": near_root,
+                        "gold": gold_root,
+                    },
+                )
+                if not all(
+                    fixture_contract[key]
+                    for key in (
+                        "reset_rejected",
+                        "near_miss_rejected",
+                        "gold_passed",
+                        "reset_reproducible",
+                        "fresh_process_final_oracle",
+                        "zero_held_inputs",
                     )
-                    raise RuntimeError(f"{fixture.id}/{arm}: scripted gold rejected")
+                ):
+                    raise RuntimeError(f"{task.task_id}/{arm}: fixture contract failed")
                 rows.append(
                     {
-                        "fixture_id": fixture.id,
-                        "fixture_sha256": fixture.fixture_sha256,
-                        "app": fixture.app,
+                        "fixture_id": task.task_id,
+                        "fixture_sha256": task.fixture_sha256,
+                        "app": task.app,
                         "arm": arm,
-                        "horizon": fixture.horizon,
-                        "semantic_steps": fixture.semantic_steps,
-                        "reset_signature": first.reset_signature,
-                        "reset_a_readiness": first.readiness,
-                        "reset_b_readiness": second.readiness,
-                        "initial_oracle": asdict(initial_oracle),
+                        "action_schema": action_schema,
+                        "semantic_steps": task.semantic_step_count,
+                        "reset_cycle_evidence": [
+                            asdict(value.reset_cycle_evidence)
+                            for value in (probe_a, probe_b, probe_c, probe_d)
+                        ],
                         "near_miss_journal": near_journal,
-                        "near_miss_oracle": asdict(near_oracle),
+                        "near_miss_receipt": asdict(near_receipt),
                         "gold_journal": gold_journal,
-                        "gold_oracle": asdict(gold_oracle),
+                        "gold_receipt": asdict(gold_receipt),
+                        "fixture_contract": fixture_contract,
                     }
                 )
                 _atomic_json(
                     output / "progress.json",
                     {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "status": "running",
                         "split": split,
                         "sealed_eval_executed": False,
+                        "task_setup_validation_artifact_id": setup["artifact_id"],
+                        "task_setup_validation_sha256": task_setup_validation_sha256,
                         "completed_cells": len(rows),
                         "rows": rows,
                     },
                 )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "passed",
         "mode": "vm",
         "split": split,
         "manifest_payload_sha256": manifest.manifest_payload_sha256,
+        "task_setup_validation_artifact_id": setup["artifact_id"],
+        "task_setup_validation_sha256": task_setup_validation_sha256,
         "sealed_eval_executed": False,
         "rows": rows,
     }
@@ -342,36 +485,38 @@ def run_vm_replay(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("build", "vm"), required=True)
-    parser.add_argument("--split", choices=("train", "development", "sealed_eval"), default="development")
+    parser.add_argument("--mode", choices=("vm",), required=True)
+    parser.add_argument("--split", choices=("development",), default="development")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--qcow", type=Path, default=DEFAULT_QCOW)
     parser.add_argument("--qemu", type=Path, default=DEFAULT_QEMU)
     parser.add_argument("--provider", type=Path, default=DEFAULT_PROVIDER)
+    parser.add_argument("--task-setup-validation", type=Path, required=True)
+    parser.add_argument("--task-setup-validation-artifact-id", required=True)
+    parser.add_argument("--task-setup-validation-sha256", required=True)
     parser.add_argument("--fixture-id")
     args = parser.parse_args(argv)
     args.output.mkdir(parents=True, exist_ok=True)
     marker = args.output / "replay.json"
     marker.unlink(missing_ok=True)
     try:
-        payload = (
-            run_build_replay(args.split)
-            if args.mode == "build"
-            else run_vm_replay(
-                args.split,
-                output=args.output,
-                qcow=args.qcow,
-                qemu=args.qemu,
-                provider=args.provider,
-                fixture_id=args.fixture_id,
-            )
+        payload = run_vm_replay(
+            args.split,
+            output=args.output,
+            qcow=args.qcow,
+            qemu=args.qemu,
+            provider=args.provider,
+            task_setup_validation=args.task_setup_validation,
+            task_setup_validation_artifact_id=args.task_setup_validation_artifact_id,
+            task_setup_validation_sha256=args.task_setup_validation_sha256,
+            fixture_id=args.fixture_id,
         )
         _atomic_json(marker, payload)
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
     except Exception as exc:
         failure = {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "failed",
             "mode": args.mode,
             "split": args.split,

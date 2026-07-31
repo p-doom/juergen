@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, replace
+import hmac
+import secrets
+import time
+import uuid
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from .oracle import initial_state
@@ -16,6 +20,52 @@ class RuntimeProbeError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ResetCycleEvidence:
+    session_id: str
+    reset_id: str
+    generation_id: str
+    sequence: int
+    reset_started_monotonic_ns: int
+    probe_completed_monotonic_ns: int
+    captured_wall_time_ns: int
+    vm_snapshot_id: str
+    setup_commit: str
+    reset_provider: str
+    transport_endpoint_sha256: str
+    task_id: str
+    fixture_sha256: str
+    probe_sha256: str
+    issuer_mac: str
+    evidence_sha256: str
+
+
+@dataclass(frozen=True)
+class StepRefreshEvidence:
+    session_id: str
+    refresh_id: str
+    sequence: int
+    task_id: str
+    fixture_sha256: str
+    reset_generation_id: str
+    completed_step: int
+    prior_binding_sha256: str
+    executed_segment_sha256: str
+    action_started_monotonic_ns: int
+    action_completed_monotonic_ns: int
+    probe_started_monotonic_ns: int
+    probe_completed_monotonic_ns: int
+    captured_wall_time_ns: int
+    before_scroll_y: int
+    after_scroll_y: int
+    observed_scroll_delta: int
+    required_minimum_delta: int
+    expected_scroll_direction: str
+    probe_sha256: str
+    issuer_mac: str
+    evidence_sha256: str
+
+
+@dataclass(frozen=True)
 class RuntimeProbe:
     state: dict[str, Any]
     geometry: dict[str, tuple[int, int]]
@@ -24,6 +74,263 @@ class RuntimeProbe:
     geometry_probe_version: str
     state_probe_version: str
     cursor_probe_version: str = "rung1_cursor_position_v1"
+    reset_cycle_evidence: ResetCycleEvidence | None = None
+    refresh_evidence: StepRefreshEvidence | None = None
+
+
+def _probe_payload(probe: RuntimeProbe) -> dict[str, Any]:
+    return {
+        "state": probe.state,
+        "geometry": {name: list(point) for name, point in sorted(probe.geometry.items())},
+        "initial_cursor": list(probe.initial_cursor),
+        "screen_size": list(probe.screen_size),
+        "geometry_probe_version": probe.geometry_probe_version,
+        "state_probe_version": probe.state_probe_version,
+        "cursor_probe_version": probe.cursor_probe_version,
+    }
+
+
+def _probe_sha256(probe: RuntimeProbe) -> str:
+    return hashlib.sha256(canonical_json(_probe_payload(probe))).hexdigest()
+
+
+class RuntimeEvidenceLedger:
+    """Issues and consumes reset/refresh evidence for one live VM session."""
+
+    def __init__(
+        self,
+        *,
+        setup_commit: str,
+        vm_snapshot_id: str = "osworld_ready",
+        reset_provider: str,
+        max_age_seconds: float = 120.0,
+    ) -> None:
+        if len(setup_commit) != 40 or any(c not in "0123456789abcdef" for c in setup_commit):
+            raise RuntimeProbeError("setup commit must be lowercase 40-hex")
+        if vm_snapshot_id != "osworld_ready":
+            raise RuntimeProbeError("runtime evidence requires osworld_ready")
+        self.setup_commit = setup_commit
+        self.vm_snapshot_id = vm_snapshot_id
+        self.reset_provider = reset_provider
+        self.max_age_ns = int(max_age_seconds * 1_000_000_000)
+        self.session_id = uuid.uuid4().hex
+        self._secret = secrets.token_bytes(32)
+        self._reset_sequence = 0
+        self._refresh_sequence = 0
+        self._last_reset_completion_ns = 0
+        self._consumed_reset_hashes: set[str] = set()
+        self._consumed_refresh_hashes: set[str] = set()
+
+    def _mac(self, payload: dict[str, Any]) -> str:
+        return hmac.new(self._secret, canonical_json(payload), hashlib.sha256).hexdigest()
+
+    def issue_reset_probe(
+        self,
+        task: SemanticTask,
+        probe: RuntimeProbe,
+        *,
+        reset_started_monotonic_ns: int,
+        probe_completed_monotonic_ns: int,
+        transport_endpoint: str,
+    ) -> RuntimeProbe:
+        if probe.reset_cycle_evidence is not None or probe.refresh_evidence is not None:
+            raise RuntimeProbeError("cannot re-issue evidence for an attributed probe")
+        if reset_started_monotonic_ns <= self._last_reset_completion_ns:
+            raise RuntimeProbeError("reset cycle overlaps or replays a prior generation")
+        if probe_completed_monotonic_ns <= reset_started_monotonic_ns:
+            raise RuntimeProbeError("reset probe did not complete after reset start")
+        now = time.monotonic_ns()
+        if probe_completed_monotonic_ns > now or now - probe_completed_monotonic_ns > self.max_age_ns:
+            raise RuntimeProbeError("reset probe is stale or future-dated")
+        self._reset_sequence += 1
+        payload = {
+            "session_id": self.session_id,
+            "reset_id": uuid.uuid4().hex,
+            "generation_id": uuid.uuid4().hex,
+            "sequence": self._reset_sequence,
+            "reset_started_monotonic_ns": reset_started_monotonic_ns,
+            "probe_completed_monotonic_ns": probe_completed_monotonic_ns,
+            "captured_wall_time_ns": time.time_ns(),
+            "vm_snapshot_id": self.vm_snapshot_id,
+            "setup_commit": self.setup_commit,
+            "reset_provider": self.reset_provider,
+            "transport_endpoint_sha256": hashlib.sha256(
+                transport_endpoint.encode("utf-8")
+            ).hexdigest(),
+            "task_id": task.task_id,
+            "fixture_sha256": task.fixture_sha256,
+            "probe_sha256": _probe_sha256(probe),
+        }
+        issuer_mac = self._mac(payload)
+        evidence_sha256 = hashlib.sha256(
+            canonical_json({**payload, "issuer_mac": issuer_mac})
+        ).hexdigest()
+        self._last_reset_completion_ns = probe_completed_monotonic_ns
+        return replace(
+            probe,
+            reset_cycle_evidence=ResetCycleEvidence(
+                **payload, issuer_mac=issuer_mac, evidence_sha256=evidence_sha256
+            ),
+        )
+
+    def consume_reset_probes(
+        self, task: SemanticTask, probes: tuple[RuntimeProbe, ...]
+    ) -> None:
+        if len({id(probe) for probe in probes}) != len(probes):
+            raise RuntimeProbeError("duplicate reset probe object evidence")
+        now = time.monotonic_ns()
+        evidence_rows: list[ResetCycleEvidence] = []
+        for probe in probes:
+            evidence = probe.reset_cycle_evidence
+            if evidence is None:
+                raise RuntimeProbeError("reset probe has no cycle evidence")
+            payload = asdict(evidence)
+            evidence_sha256 = payload.pop("evidence_sha256")
+            issuer_mac = payload.pop("issuer_mac")
+            if issuer_mac != self._mac(payload):
+                raise RuntimeProbeError("reset evidence issuer/provenance mismatch")
+            observed_sha = hashlib.sha256(
+                canonical_json({**payload, "issuer_mac": issuer_mac})
+            ).hexdigest()
+            if evidence_sha256 != observed_sha:
+                raise RuntimeProbeError("reset evidence was mutated")
+            if evidence.session_id != self.session_id:
+                raise RuntimeProbeError("reset evidence belongs to another VM session")
+            if (evidence.task_id, evidence.fixture_sha256) != (
+                task.task_id,
+                task.fixture_sha256,
+            ):
+                raise RuntimeProbeError("reset evidence task identity mismatch")
+            if evidence.probe_sha256 != _probe_sha256(probe):
+                raise RuntimeProbeError("reset probe content was mutated")
+            if evidence.probe_completed_monotonic_ns > now or (
+                now - evidence.probe_completed_monotonic_ns > self.max_age_ns
+            ):
+                raise RuntimeProbeError("reset evidence is stale or future-dated")
+            if evidence_sha256 in self._consumed_reset_hashes:
+                raise RuntimeProbeError("reset evidence replay detected")
+            evidence_rows.append(evidence)
+        if len({row.evidence_sha256 for row in evidence_rows}) != len(evidence_rows):
+            raise RuntimeProbeError("duplicate reset evidence content")
+        if len({row.reset_id for row in evidence_rows}) != len(evidence_rows) or len(
+            {row.generation_id for row in evidence_rows}
+        ) != len(evidence_rows):
+            raise RuntimeProbeError("reset/generation IDs are not distinct")
+        for first, second in zip(evidence_rows, evidence_rows[1:]):
+            if second.sequence != first.sequence + 1:
+                raise RuntimeProbeError("reset evidence sequence is not monotonic")
+            if second.reset_started_monotonic_ns <= first.probe_completed_monotonic_ns:
+                raise RuntimeProbeError("reset generations overlap or are out of order")
+        self._consumed_reset_hashes.update(row.evidence_sha256 for row in evidence_rows)
+
+    def issue_refresh_probe(
+        self,
+        task: SemanticTask,
+        binding: "ValidatedRuntimeBinding",
+        probe: RuntimeProbe,
+        *,
+        completed_step: int,
+        executed_segment_sha256: str,
+        action_started_monotonic_ns: int,
+        action_completed_monotonic_ns: int,
+        probe_started_monotonic_ns: int,
+        probe_completed_monotonic_ns: int,
+    ) -> RuntimeProbe:
+        if probe.reset_cycle_evidence is not None or probe.refresh_evidence is not None:
+            raise RuntimeProbeError("cannot refresh with attributed/stale probe evidence")
+        active = binding.initial_probe.reset_cycle_evidence
+        if active is None:
+            raise RuntimeProbeError("binding has no active reset generation")
+        if not (
+            active.probe_completed_monotonic_ns
+            < action_started_monotonic_ns
+            <= action_completed_monotonic_ns
+            < probe_started_monotonic_ns
+            <= probe_completed_monotonic_ns
+            <= time.monotonic_ns()
+        ):
+            raise RuntimeProbeError("refresh is not causally after the executed action")
+        before = int(binding.initial_probe.state.get("scroll_y", 0))
+        after = int(probe.state.get("scroll_y", 0))
+        delta = after - before
+        minimum = int(task.params["minimum_scroll_delta"])
+        direction = str(task.params["scroll_direction"])
+        if abs(delta) < minimum or (direction == "down" and delta <= 0) or (
+            direction == "up" and delta >= 0
+        ):
+            raise RuntimeProbeError("refresh does not prove the required signed scroll delta")
+        self._refresh_sequence += 1
+        payload = {
+            "session_id": self.session_id,
+            "refresh_id": uuid.uuid4().hex,
+            "sequence": self._refresh_sequence,
+            "task_id": task.task_id,
+            "fixture_sha256": task.fixture_sha256,
+            "reset_generation_id": active.generation_id,
+            "completed_step": completed_step,
+            "prior_binding_sha256": binding.binding_sha256,
+            "executed_segment_sha256": executed_segment_sha256,
+            "action_started_monotonic_ns": action_started_monotonic_ns,
+            "action_completed_monotonic_ns": action_completed_monotonic_ns,
+            "probe_started_monotonic_ns": probe_started_monotonic_ns,
+            "probe_completed_monotonic_ns": probe_completed_monotonic_ns,
+            "captured_wall_time_ns": time.time_ns(),
+            "before_scroll_y": before,
+            "after_scroll_y": after,
+            "observed_scroll_delta": delta,
+            "required_minimum_delta": minimum,
+            "expected_scroll_direction": direction,
+            "probe_sha256": _probe_sha256(probe),
+        }
+        issuer_mac = self._mac(payload)
+        evidence_sha256 = hashlib.sha256(
+            canonical_json({**payload, "issuer_mac": issuer_mac})
+        ).hexdigest()
+        return replace(
+            probe,
+            refresh_evidence=StepRefreshEvidence(
+                **payload, issuer_mac=issuer_mac, evidence_sha256=evidence_sha256
+            ),
+        )
+
+    def consume_refresh_probe(
+        self,
+        task: SemanticTask,
+        binding: "ValidatedRuntimeBinding",
+        probe: RuntimeProbe,
+        *,
+        completed_step: int,
+        executed_segment_sha256: str,
+    ) -> None:
+        evidence = probe.refresh_evidence
+        if evidence is None:
+            raise RuntimeProbeError("post-step probe has no refresh evidence")
+        payload = asdict(evidence)
+        evidence_sha256 = payload.pop("evidence_sha256")
+        issuer_mac = payload.pop("issuer_mac")
+        if issuer_mac != self._mac(payload) or evidence_sha256 != hashlib.sha256(
+            canonical_json({**payload, "issuer_mac": issuer_mac})
+        ).hexdigest():
+            raise RuntimeProbeError("refresh evidence was forged or mutated")
+        active = binding.initial_probe.reset_cycle_evidence
+        if active is None or evidence.reset_generation_id != active.generation_id:
+            raise RuntimeProbeError("refresh evidence uses a stale reset generation")
+        if evidence.prior_binding_sha256 != binding.binding_sha256:
+            raise RuntimeProbeError("refresh evidence uses a stale binding")
+        if evidence.completed_step != completed_step or completed_step != 2:
+            raise RuntimeProbeError("Chrome refresh must follow semantic step 2")
+        if evidence.executed_segment_sha256 != executed_segment_sha256:
+            raise RuntimeProbeError("refresh is not tied to the executed scroll receipt")
+        if evidence.probe_sha256 != _probe_sha256(probe):
+            raise RuntimeProbeError("refreshed probe content was mutated")
+        now = time.monotonic_ns()
+        if evidence.probe_completed_monotonic_ns > now or (
+            now - evidence.probe_completed_monotonic_ns > self.max_age_ns
+        ):
+            raise RuntimeProbeError("refresh evidence is stale or future-dated")
+        if evidence_sha256 in self._consumed_refresh_hashes:
+            raise RuntimeProbeError("refresh evidence replay detected")
+        self._consumed_refresh_hashes.add(evidence_sha256)
 
 
 @dataclass(frozen=True)
@@ -36,26 +343,179 @@ class ValidatedRuntimeBinding:
     initial_cursor_ref: str
     resolved_initial_cursor: tuple[int, int]
     refreshed_after_steps: dict[int, RuntimeProbe]
+    binding_revision: int
+    parent_binding_sha256: str | None
+    refresh_evidence_sha256: str | None
+    evidence_fresh_until_monotonic_ns: int
     binding_sha256: str
+
+    def receipt(self) -> dict[str, Any]:
+        geometry = {
+            name: list(point) for name, point in sorted(self.initial_probe.geometry.items())
+        }
+        refresh_transitions = []
+        for _, probe in sorted(self.refreshed_after_steps.items()):
+            if probe.refresh_evidence is None:
+                continue
+            transition = {
+                "pre_binding_revision": self.binding_revision - 1,
+                "post_binding_revision": self.binding_revision,
+                "pre_binding_sha256": self.parent_binding_sha256,
+                "post_binding_sha256": self.binding_sha256,
+                "refresh_evidence": asdict(probe.refresh_evidence),
+            }
+            transition["transition_receipt_sha256"] = hashlib.sha256(
+                canonical_json(transition)
+            ).hexdigest()
+            refresh_transitions.append(transition)
+        payload = {
+            "schema_version": 1,
+            "task_id": self.task_id,
+            "fixture_sha256": self.fixture_sha256,
+            "binding_revision": self.binding_revision,
+            "binding_sha256": self.binding_sha256,
+            "parent_binding_sha256": self.parent_binding_sha256,
+            "refresh_evidence_sha256": self.refresh_evidence_sha256,
+            "evidence_fresh_until_monotonic_ns": self.evidence_fresh_until_monotonic_ns,
+            "reset_cycles": [
+                {
+                    "session_id": probe.reset_cycle_evidence.session_id,
+                    "reset_id": probe.reset_cycle_evidence.reset_id,
+                    "generation_id": probe.reset_cycle_evidence.generation_id,
+                    "sequence": probe.reset_cycle_evidence.sequence,
+                    "reset_started_monotonic_ns": probe.reset_cycle_evidence.reset_started_monotonic_ns,
+                    "probe_completed_monotonic_ns": probe.reset_cycle_evidence.probe_completed_monotonic_ns,
+                    "captured_wall_time_ns": probe.reset_cycle_evidence.captured_wall_time_ns,
+                    "vm_snapshot_id": probe.reset_cycle_evidence.vm_snapshot_id,
+                    "setup_commit": probe.reset_cycle_evidence.setup_commit,
+                    "reset_provider": probe.reset_cycle_evidence.reset_provider,
+                    "transport_endpoint_sha256": probe.reset_cycle_evidence.transport_endpoint_sha256,
+                    "probe_sha256": probe.reset_cycle_evidence.probe_sha256,
+                    "evidence_sha256": probe.reset_cycle_evidence.evidence_sha256,
+                }
+                for probe in self.reset_probes
+                if probe.reset_cycle_evidence is not None
+            ],
+            "resolved_initial_cursor": list(self.resolved_initial_cursor),
+            "initial_geometry": geometry,
+            "initial_geometry_sha256": hashlib.sha256(
+                canonical_json(geometry)
+            ).hexdigest(),
+            "refresh_transitions": refresh_transitions,
+        }
+        payload["binding_receipt_sha256"] = hashlib.sha256(
+            canonical_json(payload)
+        ).hexdigest()
+        return payload
 
     def validate_for_task(self, task: SemanticTask) -> None:
         if self.task_id != task.task_id or self.fixture_sha256 != task.fixture_sha256:
             raise RuntimeProbeError(f"{task.task_id}: runtime binding identity mismatch")
+        if time.monotonic_ns() > self.evidence_fresh_until_monotonic_ns:
+            raise RuntimeProbeError(f"{task.task_id}: runtime binding evidence is stale")
         if self.reset_probe_count < 2 or self.reset_probe_count != len(self.reset_probes):
             raise RuntimeProbeError(f"{task.task_id}: fewer than two reset probes")
-        if self.initial_probe != self.reset_probes[0]:
+        if self.initial_probe != self.reset_probes[-1]:
             raise RuntimeProbeError(f"{task.task_id}: initial/reset probe mismatch")
-        for following in self.reset_probes[1:]:
+        reset_rows: list[ResetCycleEvidence] = []
+        for probe in self.reset_probes:
+            evidence = probe.reset_cycle_evidence
+            if evidence is None:
+                raise RuntimeProbeError(f"{task.task_id}: reset evidence is missing")
+            payload = asdict(evidence)
+            evidence_sha = payload.pop("evidence_sha256")
+            if evidence_sha != hashlib.sha256(canonical_json(payload)).hexdigest():
+                raise RuntimeProbeError(f"{task.task_id}: reset evidence was mutated")
+            if evidence.probe_sha256 != _probe_sha256(probe):
+                raise RuntimeProbeError(f"{task.task_id}: reset probe content was mutated")
+            if (evidence.task_id, evidence.fixture_sha256) != (
+                task.task_id,
+                task.fixture_sha256,
+            ):
+                raise RuntimeProbeError(f"{task.task_id}: reset evidence identity mismatch")
+            reset_rows.append(evidence)
+        if len({row.reset_id for row in reset_rows}) != len(reset_rows) or len(
+            {row.generation_id for row in reset_rows}
+        ) != len(reset_rows):
+            raise RuntimeProbeError(f"{task.task_id}: duplicate reset generation evidence")
+        for first, second in zip(reset_rows, reset_rows[1:]):
+            if second.sequence != first.sequence + 1 or (
+                second.reset_started_monotonic_ns <= first.probe_completed_monotonic_ns
+            ):
+                raise RuntimeProbeError(f"{task.task_id}: reset evidence ordering drift")
+        for following in self.reset_probes[:-1]:
             validate_repeated_runtime_probes(task, self.initial_probe, following)
         if self.initial_cursor_ref != "runtime.initial_cursor" or (
             self.resolved_initial_cursor != self.initial_probe.initial_cursor
         ):
             raise RuntimeProbeError(f"{task.task_id}: resolved initial cursor mismatch")
-        for probe in self.refreshed_after_steps.values():
+        if not self.refreshed_after_steps and (
+            self.binding_revision != 1
+            or self.parent_binding_sha256 is not None
+            or self.refresh_evidence_sha256 is not None
+        ):
+            raise RuntimeProbeError(f"{task.task_id}: initial binding revision drift")
+        if self.refreshed_after_steps and (
+            self.binding_revision != 2
+            or self.parent_binding_sha256 is None
+            or self.refresh_evidence_sha256 is None
+        ):
+            raise RuntimeProbeError(f"{task.task_id}: refreshed binding revision drift")
+        for step, probe in self.refreshed_after_steps.items():
             _validate_probe_envelope(task, probe, expect_initial_state=False)
+            evidence = probe.refresh_evidence
+            if evidence is None:
+                raise RuntimeProbeError(f"{task.task_id}: refresh evidence is missing")
+            payload = asdict(evidence)
+            evidence_sha = payload.pop("evidence_sha256")
+            if evidence_sha != hashlib.sha256(canonical_json(payload)).hexdigest():
+                raise RuntimeProbeError(f"{task.task_id}: refresh evidence was mutated")
+            if evidence.probe_sha256 != _probe_sha256(probe):
+                raise RuntimeProbeError(f"{task.task_id}: refreshed probe content was mutated")
+            if evidence.completed_step != step or evidence.completed_step != 2:
+                raise RuntimeProbeError(f"{task.task_id}: refresh step identity drift")
+            if evidence.prior_binding_sha256 != self.parent_binding_sha256:
+                raise RuntimeProbeError(f"{task.task_id}: refresh parent binding drift")
+            if evidence.evidence_sha256 != self.refresh_evidence_sha256:
+                raise RuntimeProbeError(f"{task.task_id}: refresh evidence seal drift")
+            if evidence.reset_generation_id != reset_rows[-1].generation_id:
+                raise RuntimeProbeError(f"{task.task_id}: stale refresh generation")
+            before = int(self.initial_probe.state.get("scroll_y", 0))
+            after = int(probe.state.get("scroll_y", 0))
+            delta = after - before
+            if (
+                evidence.before_scroll_y != before
+                or evidence.after_scroll_y != after
+                or evidence.observed_scroll_delta != delta
+                or evidence.required_minimum_delta
+                != int(task.params["minimum_scroll_delta"])
+                or evidence.expected_scroll_direction
+                != str(task.params["scroll_direction"])
+                or abs(delta) < evidence.required_minimum_delta
+                or (evidence.expected_scroll_direction == "down" and delta <= 0)
+                or (evidence.expected_scroll_direction == "up" and delta >= 0)
+            ):
+                raise RuntimeProbeError(f"{task.task_id}: refresh scroll proof drift")
+            if not (
+                reset_rows[-1].probe_completed_monotonic_ns
+                < evidence.action_started_monotonic_ns
+                <= evidence.action_completed_monotonic_ns
+                < evidence.probe_started_monotonic_ns
+                <= evidence.probe_completed_monotonic_ns
+                <= self.evidence_fresh_until_monotonic_ns
+            ):
+                raise RuntimeProbeError(f"{task.task_id}: refresh causality drift")
         observed = hashlib.sha256(
             canonical_json(
-                _binding_payload(task, self.reset_probes, self.refreshed_after_steps)
+                _binding_payload(
+                    task,
+                    self.reset_probes,
+                    self.refreshed_after_steps,
+                    binding_revision=self.binding_revision,
+                    parent_binding_sha256=self.parent_binding_sha256,
+                    refresh_evidence_sha256=self.refresh_evidence_sha256,
+                    evidence_fresh_until_monotonic_ns=self.evidence_fresh_until_monotonic_ns,
+                )
             )
         ).hexdigest()
         if observed != self.binding_sha256:
@@ -166,6 +626,11 @@ def _binding_payload(
     task: SemanticTask,
     probes: tuple[RuntimeProbe, ...],
     refreshed_after_steps: dict[int, RuntimeProbe],
+    *,
+    binding_revision: int = 1,
+    parent_binding_sha256: str | None = None,
+    refresh_evidence_sha256: str | None = None,
+    evidence_fresh_until_monotonic_ns: int = 0,
 ) -> dict[str, Any]:
     def row(probe: RuntimeProbe) -> dict[str, Any]:
         return {
@@ -176,12 +641,26 @@ def _binding_payload(
             "geometry_probe_version": probe.geometry_probe_version,
             "state_probe_version": probe.state_probe_version,
             "cursor_probe_version": probe.cursor_probe_version,
+            "reset_evidence_sha256": (
+                probe.reset_cycle_evidence.evidence_sha256
+                if probe.reset_cycle_evidence is not None
+                else None
+            ),
+            "refresh_evidence_sha256": (
+                probe.refresh_evidence.evidence_sha256
+                if probe.refresh_evidence is not None
+                else None
+            ),
         }
 
     return {
         "schema_version": 1,
         "task_id": task.task_id,
         "fixture_sha256": task.fixture_sha256,
+        "binding_revision": binding_revision,
+        "parent_binding_sha256": parent_binding_sha256,
+        "refresh_evidence_sha256": refresh_evidence_sha256,
+        "evidence_fresh_until_monotonic_ns": evidence_fresh_until_monotonic_ns,
         "reset_probes": [row(probe) for probe in probes],
         "refreshed_after_steps": {
             str(step): row(probe) for step, probe in sorted(refreshed_after_steps.items())
@@ -190,24 +669,42 @@ def _binding_payload(
 
 
 def bind_repeated_runtime_probes(
-    task: SemanticTask, probes: tuple[RuntimeProbe, ...] | list[RuntimeProbe]
+    task: SemanticTask,
+    probes: tuple[RuntimeProbe, ...] | list[RuntimeProbe],
+    *,
+    ledger: RuntimeEvidenceLedger,
 ) -> ValidatedRuntimeBinding:
     values = tuple(probes)
     if len(values) < 2:
         raise RuntimeProbeError(f"{task.task_id}: at least two reset probes are required")
+    ledger.consume_reset_probes(task, values)
     first = values[0]
     for following in values[1:]:
         validate_repeated_runtime_probes(task, first, following)
-    payload = _binding_payload(task, values, {})
+    fresh_until = min(
+        probe.reset_cycle_evidence.probe_completed_monotonic_ns + ledger.max_age_ns
+        for probe in values
+        if probe.reset_cycle_evidence is not None
+    )
+    payload = _binding_payload(
+        task,
+        values,
+        {},
+        evidence_fresh_until_monotonic_ns=fresh_until,
+    )
     return ValidatedRuntimeBinding(
         task_id=task.task_id,
         fixture_sha256=task.fixture_sha256,
         reset_probe_count=len(values),
         reset_probes=values,
-        initial_probe=first,
+        initial_probe=values[-1],
         initial_cursor_ref="runtime.initial_cursor",
-        resolved_initial_cursor=first.initial_cursor,
+        resolved_initial_cursor=values[-1].initial_cursor,
         refreshed_after_steps={},
+        binding_revision=1,
+        parent_binding_sha256=None,
+        refresh_evidence_sha256=None,
+        evidence_fresh_until_monotonic_ns=fresh_until,
         binding_sha256=hashlib.sha256(canonical_json(payload)).hexdigest(),
     )
 
@@ -218,14 +715,35 @@ def refresh_binding_after_step(
     *,
     completed_step: int,
     probe: RuntimeProbe,
+    executed_segment_sha256: str,
+    ledger: RuntimeEvidenceLedger,
 ) -> ValidatedRuntimeBinding:
     binding.probe_for_step(task, min(completed_step, 2))
     _validate_probe_envelope(task, probe, expect_initial_state=False)
+    ledger.consume_refresh_probe(
+        task,
+        binding,
+        probe,
+        completed_step=completed_step,
+        executed_segment_sha256=executed_segment_sha256,
+    )
     refreshed = {**binding.refreshed_after_steps, completed_step: probe}
-    payload = _binding_payload(task, binding.reset_probes, refreshed)
+    transition_sha = probe.refresh_evidence.evidence_sha256
+    payload = _binding_payload(
+        task,
+        binding.reset_probes,
+        refreshed,
+        binding_revision=binding.binding_revision + 1,
+        parent_binding_sha256=binding.binding_sha256,
+        refresh_evidence_sha256=transition_sha,
+        evidence_fresh_until_monotonic_ns=binding.evidence_fresh_until_monotonic_ns,
+    )
     return replace(
         binding,
         refreshed_after_steps=refreshed,
+        binding_revision=binding.binding_revision + 1,
+        parent_binding_sha256=binding.binding_sha256,
+        refresh_evidence_sha256=transition_sha,
         binding_sha256=hashlib.sha256(canonical_json(payload)).hexdigest(),
     )
 

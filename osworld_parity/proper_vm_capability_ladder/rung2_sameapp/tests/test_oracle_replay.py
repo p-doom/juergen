@@ -21,13 +21,8 @@ def test_oracle_rejects_reset_and_near_miss_and_accepts_gold() -> None:
         assert evaluate_state(fixture, scripted_state(fixture, near_miss=False)).MOUSE_SOLVED is True
 
 
-def test_build_replay_is_bounded_and_never_opens_sealed_eval() -> None:
-    report = run_build_replay("development")
-    assert report["status"] == "passed"
-    assert report["sealed_eval_executed"] is False
-    assert {row["app"] for row in report["rows"]} == {
-        "writer",
-        "calc",
-        "files",
-        "chrome",
-    }
+def test_build_replay_cannot_bypass_live_production_contract() -> None:
+    import pytest
+
+    with pytest.raises(RuntimeError, match="live VM bindings"):
+        run_build_replay("development")

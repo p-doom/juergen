@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import time
+from dataclasses import replace
 
 import pytest
 
@@ -14,6 +16,7 @@ from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.oracle 
 )
 from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.runtime import (
     RuntimeProbe,
+    RuntimeEvidenceLedger,
     RuntimeProbeError,
     bind_repeated_runtime_probes,
     resolved_cursor_history,
@@ -40,6 +43,23 @@ def _probe(task) -> RuntimeProbe:
     )
 
 
+def _attributed(task, probes):
+    ledger = RuntimeEvidenceLedger(setup_commit="a" * 40, reset_provider="test")
+    values = []
+    for index, probe in enumerate(probes):
+        started = time.monotonic_ns()
+        values.append(
+            ledger.issue_reset_probe(
+                task,
+                probe,
+                reset_started_monotonic_ns=started,
+                probe_completed_monotonic_ns=time.monotonic_ns(),
+                transport_endpoint=f"test://reset/{index}",
+            )
+        )
+    return tuple(values), ledger
+
+
 def test_chrome_up_setup_establishes_and_proves_nonzero_initial_scroll() -> None:
     task = next(
         task
@@ -64,14 +84,60 @@ def test_geometry_drift_across_exact_resets_is_rejected() -> None:
     second = _probe(task)
     name = next(iter(second.geometry))
     second.geometry[name] = (second.geometry[name][0] + 1, second.geometry[name][1])
+    values, ledger = _attributed(task, (first, second))
     with pytest.raises(RuntimeProbeError, match="geometry drift"):
-        bind_repeated_runtime_probes(task, (first, second))
+        bind_repeated_runtime_probes(task, values, ledger=ledger)
 
 
 def test_production_binding_requires_two_reset_probes() -> None:
     task = load_manifest("development").tasks[0]
+    values, ledger = _attributed(task, (_probe(task),))
     with pytest.raises(RuntimeProbeError, match="at least two reset probes"):
-        bind_repeated_runtime_probes(task, (_probe(task),))
+        bind_repeated_runtime_probes(task, values, ledger=ledger)
+
+
+def test_reset_evidence_rejects_duplicate_object_content_mutation_and_replay() -> None:
+    task = load_manifest("development").tasks[0]
+    probe = _probe(task)
+    values, ledger = _attributed(
+        task,
+        (
+            replace(probe, state=dict(probe.state), geometry=dict(probe.geometry)),
+            replace(probe, state=dict(probe.state), geometry=dict(probe.geometry)),
+        ),
+    )
+    with pytest.raises(RuntimeProbeError, match="duplicate reset probe object"):
+        bind_repeated_runtime_probes(task, (values[0], values[0]), ledger=ledger)
+
+    copied = replace(values[1], reset_cycle_evidence=values[0].reset_cycle_evidence)
+    with pytest.raises(RuntimeProbeError, match="duplicate reset evidence content"):
+        bind_repeated_runtime_probes(task, (values[0], copied), ledger=ledger)
+
+    mutated = replace(values[1], initial_cursor=(41, 50))
+    with pytest.raises(RuntimeProbeError, match="probe content was mutated"):
+        bind_repeated_runtime_probes(task, (values[0], mutated), ledger=ledger)
+
+    binding = bind_repeated_runtime_probes(task, values, ledger=ledger)
+    assert binding.reset_probe_count == 2
+    receipt = binding.receipt()
+    assert len(receipt["reset_cycles"]) == 2
+    assert receipt["binding_revision"] == 1
+    with pytest.raises(RuntimeProbeError, match="binding evidence is stale"):
+        replace(
+            binding, evidence_fresh_until_monotonic_ns=time.monotonic_ns() - 1
+        ).probe_for_step(task, 1)
+    tampered_probe = replace(
+        binding.reset_probes[0],
+        reset_cycle_evidence=replace(
+            binding.reset_probes[0].reset_cycle_evidence, reset_id="replayed"
+        ),
+    )
+    with pytest.raises(RuntimeProbeError, match="reset evidence was mutated"):
+        replace(
+            binding, reset_probes=(tampered_probe, binding.reset_probes[1])
+        ).probe_for_step(task, 1)
+    with pytest.raises(RuntimeProbeError, match="replay detected"):
+        bind_repeated_runtime_probes(task, values, ledger=ledger)
 
 
 def test_runtime_resolves_cursor_refs_and_fresh_semantic_oracle() -> None:
