@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import make_dataclass
+from dataclasses import asdict, make_dataclass
 from types import SimpleNamespace
+import time
 from typing import Any
 
 import pytest
@@ -12,6 +13,7 @@ from ..curriculum_adapter import (
     load_curriculum_evaluation_manifest,
 )
 from ..manifest import ManifestError
+from ..receipts import validate_binding_receipt, validate_executed_segment
 from ..verifier import FreshProcessTaskVerifier
 from .helpers import evaluation_manifest, ready_marker, sealed_file, task_manifest, task_row
 
@@ -137,3 +139,70 @@ def test_adapter_against_installed_semantic_curriculum_v1(tmp_path) -> None:
     )
     assert semantic.status == "ok"
     assert semantic.matched_target_ref == milestone.target_ref
+
+
+def test_approved_curriculum_receipts_match_paired_validator() -> None:
+    pytest.importorskip(
+        "osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.program"
+    )
+    from osworld_parity.proper_vm_capability_ladder.rung1.transport import (
+        RecordingTransport,
+    )
+    from osworld_parity.proper_vm_capability_ladder.rung2_sameapp import replay
+    from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.manifests import (
+        load_manifest,
+    )
+    from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.program import (
+        compile_semantic_step,
+        record_executed_segment,
+    )
+    from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.tests.test_hardened_replay import (
+        _binding,
+    )
+
+    task = next(task for task in load_manifest("development").tasks if task.app == "writer")
+    binding, _ = _binding(task)
+    binding_receipt = binding.receipt()
+    validate_binding_receipt(
+        binding_receipt,
+        task_id=task.task_id,
+        fixture_sha256=task.fixture_sha256,
+        snapshot_id="osworld_ready",
+        setup_commit=binding.reset_probes[0].reset_cycle_evidence.setup_commit,
+        require_fresh=True,
+    )
+    segment = compile_semantic_step(
+        task,
+        "native_absolute_sequence_v1",
+        binding=binding,
+        semantic_step_index=1,
+    )
+    transport = RecordingTransport(
+        cursor=segment.expected_cursor_before,
+        screen=(1400, 900),
+    )
+    started = time.monotonic_ns()
+    dispatches = tuple(
+        replay._dispatch_compiled_action(
+            transport, "native_absolute_sequence_v1", action
+        )
+        for action in segment.actions
+    )
+    completed = time.monotonic_ns()
+    executed = record_executed_segment(
+        segment,
+        dispatches,
+        execution_started_monotonic_ns=started,
+        execution_completed_monotonic_ns=completed,
+    )
+    validate_executed_segment(
+        compiled_segment=asdict(segment),
+        dispatches=dispatches,
+        executed_receipt=asdict(executed),
+        binding_receipt=binding_receipt,
+        task_id=task.task_id,
+        fixture_sha256=task.fixture_sha256,
+        action_schema="native_absolute_sequence_v1",
+        expected_semantic_step=1,
+        expected_cursor_before=segment.expected_cursor_before,
+    )
