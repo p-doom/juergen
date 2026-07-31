@@ -42,6 +42,31 @@ Both adapters compile to the same transport primitives. In particular,
 performs one exact UTF-8 clipboard write and one Ctrl+V in a single guest
 process. `pyautogui.write` is not used.
 
+### Pre-science compact-dispatch diagnostic amendment
+
+Development-only job 135826 established that the v2 geometry contract itself
+held: `r1a-click-dev-1101` passed under the native absolute arm, and the compact
+arm's measured target rectangle was fully visible and centered at the requested
+endpoint. The compact gold nevertheless left the checkbox unchanged. Its old
+browser trace had neither pointer coordinates nor a causal ordering guarantee,
+because independent asynchronous event POSTs could arrive at the host out of
+order. It therefore does not prove that the compact compiler emitted button-down
+before movement.
+
+The specific adapter-dependent failure mechanism predicted for the next check
+is relative-baseline drift: compact deltas were created from one observed cursor
+sample, while the executor read the cursor again at dispatch. Any intervening
+movement would offset the endpoint; the absolute arm would be unaffected. The
+harness now requires the planned observed baseline to equal the dispatch-time
+baseline and the final cursor to equal the geometry-derived endpoint before an
+oracle result is interpreted. It also journals each action's cursor before and
+after dispatch, persists the active cell and final host state before calling the
+oracle, and serializes browser event reports with client sequence numbers,
+browser/host timestamps, pointer screen coordinates, and `elementFromPoint`
+identity. Thus a future CPU/KVM retry can distinguish baseline drift, endpoint
+error, wrong hit element, and oracle/reporting delay. These diagnostics do not
+alter fixture contents, hashes, evaluation exposure, or model policy inputs.
+
 Every development cell performs:
 
 1. restore the full-RAM/disk `osworld_ready` QMP snapshot and deterministic setup;

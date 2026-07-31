@@ -14,6 +14,8 @@ Arm = Literal["native_absolute_control", "compact_raw_phaseb"]
 class GoldTrajectory:
     arm: Arm
     actions: tuple[dict[str, Any] | str, ...]
+    observed_cursor_baseline: tuple[int, int]
+    expected_endpoint: tuple[int, int] | None
 
 
 def _center(geometry: dict[str, Any], name: str) -> tuple[int, int]:
@@ -42,8 +44,10 @@ def build_trajectory(
     if not isinstance(geometry, dict):
         raise ValueError("fixture geometry missing")
     p = fixture.params
+    endpoint: tuple[int, int] | None
     if fixture.template == "click":
         target = _center(geometry, "decoy" if near_miss else "target")
+        endpoint = target
         if arm == "native_absolute_control":
             actions: tuple[dict[str, Any] | str, ...] = (
                 {"action": "left_click", "coordinate": list(target)},
@@ -52,6 +56,7 @@ def build_trajectory(
             actions = (_raw_move(cursor, target, "+LMB -LMB"),)
     elif fixture.template == "focus_type":
         target = _center(geometry, "target")
+        endpoint = target
         text = str(p["target_text"]) + ("x" if near_miss else "")
         if arm == "native_absolute_control":
             actions = (
@@ -66,6 +71,7 @@ def build_trajectory(
                 "0 0 0 ; type(" + json.dumps(text, ensure_ascii=False) + ")",
             )
     elif fixture.template == "scroll":
+        endpoint = None
         clicks = int(p["scroll_clicks"])
         if near_miss:
             clicks = -clicks
@@ -103,4 +109,9 @@ def build_trajectory(
             f"trajectory exceeds frozen horizon for {fixture.id}: "
             f"{len(actions)} > {fixture.horizon}"
         )
-    return GoldTrajectory(arm=arm, actions=actions)
+    return GoldTrajectory(
+        arm=arm,
+        actions=actions,
+        observed_cursor_baseline=(int(cursor[0]), int(cursor[1])),
+        expected_endpoint=endpoint,
+    )

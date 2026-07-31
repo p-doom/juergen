@@ -52,6 +52,7 @@ class FixtureStateStore:
                 "current": _initial_current(fixture),
                 "events": [],
                 "last_pointer_buttons": 0,
+                "last_client_sequence": 0,
             }
             self._condition.notify_all()
             return generation
@@ -64,7 +65,21 @@ class FixtureStateStore:
             kind = payload.get("kind")
             if not isinstance(kind, str):
                 raise FixtureServerError("event kind missing")
-            event: dict[str, Any] = {"kind": kind}
+            client_sequence = int(payload.get("client_sequence", -1))
+            if client_sequence >= 0:
+                if client_sequence <= state["last_client_sequence"]:
+                    raise FixtureServerError(
+                        f"non-monotonic client event sequence {client_sequence}"
+                    )
+                state["last_client_sequence"] = client_sequence
+            event: dict[str, Any] = {
+                "kind": kind,
+                "client_sequence": client_sequence,
+                "client_monotonic_ms": float(
+                    payload.get("client_monotonic_ms", -1.0)
+                ),
+                "host_monotonic_ns": time.monotonic_ns(),
+            }
             if kind == "ready":
                 geometry = payload.get("geometry")
                 if not isinstance(geometry, dict):
@@ -88,6 +103,12 @@ class FixtureStateStore:
                         "event": str(payload.get("event", "")),
                         "button": int(payload.get("button", -1)),
                         "buttons": buttons,
+                        "client_x": int(payload.get("client_x", -1)),
+                        "client_y": int(payload.get("client_y", -1)),
+                        "screen_x": int(payload.get("screen_x", -1)),
+                        "screen_y": int(payload.get("screen_y", -1)),
+                        "hit_id": str(payload.get("hit_id", "")),
+                        "hit_tag": str(payload.get("hit_tag", "")),
                     }
                 )
             elif kind == "click":
@@ -216,10 +237,21 @@ def _common_script(fixture: Fixture, generation: int, ready_js: str) -> str:
 <script>
 const generation = {generation};
 const endpoint = {json.dumps(endpoint)};
+let clientSequence = 0;
+let postQueue = Promise.resolve();
 function post(payload) {{
   payload.generation = generation;
-  return fetch(endpoint, {{method: 'POST', headers: {{'Content-Type':'application/json'}},
-    body: JSON.stringify(payload), cache: 'no-store'}});
+  payload.client_sequence = ++clientSequence;
+  payload.client_monotonic_ms = Math.round(performance.now() * 1000) / 1000;
+  const body = JSON.stringify(payload);
+  const send = () => fetch(endpoint, {{method: 'POST',
+    headers: {{'Content-Type':'application/json'}}, body, cache: 'no-store'}})
+    .then(response => {{ if (!response.ok) throw new Error(`event POST ${{response.status}}`);
+      return response; }});
+  // Preserve browser dispatch order at the host oracle. Independent fetches can
+  // otherwise arrive out of order and make pointer traces non-causal.
+  postQueue = postQueue.then(send, send);
+  return postQueue;
 }}
 function screenRect(element) {{
   const r = element.getBoundingClientRect();
@@ -242,8 +274,16 @@ function measuredGeometry(parts) {{
 }}
 for (const name of ['pointerdown', 'pointerup', 'pointermove']) {{
   document.addEventListener(name, (e) => {{
-    if (name !== 'pointermove' || e.buttons) post({{kind:'pointer', event:name,
-      button:e.button, buttons:e.buttons}});
+    if (name !== 'pointermove' || e.buttons) {{
+      const hit = document.elementFromPoint(e.clientX, e.clientY);
+      const topChrome = Math.max(0, window.outerHeight - window.innerHeight);
+      post({{kind:'pointer', event:name, button:e.button, buttons:e.buttons,
+        client_x:Math.round(e.clientX), client_y:Math.round(e.clientY),
+        screen_x:Math.round(window.screenX + e.clientX),
+        screen_y:Math.round(window.screenY + topChrome + e.clientY),
+        hit_id:hit && hit.id ? hit.id : '',
+        hit_tag:hit && hit.tagName ? hit.tagName.toLowerCase() : ''}});
+    }}
   }}, true);
 }}
 window.addEventListener('load', () => requestAnimationFrame(() => {{ {ready_js} }}));
