@@ -19,6 +19,7 @@ class FixtureServerError(RuntimeError):
 
 STABLE_GEOMETRY_OBSERVATIONS = 3
 MAX_GEOMETRY_ANIMATION_FRAMES = 120
+HOST_DIAGNOSTIC_JOURNAL_LIMIT = 1024
 
 
 def _initial_current(fixture: Fixture) -> dict[str, Any]:
@@ -60,13 +61,75 @@ class FixtureStateStore:
                 "geometry_observations": [],
                 "geometry_stabilization": None,
                 "geometry_stabilization_error": None,
+                "diagnostic_journal": [],
+                "diagnostic_journal_dropped": 0,
+                "diagnostic_journal_next_sequence": 1,
+                "diagnostic_http_request_next_id": 1,
             }
             self._condition.notify_all()
             return generation
 
-    def apply_event(self, fixture: Fixture, payload: dict[str, Any]) -> None:
+    @staticmethod
+    def _append_diagnostic_locked(
+        state: dict[str, Any], stage: str, details: dict[str, Any]
+    ) -> None:
+        if len(state["diagnostic_journal"]) >= HOST_DIAGNOSTIC_JOURNAL_LIMIT:
+            state["diagnostic_journal_dropped"] += 1
+            return
+        sequence = int(state["diagnostic_journal_next_sequence"])
+        state["diagnostic_journal_next_sequence"] = sequence + 1
+        state["diagnostic_journal"].append(
+            {
+                "journal_sequence": sequence,
+                "stage": stage,
+                "host_monotonic_ns": time.monotonic_ns(),
+                "host_wall_time_ns": time.time_ns(),
+                "details": copy.deepcopy(details),
+            }
+        )
+
+    def record_diagnostic(
+        self, fixture: Fixture, stage: str, details: dict[str, Any]
+    ) -> None:
         with self._condition:
             state = self._states[fixture.id]
+            self._append_diagnostic_locked(state, stage, details)
+            self._condition.notify_all()
+
+    def begin_http_request(
+        self, fixture: Fixture, details: dict[str, Any]
+    ) -> int:
+        with self._condition:
+            state = self._states[fixture.id]
+            request_id = int(state["diagnostic_http_request_next_id"])
+            state["diagnostic_http_request_next_id"] = request_id + 1
+            self._append_diagnostic_locked(
+                state,
+                "http_ingress",
+                {**details, "host_request_id": request_id},
+            )
+            self._condition.notify_all()
+            return request_id
+
+    def apply_event(
+        self,
+        fixture: Fixture,
+        payload: dict[str, Any],
+        *,
+        host_request_id: int | None = None,
+    ) -> None:
+        with self._condition:
+            state = self._states[fixture.id]
+            self._append_diagnostic_locked(
+                state,
+                "store_apply_started",
+                {
+                    "kind": payload.get("kind"),
+                    "client_sequence": payload.get("client_sequence"),
+                    "generation": payload.get("generation"),
+                    "host_request_id": host_request_id,
+                },
+            )
             if payload.get("generation") != state["generation"]:
                 raise FixtureServerError("stale fixture generation")
             kind = payload.get("kind")
@@ -143,6 +206,7 @@ class FixtureStateStore:
                     raise FixtureServerError("geometry observation missing geometry")
                 observation = {
                     "client_sequence": client_sequence,
+                    "host_request_id": host_request_id,
                     "client_monotonic_ms": event["client_monotonic_ms"],
                     "animation_frame": int(payload.get("animation_frame", -1)),
                     "fonts_ready": payload.get("fonts_ready") is True,
@@ -185,6 +249,17 @@ class FixtureStateStore:
             else:
                 raise FixtureServerError(f"unsupported browser event {kind!r}")
             state["events"].append(event)
+            self._append_diagnostic_locked(
+                state,
+                "store_apply_committed",
+                {
+                    "kind": kind,
+                    "client_sequence": client_sequence,
+                    "last_client_sequence": state["last_client_sequence"],
+                    "last_pointer_buttons": state["last_pointer_buttons"],
+                    "current": state["current"],
+                },
+            )
             self._condition.notify_all()
 
     def snapshot(self, fixture_id: str) -> dict[str, Any]:
@@ -223,8 +298,23 @@ class FixtureStateStore:
         deadline = time.monotonic() + timeout_s
         quiet_sequence: int | None = None
         quiet_since: float | None = None
+        prior_observation: tuple[Any, ...] | None = None
         with self._condition:
             generation = self._states[fixture_id]["generation"]
+            state = self._states[fixture_id]
+            self._append_diagnostic_locked(
+                state,
+                "waiter_started",
+                {
+                    "after_sequence": after_sequence,
+                    "required_kinds": list(required_kinds),
+                    "require_pointer_up": require_pointer_up,
+                    "require_pointer_down": require_pointer_down,
+                    "expected_pointer_buttons": expected_pointer_buttons,
+                    "timeout_s": timeout_s,
+                    "quiet_s": quiet_s,
+                },
+            )
             while True:
                 now = time.monotonic()
                 state = self._states[fixture_id]
@@ -258,11 +348,45 @@ class FixtureStateStore:
                     and state["last_pointer_buttons"] == expected_pointer_buttons
                 )
                 current_sequence = int(state["last_client_sequence"])
+                observation = (
+                    current_sequence,
+                    tuple(sorted(observed_kinds)),
+                    has_down,
+                    has_up,
+                    int(state["last_pointer_buttons"]),
+                    acknowledged,
+                )
+                if observation != prior_observation:
+                    self._append_diagnostic_locked(
+                        state,
+                        "waiter_observation",
+                        {
+                            "last_client_sequence": current_sequence,
+                            "relevant_client_sequences": [
+                                event.get("client_sequence") for event in relevant
+                            ],
+                            "observed_kinds": sorted(observed_kinds),
+                            "pointer_down_observed": has_down,
+                            "pointer_up_observed": has_up,
+                            "pointer_buttons": state["last_pointer_buttons"],
+                            "acknowledged": acknowledged,
+                        },
+                    )
+                    prior_observation = observation
                 if acknowledged:
                     if quiet_sequence != current_sequence:
                         quiet_sequence = current_sequence
                         quiet_since = now
                     elif quiet_since is not None and now - quiet_since >= quiet_s:
+                        self._append_diagnostic_locked(
+                            state,
+                            "waiter_decision",
+                            {
+                                "decision": "acknowledged",
+                                "last_client_sequence": current_sequence,
+                                "pointer_buttons": state["last_pointer_buttons"],
+                            },
+                        )
                         return {
                             "after_sequence": after_sequence,
                             "last_sequence": current_sequence,
@@ -278,6 +402,18 @@ class FixtureStateStore:
                     quiet_sequence = None
                     quiet_since = None
                 if now >= deadline:
+                    self._append_diagnostic_locked(
+                        state,
+                        "waiter_decision",
+                        {
+                            "decision": "timeout",
+                            "last_client_sequence": current_sequence,
+                            "observed_kinds": sorted(observed_kinds),
+                            "pointer_down_observed": has_down,
+                            "pointer_up_observed": has_up,
+                            "pointer_buttons": state["last_pointer_buttons"],
+                        },
+                    )
                     raise TimeoutError(
                         f"{fixture_id}: browser acknowledgement timeout after sequence "
                         f"{after_sequence}; required_kinds={required_kinds}, "
@@ -336,23 +472,100 @@ class FixtureHttpServer:
                 if not path.startswith(prefix):
                     self._send(404, b"not found", "text/plain; charset=utf-8")
                     return
+                fixture: Fixture | None = None
+                host_request_id: int | None = None
+                client_sequence: int | None = None
+                apply_started = False
                 try:
+                    fixture = manifest.by_id(urllib.parse.unquote(path[len(prefix) :]))
                     length = int(self.headers.get("Content-Length", "0"))
+                    host_request_id = store.begin_http_request(
+                        fixture,
+                        {"method": "POST", "path": path, "content_length": length},
+                    )
                     if not 0 < length <= 65536:
                         raise FixtureServerError("invalid event body length")
                     payload = json.loads(self.rfile.read(length))
                     if not isinstance(payload, dict):
                         raise FixtureServerError("event body must be an object")
-                    fixture = manifest.by_id(urllib.parse.unquote(path[len(prefix) :]))
-                    store.apply_event(fixture, payload)
+                    raw_client_sequence = payload.get("client_sequence")
+                    client_sequence = (
+                        int(raw_client_sequence)
+                        if raw_client_sequence is not None
+                        else None
+                    )
+                    store.record_diagnostic(
+                        fixture,
+                        "http_body_received",
+                        {
+                            "content_length": length,
+                            "kind": payload.get("kind"),
+                            "client_sequence": payload.get("client_sequence"),
+                            "host_request_id": host_request_id,
+                            "payload": payload,
+                        },
+                    )
+                    apply_started = True
+                    store.apply_event(
+                        fixture, payload, host_request_id=host_request_id
+                    )
                 except Exception as exc:
+                    if fixture is not None:
+                        if apply_started:
+                            store.record_diagnostic(
+                                fixture,
+                                "store_apply_rejected",
+                                {
+                                    "host_request_id": host_request_id,
+                                    "client_sequence": client_sequence,
+                                    "error": str(exc),
+                                },
+                            )
+                        store.record_diagnostic(
+                            fixture,
+                            "http_response_started",
+                            {
+                                "status": int(HTTPStatus.BAD_REQUEST),
+                                "error": str(exc),
+                                "host_request_id": host_request_id,
+                                "client_sequence": client_sequence,
+                            },
+                        )
                     self._send(
                         HTTPStatus.BAD_REQUEST,
                         json.dumps({"error": str(exc)}).encode("utf-8"),
                         "application/json",
                     )
+                    if fixture is not None:
+                        store.record_diagnostic(
+                            fixture,
+                            "http_response_completed",
+                            {
+                                "status": int(HTTPStatus.BAD_REQUEST),
+                                "host_request_id": host_request_id,
+                                "client_sequence": client_sequence,
+                            },
+                        )
                     return
+                store.record_diagnostic(
+                    fixture,
+                    "http_response_started",
+                    {
+                        "status": int(HTTPStatus.OK),
+                        "host_request_id": host_request_id,
+                        "client_sequence": client_sequence,
+                    },
+                )
                 self._send(200, b'{"status":"accepted"}', "application/json")
+                store.record_diagnostic(
+                    fixture,
+                    "http_response_completed",
+                    {
+                        "status": int(HTTPStatus.OK),
+                        "host_request_id": host_request_id,
+                        "client_sequence": client_sequence,
+                    },
+                )
 
         self._server = ThreadingHTTPServer((host, 0), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -395,18 +608,109 @@ const generation = {generation};
 const endpoint = {json.dumps(endpoint)};
 let clientSequence = 0;
 let postQueue = Promise.resolve();
+const diagnosticRingLimit = 256;
+const rung1aDiagnostics = {{
+  schema_version: 1,
+  generation,
+  page_time_origin_ms: performance.timeOrigin,
+  page_events: [],
+  report_queue: {{
+    enqueued: 0,
+    send_started: 0,
+    response_received: 0,
+    acknowledged: 0,
+    failed: 0,
+    pending: 0,
+    last_enqueued_sequence: null,
+    last_fetch_started_sequence: null,
+    last_resolved_sequence: null,
+    last_rejected_sequence: null,
+    records: [],
+    transitions: []
+  }}
+}};
+window.__RUNG1A_DIAGNOSTICS__ = rung1aDiagnostics;
+function boundedPush(items, value) {{
+  items.push(value);
+  if (items.length > diagnosticRingLimit) items.splice(0, items.length - diagnosticRingLimit);
+}}
+function queueTransition(record, state) {{
+  const transition = {{
+    client_sequence: record.client_sequence,
+    state,
+    client_monotonic_ms: Math.round(performance.now() * 1000) / 1000,
+    pending: rung1aDiagnostics.report_queue.pending
+  }};
+  record.state = state;
+  boundedPush(record.state_transitions, transition);
+  boundedPush(rung1aDiagnostics.report_queue.transitions, transition);
+}}
 function post(payload) {{
   payload.generation = generation;
   payload.client_sequence = ++clientSequence;
   payload.client_monotonic_ms = Math.round(performance.now() * 1000) / 1000;
   const body = JSON.stringify(payload);
-  const send = () => fetch(endpoint, {{method: 'POST',
-    headers: {{'Content-Type':'application/json'}}, body, cache: 'no-store'}})
-    .then(response => {{ if (!response.ok) throw new Error(`event POST ${{response.status}}`);
-      return response; }});
+  const queue = rung1aDiagnostics.report_queue;
+  const record = {{
+    client_sequence: payload.client_sequence,
+    predecessor_client_sequence: payload.client_sequence > 1
+      ? payload.client_sequence - 1 : null,
+    kind: payload.kind,
+    event: payload.event || null,
+    enqueue_client_monotonic_ms: payload.client_monotonic_ms,
+    send_started_client_monotonic_ms: null,
+    response_client_monotonic_ms: null,
+    acknowledged_client_monotonic_ms: null,
+    failed_client_monotonic_ms: null,
+    http_status: null,
+    error: null,
+    state: null,
+    predecessor_settlement_at_fetch: null,
+    state_transitions: []
+  }};
+  boundedPush(rung1aDiagnostics.page_events, JSON.parse(body));
+  boundedPush(queue.records, record);
+  queue.enqueued += 1;
+  queue.pending += 1;
+  queue.last_enqueued_sequence = payload.client_sequence;
+  queueTransition(record, 'enqueued');
+  const send = (predecessorSettlement) => {{
+    queue.send_started += 1;
+    queue.last_fetch_started_sequence = payload.client_sequence;
+    record.predecessor_settlement_at_fetch = payload.client_sequence === 1
+      ? 'root_resolved' : predecessorSettlement;
+    record.send_started_client_monotonic_ms = Math.round(performance.now() * 1000) / 1000;
+    queueTransition(record, 'fetch_started');
+    return fetch(endpoint, {{method: 'POST',
+      headers: {{'Content-Type':'application/json'}}, body, cache: 'no-store'}})
+      .then(response => {{
+        queue.response_received += 1;
+        record.response_client_monotonic_ms = Math.round(performance.now() * 1000) / 1000;
+        record.http_status = response.status;
+        if (!response.ok) throw new Error(`event POST ${{response.status}}`);
+        queue.acknowledged += 1;
+        queue.pending -= 1;
+        queue.last_resolved_sequence = payload.client_sequence;
+        record.acknowledged_client_monotonic_ms = Math.round(performance.now() * 1000) / 1000;
+        queueTransition(record, 'resolved');
+        return response;
+      }})
+      .catch(error => {{
+        queue.failed += 1;
+        queue.pending -= 1;
+        queue.last_rejected_sequence = payload.client_sequence;
+        record.failed_client_monotonic_ms = Math.round(performance.now() * 1000) / 1000;
+        record.error = String(error);
+        queueTransition(record, 'rejected');
+        throw error;
+      }});
+  }};
   // Preserve browser dispatch order at the host oracle. Independent fetches can
   // otherwise arrive out of order and make pointer traces non-causal.
-  postQueue = postQueue.then(send, send);
+  postQueue = postQueue.then(
+    () => send('resolved'),
+    () => send('rejected')
+  );
   return postQueue;
 }}
 function screenRect(element) {{

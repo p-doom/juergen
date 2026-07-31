@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -147,6 +148,9 @@ def test_two_consecutive_fixture_resets_are_equivalent() -> None:
         second = store.snapshot(fixture.id)
         for state in (first, second):
             state.pop("generation")
+            state.pop("diagnostic_journal")
+            state.pop("diagnostic_journal_dropped")
+            state.pop("diagnostic_journal_next_sequence")
             for event in state["events"]:
                 event.pop("host_monotonic_ns")
         assert first == second
@@ -188,11 +192,25 @@ def test_pointer_diagnostics_are_ordered_and_record_exact_hit_coordinates() -> N
         store.apply_event(fixture, pointer)
 
     html = render_fixture_html(fixture, generation)
-    assert "postQueue = postQueue.then(send, send)" in html
+    assert "() => send('resolved')" in html
+    assert "() => send('rejected')" in html
     assert "client_sequence" in html
     assert "client_monotonic_ms" in html
     assert "document.elementFromPoint" in html
     assert "screen_x:" in html and "screen_y:" in html
+    assert "window.__RUNG1A_DIAGNOSTICS__ = rung1aDiagnostics" in html
+    assert "diagnosticRingLimit = 256" in html
+    assert "queue.enqueued += 1" in html
+    assert "queue.send_started += 1" in html
+    assert "queue.acknowledged += 1" in html
+    assert "queue.failed += 1" in html
+    assert "boundedPush(rung1aDiagnostics.page_events" in html
+    assert "predecessor_client_sequence" in html
+    assert "predecessorSettlement" in html
+    assert "queueTransition(record, 'enqueued')" in html
+    assert "queueTransition(record, 'fetch_started')" in html
+    assert "queueTransition(record, 'resolved')" in html
+    assert "queueTransition(record, 'rejected')" in html
 
 
 def test_ready_is_rejected_before_fonts_and_exact_geometry_stabilization() -> None:
@@ -328,6 +346,12 @@ def test_browser_quiescence_requires_causal_release_and_click_ack() -> None:
     assert ack["last_sequence"] == ready_sequence + 3
     assert ack["pointer_up_acknowledged"] is True
     assert ack["pointer_buttons"] == 0
+    stages = [
+        item["stage"] for item in store.snapshot(fixture.id)["diagnostic_journal"]
+    ]
+    assert "waiter_started" in stages
+    assert "waiter_observation" in stages
+    assert "waiter_decision" in stages
 
     # Already-consumed events are stale and cannot acknowledge another action.
     with pytest.raises(TimeoutError, match="acknowledgement timeout"):
@@ -403,3 +427,58 @@ def test_http_surface_exposes_fixture_but_no_oracle_state() -> None:
             with pytest.raises(urllib.error.HTTPError) as caught:
                 urllib.request.urlopen(base + forbidden)
             assert caught.value.code == 404
+
+
+def test_http_event_path_records_bounded_ingress_apply_and_response_journal() -> None:
+    manifest = load_manifest()
+    fixture = manifest.select(split="development")[0]
+    with FixtureHttpServer(manifest) as server:
+        generation = server.store.snapshot(fixture.id)["generation"]
+        body = json.dumps(
+            {
+                "kind": "unsupported-test-event",
+                "generation": generation,
+                "client_sequence": 1,
+                "client_monotonic_ms": 1.0,
+            }
+        ).encode()
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.port}/event/{fixture.id}",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request)
+        assert caught.value.code == 400
+        deadline = time.monotonic() + 1.0
+        while True:
+            snapshot = server.store.snapshot(fixture.id)
+            if snapshot["diagnostic_journal"][-1]["stage"] == "http_response_completed":
+                break
+            if time.monotonic() >= deadline:
+                pytest.fail("HTTP handler did not journal response completion")
+            time.sleep(0.001)
+    journal = snapshot["diagnostic_journal"]
+    assert snapshot["diagnostic_journal_dropped"] == 0
+    assert [item["journal_sequence"] for item in journal] == list(
+        range(1, len(journal) + 1)
+    )
+    assert [item["stage"] for item in journal] == [
+        "http_ingress",
+        "http_body_received",
+        "store_apply_started",
+        "store_apply_rejected",
+        "http_response_started",
+        "http_response_completed",
+    ]
+    assert {
+        item["details"].get("host_request_id") for item in journal
+    } == {1}
+    assert {
+        item["details"].get("client_sequence")
+        for item in journal
+        if item["stage"] != "http_ingress"
+    } == {1}
+    assert all(isinstance(item["host_monotonic_ns"], int) for item in journal)
+    assert all(isinstance(item["host_wall_time_ns"], int) for item in journal)

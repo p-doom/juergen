@@ -4,9 +4,10 @@ import argparse
 import hashlib
 import json
 import sys
+import time
 import traceback
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .fixtures import Fixture, FixtureManifest, load_manifest
 from .selfcheck import (
@@ -49,6 +50,25 @@ LOWERED_KINDS = ("click",)
 BROWSER_SEQUENCE = ("pointerdown", "pointerup", "click")
 X_EVENT_SEQUENCE = ("mouse_down", "mouse_up")
 CLICK_CALL = "pyautogui.click(clicks=1, interval=0.05)"
+ATTEMPT_EVIDENCE_SCHEMA = "rung1_transport_attempt_evidence_v1"
+POST_TIMEOUT_OBSERVATION_GRACE_S = 0.25
+TIMEOUT_CLASSIFIER_RULES = {
+    "guest_input_path": (
+        "passive X observer lacks button release and the post-grace pointer mask is held"
+    ),
+    "chromium_input_delivery": (
+        "passive X observer has button release with pointer mask zero but the browser "
+        "local ring lacks pointerup"
+    ),
+    "browser_reporter": (
+        "browser local ring has pointerup and click but its serialized reporter remains "
+        "queued or unresolved"
+    ),
+    "host_harness": (
+        "host HTTP journal has pointerup or click ingress that store/waiter evidence misses"
+    ),
+    "inconclusive": "none of the identifying evidence rules is satisfied",
+}
 
 
 class TransportDiagnosticError(RuntimeError):
@@ -374,9 +394,35 @@ def _run_trial(
     pair_id: str,
     trial_id: str,
     global_pair_index: int,
+    checkpoint_attempt: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    timings: dict[str, Any] = {
+        "clock": "time.monotonic_ns",
+        "trial_started_host_monotonic_ns": time.monotonic_ns(),
+        "trial_started_host_wall_time_ns": time.time_ns(),
+    }
+    reset_started = time.monotonic_ns()
     transport = session.reset_to_ready()
+    reset_completed = time.monotonic_ns()
+    timings.update(
+        {
+            "reset_started_host_monotonic_ns": reset_started,
+            "reset_completed_host_monotonic_ns": reset_completed,
+            "reset_duration_ns": reset_completed - reset_started,
+        }
+    )
+    fixture_launch_started = time.monotonic_ns()
     initial = session.launch_fixture(server, fixture)
+    fixture_launch_completed = time.monotonic_ns()
+    timings.update(
+        {
+            "fixture_launch_started_host_monotonic_ns": fixture_launch_started,
+            "fixture_launch_completed_host_monotonic_ns": fixture_launch_completed,
+            "fixture_launch_duration_ns": (
+                fixture_launch_completed - fixture_launch_started
+            ),
+        }
+    )
     _validate_loaded_geometry(fixture, initial, transport.screen_size())
     if initial.get("current") != {"checked": False, "decoy_checked": False}:
         raise TransportDiagnosticError(f"trial {trial_index} reset state was not clean")
@@ -387,7 +433,18 @@ def _run_trial(
     if len(trajectory.actions) != 1 or trajectory.expected_endpoint is None:
         raise TransportDiagnosticError("fixed click trajectory contract drifted")
     after_sequence = int(server.store.snapshot(fixture.id)["last_client_sequence"])
+    dispatch_started = time.monotonic_ns()
+    timings["dispatch_started_host_wall_time_ns"] = time.time_ns()
     dispatch, journal = _execute(arm, transport, trajectory)
+    dispatch_completed = time.monotonic_ns()
+    timings.update(
+        {
+            "dispatch_started_host_monotonic_ns": dispatch_started,
+            "dispatch_completed_host_monotonic_ns": dispatch_completed,
+            "dispatch_completed_host_wall_time_ns": time.time_ns(),
+            "dispatch_duration_ns": dispatch_completed - dispatch_started,
+        }
+    )
     failed_atomic_states = [
         state
         for state in journal.get("atomic_action_states", [])
@@ -402,13 +459,233 @@ def _run_trial(
     endpoint = trajectory.expected_endpoint
     semantic = _semantic_contract(dispatch, endpoint)
     atomic = _atomic_contract(journal)
-    acknowledgement = server.store.wait_for_browser_quiescence(
-        fixture.id,
-        after_sequence=after_sequence,
-        required_kinds=("click",),
-        require_pointer_down=True,
-        require_pointer_up=True,
-        expected_pointer_buttons=0,
+    atomic_states = journal.get("atomic_action_states", [])
+    atomic_result = atomic_states[0] if len(atomic_states) == 1 else None
+    attempt = {
+        "schema_version": 1,
+        "evidence_schema": ATTEMPT_EVIDENCE_SCHEMA,
+        "status": "attempted",
+        "stage": "before_browser_acknowledgement",
+        "trial": {
+            "pair_index": pair_index,
+            "global_pair_index": global_pair_index,
+            "pair_id": pair_id,
+            "trial_index": trial_index,
+            "trial_id": trial_id,
+            "arm": arm,
+            "fixture_id": fixture.id,
+            "fixture_sha256": fixture.fixture_sha256,
+        },
+        "progress": {
+            "dispatch_count": 1,
+            "retry_count": 0,
+            "atomic_guest_process_count": (
+                atomic_result.get("guest_process_count")
+                if isinstance(atomic_result, dict)
+                else None
+            ),
+            "browser_acknowledged": False,
+        },
+        "browser_acknowledgement_request": {
+            "after_client_sequence": after_sequence,
+            "required_kinds": ["click"],
+            "require_pointer_down": True,
+            "require_pointer_up": True,
+            "expected_pointer_buttons": 0,
+        },
+        "baseline": list(baseline),
+        "endpoint": list(endpoint),
+        "dispatch": dispatch,
+        "journal": journal,
+        "atomic_result": atomic_result,
+        "semantic_contract": semantic,
+        "atomic_contract": atomic,
+        "timings": timings,
+    }
+    checkpoint_started = time.monotonic_ns()
+    timings["pre_ack_checkpoint_started_host_monotonic_ns"] = checkpoint_started
+    if checkpoint_attempt is not None:
+        checkpoint_attempt(attempt)
+    checkpoint_completed = time.monotonic_ns()
+    timings.update(
+        {
+            "pre_ack_checkpoint_completed_host_monotonic_ns": checkpoint_completed,
+            "pre_ack_checkpoint_duration_ns": checkpoint_completed - checkpoint_started,
+        }
+    )
+    wait_started = time.monotonic_ns()
+    timings["browser_ack_wait_started_host_monotonic_ns"] = wait_started
+    timings["browser_ack_wait_started_host_wall_time_ns"] = time.time_ns()
+    try:
+        acknowledgement = server.store.wait_for_browser_quiescence(
+            fixture.id,
+            after_sequence=after_sequence,
+            required_kinds=("click",),
+            require_pointer_down=True,
+            require_pointer_up=True,
+            expected_pointer_buttons=0,
+        )
+    except TimeoutError as exc:
+        wait_completed = time.monotonic_ns()
+        timings.update(
+            {
+                "browser_ack_wait_completed_host_monotonic_ns": wait_completed,
+                "browser_ack_wait_completed_host_wall_time_ns": time.time_ns(),
+                "browser_ack_wait_duration_ns": wait_completed - wait_started,
+            }
+        )
+        immediate_host_snapshot = _capture_timeout_component(
+            "immediate_host_oracle_snapshot",
+            lambda: server.store.snapshot(fixture.id),
+            timings,
+        )
+        immediate_live_browser = _capture_timeout_component(
+            "immediate_live_browser",
+            lambda: session.capture_browser_diagnostics(fixture),
+            timings,
+        )
+        immediate_live_guest_pointer = _capture_timeout_component(
+            "immediate_live_guest_pointer",
+            session.capture_guest_pointer_state,
+            timings,
+        )
+        grace_started = time.monotonic_ns()
+        timings["observation_grace_started_host_monotonic_ns"] = grace_started
+        timings["observation_grace_started_host_wall_time_ns"] = time.time_ns()
+        time.sleep(POST_TIMEOUT_OBSERVATION_GRACE_S)
+        grace_completed = time.monotonic_ns()
+        timings.update(
+            {
+                "observation_grace_completed_host_monotonic_ns": grace_completed,
+                "observation_grace_completed_host_wall_time_ns": time.time_ns(),
+                "observation_grace_duration_ns": grace_completed - grace_started,
+                "observation_grace_requested_s": POST_TIMEOUT_OBSERVATION_GRACE_S,
+            }
+        )
+        host_snapshot = _capture_timeout_component(
+            "post_grace_host_oracle_snapshot",
+            lambda: server.store.snapshot(fixture.id),
+            timings,
+        )
+        live_browser = _capture_timeout_component(
+            "post_grace_live_browser",
+            lambda: session.capture_browser_diagnostics(fixture),
+            timings,
+        )
+        live_guest_pointer = _capture_timeout_component(
+            "post_grace_live_guest_pointer",
+            session.capture_guest_pointer_state,
+            timings,
+        )
+        chrome_log = _capture_timeout_component(
+            "chrome_log",
+            session.capture_chrome_log,
+            timings,
+        )
+        immediate_browser_page = _browser_page_from_capture(immediate_live_browser)
+        browser_page = _browser_page_from_capture(live_browser)
+        page_diagnostics = (
+            browser_page.get("diagnostics", {})
+            if isinstance(browser_page, dict)
+            and isinstance(browser_page.get("diagnostics"), dict)
+            else {}
+        )
+        attempt.update(
+            {
+                "status": "failed",
+                "stage": "browser_acknowledgement_timeout",
+                "progress": {
+                    **attempt["progress"],
+                    "browser_acknowledged": False,
+                    "failure_kind": "infrastructure",
+                },
+                "timeout": {
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                },
+                "observation_grace": {
+                    "requested_s": POST_TIMEOUT_OBSERVATION_GRACE_S,
+                    "no_input_dispatched": True,
+                    "immediate": {
+                        "host_oracle_snapshot": immediate_host_snapshot,
+                        "live_browser": immediate_live_browser,
+                        "live_guest_pointer": immediate_live_guest_pointer,
+                    },
+                    "post_grace": {
+                        "host_oracle_snapshot": host_snapshot,
+                        "live_browser": live_browser,
+                        "live_guest_pointer": live_guest_pointer,
+                    },
+                },
+                "host_oracle_snapshot": host_snapshot,
+                "live_browser": live_browser,
+                "browser_page_event_log": page_diagnostics.get("page_events"),
+                "report_queue": page_diagnostics.get("report_queue"),
+                "dom_state": (
+                    browser_page.get("dom")
+                    if isinstance(browser_page, dict)
+                    else None
+                ),
+                "live_guest_pointer": live_guest_pointer,
+                "chrome_log": chrome_log,
+                "cross_clock_calibration": {
+                    "host": {
+                        key: value
+                        for key, value in timings.items()
+                        if "host_" in key
+                    },
+                    "browser_immediate": _browser_clock_sample(
+                        immediate_browser_page
+                    ),
+                    "browser_post_grace": _browser_clock_sample(browser_page),
+                    "guest_immediate": _guest_clock_sample(
+                        immediate_live_guest_pointer
+                    ),
+                    "guest_post_grace": _guest_clock_sample(live_guest_pointer),
+                    "limitations": [
+                        "X server event time is unavailable without a passive "
+                        "XRecord/XI2 observer"
+                    ],
+                },
+                "instrumentation_limitations": [
+                    "no passive guest XRecord/XI2 observer was installed by this "
+                    "semantics-preserving core patch",
+                    "the atomic journal proves per-event X sync but does not contain "
+                    "timestamped XQueryPointer samples after each button event",
+                ],
+            }
+        )
+        attempt["outcome_classifier"] = _classify_timeout_outcome(attempt)
+        timings["timeout_evidence_completed_host_monotonic_ns"] = time.monotonic_ns()
+        timings["trial_completed_host_monotonic_ns"] = timings[
+            "timeout_evidence_completed_host_monotonic_ns"
+        ]
+        timings["trial_completed_host_wall_time_ns"] = time.time_ns()
+        timings["trial_duration_ns"] = (
+            timings["trial_completed_host_monotonic_ns"]
+            - timings["trial_started_host_monotonic_ns"]
+        )
+        if checkpoint_attempt is not None:
+            checkpoint_attempt(attempt)
+        evidence = {
+            "schema_version": 1,
+            "evidence_schema": ATTEMPT_EVIDENCE_SCHEMA,
+            "status": "failed",
+            "failure_kind": "infrastructure",
+            "failure_stage": "browser_acknowledgement_timeout",
+            "attempted_trial": attempt,
+        }
+        raise TransportDiagnosticError(
+            f"trial {trial_id} browser acknowledgement timed out",
+            evidence=evidence,
+        ) from exc
+    wait_completed = time.monotonic_ns()
+    timings.update(
+        {
+            "browser_ack_wait_completed_host_monotonic_ns": wait_completed,
+            "browser_ack_wait_completed_host_wall_time_ns": time.time_ns(),
+            "browser_ack_wait_duration_ns": wait_completed - wait_started,
+        }
     )
     browser = _browser_contract(acknowledgement, endpoint)
     final_state = server.store.snapshot(fixture.id)
@@ -416,6 +693,28 @@ def _run_trial(
         raise TransportDiagnosticError(
             f"click state acknowledgement mismatch: {final_state.get('current')}"
         )
+    timings["trial_completed_host_monotonic_ns"] = time.monotonic_ns()
+    timings["trial_completed_host_wall_time_ns"] = time.time_ns()
+    timings["trial_duration_ns"] = (
+        timings["trial_completed_host_monotonic_ns"]
+        - timings["trial_started_host_monotonic_ns"]
+    )
+    attempt.update(
+        {
+            "status": "passed",
+            "stage": "browser_acknowledged",
+            "progress": {
+                **attempt["progress"],
+                "browser_acknowledged": True,
+                "failure_kind": None,
+            },
+            "browser_acknowledgement": acknowledgement,
+            "browser_contract": browser,
+            "final_state": final_state["current"],
+        }
+    )
+    if checkpoint_attempt is not None:
+        checkpoint_attempt(attempt)
     return {
         "pair_index": pair_index,
         "global_pair_index": global_pair_index,
@@ -438,7 +737,213 @@ def _run_trial(
         **atomic,
         "browser_contract": browser,
         "final_state": final_state["current"],
+        "attempt_evidence": attempt,
     }
+
+
+def _captured_value(capture: Any) -> dict[str, Any]:
+    if (
+        isinstance(capture, dict)
+        and capture.get("status") == "captured"
+        and isinstance(capture.get("value"), dict)
+    ):
+        return capture["value"]
+    return {}
+
+
+def _browser_page_from_capture(capture: Any) -> dict[str, Any]:
+    value = _captured_value(capture)
+    page = value.get("page")
+    return page if isinstance(page, dict) else {}
+
+
+def _browser_clock_sample(page: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: page.get(key)
+        for key in (
+            "captured_browser_wall_time_ms",
+            "performance_time_origin_ms",
+            "performance_now_ms",
+            "captured_client_monotonic_ms",
+        )
+    }
+
+
+def _guest_clock_sample(capture: Any) -> dict[str, Any]:
+    value = _captured_value(capture)
+    return {
+        key: value.get(key)
+        for key in (
+            "guest_wall_before_ns",
+            "guest_wall_after_ns",
+            "guest_monotonic_before_ns",
+            "guest_monotonic_after_ns",
+        )
+    }
+
+
+def _classify_timeout_outcome(attempt: dict[str, Any]) -> dict[str, Any]:
+    browser_page = _browser_page_from_capture(attempt.get("live_browser"))
+    diagnostics = browser_page.get("diagnostics", {})
+    page_events = (
+        diagnostics.get("page_events", []) if isinstance(diagnostics, dict) else []
+    )
+    page_events = page_events if isinstance(page_events, list) else []
+    pointer_up_sequences = {
+        int(event["client_sequence"])
+        for event in page_events
+        if isinstance(event, dict)
+        and event.get("kind") == "pointer"
+        and event.get("event") == "pointerup"
+        and isinstance(event.get("client_sequence"), int)
+    }
+    click_sequences = {
+        int(event["client_sequence"])
+        for event in page_events
+        if isinstance(event, dict)
+        and event.get("kind") == "click"
+        and isinstance(event.get("client_sequence"), int)
+    }
+    relevant_sequences = pointer_up_sequences | click_sequences
+    page_has_pointer_up = bool(pointer_up_sequences)
+    page_has_click = bool(click_sequences)
+    report_queue = (
+        diagnostics.get("report_queue", {}) if isinstance(diagnostics, dict) else {}
+    )
+    report_queue = report_queue if isinstance(report_queue, dict) else {}
+    records = report_queue.get("records", [])
+    records = records if isinstance(records, list) else []
+    record_states = {
+        int(record["client_sequence"]): record.get("state")
+        for record in records
+        if isinstance(record, dict) and isinstance(record.get("client_sequence"), int)
+    }
+    unresolved_relevant_sequences = sorted(
+        sequence
+        for sequence in relevant_sequences
+        if record_states.get(sequence) != "resolved"
+    )
+
+    host_snapshot = _captured_value(attempt.get("host_oracle_snapshot"))
+    journal = host_snapshot.get("diagnostic_journal", [])
+    journal = journal if isinstance(journal, list) else []
+    ingress_sequences = {
+        details.get("client_sequence")
+        for item in journal
+        if isinstance(item, dict)
+        and item.get("stage") == "http_body_received"
+        and isinstance((details := item.get("details")), dict)
+    }
+    committed_sequences = {
+        item["details"].get("client_sequence")
+        for item in journal
+        if isinstance(item, dict)
+        and item.get("stage") == "store_apply_committed"
+        and isinstance(item.get("details"), dict)
+    }
+    missing_store_sequences = sorted(
+        sequence
+        for sequence in (relevant_sequences & ingress_sequences) - committed_sequences
+        if isinstance(sequence, int)
+    )
+    relevant_absent_from_host = sorted(relevant_sequences - ingress_sequences)
+    waiter_timed_out = any(
+        isinstance(item, dict)
+        and item.get("stage") == "waiter_decision"
+        and isinstance(item.get("details"), dict)
+        and item["details"].get("decision") == "timeout"
+        for item in journal
+    )
+    waiter_missed_sequences = sorted(
+        relevant_sequences & committed_sequences
+        if waiter_timed_out and relevant_sequences <= committed_sequences
+        else set()
+    )
+
+    x_observer = attempt.get("passive_x_observer")
+    x_observer_available = isinstance(x_observer, dict) and x_observer.get(
+        "status"
+    ) == "captured"
+    x_events = x_observer.get("events", []) if x_observer_available else []
+    x_has_release = any(
+        isinstance(event, dict) and event.get("event") == "button_release"
+        for event in x_events
+    )
+    pointer = _captured_value(attempt.get("live_guest_pointer"))
+    pointer_mask = pointer.get("pointer_button_mask")
+
+    classification = "inconclusive"
+    if x_observer_available and not x_has_release and pointer_mask not in {None, 0}:
+        classification = "guest_input_path"
+    elif x_observer_available and x_has_release and pointer_mask == 0 and not page_has_pointer_up:
+        classification = "chromium_input_delivery"
+    elif missing_store_sequences or waiter_missed_sequences:
+        classification = "host_harness"
+    elif page_has_pointer_up and page_has_click and (
+        unresolved_relevant_sequences or relevant_absent_from_host
+    ):
+        classification = "browser_reporter"
+    limitations = []
+    if not x_observer_available:
+        limitations.append(
+            "passive XRecord/XI2 event trace unavailable; guest-vs-Chromium rules cannot fire"
+        )
+    return {
+        "schema_version": 1,
+        "classification": classification,
+        "rules": TIMEOUT_CLASSIFIER_RULES,
+        "observed": {
+            "page_has_pointer_up": page_has_pointer_up,
+            "page_has_click": page_has_click,
+            "pointer_up_client_sequences": sorted(pointer_up_sequences),
+            "click_client_sequences": sorted(click_sequences),
+            "reporter_record_states": {
+                str(sequence): record_states.get(sequence)
+                for sequence in sorted(relevant_sequences)
+            },
+            "reporter_unresolved_relevant_sequences": (
+                unresolved_relevant_sequences
+            ),
+            "relevant_sequences_absent_from_host": relevant_absent_from_host,
+            "host_ingress_missing_store_sequences": missing_store_sequences,
+            "host_waiter_missed_sequences": waiter_missed_sequences,
+            "post_grace_pointer_button_mask": pointer_mask,
+            "passive_x_observer_available": x_observer_available,
+            "passive_x_release_observed": x_has_release,
+        },
+        "limitations": limitations,
+    }
+
+
+def _capture_timeout_component(
+    name: str,
+    capture: Callable[[], Any],
+    timings: dict[str, Any],
+) -> dict[str, Any]:
+    started = time.monotonic_ns()
+    started_wall = time.time_ns()
+    timings[f"{name}_capture_started_host_monotonic_ns"] = started
+    timings[f"{name}_capture_started_host_wall_time_ns"] = started_wall
+    try:
+        value = capture()
+        return {
+            "schema_version": 1,
+            "status": "captured",
+            "value": value,
+        }
+    except Exception as exc:
+        return {
+            "schema_version": 1,
+            "status": "capture_error",
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        }
+    finally:
+        completed = time.monotonic_ns()
+        completed_wall = time.time_ns()
+        timings[f"{name}_capture_completed_host_monotonic_ns"] = completed
+        timings[f"{name}_capture_completed_host_wall_time_ns"] = completed_wall
+        timings[f"{name}_capture_duration_ns"] = completed - started
 
 
 def _matching_contract(trial: dict[str, Any]) -> dict[str, Any]:
@@ -464,14 +969,26 @@ def _checkpoint(
     pairs: list[dict[str, Any]],
     active_trial: dict[str, Any] | None,
     stage: str,
+    attempted_trial: dict[str, Any] | None = None,
     expected_pair_count: int = PAIR_COUNT,
     suite: str = "rung1_shared_click_transport_diagnostic",
     shard_index: int | None = None,
 ) -> None:
+    attempted_progress = (
+        attempted_trial.get("progress", {})
+        if isinstance(attempted_trial, dict)
+        else {}
+    )
+    attempted_failure_kind = (
+        attempted_progress.get("failure_kind")
+        if isinstance(attempted_progress, dict)
+        else None
+    )
+    failed = attempted_trial is not None and attempted_trial.get("status") == "failed"
     _atomic_json(
         output / "transport_diagnostic_progress.json",
         {
-            "status": "running",
+            "status": "failed" if failed else "running",
             "suite": suite,
             "shard_index": shard_index,
             "expected_pair_count": expected_pair_count,
@@ -480,14 +997,21 @@ def _checkpoint(
             "completed_trial_count": len(trials),
             "stop_on_first_mismatch": True,
             "retry_count": 0,
-            "infrastructure_error_count": 0,
-            "verifier_failure_count": 0,
-            "injected_failure_count": 0,
+            "infrastructure_error_count": int(
+                failed and attempted_failure_kind == "infrastructure"
+            ),
+            "verifier_failure_count": int(
+                failed and attempted_failure_kind == "verification"
+            ),
+            "injected_failure_count": int(
+                failed and attempted_failure_kind == "injected"
+            ),
             "gpu_count": 0,
             "model_access": False,
             "sealed_evaluation_access": False,
             "stage": stage,
             "active_trial": active_trial,
+            "attempted_trial": attempted_trial,
             "pairs": pairs,
             "trials": trials,
         },
@@ -639,11 +1163,25 @@ def run_vm_transport_diagnostic(
                     trials=trials,
                     pairs=pairs,
                     active_trial=active,
+                    attempted_trial=None,
                     stage="resetting_trial",
                     expected_pair_count=pair_count,
                     suite=str(spec["suite"]),
                     shard_index=shard_index,
                 )
+                def checkpoint_attempt(attempt: dict[str, Any]) -> None:
+                    _checkpoint(
+                        output,
+                        trials=trials,
+                        pairs=pairs,
+                        active_trial=active,
+                        attempted_trial=attempt,
+                        stage=str(attempt["stage"]),
+                        expected_pair_count=pair_count,
+                        suite=str(spec["suite"]),
+                        shard_index=shard_index,
+                    )
+
                 trial = _run_trial(
                     session=session,
                     server=server,
@@ -654,6 +1192,7 @@ def run_vm_transport_diagnostic(
                     pair_id=pair_id,
                     trial_id=trial_id,
                     global_pair_index=global_pair_index,
+                    checkpoint_attempt=checkpoint_attempt,
                 )
                 pair_trials.append(trial)
                 trials.append(trial)
@@ -662,6 +1201,7 @@ def run_vm_transport_diagnostic(
                     trials=trials,
                     pairs=pairs,
                     active_trial=active,
+                    attempted_trial=trial["attempt_evidence"],
                     stage="trial_passed",
                     expected_pair_count=pair_count,
                     suite=str(spec["suite"]),

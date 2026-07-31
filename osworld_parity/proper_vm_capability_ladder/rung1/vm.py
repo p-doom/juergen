@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import importlib.util
@@ -9,9 +10,12 @@ import re
 import secrets
 import shutil
 import socket
+import struct
 import sys
 import tempfile
 import time
+import urllib.parse
+import urllib.request
 import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -23,7 +27,7 @@ import fcntl
 
 from .fixtures import Fixture
 from .server import FixtureHttpServer
-from .transport import HttpVmTransport
+from .transport import ALL_POINTER_BUTTON_MASK, HttpVmTransport
 
 
 DEFAULT_QCOW = Path(
@@ -38,6 +42,7 @@ DEFAULT_PROVIDER = Path(
     "qemu_fast_reset.py"
 )
 READY_SNAPSHOT = "osworld_ready"
+POINTER_STATE_PREFIX = "RUNG1A_POINTER_STATE="
 
 
 class VmHarnessError(RuntimeError):
@@ -183,6 +188,152 @@ def _node_port_allocation_lock() -> Iterator[None]:
         os.close(fd)
 
 
+_WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+_MAX_CDP_MESSAGE_BYTES = 4 * 1024 * 1024
+_MAX_CDP_TARGET_LIST_BYTES = 1024 * 1024
+_MAX_CHROME_LOG_BYTES = 1024 * 1024
+CHROME_LOG_PREFIX = "RUNG1A_CHROME_LOG="
+
+
+def _recv_exact(sock: socket.socket, length: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = length
+    while remaining:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            raise VmHarnessError("CDP websocket closed before its response completed")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _send_websocket_frame(sock: socket.socket, payload: bytes, *, opcode: int) -> None:
+    first = 0x80 | opcode
+    length = len(payload)
+    if length < 126:
+        header = bytes((first, 0x80 | length))
+    elif length <= 0xFFFF:
+        header = bytes((first, 0x80 | 126)) + struct.pack("!H", length)
+    else:
+        header = bytes((first, 0x80 | 127)) + struct.pack("!Q", length)
+    mask = os.urandom(4)
+    masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+    sock.sendall(header + mask + masked)
+
+
+def _recv_websocket_message(sock: socket.socket) -> bytes:
+    message = bytearray()
+    message_opcode: int | None = None
+    while True:
+        first, second = _recv_exact(sock, 2)
+        final = bool(first & 0x80)
+        opcode = first & 0x0F
+        masked = bool(second & 0x80)
+        length = second & 0x7F
+        if length == 126:
+            length = struct.unpack("!H", _recv_exact(sock, 2))[0]
+        elif length == 127:
+            length = struct.unpack("!Q", _recv_exact(sock, 8))[0]
+        if length > _MAX_CDP_MESSAGE_BYTES:
+            raise VmHarnessError(f"CDP websocket frame exceeded {length} bytes")
+        mask = _recv_exact(sock, 4) if masked else b""
+        payload = _recv_exact(sock, length)
+        if masked:
+            payload = bytes(
+                value ^ mask[index % 4] for index, value in enumerate(payload)
+            )
+        if opcode == 0x8:
+            raise VmHarnessError("CDP websocket closed before the requested response")
+        if opcode == 0x9:
+            _send_websocket_frame(sock, payload, opcode=0xA)
+            continue
+        if opcode == 0xA:
+            continue
+        if opcode in {0x1, 0x2}:
+            message_opcode = opcode
+        elif opcode != 0x0 or message_opcode is None:
+            raise VmHarnessError(f"unsupported CDP websocket opcode {opcode}")
+        message.extend(payload)
+        if len(message) > _MAX_CDP_MESSAGE_BYTES:
+            raise VmHarnessError("CDP websocket message exceeded the evidence bound")
+        if final:
+            return bytes(message)
+
+
+def _cdp_evaluate(websocket_url: str, expression: str, *, timeout_s: float) -> Any:
+    parsed = urllib.parse.urlsplit(websocket_url)
+    if parsed.scheme != "ws" or parsed.hostname is None:
+        raise VmHarnessError(f"unsupported CDP websocket URL: {websocket_url!r}")
+    port = parsed.port or 80
+    path = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    expected_accept = base64.b64encode(
+        hashlib.sha1((key + _WEBSOCKET_GUID).encode("ascii")).digest()
+    ).decode("ascii")
+    with socket.create_connection((parsed.hostname, port), timeout=timeout_s) as sock:
+        sock.settimeout(timeout_s)
+        handshake = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {parsed.hostname}:{port}\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n\r\n"
+        ).encode("ascii")
+        sock.sendall(handshake)
+        response = bytearray()
+        while b"\r\n\r\n" not in response:
+            if len(response) > 65536:
+                raise VmHarnessError("CDP websocket handshake exceeded its bound")
+            response.extend(_recv_exact(sock, 1))
+        header_text = bytes(response).decode("iso-8859-1")
+        lines = header_text.split("\r\n")
+        if not lines or " 101 " not in lines[0]:
+            raise VmHarnessError(f"CDP websocket upgrade failed: {lines[0]!r}")
+        headers = {
+            name.strip().lower(): value.strip()
+            for line in lines[1:]
+            if ":" in line
+            for name, value in [line.split(":", 1)]
+        }
+        if headers.get("sec-websocket-accept") != expected_accept:
+            raise VmHarnessError("CDP websocket returned an invalid accept key")
+        request_id = 1
+        request = json.dumps(
+            {
+                "id": request_id,
+                "method": "Runtime.evaluate",
+                "params": {
+                    "expression": expression,
+                    "returnByValue": True,
+                    "awaitPromise": False,
+                },
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+        _send_websocket_frame(sock, request, opcode=0x1)
+        while True:
+            raw = _recv_websocket_message(sock)
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise VmHarnessError("CDP websocket returned invalid JSON") from exc
+            if not isinstance(payload, dict) or payload.get("id") != request_id:
+                continue
+            if "error" in payload:
+                raise VmHarnessError(f"CDP Runtime.evaluate failed: {payload['error']}")
+            result = payload.get("result", {}).get("result", {})
+            if not isinstance(result, dict):
+                raise VmHarnessError("CDP Runtime.evaluate returned no result object")
+            if "exceptionDetails" in payload.get("result", {}):
+                raise VmHarnessError(
+                    f"CDP Runtime.evaluate raised: {payload['result']['exceptionDetails']}"
+                )
+            if "value" not in result:
+                raise VmHarnessError(f"CDP Runtime.evaluate returned no value: {result}")
+            return result["value"]
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -244,6 +395,7 @@ class KvmFixtureSession:
         self._scratch_root_owned = False
         self._task_lock_path: Path | None = None
         self.metadata_path = self.vm_log_dir.parent / "vm_metadata.json"
+        self._chromium_port: int | None = None
 
     def _set_environment(self, key: str, value: str) -> None:
         if key not in self._saved_environment:
@@ -439,6 +591,7 @@ class KvmFixtureSession:
             metadata = self._metadata(state=state, overlay_fds=overlay_fds)
             _atomic_json(self.metadata_path, metadata)
             port = int(metadata["ports"]["server"])
+            self._chromium_port = int(metadata["ports"]["chromium"])
             self.transport = HttpVmTransport(f"http://127.0.0.1:{port}")
             self._module = module
         except Exception:
@@ -491,7 +644,9 @@ class KvmFixtureSession:
         if prior_generation_id == new_generation_id:
             raise VmHarnessError("provider reset generation did not advance")
         after = self.provider.state(str(self.qcow))
-        port = int(after["ports"]["server"])
+        ports = after["ports"]
+        port = int(ports["server"])
+        self._chromium_port = int(ports["chromium"])
         # Sessions and host-side input audits must never cross an episode reset.
         self.transport = HttpVmTransport(f"http://127.0.0.1:{port}")
         self._verify_reset_sentinel_removed(sentinel_path)
@@ -709,6 +864,226 @@ nohup "$browser" --no-first-run --no-default-browser-check \
         time.sleep(0.25)
         return int(fixture_server.store.snapshot(fixture.id)["last_pointer_buttons"])
 
+    def capture_browser_diagnostics(
+        self, fixture: Fixture, *, timeout_s: float = 2.0
+    ) -> dict[str, Any]:
+        """Read the live fixture page through CDP without modifying page state."""
+        if self._chromium_port is None:
+            raise VmHarnessError("VM session has no forwarded Chromium CDP port")
+        list_url = f"http://127.0.0.1:{self._chromium_port}/json/list"
+        with urllib.request.urlopen(list_url, timeout=timeout_s) as response:
+            target_bytes = response.read(_MAX_CDP_TARGET_LIST_BYTES + 1)
+        if len(target_bytes) > _MAX_CDP_TARGET_LIST_BYTES:
+            raise VmHarnessError("Chromium CDP target list exceeded its evidence bound")
+        targets = json.loads(target_bytes)
+        if not isinstance(targets, list):
+            raise VmHarnessError("Chromium CDP target list was not an array")
+        matching = [
+            target
+            for target in targets
+            if isinstance(target, dict)
+            and target.get("type") == "page"
+            and fixture.id in str(target.get("url", ""))
+            and isinstance(target.get("webSocketDebuggerUrl"), str)
+        ]
+        if len(matching) != 1:
+            summary = [
+                {
+                    "id": target.get("id"),
+                    "type": target.get("type"),
+                    "url": target.get("url"),
+                }
+                for target in targets
+                if isinstance(target, dict)
+            ]
+            raise VmHarnessError(
+                f"expected one live CDP fixture target, found {len(matching)}: {summary}"
+            )
+        target = matching[0]
+        advertised_websocket_url = str(target["webSocketDebuggerUrl"])
+        advertised = urllib.parse.urlsplit(advertised_websocket_url)
+        local_websocket_url = urllib.parse.urlunsplit(
+            (
+                "ws",
+                f"127.0.0.1:{self._chromium_port}",
+                advertised.path,
+                advertised.query,
+                "",
+            )
+        )
+        expression = r"""
+(() => {
+  const elementState = (element) => element ? {
+    id: element.id || '',
+    tag: element.tagName ? element.tagName.toLowerCase() : '',
+    checked: typeof element.checked === 'boolean' ? element.checked : null,
+    value: 'value' in element ? String(element.value) : null,
+    disabled: Boolean(element.disabled),
+    outer_html: element.outerHTML
+  } : null;
+  return {
+    schema_version: 1,
+    captured_browser_wall_time_ms: Date.now(),
+    performance_time_origin_ms: performance.timeOrigin,
+    performance_now_ms: performance.now(),
+    captured_client_monotonic_ms: Math.round(performance.now() * 1000) / 1000,
+    url: location.href,
+    title: document.title,
+    ready_state: document.readyState,
+    visibility_state: document.visibilityState,
+    has_focus: document.hasFocus(),
+    diagnostics: window.__RUNG1A_DIAGNOSTICS__
+      ? JSON.parse(JSON.stringify(window.__RUNG1A_DIAGNOSTICS__)) : null,
+    dom: {
+      active_element: elementState(document.activeElement),
+      target: elementState(document.getElementById('target')),
+      decoy: elementState(document.getElementById('decoy')),
+      scroll_x: Math.round(window.scrollX),
+      scroll_y: Math.round(window.scrollY),
+      body_text: document.body ? document.body.innerText : null,
+      outer_html: document.documentElement ? document.documentElement.outerHTML : null
+    }
+  };
+})()
+""".strip()
+        page = _cdp_evaluate(local_websocket_url, expression, timeout_s=timeout_s)
+        if not isinstance(page, dict):
+            raise VmHarnessError("CDP page diagnostic result was not an object")
+        return {
+            "schema_version": 1,
+            "status": "captured",
+            "transport": "cdp_runtime_evaluate",
+            "host_forwarded_port": self._chromium_port,
+            "target": {
+                "id": target.get("id"),
+                "type": target.get("type"),
+                "url": target.get("url"),
+                "title": target.get("title"),
+                "advertised_websocket_url": advertised_websocket_url,
+                "local_websocket_url": local_websocket_url,
+            },
+            "page": page,
+        }
+
+    def capture_guest_pointer_state(self) -> dict[str, Any]:
+        """Query the live X root pointer without issuing an input operation."""
+        if self.transport is None:
+            raise VmHarnessError("VM session is not started")
+        program = (
+            "import json,time\n"
+            "from Xlib import display\n"
+            "d=display.Display()\n"
+            "wall_before=time.time_ns()\n"
+            "monotonic_before=time.monotonic_ns()\n"
+            "q=d.screen().root.query_pointer()\n"
+            "monotonic_after=time.monotonic_ns()\n"
+            "wall_after=time.time_ns()\n"
+            "payload={'schema_version':1,'cursor':[int(q.root_x),int(q.root_y)],"
+            f"'raw_x_mask':int(q.mask),'pointer_button_mask':int(q.mask)&"
+            f"{ALL_POINTER_BUTTON_MASK},'guest_wall_before_ns':wall_before,"
+            "'guest_wall_after_ns':wall_after,"
+            "'guest_monotonic_before_ns':monotonic_before,"
+            "'guest_monotonic_after_ns':monotonic_after}\n"
+            f"print({POINTER_STATE_PREFIX!r}+json.dumps(payload,sort_keys=True))\n"
+            "d.close()\n"
+        )
+        raw = self.transport.execute_argv(["python", "-c", program], check=False)
+        output = raw.get("output")
+        markers = (
+            [line for line in output.splitlines() if line.startswith(POINTER_STATE_PREFIX)]
+            if isinstance(output, str)
+            else []
+        )
+        parsed: dict[str, Any] | None = None
+        if len(markers) == 1:
+            candidate = json.loads(markers[0][len(POINTER_STATE_PREFIX) :])
+            if isinstance(candidate, dict):
+                parsed = candidate
+        return {
+            "schema_version": 1,
+            "status": "captured" if parsed is not None else "capture_failed",
+            "guest_returncode": raw.get("returncode"),
+            "guest_status": raw.get("status"),
+            "raw_result_marker": markers[0] if len(markers) == 1 else None,
+            "cursor": parsed.get("cursor") if parsed is not None else None,
+            "raw_x_mask": parsed.get("raw_x_mask") if parsed is not None else None,
+            "pointer_button_mask": (
+                parsed.get("pointer_button_mask") if parsed is not None else None
+            ),
+            "guest_wall_before_ns": (
+                parsed.get("guest_wall_before_ns") if parsed is not None else None
+            ),
+            "guest_wall_after_ns": (
+                parsed.get("guest_wall_after_ns") if parsed is not None else None
+            ),
+            "guest_monotonic_before_ns": (
+                parsed.get("guest_monotonic_before_ns")
+                if parsed is not None
+                else None
+            ),
+            "guest_monotonic_after_ns": (
+                parsed.get("guest_monotonic_after_ns")
+                if parsed is not None
+                else None
+            ),
+            "raw_guest_result": raw,
+        }
+
+    def capture_chrome_log(self) -> dict[str, Any]:
+        if self.transport is None:
+            raise VmHarnessError("VM session is not started")
+        program = (
+            "import hashlib,json\n"
+            "from pathlib import Path\n"
+            "p=Path('/tmp/rung1a_chrome.log')\n"
+            "digest=hashlib.sha256()\n"
+            "tail=bytearray()\n"
+            "total=0\n"
+            "with p.open('rb') as source:\n"
+            "  while True:\n"
+            "    chunk=source.read(65536)\n"
+            "    if not chunk: break\n"
+            "    total+=len(chunk)\n"
+            "    digest.update(chunk)\n"
+            "    tail.extend(chunk)\n"
+            f"    if len(tail)>{_MAX_CHROME_LOG_BYTES}: "
+            f"del tail[:-{_MAX_CHROME_LOG_BYTES}]\n"
+            "payload={'schema_version':1,'total_bytes':total,"
+            "'captured_bytes':len(tail),'sha256':digest.hexdigest(),"
+            "'truncated':len(tail)!=total,'tail':tail.decode('utf-8','replace')}\n"
+            f"print({CHROME_LOG_PREFIX!r}+json.dumps(payload,sort_keys=True))\n"
+        )
+        raw = self.transport.execute_argv(["python", "-c", program], check=False)
+        output = raw.get("output")
+        markers = (
+            [line for line in output.splitlines() if line.startswith(CHROME_LOG_PREFIX)]
+            if isinstance(output, str)
+            else []
+        )
+        parsed: dict[str, Any] | None = None
+        if len(markers) == 1:
+            candidate = json.loads(markers[0][len(CHROME_LOG_PREFIX) :])
+            if isinstance(candidate, dict):
+                parsed = candidate
+        return {
+            "schema_version": 1,
+            "status": "captured" if parsed is not None else "capture_failed",
+            "path": "/tmp/rung1a_chrome.log",
+            "guest_returncode": raw.get("returncode"),
+            "guest_status": raw.get("status"),
+            "total_bytes": parsed.get("total_bytes") if parsed is not None else None,
+            "captured_bytes": (
+                parsed.get("captured_bytes") if parsed is not None else None
+            ),
+            "sha256": parsed.get("sha256") if parsed is not None else None,
+            "truncated": parsed.get("truncated") if parsed is not None else None,
+            "content_tail": parsed.get("tail") if parsed is not None else None,
+            "guest_error": raw.get("error"),
+            "raw_guest_result": {
+                key: value for key, value in raw.items() if key != "output"
+            },
+        }
+
     def close(self) -> None:
         cleanup_errors: list[str] = []
         provider_stopped = self.provider is None
@@ -728,6 +1103,7 @@ nohup "$browser" --no-first-run --no-default-browser-check \
                 cleanup_errors.append(f"provider stop failed: {exc}")
             self.provider = None
         self.transport = None
+        self._chromium_port = None
         scratch_path = self.vm_scratch_dir
         if self.vm_scratch_dir is not None:
             try:
