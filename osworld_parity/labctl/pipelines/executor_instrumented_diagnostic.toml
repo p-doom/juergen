@@ -1,0 +1,7 @@
+name = "proper_vm_executor_instrumented_diagnostic_v1"
+
+[stages.build]
+recipe = "../recipes/executor_cert_build_cpu.toml"
+
+[stages.instrumented_diagnostic]
+recipe = "../recipes/executor_diag_click_instrumented_cpu_kvm.toml"

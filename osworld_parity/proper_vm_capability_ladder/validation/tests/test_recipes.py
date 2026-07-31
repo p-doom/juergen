@@ -7,6 +7,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 RECIPES = ROOT / "labctl" / "recipes"
 PIPELINE = ROOT / "labctl" / "pipelines" / "executor_certification.toml"
+DIAGNOSTIC_PIPELINE = (
+    ROOT / "labctl" / "pipelines" / "executor_instrumented_diagnostic.toml"
+)
+DIAGNOSTIC_RECIPE = (
+    ROOT / "labctl" / "recipes" / "executor_diag_click_instrumented_cpu_kvm.toml"
+)
 NAMES = (
     "executor_cert_build_cpu.toml",
     "executor_cert_click_preflight_cpu_kvm.toml",
@@ -117,3 +123,36 @@ def test_full_click_recipes_use_four_registered_core_shards() -> None:
         assert raw["outputs"]["result"]["marker"] == (
             f"transport_certification_shard_{shard}.json"
         )
+
+
+def test_instrumented_diagnostic_is_a_separate_fail_closed_identity() -> None:
+    pipeline = tomllib.loads(DIAGNOSTIC_PIPELINE.read_text(encoding="utf-8"))
+    assert pipeline == {
+        "name": "proper_vm_executor_instrumented_diagnostic_v1",
+        "stages": {
+            "build": {"recipe": "../recipes/executor_cert_build_cpu.toml"},
+            "instrumented_diagnostic": {
+                "recipe": "../recipes/executor_diag_click_instrumented_cpu_kvm.toml"
+            },
+        },
+    }
+    raw = tomllib.loads(DIAGNOSTIC_RECIPE.read_text(encoding="utf-8"))
+    text = DIAGNOSTIC_RECIPE.read_text(encoding="utf-8")
+    assert raw["name"] == "proper_vm_executor_click_instrumented_diagnostic_cpu_kvm_v1"
+    assert raw["repo"] == "juergen_gui_executor_integration"
+    assert raw["resources"]["gpus"] == 0
+    assert raw["env"]["CUDA_VISIBLE_DEVICES"] == ""
+    assert raw["inputs"]["build"] == {
+        "type": "stage",
+        "stage": "build",
+        "role": "result",
+    }
+    assert raw["outputs"]["result"]["marker"] == "ARTIFACT_INDEX.json"
+    assert "diagnostic_rc=$?" in text
+    assert '--result="$terminal_name=$terminal_path"' in text
+    assert "transport_diagnostic_progress.json" in text
+    assert "vm_metadata.json" in text
+    assert 'exit "$diagnostic_rc"' in text
+    assert "retry" not in " ".join(raw["command"]).lower()
+    assert "heldout" not in text.lower()
+    assert "sealed_eval" not in text.lower()
