@@ -5,7 +5,7 @@ runtime is injected only after :func:`consume_executor_ready` has validated and
 consumed the executor integration marker.
 """
 
-from .aggregate import aggregate_results
+from .aggregate import IncompleteEvaluationError, aggregate_results
 from .curriculum_adapter import load_curriculum_evaluation_manifest
 from .manifest import EvaluationManifest, ManifestError, load_evaluation_manifest
 from .planning import TrialSpec, build_plan
@@ -15,6 +15,7 @@ from .runner import PairedEvaluationRunner
 __all__ = [
     "ConsumedReadiness",
     "EvaluationManifest",
+    "IncompleteEvaluationError",
     "ManifestError",
     "PairedEvaluationRunner",
     "ReadinessError",

@@ -26,8 +26,10 @@ MODES = (
 )
 GOLD_PREFIX_HORIZONS = (2, 4, 8)
 
-# These are harness/infrastructure failures.  They may exclude an entire pair.
-# Model parse and action dispatch errors are deliberately absent: those are
+# These are harness/infrastructure failure candidates.  They interrupt a pair
+# and require operator review; the offline aggregator cannot authenticate a
+# self-contained exclusion receipt and therefore emits no estimate.  Model
+# parse and action dispatch errors are deliberately absent: those remain
 # scored complete-system outcomes.
 INFRA_FAILURE_CLASSES = (
     "vm_reset",
@@ -37,6 +39,54 @@ INFRA_FAILURE_CLASSES = (
     "verifier",
     "harness_io",
 )
+
+# Infrastructure failure candidates are well-formed only when the operation
+# that failed is compatible with the runner-captured phase.  Aggregation
+# derives class and phase from the structured event, checks this matrix, then
+# still fails closed because row-local hashes are not external attestation.
+INFRA_FAILURE_CLASS_PHASES = {
+    "vm_reset": frozenset({"open_session"}),
+    "vm_setup": frozenset({"open_session"}),
+    "observation_capture": frozenset(
+        {"initial_state_probe", "observe", "state_probe"}
+    ),
+    "model_service": frozenset({"request_action"}),
+    "verifier": frozenset({"initial_verifier", "verifier"}),
+    "harness_io": frozenset(
+        {
+            "open_session",
+            "initial_state_probe",
+            "observe",
+            "request_action",
+            "execute",
+            "state_probe",
+            "initial_verifier",
+            "verifier",
+            "close",
+        }
+    ),
+}
+INFRA_FAILURE_SOURCES = {
+    "vm_reset": "vm_reset_provider",
+    "vm_setup": "vm_setup_provider",
+    "observation_capture": "observation_transport",
+    "model_service": "model_service",
+    "verifier": "fresh_process_verifier",
+    "harness_io": "harness_io",
+}
+INFRA_FAILURE_OPERATIONS = {
+    "open_session": "open_session",
+    "initial_state_probe": "state_probe",
+    "observe": "capture_observation",
+    "request_action": "generate_action",
+    "execute": "execute_action",
+    "state_probe": "state_probe",
+    "initial_verifier": "verify_state",
+    "verifier": "verify_state",
+    "close": "close_session",
+}
+INFRA_FAILURE_SOURCE_RECEIPT_TYPE = "infrastructure_failure_source_receipt_v1"
+INFRA_FAILURE_EVENT_RECEIPT_TYPE = "paired_infrastructure_failure_event_v1"
 
 
 def canonical_json(value: Any) -> bytes:
@@ -230,8 +280,95 @@ class PairedRuntime(Protocol):
 class InfrastructureFailure(RuntimeError):
     """Known unscored failure emitted by a runtime integration."""
 
-    def __init__(self, failure_class: str, message: str) -> None:
+    def __init__(
+        self,
+        failure_class: str,
+        message: str,
+        *,
+        source_receipt: dict[str, Any],
+    ) -> None:
         if failure_class not in INFRA_FAILURE_CLASSES:
             raise ValueError(f"unknown infrastructure failure class: {failure_class}")
+        validate_infrastructure_failure_source_receipt(
+            source_receipt,
+            expected_class=failure_class,
+        )
         super().__init__(message)
         self.failure_class = failure_class
+        self.source_receipt = dict(source_receipt)
+
+
+def infrastructure_failure_source_receipt(
+    failure_class: str,
+    *,
+    operation: str,
+    raw_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    """Seal the source-owned evidence captured when an operation fails."""
+
+    if failure_class not in INFRA_FAILURE_CLASSES:
+        raise ValueError(f"unknown infrastructure failure class: {failure_class}")
+    if not isinstance(operation, str) or not operation:
+        raise ValueError("infrastructure failure operation is required")
+    if not isinstance(raw_evidence, dict) or not raw_evidence:
+        raise ValueError("infrastructure failure raw evidence is required")
+    receipt = {
+        "schema_version": 1,
+        "receipt_type": INFRA_FAILURE_SOURCE_RECEIPT_TYPE,
+        "failure_class": failure_class,
+        "source": INFRA_FAILURE_SOURCES[failure_class],
+        "operation": operation,
+        "status": "failed",
+        "raw_evidence": dict(raw_evidence),
+        "raw_evidence_sha256": sha256_json(raw_evidence),
+    }
+    receipt["source_receipt_sha256"] = sha256_json(receipt)
+    return receipt
+
+
+def validate_infrastructure_failure_source_receipt(
+    receipt: Any,
+    *,
+    expected_class: str,
+    expected_operation: str | None = None,
+) -> dict[str, Any]:
+    """Validate a source receipt without trusting an outer result-row seal."""
+
+    expected_fields = {
+        "schema_version",
+        "receipt_type",
+        "failure_class",
+        "source",
+        "operation",
+        "status",
+        "raw_evidence",
+        "raw_evidence_sha256",
+        "source_receipt_sha256",
+    }
+    if not isinstance(receipt, dict) or set(receipt) != expected_fields:
+        raise ValueError("infrastructure failure source receipt schema mismatch")
+    if expected_class not in INFRA_FAILURE_CLASSES:
+        raise ValueError(f"unknown infrastructure failure class: {expected_class}")
+    if (
+        receipt.get("schema_version") != 1
+        or receipt.get("receipt_type") != INFRA_FAILURE_SOURCE_RECEIPT_TYPE
+        or receipt.get("failure_class") != expected_class
+        or receipt.get("source") != INFRA_FAILURE_SOURCES[expected_class]
+        or receipt.get("status") != "failed"
+    ):
+        raise ValueError("infrastructure failure source receipt identity mismatch")
+    operation = receipt.get("operation")
+    if not isinstance(operation, str) or not operation:
+        raise ValueError("infrastructure failure source operation is missing")
+    if expected_operation is not None and operation != expected_operation:
+        raise ValueError("infrastructure failure source operation mismatch")
+    raw_evidence = receipt.get("raw_evidence")
+    if not isinstance(raw_evidence, dict) or not raw_evidence:
+        raise ValueError("infrastructure failure raw evidence is missing")
+    if receipt.get("raw_evidence_sha256") != sha256_json(raw_evidence):
+        raise ValueError("infrastructure failure raw evidence hash mismatch")
+    unsigned = dict(receipt)
+    seal = unsigned.pop("source_receipt_sha256")
+    if seal != sha256_json(unsigned):
+        raise ValueError("infrastructure failure source receipt hash mismatch")
+    return dict(receipt)

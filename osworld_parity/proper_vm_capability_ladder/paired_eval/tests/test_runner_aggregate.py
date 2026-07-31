@@ -7,12 +7,14 @@ from dataclasses import replace
 
 import pytest
 
-from ..aggregate import aggregate_results
+from ..aggregate import IncompleteEvaluationError, aggregate_results
 from ..contracts import (
     APPROVED_CURRICULUM_COMMIT,
     APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
     ARMS,
     ExecutionReceipt,
+    INFRA_FAILURE_CLASSES,
+    INFRA_FAILURE_CLASS_PHASES,
     InfrastructureFailure,
     Observation,
     RequestedAction,
@@ -20,6 +22,7 @@ from ..contracts import (
     sha256_json,
     StateProbe,
     VerifierState,
+    infrastructure_failure_source_receipt,
 )
 from ..manifest import load_evaluation_manifest
 from ..planning import build_plan
@@ -302,6 +305,61 @@ def _resign_executed(receipt, **changes):
     return _seal(value, "executed_receipt_sha256")
 
 
+def _resign_row(row):
+    value = copy.deepcopy(row)
+    value.pop("record_payload_sha256", None)
+    return _seal(value, "record_payload_sha256")
+
+
+def _forge_close_exclusion(row, trial, task, *, arm_index=0):
+    """Build the strongest row-local forgery: every public hash is renewed."""
+
+    forged = copy.deepcopy(row)
+    arm = forged["arms"][arm_index]
+    message = "fully re-sealed forged close failure"
+    source = infrastructure_failure_source_receipt(
+        "harness_io",
+        operation="close_session",
+        raw_evidence={
+            "event": "session_close_failure",
+            "task_id": task.task_id,
+            "fixture_sha256": task.fixture_sha256,
+            "executed_turns": len(arm["turns"]),
+            "binding_sha256": arm["start_binding_sha256"],
+            "error_code": "fabricated_after_success",
+        },
+    )
+    event = {
+        "schema_version": 1,
+        "receipt_type": "paired_infrastructure_failure_event_v1",
+        "pair_id": trial.pair_id,
+        "task_id": task.task_id,
+        "fixture_sha256": task.fixture_sha256,
+        "arm": arm["arm"],
+        "generation_seed": trial.generation_seed_for(arm["arm"]),
+        "failure_class": "harness_io",
+        "phase": "close",
+        "message_sha256": sha256_json(message),
+        "start_binding_sha256": arm["start_binding_sha256"],
+        "prior_turn_payload_sha256": [
+            turn["turn_payload_sha256"] for turn in arm["turns"]
+        ],
+        "source_receipt": source,
+    }
+    event["event_receipt_sha256"] = sha256_json(event)
+    arm["infra_failure_class"] = "harness_io"
+    arm["infra_failure_phase"] = "close"
+    arm["infra_failure_message"] = message
+    arm["infra_failure_evidence"] = event
+    forged["exclusion"] = {
+        "excluded": True,
+        "policy": "arm_blind_whole_pair_infrastructure_only",
+        "infra_failure_classes": ["harness_io"],
+        "decision_inputs_contain_arm_identity": False,
+    }
+    return _resign_row(forged)
+
+
 class FakeSession:
     def __init__(
         self, task, arm, mode, prefix, fail=False, semantic_fail=False,
@@ -311,6 +369,7 @@ class FakeSession:
         alternative_execution=False, state_probe_intervention=False,
         probe_method="uno_readonly_state_probe",
         reported_seed_offset=0,
+        close_failure=False,
     ) -> None:
         self.task, self.arm, self.mode, self.prefix = task, arm, mode, prefix
         self.fail, self.semantic_fail = fail, semantic_fail
@@ -323,6 +382,7 @@ class FakeSession:
         self.state_probe_intervention = state_probe_intervention
         self.probe_method = probe_method
         self.reported_seed_offset = reported_seed_offset
+        self.close_failure = close_failure
         self.executed_turns = 0
         self.binding = _binding(task, arm.name)
         self.cursor = (960, 540)
@@ -363,7 +423,22 @@ class FakeSession:
 
     def observe(self):
         if self.fail:
-            raise InfrastructureFailure("observation_capture", "injected fake outage")
+            raise InfrastructureFailure(
+                "observation_capture",
+                "injected fake outage",
+                source_receipt=infrastructure_failure_source_receipt(
+                    "observation_capture",
+                    operation="capture_observation",
+                    raw_evidence={
+                        "event": "observation_transport_failure",
+                        "task_id": self.task.task_id,
+                        "fixture_sha256": self.task.fixture_sha256,
+                        "turn_index": self.executed_turns,
+                        "binding_sha256": self.binding["binding_sha256"],
+                        "transport_error_code": "injected_fake_outage",
+                    },
+                ),
+            )
         return Observation(
             {"frame": self.executed_turns, "task": self.task.task_id},
             "application/json",
@@ -502,6 +577,23 @@ class FakeSession:
         )
 
     def close(self):
+        if self.close_failure:
+            raise InfrastructureFailure(
+                "harness_io",
+                "injected close failure",
+                source_receipt=infrastructure_failure_source_receipt(
+                    "harness_io",
+                    operation="close_session",
+                    raw_evidence={
+                        "event": "session_close_failure",
+                        "task_id": self.task.task_id,
+                        "fixture_sha256": self.task.fixture_sha256,
+                        "executed_turns": self.executed_turns,
+                        "binding_sha256": self.binding["binding_sha256"],
+                        "error_code": "injected_close_failure",
+                    },
+                ),
+            )
         return None
 
 
@@ -523,6 +615,7 @@ class FakeRuntime:
         state_probe_intervention: bool = False,
         probe_method: str = "uno_readonly_state_probe",
         reported_seed_offset: int = 0,
+        close_failure_arm: str | None = None,
     ) -> None:
         self.fail_arm = fail_arm
         self.semantic_fail_arm = semantic_fail_arm
@@ -539,6 +632,7 @@ class FakeRuntime:
         self.state_probe_intervention = state_probe_intervention
         self.probe_method = probe_method
         self.reported_seed_offset = reported_seed_offset
+        self.close_failure_arm = close_failure_arm
         self.contract = {
             "schema": "proper_vm_paired_runtime_v1",
             "runtime_id": "fake-paired-runtime-v1",
@@ -582,6 +676,7 @@ class FakeRuntime:
             self.state_probe_intervention,
             self.probe_method,
             self.reported_seed_offset,
+            arm.name == self.close_failure_arm,
         )
 
 
@@ -693,6 +788,62 @@ def test_known_infrastructure_failure_excludes_whole_pair_arm_blind(tmp_path) ->
         "decision_inputs_contain_arm_identity": False,
     }
     assert next(arm for arm in row["arms"] if arm["arm"] == ARMS[1])["success"] is None
+
+
+def test_evidence_backed_mixed_pair_exclusion_preserves_available_score(tmp_path) -> None:
+    manifest, readiness, setup = _setup(tmp_path)
+    trial = build_plan(manifest)[0]
+    row = _runner(
+        manifest,
+        readiness,
+        setup,
+        FakeRuntime(fail_arm=ARMS[1]),
+    ).run_trial(trial)
+    failed = next(arm for arm in row["arms"] if arm["arm"] == ARMS[1])
+    successful = next(arm for arm in row["arms"] if arm["arm"] == ARMS[0])
+    assert failed["success"] is None
+    assert failed["infra_failure_phase"] == "observe"
+    assert failed["infra_failure_evidence"]["source_receipt"]["source"] == (
+        "observation_transport"
+    )
+    assert successful["success"] is True
+    with pytest.raises(IncompleteEvaluationError) as caught:
+        aggregate_results(manifest, [trial], [row])
+    assert caught.value.status == {
+        "status": "invalid_incomplete_evaluation",
+        "reason": "infrastructure_exclusion_lacks_external_attestation",
+        "pair_id": trial.pair_id,
+        "infra_failure_classes": ["observation_capture"],
+        "estimates_emitted": False,
+        "pass_at_k_emitted": False,
+        "automatic_replacement_or_retry": False,
+        "required_action": "operator_review_and_new_preregistered_run",
+    }
+
+
+def test_evidence_backed_close_failure_does_not_erase_success(tmp_path) -> None:
+    manifest, readiness, setup = _setup(tmp_path)
+    trial = build_plan(manifest)[0]
+    row = _runner(
+        manifest,
+        readiness,
+        setup,
+        FakeRuntime(close_failure_arm=ARMS[0]),
+    ).run_trial(trial)
+    closed = next(arm for arm in row["arms"] if arm["arm"] == ARMS[0])
+    assert closed["success"] is True
+    assert closed["score_name"] == "semantic_next_state"
+    assert closed["infra_failure_class"] == "harness_io"
+    assert closed["infra_failure_phase"] == "close"
+    assert closed["infra_failure_evidence"]["prior_turn_payload_sha256"] == [
+        closed["turns"][0]["turn_payload_sha256"]
+    ]
+    assert row["exclusion"]["excluded"] is True
+    with pytest.raises(IncompleteEvaluationError) as caught:
+        aggregate_results(manifest, [trial], [row])
+    assert caught.value.status["infra_failure_classes"] == ["harness_io"]
+    assert caught.value.status["estimates_emitted"] is False
+    assert caught.value.status["pass_at_k_emitted"] is False
 
 
 def test_reset_runtime_and_execution_failures_cannot_masquerade_as_success(tmp_path) -> None:
@@ -861,6 +1012,112 @@ def test_aggregate_rejects_stored_success_or_verifier_tampering(tmp_path) -> Non
     tampered["record_payload_sha256"] = sha256_json(unsigned_row)
     with pytest.raises(ValueError, match="input-free/read-only"):
         aggregate_results(manifest, [trial], [tampered])
+
+
+@pytest.mark.parametrize(
+    "failure_class",
+    [*INFRA_FAILURE_CLASSES, "invented_failure"],
+)
+def test_aggregate_rejects_outer_resealed_self_declared_exclusion(
+    tmp_path, failure_class
+) -> None:
+    manifest, readiness, setup = _setup(tmp_path)
+    trial = build_plan(manifest)[0]
+    row = _runner(manifest, readiness, setup, FakeRuntime()).run_trial(trial)
+    tampered = copy.deepcopy(row)
+    victim = tampered["arms"][0]
+    assert victim["success"] is True
+    assert victim["turns"][-1]["verifier_state"]["status"] == "ok"
+    victim["infra_failure_class"] = failure_class
+    victim["infra_failure_phase"] = (
+        sorted(INFRA_FAILURE_CLASS_PHASES[failure_class])[0]
+        if failure_class in INFRA_FAILURE_CLASS_PHASES
+        else "verifier"
+    )
+    victim["infra_failure_message"] = "forged outer exclusion"
+    victim["success"] = None
+    tampered["exclusion"] = {
+        "excluded": True,
+        "policy": "arm_blind_whole_pair_infrastructure_only",
+        "infra_failure_classes": [failure_class],
+        "decision_inputs_contain_arm_identity": False,
+    }
+    unsigned = dict(tampered)
+    unsigned.pop("record_payload_sha256")
+    tampered["record_payload_sha256"] = sha256_json(unsigned)
+    with pytest.raises(ValueError, match="infrastructure"):
+        aggregate_results(manifest, [trial], [tampered])
+
+
+def test_aggregate_rejects_outer_resealed_failure_evidence_relabel(tmp_path) -> None:
+    manifest, readiness, setup = _setup(tmp_path)
+    trial = build_plan(manifest)[0]
+    row = _runner(
+        manifest,
+        readiness,
+        setup,
+        FakeRuntime(fail_arm=ARMS[1]),
+    ).run_trial(trial)
+    tampered = copy.deepcopy(row)
+    victim = next(arm for arm in tampered["arms"] if arm["arm"] == ARMS[1])
+    victim["infra_failure_class"] = "verifier"
+    victim["infra_failure_phase"] = "verifier"
+    tampered["exclusion"]["infra_failure_classes"] = ["verifier"]
+    unsigned = dict(tampered)
+    unsigned.pop("record_payload_sha256")
+    tampered["record_payload_sha256"] = sha256_json(unsigned)
+    with pytest.raises(ValueError, match="outer infrastructure summary"):
+        aggregate_results(manifest, [trial], [tampered])
+
+
+def test_aggregate_rejects_outer_resealed_inner_failure_evidence_tamper(tmp_path) -> None:
+    manifest, readiness, setup = _setup(tmp_path)
+    trial = build_plan(manifest)[0]
+    row = _runner(
+        manifest,
+        readiness,
+        setup,
+        FakeRuntime(fail_arm=ARMS[1]),
+    ).run_trial(trial)
+    tampered = copy.deepcopy(row)
+    victim = next(arm for arm in tampered["arms"] if arm["arm"] == ARMS[1])
+    victim["infra_failure_evidence"]["source_receipt"]["raw_evidence"][
+        "transport_error_code"
+    ] = "forged"
+    unsigned = dict(tampered)
+    unsigned.pop("record_payload_sha256")
+    tampered["record_payload_sha256"] = sha256_json(unsigned)
+    with pytest.raises(ValueError, match="failure event hash mismatch"):
+        aggregate_results(manifest, [trial], [tampered])
+
+
+def test_fully_resealed_forged_exclusion_is_indistinguishable_and_fails_closed(
+    tmp_path,
+) -> None:
+    manifest, readiness, setup = _setup(tmp_path)
+    trial = build_plan(manifest)[0]
+    genuine = _runner(
+        manifest,
+        readiness,
+        setup,
+        FakeRuntime(close_failure_arm=ARMS[0]),
+    ).run_trial(trial)
+    clean = _runner(manifest, readiness, setup, FakeRuntime()).run_trial(trial)
+    forged = _forge_close_exclusion(
+        clean,
+        trial,
+        manifest.task(trial.task_id),
+    )
+
+    statuses = []
+    for row in (genuine, forged):
+        with pytest.raises(IncompleteEvaluationError) as caught:
+            aggregate_results(manifest, [trial], [row])
+        statuses.append(caught.value.status)
+    assert statuses[0] == statuses[1]
+    assert statuses[0]["reason"] == (
+        "infrastructure_exclusion_lacks_external_attestation"
+    )
 
 
 def test_provider_generation_and_aab_refresh_receipts_are_fail_closed(tmp_path) -> None:

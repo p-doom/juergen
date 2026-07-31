@@ -101,8 +101,18 @@ presented as a curriculum `CompiledProgram`. A c603 complete-program aggregate
 is emitted only for exact semantic-step coverage `1..N`; it revalidates ordered
 segment receipts, conservative caps, stable non-Chrome bindings, and Chrome's
 exact `(1, 1, 2)` / `A, A, B` transition.
-Known VM/setup/observation/model-service/verifier failures can exclude only the
-whole pair.  Parse and executor-dispatch errors remain scored system failures.
+Known VM/setup/observation/model-service/verifier failures interrupt the whole
+pair. Each failure candidate carries a hash-sealed, typed source receipt whose
+class and operation agree with the exact runner-captured phase; an outer row
+declaration is never evidence. A failure after a verified turn (for example,
+session close) does not erase that turn's separately recorded semantic score.
+Because every hash is carried inside the same mutable result row, the current
+schema has no independent attestation boundary for an exclusion. Offline
+aggregation therefore rejects every row with an infrastructure/exclusion
+candidate as `invalid_incomplete_evaluation`, emits no point estimate or
+pass@k value, performs no automatic replacement/retry, and requires operator
+review plus a new preregistered run. Parse and executor-dispatch errors remain
+scored system failures.
 
 Aggregation rejects duplicate, missing, or unmatched pairs.  It emits arm
 rates, compact-minus-native paired differences, a deterministic task-clustered

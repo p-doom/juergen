@@ -12,8 +12,13 @@ from .contracts import (
     APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
     ARMS,
     GENERATION_SEED_DERIVATION,
+    INFRA_FAILURE_CLASSES,
+    INFRA_FAILURE_CLASS_PHASES,
+    INFRA_FAILURE_EVENT_RECEIPT_TYPE,
+    INFRA_FAILURE_OPERATIONS,
     SAMPLING_SEED_POLICY,
     sha256_json,
+    validate_infrastructure_failure_source_receipt,
 )
 from .manifest import EvaluationManifest
 from .planning import TrialSpec
@@ -26,6 +31,29 @@ from .receipts import (
     validate_executed_segment,
     validate_prefix_replay,
 )
+
+
+class IncompleteEvaluationError(ValueError):
+    """A validated result cannot contribute to any statistical estimate."""
+
+    def __init__(self, pair_id: str, failure_classes: Iterable[str]) -> None:
+        classes = sorted(set(failure_classes))
+        self.status = {
+            "status": "invalid_incomplete_evaluation",
+            "reason": "infrastructure_exclusion_lacks_external_attestation",
+            "pair_id": pair_id,
+            "infra_failure_classes": classes,
+            "estimates_emitted": False,
+            "pass_at_k_emitted": False,
+            "automatic_replacement_or_retry": False,
+            "required_action": "operator_review_and_new_preregistered_run",
+        }
+        super().__init__(
+            f"{pair_id}: incomplete evaluation: infrastructure exclusion "
+            "cannot be authenticated from a self-contained result row; no "
+            "estimates were produced; operator review and a new preregistered "
+            "run are required"
+        )
 
 
 def load_jsonl(paths: Iterable[Path]) -> list[dict[str, Any]]:
@@ -225,8 +253,10 @@ def _validate_row(
     for value, source, precentered in zip(
         arms, start_sources, start_precentered, strict=True
     ):
+        failure_event = value.get("infra_failure_evidence")
         prestart_infra = (
-            value.get("infra_failure_class") is not None
+            isinstance(failure_event, dict)
+            and failure_event.get("phase") == "open_session"
             and value.get("reset_signature") is None
         )
         if prestart_infra:
@@ -273,17 +303,11 @@ def _validate_row(
     classes = exclusion.get("infra_failure_classes")
     if not isinstance(classes, list) or classes != sorted(set(classes)):
         raise ValueError(f"{trial.pair_id}: invalid infrastructure exclusion classes")
+    if any(value not in INFRA_FAILURE_CLASSES for value in classes):
+        raise ValueError(f"{trial.pair_id}: unknown infrastructure exclusion class")
     if exclusion.get("excluded") is not bool(classes):
         raise ValueError(f"{trial.pair_id}: exclusion/class mismatch")
-    actual_classes = sorted(
-        {
-            value.get("infra_failure_class")
-            for value in arms
-            if value.get("infra_failure_class") is not None
-        }
-    )
-    if classes != actual_classes:
-        raise ValueError(f"{trial.pair_id}: exclusion was not derived from both arms")
+    validated_classes: set[str] = set()
     for arm in manifest.arms:
         system = row.get("systems", {}).get(arm.name)
         expected = {
@@ -300,11 +324,17 @@ def _validate_row(
             arm.name
         ):
             raise ValueError(f"{trial.pair_id}: arm stochastic seed evidence mismatch")
-        _validate_and_recompute_arm(
+        validated_class = _validate_and_recompute_arm(
             manifest.task(trial.task_id),
             trial,
             _arm(row, arm.name),
             setup_commit=setup_commit,
+        )
+        if validated_class is not None:
+            validated_classes.add(validated_class)
+    if classes != sorted(validated_classes):
+        raise ValueError(
+            f"{trial.pair_id}: exclusion was not derived from validated evidence"
         )
     expected_runtime = {
         "schema": "proper_vm_paired_runtime_v1",
@@ -323,6 +353,134 @@ def _validate_row(
     }
     if row.get("runtime") != expected_runtime:
         raise ValueError(f"{trial.pair_id}: runtime contract drift")
+    if validated_classes:
+        # The nested receipts prove internal consistency and bind the exact
+        # runner phase, but their SHA-256 seals are carried inside the same
+        # mutable row.  Without an independently pinned signature or
+        # attestation boundary, accepting them would let a re-sealed row alter
+        # the paired denominator and pass@k.  Refuse the entire aggregate.
+        raise IncompleteEvaluationError(trial.pair_id, validated_classes)
+
+
+def _validate_infrastructure_failure_evidence(
+    task: Any,
+    trial: TrialSpec,
+    arm: dict[str, Any],
+    turns: list[dict[str, Any]],
+) -> str | None:
+    outer_failure_class = arm.get("infra_failure_class")
+    outer_phase = arm.get("infra_failure_phase")
+    outer_message = arm.get("infra_failure_message")
+    event = arm.get("infra_failure_evidence")
+    if event is None:
+        if (
+            outer_failure_class is not None
+            or outer_phase is not None
+            or outer_message is not None
+        ):
+            raise ValueError(
+                f"{trial.pair_id}: partial infrastructure failure declaration"
+            )
+        return None
+    expected_fields = {
+        "schema_version",
+        "receipt_type",
+        "pair_id",
+        "task_id",
+        "fixture_sha256",
+        "arm",
+        "generation_seed",
+        "failure_class",
+        "phase",
+        "message_sha256",
+        "start_binding_sha256",
+        "prior_turn_payload_sha256",
+        "source_receipt",
+        "event_receipt_sha256",
+    }
+    if not isinstance(event, dict) or set(event) != expected_fields:
+        raise ValueError(
+            f"{trial.pair_id}: infrastructure failure event schema mismatch"
+        )
+    unsigned_event = dict(event)
+    event_seal = unsigned_event.pop("event_receipt_sha256")
+    if event_seal != sha256_json(unsigned_event):
+        raise ValueError(f"{trial.pair_id}: infrastructure failure event hash mismatch")
+    failure_class = event.get("failure_class")
+    phase = event.get("phase")
+    if failure_class not in INFRA_FAILURE_CLASSES:
+        raise ValueError(f"{trial.pair_id}: unknown infrastructure failure class")
+    if phase not in INFRA_FAILURE_CLASS_PHASES[failure_class]:
+        raise ValueError(f"{trial.pair_id}: infrastructure class/phase mismatch")
+    if not isinstance(outer_message, str) or not outer_message:
+        raise ValueError(f"{trial.pair_id}: infrastructure failure message missing")
+    if outer_failure_class != failure_class or outer_phase != phase:
+        raise ValueError(
+            f"{trial.pair_id}: outer infrastructure summary disagrees with "
+            "structured phase evidence"
+        )
+    if (
+        event.get("schema_version") != 1
+        or event.get("receipt_type") != INFRA_FAILURE_EVENT_RECEIPT_TYPE
+        or event.get("pair_id") != trial.pair_id
+        or event.get("task_id") != task.task_id
+        or event.get("fixture_sha256") != task.fixture_sha256
+        or event.get("arm") != arm.get("arm")
+        or event.get("generation_seed")
+        != trial.generation_seed_for(arm.get("arm"))
+        or event.get("message_sha256") != sha256_json(outer_message)
+        or event.get("start_binding_sha256") != arm.get("start_binding_sha256")
+        or event.get("prior_turn_payload_sha256")
+        != [turn["turn_payload_sha256"] for turn in turns]
+    ):
+        raise ValueError(
+            f"{trial.pair_id}: infrastructure failure event binding mismatch"
+        )
+    try:
+        source_receipt = validate_infrastructure_failure_source_receipt(
+            event.get("source_receipt"),
+            expected_class=failure_class,
+            expected_operation=INFRA_FAILURE_OPERATIONS[phase],
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"{trial.pair_id}: invalid infrastructure source evidence: {exc}"
+        ) from exc
+    raw_evidence = source_receipt["raw_evidence"]
+    raw_event = raw_evidence.get("event")
+    if not isinstance(raw_event, str) or not raw_event:
+        raise ValueError(f"{trial.pair_id}: infrastructure source event missing")
+    if raw_event == "verifier_non_ok_result":
+        if failure_class != "verifier" or phase != "verifier" or not turns:
+            raise ValueError(f"{trial.pair_id}: invalid non-ok verifier evidence")
+        final_turn = turns[-1]
+        verifier = final_turn["verifier_state"]
+        if (
+            verifier.get("status") == "ok"
+            or final_turn.get("infra_failure_class") != "verifier"
+            or raw_evidence
+            != {
+                "event": "verifier_non_ok_result",
+                "task_id": task.task_id,
+                "fixture_sha256": task.fixture_sha256,
+                "turn_index": len(turns) - 1,
+                "turn_payload_sha256": final_turn["turn_payload_sha256"],
+                "verifier_status": verifier.get("status"),
+                "oracle_pid": verifier.get("oracle_pid"),
+                "verifier_module": verifier.get("verifier_module"),
+            }
+        ):
+            raise ValueError(f"{trial.pair_id}: non-ok verifier evidence mismatch")
+    elif failure_class == "verifier":
+        if (
+            raw_event != "fresh_process_verifier_failure"
+            or raw_evidence.get("task_id") != task.task_id
+            or raw_evidence.get("fixture_sha256") != task.fixture_sha256
+            or not isinstance(raw_evidence.get("reason_code"), str)
+            or not raw_evidence["reason_code"]
+        ):
+            raise ValueError(f"{trial.pair_id}: verifier failure evidence mismatch")
+    return failure_class
 
 
 def _validate_and_recompute_arm(
@@ -331,7 +489,7 @@ def _validate_and_recompute_arm(
     arm: dict[str, Any],
     *,
     setup_commit: str,
-) -> bool | None:
+) -> str | None:
     start_receipt = arm.get("start_binding_receipt")
     if start_receipt is not None:
         binding = validate_binding_receipt(
@@ -397,52 +555,79 @@ def _validate_and_recompute_arm(
             turns,
             setup_commit=setup_commit,
         )
-    infra = arm.get("infra_failure_class")
-    if infra is not None:
+    infra = _validate_infrastructure_failure_evidence(task, trial, arm, turns)
+    if not turns and infra is not None:
         expected_success: bool | None = None
+        expected_score = "excluded_infrastructure"
+        expected_divergence = None
+        if arm.get("final_verifier_state") is not None or arm.get("MOUSE_SOLVED") is not None:
+            raise ValueError(f"{trial.pair_id}: empty trace has final verifier evidence")
     else:
         if not turns:
             if arm.get("budget_failure") is None:
                 raise ValueError(f"{trial.pair_id}: unexcluded arm has no trace")
             expected_success = False
-            if arm.get("score_name") != "budget_failure":
-                raise ValueError(f"{trial.pair_id}: empty budget trace score mismatch")
+            expected_score = "budget_failure"
+            expected_divergence = {
+                "turn_index": None,
+                "reason": arm["budget_failure"],
+            }
             if arm.get("final_verifier_state") is not None or arm.get("MOUSE_SOLVED") is not None:
                 raise ValueError(f"{trial.pair_id}: empty trace has final verifier evidence")
-            if arm.get("success") is not expected_success:
-                raise ValueError(f"{trial.pair_id}: stored success disagrees with trace")
-            return expected_success
-        final = turns[-1]["verifier_state"]
-        budget_failure = _recompute_budget_failure(trial, arm, turns)
-        execution_ok = budget_failure is None and all(
-            turn.get("parse_status") == "ok" and turn.get("dispatch_status") == "ok"
-            for turn in turns
-        )
-        if trial.mode == "gold_history_one_step":
-            expected_success = bool(
-                execution_ok
-                and final.get("status") == "ok"
-                and final.get("matched_target_ref")
-                == task.expected_target(trial.gold_prefix_length)
-                and final.get("semantic_step_index") == trial.gold_prefix_length + 1
-            )
-            expected_score = "semantic_next_state"
         else:
-            expected_success = bool(
-                execution_ok
-                and final.get("status") == "ok"
-                and final.get("task_solved") is True
+            final = turns[-1]["verifier_state"]
+            budget_failure = _recompute_budget_failure(trial, arm, turns)
+            execution_ok = budget_failure is None and all(
+                turn.get("parse_status") == "ok" and turn.get("dispatch_status") == "ok"
+                for turn in turns
             )
-            expected_score = "semantic_final_state"
-        if arm.get("score_name") != expected_score:
-            raise ValueError(f"{trial.pair_id}: score name mismatch")
-        if arm.get("final_verifier_state") != final:
-            raise ValueError(f"{trial.pair_id}: final verifier evidence mismatch")
-        if arm.get("MOUSE_SOLVED") is not bool(final.get("task_solved")):
-            raise ValueError(f"{trial.pair_id}: MOUSE_SOLVED mismatch")
+            if trial.mode == "gold_history_one_step":
+                target = task.expected_target(trial.gold_prefix_length)
+                expected_success = bool(
+                    execution_ok
+                    and final.get("status") == "ok"
+                    and final.get("matched_target_ref") == target
+                    and final.get("semantic_step_index")
+                    == trial.gold_prefix_length + 1
+                )
+                expected_score = "semantic_next_state"
+                expected_divergence = None if expected_success else {
+                    "turn_index": 0,
+                    "reason": "semantic_next_state_mismatch",
+                    "expected_target_ref": target,
+                    "observed_target_ref": final.get("matched_target_ref"),
+                }
+            else:
+                expected_success = bool(
+                    execution_ok
+                    and final.get("status") == "ok"
+                    and final.get("task_solved") is True
+                )
+                expected_score = "semantic_final_state"
+                expected_divergence = None if expected_success else {
+                    "turn_index": None,
+                    "reason": "final_semantic_goal_not_reached",
+                    "detectability": "right_censored_at_horizon",
+                }
+            if arm.get("final_verifier_state") != final:
+                raise ValueError(f"{trial.pair_id}: final verifier evidence mismatch")
+            if arm.get("MOUSE_SOLVED") is not bool(final.get("task_solved")):
+                raise ValueError(f"{trial.pair_id}: MOUSE_SOLVED mismatch")
+            if (
+                expected_success
+                and infra is not None
+                and arm["infra_failure_evidence"]["phase"] != "close"
+            ):
+                raise ValueError(
+                    f"{trial.pair_id}: successful trace has non-close infrastructure exclusion"
+                )
+    if arm.get("score_name") != expected_score:
+        raise ValueError(f"{trial.pair_id}: score name mismatch")
+    if arm.get("first_divergence_from_gold") != expected_divergence:
+        raise ValueError(f"{trial.pair_id}: stored divergence disagrees with trace")
     if arm.get("success") is not expected_success:
         raise ValueError(f"{trial.pair_id}: stored success disagrees with trace")
-    return expected_success
+    return infra
 
 
 def _validate_turn_trace_evidence(

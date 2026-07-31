@@ -13,6 +13,9 @@ from .contracts import (
     APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
     ARMS,
     ExecutionReceipt,
+    INFRA_FAILURE_CLASS_PHASES,
+    INFRA_FAILURE_EVENT_RECEIPT_TYPE,
+    INFRA_FAILURE_OPERATIONS,
     InfrastructureFailure,
     PairedRuntime,
     RUNTIME_CONTRACT_SCHEMA,
@@ -21,7 +24,9 @@ from .contracts import (
     RequestedAction,
     StateProbe,
     VerifierState,
+    infrastructure_failure_source_receipt,
     sha256_json,
+    validate_infrastructure_failure_source_receipt,
 )
 from .manifest import Arm, EvaluationManifest, Task
 from .planning import TrialSpec
@@ -408,6 +413,8 @@ class PairedEvaluationRunner:
         infra_class: str | None = None
         infra_phase: str | None = None
         infra_message: str | None = None
+        infra_evidence: dict[str, Any] | None = None
+        active_phase = "open_session"
         reset_signature: str | None = None
         start_cursor: tuple[int, int] | None = None
         start_cursor_ref: str | None = None
@@ -420,6 +427,7 @@ class PairedEvaluationRunner:
         start_state_probe_evidence: dict[str, Any] | None = None
         budget = _BudgetTracker(trial.budget)
         try:
+            active_phase = "open_session"
             session = self.runtime.open_session(
                 task=task,
                 arm=arm,
@@ -465,8 +473,10 @@ class PairedEvaluationRunner:
                 raise PairingViolation(
                     f"{arm.name}: gold-prefix replay does not end at session start"
                 )
+            active_phase = "initial_state_probe"
             initial_probe = session.probe_state()
             self._validate_state_probe(task, arm, initial_probe)
+            active_phase = "initial_verifier"
             initial_verified = self.verifier.verify(
                 task=task,
                 state=initial_probe.state,
@@ -515,7 +525,9 @@ class PairedEvaluationRunner:
             for turn_index in range(trial.horizon):
                 budget_before = budget.snapshot()
                 budget.start_model_turn()
+                active_phase = "observe"
                 observation = session.observe()
+                active_phase = "request_action"
                 requested = session.request_action(
                     observation=observation,
                     history=tuple(history),
@@ -528,6 +540,7 @@ class PairedEvaluationRunner:
                     )
                 budget.add_output_tokens(requested.usage)
                 if budget.failure is None:
+                    active_phase = "execute"
                     receipt = session.execute(requested)
                     budget.add_execution(receipt)
                 else:
@@ -562,8 +575,10 @@ class PairedEvaluationRunner:
                     if trial.mode == "gold_history_one_step"
                     else None
                 )
+                active_phase = "state_probe"
                 state_probe = session.probe_state()
                 self._validate_state_probe(task, arm, state_probe)
+                active_phase = "verifier"
                 verified = self.verifier.verify(
                     task=task,
                     state=state_probe.state,
@@ -609,8 +624,36 @@ class PairedEvaluationRunner:
                 )
                 if verified.status != "ok":
                     infra_class = "verifier"
-                    infra_phase = "verify"
+                    infra_phase = "verifier"
                     infra_message = "verifier returned non-ok status"
+                    source_receipt = infrastructure_failure_source_receipt(
+                        "verifier",
+                        operation=INFRA_FAILURE_OPERATIONS["verifier"],
+                        raw_evidence={
+                            "event": "verifier_non_ok_result",
+                            "task_id": task.task_id,
+                            "fixture_sha256": task.fixture_sha256,
+                            "turn_index": turn_index,
+                            "turn_payload_sha256": turn["turn_payload_sha256"],
+                            "verifier_status": verified.status,
+                            "oracle_pid": verified.oracle_pid,
+                            "verifier_module": verified.verifier_module,
+                        },
+                    )
+                    failure = InfrastructureFailure(
+                        "verifier",
+                        infra_message,
+                        source_receipt=source_receipt,
+                    )
+                    infra_evidence = _infrastructure_failure_event(
+                        failure,
+                        phase=active_phase,
+                        task=task,
+                        arm=arm,
+                        trial=trial,
+                        turns=turns,
+                        start_binding_sha256=start_binding_sha256,
+                    )
                     break
                 if budget.failure is not None:
                     break
@@ -626,20 +669,45 @@ class PairedEvaluationRunner:
                     break
         except InfrastructureFailure as exc:
             infra_class = exc.failure_class
-            infra_phase = "runtime"
+            infra_phase = active_phase
             infra_message = str(exc)
+            infra_evidence = _infrastructure_failure_event(
+                exc,
+                phase=active_phase,
+                task=task,
+                arm=arm,
+                trial=trial,
+                turns=turns,
+                start_binding_sha256=start_binding_sha256,
+            )
         finally:
             if session is not None:
                 try:
+                    active_phase = "close"
                     session.close()
                 except InfrastructureFailure as exc:
                     if infra_class is None:
                         infra_class = exc.failure_class
                         infra_phase = "close"
                         infra_message = str(exc)
+                        infra_evidence = _infrastructure_failure_event(
+                            exc,
+                            phase="close",
+                            task=task,
+                            arm=arm,
+                            trial=trial,
+                            turns=turns,
+                            start_binding_sha256=start_binding_sha256,
+                        )
 
         final_verifier = turns[-1]["verifier_state"] if turns else None
-        score = _score_arm(task, trial, turns, infra_class, budget.failure)
+        score = _score_arm(
+            task,
+            trial,
+            turns,
+            has_infrastructure_failure=infra_class is not None,
+            budget_failure=budget.failure,
+        )
         ordered_execution_trace = _ordered_execution_trace_aggregate(
             task,
             arm,
@@ -689,6 +757,7 @@ class PairedEvaluationRunner:
             "infra_failure_class": infra_class,
             "infra_failure_phase": infra_phase,
             "infra_failure_message": infra_message,
+            "infra_failure_evidence": infra_evidence,
         }
 
     def _validate_prefix_replay(
@@ -1069,14 +1138,61 @@ def _complete_program_aggregate(
     )
 
 
+def _infrastructure_failure_event(
+    failure: InfrastructureFailure,
+    *,
+    phase: str,
+    task: Task,
+    arm: Arm,
+    trial: TrialSpec,
+    turns: list[dict[str, Any]],
+    start_binding_sha256: str | None,
+) -> dict[str, Any]:
+    if phase not in INFRA_FAILURE_CLASS_PHASES[failure.failure_class]:
+        raise PairingViolation(
+            f"{arm.name}: infrastructure class {failure.failure_class!r} "
+            f"is invalid for phase {phase!r}"
+        )
+    try:
+        source_receipt = validate_infrastructure_failure_source_receipt(
+            failure.source_receipt,
+            expected_class=failure.failure_class,
+            expected_operation=INFRA_FAILURE_OPERATIONS[phase],
+        )
+    except ValueError as exc:
+        raise PairingViolation(
+            f"{arm.name}: invalid infrastructure failure source evidence: {exc}"
+        ) from exc
+    event = {
+        "schema_version": 1,
+        "receipt_type": INFRA_FAILURE_EVENT_RECEIPT_TYPE,
+        "pair_id": trial.pair_id,
+        "task_id": task.task_id,
+        "fixture_sha256": task.fixture_sha256,
+        "arm": arm.name,
+        "generation_seed": trial.generation_seed_for(arm.name),
+        "failure_class": failure.failure_class,
+        "phase": phase,
+        "message_sha256": sha256_json(str(failure)),
+        "start_binding_sha256": start_binding_sha256,
+        "prior_turn_payload_sha256": [
+            turn["turn_payload_sha256"] for turn in turns
+        ],
+        "source_receipt": source_receipt,
+    }
+    event["event_receipt_sha256"] = sha256_json(event)
+    return event
+
+
 def _score_arm(
     task: Task,
     trial: TrialSpec,
     turns: list[dict[str, Any]],
-    infra_class: str | None,
+    *,
+    has_infrastructure_failure: bool,
     budget_failure: str | None,
 ) -> dict[str, Any]:
-    if infra_class is not None:
+    if not turns and has_infrastructure_failure:
         return {
             "success": None,
             "score_name": "excluded_infrastructure",
