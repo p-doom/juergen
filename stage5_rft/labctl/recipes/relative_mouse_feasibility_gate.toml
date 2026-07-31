@@ -1,5 +1,5 @@
 name = "stage5_relative_mouse_feasibility_gate_v1"
-repo = "juergen"
+repo = "juergen_relative_onpolicy_launch"
 
 command = ["bash", "-c", '''
 set -euo pipefail
@@ -41,4 +41,3 @@ alias = "relative_mouse_feasibility_gate_{run.id}"
 [env]
 PYTHONUNBUFFERED = "1"
 HF_HUB_OFFLINE = "1"
-

@@ -1,5 +1,5 @@
 name = "stage5_relative_mouse_seal_rollouts_v1"
-repo = "juergen"
+repo = "juergen_relative_onpolicy_launch"
 
 command = ["bash", "-c", '''
 set -euo pipefail
@@ -43,4 +43,3 @@ role = "rollouts"
 type = "dataset"
 marker = "manifest.json"
 alias = "relative_mouse_pilot_rollouts_{run.id}"
-

@@ -1,5 +1,5 @@
 name = "stage5_relative_mouse_collect_shard1_v1"
-repo = "juergen"
+repo = "juergen_relative_onpolicy_launch"
 
 command = ["bash", "-c", '''
 set -euo pipefail
@@ -31,4 +31,3 @@ path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/chec
 type = "dataset"
 marker = "sample_manifest.json"
 alias = "relative_mouse_pilot_shard1_{run.id}"
-
