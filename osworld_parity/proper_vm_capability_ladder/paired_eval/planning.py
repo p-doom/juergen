@@ -20,7 +20,7 @@ class TrialSpec:
     fixture_sha256: str
     snapshot_id: str
     parameter_seed: int
-    initial_cursor: tuple[int, int]
+    initial_cursor_ref: str
     budget: dict[str, int | float]
     mode: str
     gold_prefix_length: int
@@ -72,9 +72,40 @@ def _trial(
         "\x00".join(str(item) for item in cell_payload).encode("utf-8")
     ).hexdigest()
     pair_id = hashlib.sha256(f"{cell_id}\x00{attempt}".encode("utf-8")).hexdigest()
-    generation_seed = _digest_int(manifest.order_seed, pair_id, "generation") & 0x7FFFFFFF
+    generation_seed = _digest_int(manifest.sampling_seed, pair_id, "generation") & 0x7FFFFFFF
     order_bit = _digest_int(manifest.order_seed, pair_id, "arm-order") & 1
     arm_order = ARMS if order_bit == 0 else tuple(reversed(ARMS))
+    logical_steps = (
+        1
+        if mode == "gold_history_one_step"
+        else task.semantic_step_count - prefix
+    )
+    if task.pair_primitive_action_budget > int(
+        manifest.budget["max_primitive_actions_per_trial"]
+    ):
+        raise ValueError(f"{task.task_id}: primitive action budget exceeds evaluation ceiling")
+    if task.pair_primitive_event_budget > int(
+        manifest.budget["max_emitted_primitive_events_per_trial"]
+    ):
+        raise ValueError(f"{task.task_id}: primitive event budget exceeds evaluation ceiling")
+    if mode == "gold_history_one_step" and horizon > int(
+        manifest.budget["max_model_turns_per_semantic_step"]
+    ):
+        raise ValueError(f"{task.task_id}: semantic model-turn budget exceeds ceiling")
+    if horizon > int(manifest.budget["max_model_turns_per_trial"]):
+        raise ValueError(f"{task.task_id}: trial model-turn budget exceeds ceiling")
+    budget = {
+        "model_turns": horizon,
+        "logical_semantic_steps": logical_steps,
+        "primitive_actions": task.pair_primitive_action_budget,
+        "emitted_primitive_events": task.pair_primitive_event_budget,
+        "output_tokens_per_turn": int(manifest.budget["max_output_tokens_per_turn"]),
+        "total_output_tokens": min(
+            int(manifest.budget["max_total_output_tokens"]),
+            horizon * int(manifest.budget["max_output_tokens_per_turn"]),
+        ),
+        "wall_time_seconds": manifest.budget["wall_time_seconds"],
+    }
     return TrialSpec(
         pair_id=pair_id,
         cell_id=cell_id,
@@ -82,8 +113,8 @@ def _trial(
         fixture_sha256=task.fixture_sha256,
         snapshot_id=task.snapshot_id,
         parameter_seed=task.parameter_seed,
-        initial_cursor=task.cursor_for_prefix(prefix),
-        budget=dict(manifest.budget),
+        initial_cursor_ref=task.cursor_ref_for_prefix(prefix),
+        budget=budget,
         mode=mode,
         gold_prefix_length=prefix,
         horizon=horizon,
@@ -112,14 +143,20 @@ def build_plan(
             continue
         cells: list[tuple[str, int, int]] = []
         for prefix in range(task.semantic_step_count):
-            cells.append(("gold_history_one_step", prefix, 1))
+            cells.append(
+                (
+                    "gold_history_one_step",
+                    prefix,
+                    task.pair_primitive_action_budget,
+                )
+            )
             for horizon in GOLD_PREFIX_HORIZONS:
                 cells.append(("gold_prefix_horizon", prefix, horizon))
         cells.append(
             (
                 "natural_closed_loop",
                 0,
-                int(manifest.budget["max_actions"]),
+                task.pair_primitive_action_budget,
             )
         )
         for mode, prefix, horizon in cells:
@@ -141,4 +178,10 @@ def build_plan(
     pair_ids = [trial.pair_id for trial in plan]
     if len(pair_ids) != len(set(pair_ids)):
         raise AssertionError("deterministic plan produced duplicate pair IDs")
+    generation_seeds: dict[str, set[int]] = {}
+    for trial in plan:
+        seen = generation_seeds.setdefault(trial.cell_id, set())
+        if trial.generation_seed in seen:
+            raise AssertionError("generation seed collision within a pass@k cell")
+        seen.add(trial.generation_seed)
     return tuple(plan)

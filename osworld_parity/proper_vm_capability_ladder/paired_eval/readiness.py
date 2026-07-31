@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,15 +27,18 @@ READINESS_CHECKS = {
     "sameapp_8_cells",
     "vm_isolation_and_provenance",
 }
+_CONSUMPTION_TOKEN = object()
 
 
 class ReadinessError(RuntimeError):
     pass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class ConsumedReadiness:
     path: str
+    artifact_id: str
+    labctl_context_path: str
     marker_sha256: str
     certification_schema: str
     capability_report_sha256: str
@@ -43,13 +46,22 @@ class ConsumedReadiness:
     vm_snapshot_id: str
     consumed_at: str
     marker: dict[str, Any]
-    _consumed: bool = True
+    _token: object = field(repr=False, compare=False)
+
+    def __init__(self, *_: Any, **__: Any) -> None:
+        raise TypeError("ConsumedReadiness can only be created by consuming a marker")
+
+    @property
+    def consumed(self) -> bool:
+        return self._token is _CONSUMPTION_TOKEN
 
 
 def consume_executor_ready(
     path: Path,
     *,
     expected_sha256: str,
+    expected_artifact_id: str,
+    labctl_context_path: Path,
 ) -> ConsumedReadiness:
     """Consume the registered aggregate executor marker, or fail closed.
 
@@ -59,6 +71,11 @@ def consume_executor_ready(
 
     if path.name != "EXECUTOR_READY.json":
         raise ReadinessError("readiness path must name EXECUTOR_READY.json")
+    artifact_id = _validate_labctl_binding(
+        labctl_context_path,
+        marker_path=path,
+        expected_artifact_id=expected_artifact_id,
+    )
     try:
         raw = path.read_bytes()
     except OSError as exc:
@@ -116,16 +133,23 @@ def consume_executor_ready(
     snapshot = marker.get("vm_snapshot_id")
     if snapshot != "osworld_ready":
         raise ReadinessError("vm_snapshot_id must be osworld_ready")
-    return ConsumedReadiness(
-        path=str(path.resolve()),
-        marker_sha256=observed_sha,
-        certification_schema=CERTIFICATION_SCHEMA,
-        capability_report_sha256=capability_sha,
-        executor_commit=commit,
-        vm_snapshot_id=snapshot,
-        consumed_at=datetime.now(timezone.utc).isoformat(),
-        marker=dict(marker),
-    )
+    values = {
+        "path": str(path.resolve()),
+        "artifact_id": artifact_id,
+        "labctl_context_path": str(labctl_context_path.resolve()),
+        "marker_sha256": observed_sha,
+        "certification_schema": CERTIFICATION_SCHEMA,
+        "capability_report_sha256": capability_sha,
+        "executor_commit": commit,
+        "vm_snapshot_id": snapshot,
+        "consumed_at": datetime.now(timezone.utc).isoformat(),
+        "marker": dict(marker),
+        "_token": _CONSUMPTION_TOKEN,
+    }
+    consumed = object.__new__(ConsumedReadiness)
+    for key, value in values.items():
+        object.__setattr__(consumed, key, value)
+    return consumed
 
 
 def _sha256(value: Any) -> bool:
@@ -136,3 +160,44 @@ def _sha256(value: Any) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _validate_labctl_binding(
+    context_path: Path,
+    *,
+    marker_path: Path,
+    expected_artifact_id: str,
+) -> str:
+    try:
+        context = json.loads(context_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ReadinessError(f"cannot read LABCTL_CONTEXT {context_path}: {exc}") from exc
+    if not isinstance(context, dict) or not isinstance(context.get("inputs"), list):
+        raise ReadinessError("LABCTL_CONTEXT.inputs must be an array")
+    matches = [
+        value
+        for value in context["inputs"]
+        if isinstance(value, dict) and value.get("role") == "executor_readiness"
+    ]
+    if len(matches) != 1:
+        raise ReadinessError(
+            "LABCTL_CONTEXT must contain exactly one executor_readiness input"
+        )
+    binding = matches[0]
+    if set(binding) != {"role", "artifact_id", "resolved_path"}:
+        raise ReadinessError("executor_readiness input field set drifted")
+    artifact_id = binding.get("artifact_id")
+    if artifact_id != expected_artifact_id:
+        raise ReadinessError(
+            f"executor readiness artifact mismatch: {artifact_id} != {expected_artifact_id}"
+        )
+    resolved_path = binding.get("resolved_path")
+    if not isinstance(resolved_path, str) or not resolved_path:
+        raise ReadinessError("executor_readiness resolved_path is missing")
+    artifact_root = Path(resolved_path).resolve()
+    expected_marker = artifact_root / "EXECUTOR_READY.json"
+    if marker_path.resolve() != expected_marker:
+        raise ReadinessError(
+            "explicit EXECUTOR_READY.json is not the registered executor_readiness artifact"
+        )
+    return artifact_id

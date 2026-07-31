@@ -8,9 +8,10 @@ from typing import Any, Protocol
 
 ARMS = ("native_absolute_control", "compact_raw_phaseb")
 ACTION_INTERFACES = {
-    "native_absolute_control": "native_absolute_v1",
-    "compact_raw_phaseb": "compact_raw_relative_v1",
+    "native_absolute_control": "native_absolute_sequence_v1",
+    "compact_raw_phaseb": "compact_raw_phaseb_v1",
 }
+RUNTIME_CONTRACT_SCHEMA = "proper_vm_paired_runtime_v1"
 MODES = (
     "gold_history_one_step",
     "gold_prefix_horizon",
@@ -92,6 +93,7 @@ class ExecutionReceipt:
     operations: tuple[Any, ...] = ()
     backend_primitives: tuple[str, ...] = ()
     executor_evidence: dict[str, Any] = field(default_factory=dict)
+    primitive_action_count: int = 1
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,9 @@ class VerifierState:
     semantic_step_index: int
     semantic_state: dict[str, Any]
     matched_target_ref: str | None = None
+    reason: str = ""
+    oracle_pid: int = 0
+    verifier_module: str = ""
 
     @property
     def semantic_state_sha256(self) -> str:
@@ -112,6 +117,7 @@ class SessionStart:
     task_id: str
     snapshot_id: str
     parameter_seed: int
+    cursor_ref: str
     cursor: tuple[int, int]
     reset_signature: str
 
@@ -129,18 +135,20 @@ class ArmSession(Protocol):
         observation: Observation,
         history: tuple[dict[str, Any], ...],
         generation_seed: int,
-        budget: dict[str, int | float],
+        budget: dict[str, Any],
     ) -> RequestedAction: ...
 
     def execute(self, requested: RequestedAction) -> ExecutionReceipt: ...
 
-    def verify(self, *, expected_target_ref: str | None) -> VerifierState: ...
+    def probe_state(self) -> dict[str, Any]: ...
 
     def close(self) -> None: ...
 
 
 class PairedRuntime(Protocol):
     """Bridge implemented by the real model/VM executor integration."""
+
+    contract: dict[str, Any]
 
     def open_session(
         self,

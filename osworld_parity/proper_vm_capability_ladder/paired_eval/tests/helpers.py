@@ -33,6 +33,17 @@ def task_row(task_id: str = "writer-dev-1", seed: int = 101) -> dict[str, Any]:
             },
         ],
         "semantic_step_count": 2,
+        "budgets": {
+            "semantic_steps": 2,
+            "primitive_actions": {
+                "native_absolute_sequence_v1": 3,
+                "compact_raw_phaseb_v1": 4,
+            },
+            "primitive_events": {
+                "native_absolute_sequence_v1": 8,
+                "compact_raw_phaseb_v1": 10,
+            },
+        },
         "instruction": "Replace the text and save the Writer document.",
         "snapshot": {
             "id": "osworld_ready",
@@ -44,13 +55,37 @@ def task_row(task_id: str = "writer-dev-1", seed: int = 101) -> dict[str, Any]:
         "near_miss": {"text": "new", "saved": False},
         "verifier": {
             "kind": "writer_state",
-            "module": "example.verifier",
+            "module": "osworld_parity.proper_vm_capability_ladder.paired_eval.tests.fake_verifier",
             "fresh_process": True,
+            "entrypoint": "main",
+            "result_schema": "semantic_oracle_result_v2",
+            "state_extractor_entrypoint": "extract_state",
         },
-        "initial_cursor": [960, 540],
+        "geometry_contract": {
+            "source": "live_probe",
+            "probe_version": "test_geometry_probe_v1",
+            "state_probe_version": "test_state_probe_v1",
+            "required_targets": ["editor"],
+        },
+        "initial_cursor": {
+            "source": "live_probe",
+            "probe_version": "rung1_cursor_position_v1",
+        },
         "gold_cursor_history": [
-            {"prefix_length": 1, "step_id": "replace", "cursor_after": [820, 520]},
-            {"prefix_length": 2, "step_id": "save", "cursor_after": [820, 520]},
+            {
+                "prefix_length": 1,
+                "step_id": "replace",
+                "target_ref": "writer.body.replaced",
+                "cursor_before_ref": "runtime.initial_cursor",
+                "cursor_after_ref": "geometry.editor",
+            },
+            {
+                "prefix_length": 2,
+                "step_id": "save",
+                "target_ref": "writer.document.saved",
+                "cursor_before_ref": "geometry.editor",
+                "cursor_after_ref": "geometry.editor",
+            },
         ],
         "coverage": {"click": True, "coalesced_type": True, "ctrl_s": True},
         "exclusions": ["horizontal_scroll", "timing_sensitive_double_click"],
@@ -83,10 +118,13 @@ def evaluation_manifest(task_seal: str, readiness_sha: str, attempts: int = 8) -
         "heldout_access": False,
         "task_manifest_payload_sha256": task_seal,
         "expected_executor_ready_sha256": readiness_sha,
+        "expected_executor_ready_artifact_id": "artifact-executor-ready-test",
+        "expected_executor_certification_schema": "proper_vm_executor_cert_v1",
+        "evaluator_commit": "8" * 40,
         "arms": [
             {
                 "name": ARMS[0],
-                "action_interface": "native_absolute_v1",
+                "action_interface": "native_absolute_sequence_v1",
                 "checkpoint": "upstream/native",
                 "checkpoint_sha256": "1" * 64,
                 "prompt_id": "native-prompt-v1",
@@ -95,7 +133,7 @@ def evaluation_manifest(task_seal: str, readiness_sha: str, attempts: int = 8) -
             },
             {
                 "name": ARMS[1],
-                "action_interface": "compact_raw_relative_v1",
+                "action_interface": "compact_raw_phaseb_v1",
                 "checkpoint": "phase-b/raw-relative",
                 "checkpoint_sha256": "3" * 64,
                 "prompt_id": "compact-prompt-v1",
@@ -103,10 +141,21 @@ def evaluation_manifest(task_seal: str, readiness_sha: str, attempts: int = 8) -
                 "generation": {"do_sample": True, "temperature": 0.7},
             },
         ],
+        "runtime": {
+            "runtime_id": "fake-paired-runtime-v1",
+            "module": "example.runtime",
+            "factory": "create_runtime",
+            "source_sha256": "9" * 64,
+            "contract_schema": "proper_vm_paired_runtime_v1",
+        },
         "budget": {
-            "max_actions": 8,
-            "max_model_calls": 8,
-            "max_output_tokens": 256,
+            "max_model_turns_per_trial": 8,
+            "max_model_turns_per_semantic_step": 8,
+            "max_logical_semantic_steps": 4,
+            "max_primitive_actions_per_trial": 16,
+            "max_emitted_primitive_events_per_trial": 64,
+            "max_output_tokens_per_turn": 256,
+            "max_total_output_tokens": 2048,
             "wall_time_seconds": 120,
         },
         "modes": list(MODES),
@@ -114,6 +163,8 @@ def evaluation_manifest(task_seal: str, readiness_sha: str, attempts: int = 8) -
         "attempts_per_cell": attempts,
         "order_seed": 20260731,
         "shard_seed": 10101,
+        "sampling_seed": 424242,
+        "sampling_seed_policy": "paired_fixed_per_attempt_v1",
         "bootstrap_seed": 20260731,
         "bootstrap_resamples": 200,
         "exclusions": [],
@@ -152,6 +203,20 @@ def ready_marker(path: Path) -> tuple[Path, str]:
     raw = (json.dumps(marker, sort_keys=True) + "\n").encode("utf-8")
     path.write_bytes(raw)
     return path, hashlib.sha256(raw).hexdigest()
+
+
+def labctl_context(path: Path, artifact_root: Path) -> Path:
+    value = {
+        "inputs": [
+            {
+                "role": "executor_readiness",
+                "artifact_id": "artifact-executor-ready-test",
+                "resolved_path": str(artifact_root.resolve()),
+            }
+        ]
+    }
+    path.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
+    return path
 
 
 def sealed_file(path: Path, value: dict[str, Any]) -> tuple[Path, str]:

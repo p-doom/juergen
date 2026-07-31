@@ -17,8 +17,8 @@ cannot be overridden inside an arm.
 ## Development modes
 
 - `gold_history_one_step` resets and replays an action-format-independent gold
-  semantic prefix, executes one model action, and scores the semantic next
-  state with the fresh-process task verifier.
+  semantic prefix, permits a bounded multi-action/event plan for exactly one
+  logical semantic step, and scores its next state in a fresh oracle process.
 - `gold_prefix_horizon` starts from every registered semantic prefix and runs
   fixed action horizons 2, 4, and 8.
 - `natural_closed_loop` starts from the reset state and runs naturally on tasks
@@ -28,6 +28,8 @@ Every cell can have multiple independent generation attempts.  The aggregate
 always reports whether pass@1, pass@4, and pass@8 are actually estimable; it
 does not invent pass@k values when there are too few complete attempts or when
 multi-sample generation is deterministic.
+The sealed config requires at least eight attempts, sampling enabled with a
+positive temperature, and a unique deterministic generation seed per attempt.
 
 ## Fail-closed execution gate
 
@@ -40,6 +42,9 @@ the runtime factory; it never searches the repository for or creates a marker.
 The accepted certification schema is exactly `proper_vm_executor_cert_v1`,
 including its ordered four-interface list, eight frozen checks, canonical
 report self-hash, and `osworld_ready` snapshot binding.
+The registered artifact identity is independently matched through the one
+`executor_readiness` input in the JSON file named by `LABCTL_CONTEXT`; no input
+alias, path search, or marker self-ID is accepted.
 
 ```text
 python -m osworld_parity.proper_vm_capability_ladder.paired_eval validate \
@@ -61,6 +66,11 @@ Each pair row records observation hashes (not screenshots), raw requested
 actions, canonical semantic operations, lowered operations, executed operation
 traces, cursor before/after, executor evidence, verifier semantic state and
 hash, parse/dispatch status, and both raw and semantic first divergence.
+Task coordinates are live-probe references resolved independently after every
+reset. Both arms must resolve the same initial cursor and reset signature.
+Model turns, logical steps, primitive action lines, emitted events, output
+tokens, and wall time are separately decremented and logged. Any overrun or
+parse/dispatch error is a scored failure.
 Known VM/setup/observation/model-service/verifier failures can exclude only the
 whole pair.  Parse and executor-dispatch errors remain scored system failures.
 
@@ -68,3 +78,6 @@ Aggregation rejects duplicate, missing, or unmatched pairs.  It emits arm
 rates, compact-minus-native paired differences, a deterministic task-clustered
 paired bootstrap interval, descriptive McNemar discordance, mode/horizon
 strata, and the pass@1/4/8 feasibility report.
+It also re-hashes every sealed row/turn/verifier state and recomputes success
+from trace plus fresh-process oracle evidence instead of trusting stored score
+fields.

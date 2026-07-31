@@ -31,13 +31,14 @@ CURRICULUM_TASK_FIELDS = {
     "natural_multistep",
     "semantic_steps",
     "semantic_step_count",
-    "max_action_turns",
+    "budgets",
     "snapshot",
     "assets",
     "params",
     "expected",
     "near_miss",
     "verifier",
+    "geometry_contract",
     "initial_cursor",
     "gold_cursor_history",
     "coverage",
@@ -106,8 +107,8 @@ def adapt_curriculum_manifest(
             raise ManifestError("semantic curriculum task is not natural multistep")
         if not 2 <= int(row.get("semantic_step_count", 0)) <= 4:
             raise ManifestError("semantic curriculum task is not 2-4 semantic steps")
-        if int(row.get("max_action_turns", 0)) < int(row["semantic_step_count"]):
-            raise ManifestError("semantic curriculum max_action_turns is invalid")
+        if row.get("budgets", {}).get("semantic_steps") != row["semantic_step_count"]:
+            raise ManifestError("semantic curriculum semantic budget is invalid")
         for step in row.get("semantic_steps", []):
             if not isinstance(step, dict) or set(step) != {
                 "step_id",
@@ -122,8 +123,8 @@ def adapt_curriculum_manifest(
                 "prefix_length",
                 "step_id",
                 "target_ref",
-                "cursor_before",
-                "cursor_after",
+                "cursor_before_ref",
+                "cursor_after_ref",
             }:
                 raise ManifestError("semantic curriculum cursor field set drift")
         rows.append(row)

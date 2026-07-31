@@ -27,7 +27,10 @@ def test_manifest_and_deterministic_plan_keep_pairs_together(tmp_path) -> None:
     assert all(set(trial.arm_order) == set(ARMS) for trial in plan)
     assert len({trial.pair_id for trial in plan}) == len(plan)
     assert build_plan(manifest) == plan
-    assert all(trial.budget == manifest.budget for trial in plan)
+    assert all(trial.budget["model_turns"] == trial.horizon for trial in plan)
+    one_step = [trial for trial in plan if trial.mode == "gold_history_one_step"]
+    assert all(trial.budget["logical_semantic_steps"] == 1 for trial in one_step)
+    assert all(trial.horizon == 4 for trial in one_step)
     assert all(trial.snapshot_id == "osworld_ready" for trial in plan)
     assert all(trial.parameter_seed == 101 for trial in plan)
 
@@ -64,6 +67,15 @@ def test_manifest_rejects_outcome_aware_exclusion(tmp_path) -> None:
         }
     ]
     with pytest.raises(ManifestError, match="without arm or outcome"):
+        validate_evaluation_manifest(value, tasks, task_manifest_payload_sha256=task_seal)
+
+
+def test_manifest_rejects_deterministic_replication_as_pass_at_k(tmp_path) -> None:
+    _, marker_sha = ready_marker(tmp_path / "EXECUTOR_READY.json")
+    tasks, task_seal = task_manifest()
+    value = evaluation_manifest(task_seal, marker_sha)
+    value["arms"][1]["generation"] = {"do_sample": False, "temperature": 1.0}
+    with pytest.raises(ManifestError, match="do_sample must be true"):
         validate_evaluation_manifest(value, tasks, task_manifest_payload_sha256=task_seal)
 
 

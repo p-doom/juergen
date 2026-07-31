@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from .contracts import ARMS
+from .contracts import ARMS, sha256_json
 from .manifest import EvaluationManifest
 from .planning import TrialSpec
 
@@ -84,6 +84,7 @@ def aggregate_results(
         "schema_version": 1,
         "report_type": "paired_complete_system_development",
         "suite": manifest.suite,
+        "evaluator_commit": manifest.evaluator_commit,
         "split": "development",
         "development_only": True,
         "comparison_scope": "complete_system",
@@ -126,6 +127,10 @@ def _validate_row(
     trial: TrialSpec,
     row: dict[str, Any],
 ) -> None:
+    unsigned_row = dict(row)
+    row_seal = unsigned_row.pop("record_payload_sha256", None)
+    if row_seal != sha256_json(unsigned_row):
+        raise ValueError(f"{trial.pair_id}: record payload hash mismatch")
     if row.get("schema_version") != 1 or row.get("record_type") != "paired_complete_system_trial":
         raise ValueError(f"{trial.pair_id}: result schema drift")
     if row.get("split") != "development" or row.get("development_only") is not True:
@@ -136,12 +141,25 @@ def _validate_row(
         raise ValueError(f"{trial.pair_id}: attempt identity mismatch")
     if row.get("task_id") != trial.task_id:
         raise ValueError(f"{trial.pair_id}: task mismatch")
+    if row.get("evaluator_commit") != manifest.evaluator_commit:
+        raise ValueError(f"{trial.pair_id}: evaluator commit mismatch")
+    readiness = row.get("readiness")
+    if not isinstance(readiness, dict):
+        raise ValueError(f"{trial.pair_id}: readiness provenance missing")
+    if readiness.get("marker_sha256") != manifest.expected_executor_ready_sha256:
+        raise ValueError(f"{trial.pair_id}: readiness marker hash mismatch")
+    if readiness.get("artifact_id") != manifest.expected_executor_ready_artifact_id:
+        raise ValueError(f"{trial.pair_id}: readiness artifact mismatch")
+    if readiness.get("certification_schema") != manifest.expected_executor_certification_schema:
+        raise ValueError(f"{trial.pair_id}: readiness schema mismatch")
     pairing = row.get("pairing")
     expected_pairing = {
         "snapshot_id": trial.snapshot_id,
         "parameter_seed": trial.parameter_seed,
-        "initial_cursor": list(trial.initial_cursor),
+        "initial_cursor_ref": trial.initial_cursor_ref,
+        "initial_cursor": row.get("pairing", {}).get("initial_cursor"),
         "generation_seed": trial.generation_seed,
+        "sampling_seed_policy": "paired_fixed_per_attempt_v1",
         "budget": trial.budget,
         "arm_order": list(trial.arm_order),
         "shard_index": trial.shard_index,
@@ -154,6 +172,18 @@ def _validate_row(
         raise ValueError(f"{trial.pair_id}: result must contain two arm rows")
     if {value.get("arm") for value in arms if isinstance(value, dict)} != set(ARMS):
         raise ValueError(f"{trial.pair_id}: missing or duplicate arm")
+    reset_signatures = [value.get("reset_signature") for value in arms]
+    if all(value is not None for value in reset_signatures) and len(set(reset_signatures)) != 1:
+        raise ValueError(f"{trial.pair_id}: paired reset signatures differ")
+    start_refs = [value.get("start_cursor_ref") for value in arms]
+    start_cursors = [value.get("start_cursor") for value in arms]
+    if all(value is not None for value in start_refs + start_cursors):
+        if start_refs != [trial.initial_cursor_ref, trial.initial_cursor_ref]:
+            raise ValueError(f"{trial.pair_id}: paired cursor refs differ")
+        if start_cursors[0] != start_cursors[1]:
+            raise ValueError(f"{trial.pair_id}: paired live cursor values differ")
+        if row["pairing"].get("initial_cursor") != start_cursors[0]:
+            raise ValueError(f"{trial.pair_id}: paired live cursor evidence mismatch")
     exclusion = row.get("exclusion")
     if not isinstance(exclusion, dict):
         raise ValueError(f"{trial.pair_id}: exclusion decision missing")
@@ -187,6 +217,139 @@ def _validate_row(
         }
         if system != expected:
             raise ValueError(f"{trial.pair_id}: complete-system provenance drift for {arm.name}")
+        _validate_and_recompute_arm(manifest.task(trial.task_id), trial, _arm(row, arm.name))
+    expected_runtime = {
+        "schema": "proper_vm_paired_runtime_v1",
+        "runtime_id": manifest.runtime.runtime_id,
+        "executor_commit": row["readiness"].get("executor_commit"),
+        "interfaces": {arm.name: arm.action_interface for arm in manifest.arms},
+    }
+    if row.get("runtime") != expected_runtime:
+        raise ValueError(f"{trial.pair_id}: runtime contract drift")
+
+
+def _validate_and_recompute_arm(task: Any, trial: TrialSpec, arm: dict[str, Any]) -> bool | None:
+    turns = arm.get("turns")
+    if not isinstance(turns, list):
+        raise ValueError(f"{trial.pair_id}: arm trace is not a list")
+    infra = arm.get("infra_failure_class")
+    if infra is not None:
+        expected_success: bool | None = None
+    else:
+        if not turns:
+            if arm.get("budget_failure") is None:
+                raise ValueError(f"{trial.pair_id}: unexcluded arm has no trace")
+            expected_success = False
+            if arm.get("score_name") != "budget_failure":
+                raise ValueError(f"{trial.pair_id}: empty budget trace score mismatch")
+            if arm.get("final_verifier_state") is not None or arm.get("MOUSE_SOLVED") is not None:
+                raise ValueError(f"{trial.pair_id}: empty trace has final verifier evidence")
+            if arm.get("success") is not expected_success:
+                raise ValueError(f"{trial.pair_id}: stored success disagrees with trace")
+            return expected_success
+        for turn in turns:
+            unsigned_turn = dict(turn)
+            turn_seal = unsigned_turn.pop("turn_payload_sha256", None)
+            if turn_seal != sha256_json(unsigned_turn):
+                raise ValueError(f"{trial.pair_id}: turn payload hash mismatch")
+            verifier = turn.get("verifier_state")
+            if not isinstance(verifier, dict):
+                raise ValueError(f"{trial.pair_id}: verifier evidence missing")
+            state = verifier.get("semantic_state")
+            if not isinstance(state, dict) or sha256_json(state) != verifier.get(
+                "semantic_state_sha256"
+            ):
+                raise ValueError(f"{trial.pair_id}: verifier state hash mismatch")
+            if verifier.get("verifier_module") != task.verifier_module:
+                raise ValueError(f"{trial.pair_id}: verifier module mismatch")
+            if not isinstance(verifier.get("oracle_pid"), int) or verifier["oracle_pid"] <= 0:
+                raise ValueError(f"{trial.pair_id}: fresh verifier PID missing")
+        final = turns[-1]["verifier_state"]
+        budget_failure = _recompute_budget_failure(trial, arm, turns)
+        execution_ok = budget_failure is None and all(
+            turn.get("parse_status") == "ok" and turn.get("dispatch_status") == "ok"
+            for turn in turns
+        )
+        if trial.mode == "gold_history_one_step":
+            expected_success = bool(
+                execution_ok
+                and final.get("status") == "ok"
+                and final.get("matched_target_ref")
+                == task.expected_target(trial.gold_prefix_length)
+                and final.get("semantic_step_index") == trial.gold_prefix_length + 1
+            )
+            expected_score = "semantic_next_state"
+        else:
+            expected_success = bool(
+                execution_ok
+                and final.get("status") == "ok"
+                and final.get("task_solved") is True
+            )
+            expected_score = "semantic_final_state"
+        if arm.get("score_name") != expected_score:
+            raise ValueError(f"{trial.pair_id}: score name mismatch")
+        if arm.get("final_verifier_state") != final:
+            raise ValueError(f"{trial.pair_id}: final verifier evidence mismatch")
+        if arm.get("MOUSE_SOLVED") is not bool(final.get("task_solved")):
+            raise ValueError(f"{trial.pair_id}: MOUSE_SOLVED mismatch")
+    if arm.get("success") is not expected_success:
+        raise ValueError(f"{trial.pair_id}: stored success disagrees with trace")
+    return expected_success
+
+
+def _recompute_budget_failure(
+    trial: TrialSpec,
+    arm: dict[str, Any],
+    turns: list[dict[str, Any]],
+) -> str | None:
+    limits = trial.budget
+    model_turns = len(turns)
+    actions = sum(int(turn.get("primitive_action_count", -1)) for turn in turns)
+    events = sum(len(turn.get("operations", [])) for turn in turns)
+    token_values = [turn.get("model_usage", {}).get("output_tokens") for turn in turns]
+    if not all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in token_values):
+        raise ValueError(f"{trial.pair_id}: invalid output-token evidence")
+    tokens = sum(token_values)
+    final_step = int(turns[-1]["verifier_state"]["semantic_step_index"])
+    logical_steps = max(0, final_step - trial.gold_prefix_length)
+    failures: list[str] = []
+    if model_turns > int(limits["model_turns"]):
+        failures.append("model_turns_exceeded")
+    if logical_steps > int(limits["logical_semantic_steps"]):
+        failures.append("logical_semantic_steps_exceeded")
+    if actions > int(limits["primitive_actions"]):
+        failures.append("primitive_actions_exceeded")
+    if events > int(limits["emitted_primitive_events"]):
+        failures.append("emitted_primitive_events_exceeded")
+    if any(value > int(limits["output_tokens_per_turn"]) for value in token_values):
+        failures.append("output_tokens_per_turn_exceeded")
+    if tokens > int(limits["total_output_tokens"]):
+        failures.append("total_output_tokens_exceeded")
+    accounting = arm.get("budget_accounting")
+    if not isinstance(accounting, dict) or accounting.get("limits") != limits:
+        raise ValueError(f"{trial.pair_id}: budget accounting limits mismatch")
+    used = accounting.get("used", {})
+    expected_used = {
+        "model_turns": model_turns,
+        "logical_semantic_steps": logical_steps,
+        "primitive_actions": actions,
+        "emitted_primitive_events": events,
+        "output_tokens": tokens,
+    }
+    if any(used.get(key) != value for key, value in expected_used.items()):
+        raise ValueError(f"{trial.pair_id}: budget accounting usage mismatch")
+    elapsed = used.get("wall_time_seconds")
+    if not isinstance(elapsed, (int, float)) or elapsed < 0:
+        raise ValueError(f"{trial.pair_id}: invalid wall-time evidence")
+    if elapsed > float(limits["wall_time_seconds"]):
+        failures.append("wall_time_seconds_exceeded")
+    stored = arm.get("budget_failure")
+    if failures:
+        if stored not in failures:
+            raise ValueError(f"{trial.pair_id}: budget failure evidence mismatch")
+    elif stored is not None:
+        raise ValueError(f"{trial.pair_id}: spurious budget failure")
+    return stored
 
 
 def _arm(row: dict[str, Any], arm: str) -> dict[str, Any]:
@@ -298,7 +461,8 @@ def _pass_at_k(
             "cells_total": len(cells),
             "cells_with_at_least_k_attempts": len(eligible),
             "stochastic_generation_configured": stochastic,
-            "paired_task_reset_per_attempt": True,
+        "paired_task_reset_per_attempt": True,
+            "unique_fixed_generation_seed_per_attempt": True,
             "estimate_by_arm": estimates,
         }
     return output

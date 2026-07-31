@@ -66,7 +66,11 @@ class Task:
     instruction: str
     snapshot_id: str
     reset_strategy: str
-    initial_cursor: tuple[int, int]
+    verifier_kind: str
+    verifier_module: str
+    budgets: dict[str, Any]
+    geometry_contract: dict[str, Any]
+    initial_cursor_contract: dict[str, Any]
     semantic_steps: tuple[SemanticStep, ...]
     gold_cursor_history: tuple[dict[str, Any], ...]
     fixture_sha256: str
@@ -81,9 +85,9 @@ class Task:
             raise IndexError(f"no next semantic target after prefix {prefix_length}")
         return self.semantic_steps[prefix_length].target_ref
 
-    def cursor_for_prefix(self, prefix_length: int) -> tuple[int, int]:
+    def cursor_ref_for_prefix(self, prefix_length: int) -> str:
         if prefix_length == 0:
-            return self.initial_cursor
+            return "runtime.initial_cursor"
         if not 0 < prefix_length <= self.semantic_step_count:
             raise IndexError(f"invalid gold prefix length {prefix_length}")
         previous = self.semantic_steps[prefix_length - 1]
@@ -95,12 +99,20 @@ class Task:
             marker_matches = marker == prefix_length or marker == previous.step_id
             if not marker_matches and entry.get("step_id") != previous.step_id:
                 continue
-            for key in ("cursor", "cursor_after", "expected_cursor"):
-                if key in entry:
-                    return _cursor(entry[key], label=f"{self.task_id} gold cursor {prefix_length}")
+            cursor_ref = entry.get("cursor_after_ref")
+            if isinstance(cursor_ref, str) and cursor_ref:
+                return cursor_ref
         raise ManifestError(
-            f"{self.task_id} has no unambiguous gold cursor for prefix {prefix_length}"
+            f"{self.task_id} has no unambiguous gold cursor ref for prefix {prefix_length}"
         )
+
+    @property
+    def pair_primitive_action_budget(self) -> int:
+        return max(int(value) for value in self.budgets["primitive_actions"].values())
+
+    @property
+    def pair_primitive_event_budget(self) -> int:
+        return max(int(value) for value in self.budgets["primitive_events"].values())
 
 
 @dataclass(frozen=True)
@@ -119,6 +131,15 @@ class Arm:
 
 
 @dataclass(frozen=True)
+class RuntimeBinding:
+    runtime_id: str
+    module: str
+    factory: str
+    source_sha256: str
+    contract_schema: str
+
+
+@dataclass(frozen=True)
 class EvaluationManifest:
     suite: str
     split: str
@@ -126,14 +147,19 @@ class EvaluationManifest:
     task_manifest_payload_sha256: str
     evaluation_manifest_payload_sha256: str
     expected_executor_ready_sha256: str
+    expected_executor_ready_artifact_id: str
+    expected_executor_certification_schema: str
+    evaluator_commit: str
     order_seed: int
     shard_seed: int
+    sampling_seed: int
     bootstrap_seed: int
     bootstrap_resamples: int
     attempts_per_cell: int
     budget: dict[str, int | float]
     modes: tuple[str, ...]
     arms: tuple[Arm, ...]
+    runtime: RuntimeBinding
     tasks: tuple[Task, ...]
     excluded_task_ids: frozenset[str]
 
@@ -216,6 +242,15 @@ def validate_evaluation_manifest(
     readiness_sha = evaluation.get("expected_executor_ready_sha256")
     if not _is_sha256(readiness_sha):
         raise ManifestError("expected_executor_ready_sha256 must pin a readiness marker")
+    readiness_artifact_id = evaluation.get("expected_executor_ready_artifact_id")
+    if not isinstance(readiness_artifact_id, str) or not readiness_artifact_id:
+        raise ManifestError("expected_executor_ready_artifact_id is required")
+    readiness_schema = evaluation.get("expected_executor_certification_schema")
+    if readiness_schema != "proper_vm_executor_cert_v1":
+        raise ManifestError("expected executor certification schema drift")
+    evaluator_commit = evaluation.get("evaluator_commit")
+    if not _is_git_commit(evaluator_commit):
+        raise ManifestError("evaluator_commit must be a lowercase 40-hex commit")
 
     raw_budget = evaluation.get("budget")
     if not isinstance(raw_budget, dict):
@@ -231,6 +266,7 @@ def validate_evaluation_manifest(
     for value in raw_arms:
         if any(key in value for key in ("budget", "seed", "snapshot", "cursor")):
             raise ManifestError("budget, seed, snapshot, and cursor must not vary by arm")
+    runtime = _parse_runtime(evaluation.get("runtime"))
 
     raw_modes = evaluation.get("modes")
     if not isinstance(raw_modes, list) or set(raw_modes) != set(MODES):
@@ -242,10 +278,12 @@ def validate_evaluation_manifest(
         raise ManifestError("gold-prefix horizons are frozen at [2, 4, 8]")
 
     attempts = evaluation.get("attempts_per_cell", 1)
-    if not isinstance(attempts, int) or isinstance(attempts, bool) or not 1 <= attempts <= 128:
-        raise ManifestError("attempts_per_cell must be an integer in [1, 128]")
+    if not isinstance(attempts, int) or isinstance(attempts, bool) or not 8 <= attempts <= 128:
+        raise ManifestError("true pass@8 requires attempts_per_cell in [8, 128]")
+    if evaluation.get("sampling_seed_policy") != "paired_fixed_per_attempt_v1":
+        raise ManifestError("sampling_seed_policy must be paired_fixed_per_attempt_v1")
     seeds = {}
-    for key in ("order_seed", "shard_seed", "bootstrap_seed"):
+    for key in ("order_seed", "shard_seed", "sampling_seed", "bootstrap_seed"):
         value = evaluation.get(key)
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ManifestError(f"{key} must be a non-negative integer")
@@ -276,30 +314,54 @@ def validate_evaluation_manifest(
             or hashlib.sha256(canonical_json(evaluation)).hexdigest()
         ),
         expected_executor_ready_sha256=readiness_sha,
+        expected_executor_ready_artifact_id=readiness_artifact_id,
+        expected_executor_certification_schema=readiness_schema,
+        evaluator_commit=evaluator_commit,
         order_seed=seeds["order_seed"],
         shard_seed=seeds["shard_seed"],
+        sampling_seed=seeds["sampling_seed"],
         bootstrap_seed=seeds["bootstrap_seed"],
         bootstrap_resamples=resamples,
         attempts_per_cell=attempts,
         budget=budget,
         modes=tuple(raw_modes),
         arms=arms,
+        runtime=runtime,
         tasks=tasks,
         excluded_task_ids=frozenset(exclusions),
     )
 
 
 def _validate_budget(value: dict[str, Any]) -> dict[str, int | float]:
-    allowed = {"max_actions", "max_model_calls", "max_output_tokens", "wall_time_seconds"}
-    if set(value) - allowed:
-        raise ManifestError(f"unknown budget keys: {sorted(set(value) - allowed)}")
-    for required in ("max_actions", "max_model_calls", "max_output_tokens"):
+    required_keys = {
+        "max_model_turns_per_trial",
+        "max_model_turns_per_semantic_step",
+        "max_logical_semantic_steps",
+        "max_primitive_actions_per_trial",
+        "max_emitted_primitive_events_per_trial",
+        "max_output_tokens_per_turn",
+        "max_total_output_tokens",
+        "wall_time_seconds",
+    }
+    if set(value) != required_keys:
+        raise ManifestError(f"budget keys must be exactly {sorted(required_keys)}")
+    for required in required_keys - {"wall_time_seconds"}:
         item = value.get(required)
         if not isinstance(item, int) or isinstance(item, bool) or item <= 0:
             raise ManifestError(f"budget.{required} must be a positive integer")
-    wall = value.get("wall_time_seconds")
-    if wall is not None and (not isinstance(wall, (int, float)) or wall <= 0):
+    wall = value["wall_time_seconds"]
+    if not isinstance(wall, (int, float)) or isinstance(wall, bool) or wall <= 0:
         raise ManifestError("budget.wall_time_seconds must be positive")
+    if value["max_model_turns_per_trial"] < 8:
+        raise ManifestError("budget must admit the frozen horizon 8")
+    if value["max_model_turns_per_semantic_step"] < 8:
+        raise ManifestError("semantic-step budget must admit bounded multi-action plans")
+    if value["max_logical_semantic_steps"] < 4:
+        raise ManifestError("budget must admit 2-4-step natural tasks")
+    if value["max_total_output_tokens"] < (
+        value["max_output_tokens_per_turn"] * value["max_model_turns_per_trial"]
+    ):
+        raise ManifestError("total output-token budget cannot cover all admitted turns")
     return dict(value)
 
 
@@ -320,6 +382,11 @@ def _parse_arm(value: Any) -> Arm:
     generation = value.get("generation", {})
     if not isinstance(generation, dict):
         raise ManifestError(f"{name}.generation must be an object")
+    if generation.get("do_sample") is not True:
+        raise ManifestError(f"{name}.generation.do_sample must be true for pass@k")
+    temperature = generation.get("temperature")
+    if not isinstance(temperature, (int, float)) or isinstance(temperature, bool) or temperature <= 0:
+        raise ManifestError(f"{name}.generation.temperature must be positive")
     return Arm(
         name=name,
         action_interface=ACTION_INTERFACES[name],
@@ -328,6 +395,31 @@ def _parse_arm(value: Any) -> Arm:
         prompt_id=value["prompt_id"],
         prompt_sha256=value["prompt_sha256"],
         generation=dict(generation),
+    )
+
+
+def _parse_runtime(value: Any) -> RuntimeBinding:
+    if not isinstance(value, dict) or set(value) != {
+        "runtime_id",
+        "module",
+        "factory",
+        "source_sha256",
+        "contract_schema",
+    }:
+        raise ManifestError("runtime binding field set drifted")
+    for key in ("runtime_id", "module", "factory"):
+        if not isinstance(value.get(key), str) or not value[key]:
+            raise ManifestError(f"runtime.{key} is required")
+    if value.get("contract_schema") != "proper_vm_paired_runtime_v1":
+        raise ManifestError("runtime contract schema drift")
+    if not _is_sha256(value.get("source_sha256")):
+        raise ManifestError("runtime.source_sha256 is invalid")
+    return RuntimeBinding(
+        runtime_id=value["runtime_id"],
+        module=value["module"],
+        factory=value["factory"],
+        source_sha256=value["source_sha256"],
+        contract_schema=value["contract_schema"],
     )
 
 
@@ -378,7 +470,42 @@ def _parse_task(value: Any) -> Task:
     for key in ("kind", "module"):
         if not isinstance(verifier.get(key), str) or not verifier[key]:
             raise ManifestError(f"{value['task_id']}: verifier.{key} is required")
-    initial = _cursor(value.get("initial_cursor"), label=f"{value['task_id']} initial_cursor")
+    if (
+        verifier.get("entrypoint") != "main"
+        or verifier.get("result_schema") != "semantic_oracle_result_v2"
+        or verifier.get("state_extractor_entrypoint") != "extract_state"
+    ):
+        raise ManifestError(f"{value['task_id']}: verifier API drift")
+    initial = value.get("initial_cursor")
+    if initial != {
+        "source": "live_probe",
+        "probe_version": "rung1_cursor_position_v1",
+    }:
+        raise ManifestError(f"{value['task_id']}: initial cursor contract drift")
+    geometry = value.get("geometry_contract")
+    if (
+        not isinstance(geometry, dict)
+        or geometry.get("source") != "live_probe"
+        or not isinstance(geometry.get("probe_version"), str)
+        or not isinstance(geometry.get("state_probe_version"), str)
+        or not isinstance(geometry.get("required_targets"), list)
+    ):
+        raise ManifestError(f"{value['task_id']}: geometry contract drift")
+    budgets = value.get("budgets")
+    if not isinstance(budgets, dict) or set(budgets) != {
+        "semantic_steps",
+        "primitive_actions",
+        "primitive_events",
+    }:
+        raise ManifestError(f"{value['task_id']}: task budget field set drift")
+    if budgets["semantic_steps"] != count:
+        raise ManifestError(f"{value['task_id']}: semantic budget mismatch")
+    for budget_name in ("primitive_actions", "primitive_events"):
+        arm_values = budgets[budget_name]
+        if not isinstance(arm_values, dict) or set(arm_values) != set(ACTION_INTERFACES.values()):
+            raise ManifestError(f"{value['task_id']}: {budget_name} interface drift")
+        if any(not isinstance(item, int) or isinstance(item, bool) or item < 1 for item in arm_values.values()):
+            raise ManifestError(f"{value['task_id']}: invalid {budget_name}")
     history = value.get("gold_cursor_history")
     if not isinstance(history, list) or not all(isinstance(item, dict) for item in history):
         raise ManifestError(f"{value['task_id']}: gold_cursor_history must be object rows")
@@ -401,14 +528,18 @@ def _parse_task(value: Any) -> Task:
         instruction=value["instruction"],
         snapshot_id=snapshot["id"],
         reset_strategy=snapshot["reset_strategy"],
-        initial_cursor=initial,
+        verifier_kind=verifier["kind"],
+        verifier_module=verifier["module"],
+        budgets=dict(budgets),
+        geometry_contract=dict(geometry),
+        initial_cursor_contract=dict(initial),
         semantic_steps=tuple(steps),
         gold_cursor_history=tuple(dict(item) for item in history),
         fixture_sha256=fixture_sha,
         raw=dict(value),
     )
     for prefix in range(1, task.semantic_step_count + 1):
-        task.cursor_for_prefix(prefix)
+        task.cursor_ref_for_prefix(prefix)
     return task
 
 
@@ -435,3 +566,13 @@ def _validate_exclusions(value: Any, task_ids: set[str]) -> set[str]:
             raise ManifestError("exclusion evidence must be hashed")
         excluded.add(task_id)
     return excluded
+
+
+def _is_git_commit(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) != 40 or value.lower() != value:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True

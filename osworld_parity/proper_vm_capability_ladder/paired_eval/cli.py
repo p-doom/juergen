@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
+import hashlib
 import json
 import os
 from dataclasses import asdict
@@ -27,12 +29,20 @@ def _shard(parser: argparse.ArgumentParser) -> None:
 
 
 def _load_factory(
-    value: str,
+    manifest: EvaluationManifest,
 ) -> Callable[[EvaluationManifest, ConsumedReadiness], Any]:
-    module_name, separator, attribute = value.partition(":")
-    if not separator or not module_name or not attribute:
-        raise ValueError("runtime factory must be module.path:callable")
-    factory = getattr(importlib.import_module(module_name), attribute)
+    binding = manifest.runtime
+    spec = importlib.util.find_spec(binding.module)
+    source = None if spec is None else spec.origin
+    if not isinstance(source, str) or source in {"built-in", "frozen"}:
+        raise ValueError("bound runtime module has no source file")
+    observed = hashlib.sha256(Path(source).read_bytes()).hexdigest()
+    if observed != binding.source_sha256:
+        raise ValueError(
+            f"runtime source hash mismatch: {observed} != {binding.source_sha256}"
+        )
+    module = importlib.import_module(binding.module)
+    factory = getattr(module, binding.factory)
     if not callable(factory):
         raise TypeError("runtime factory is not callable")
     return factory
@@ -66,7 +76,6 @@ def main(argv: list[str] | None = None) -> int:
     _common(run)
     _shard(run)
     run.add_argument("--executor-ready", type=Path, required=True)
-    run.add_argument("--runtime-factory", required=True)
     run.add_argument("--output", type=Path, required=True)
 
     aggregate = commands.add_parser("aggregate")
@@ -114,11 +123,16 @@ def main(argv: list[str] | None = None) -> int:
         # Consume and bind readiness before importing a runtime factory.  This
         # prevents a factory with VM/model startup side effects from bypassing
         # the pre-scoring integration gate.
+        context_value = os.environ.get("LABCTL_CONTEXT")
+        if not context_value:
+            raise RuntimeError("LABCTL_CONTEXT path is required for scored execution")
         readiness = consume_executor_ready(
             args.executor_ready,
             expected_sha256=manifest.expected_executor_ready_sha256,
+            expected_artifact_id=manifest.expected_executor_ready_artifact_id,
+            labctl_context_path=Path(context_value),
         )
-        factory = _load_factory(args.runtime_factory)
+        factory = _load_factory(manifest)
         runtime = factory(manifest, readiness)
         rows = PairedEvaluationRunner(manifest, readiness, runtime).run(plan)
         write_jsonl_atomic(args.output, rows)
