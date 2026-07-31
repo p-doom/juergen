@@ -55,7 +55,7 @@ Unfinished WIP lives under `eval/`:
   - incrementally rewrites the aggregate `result.json` after each attempt;
   - reports per-task/category/overall pass@1, empirical pass@4, mean/best
     progress, parse-valid rate, and expected-action rate.
-- `cua_micro_tasks_v1.json`
+- `cua_micro_tasks.json`
   - 24 tasks across `move`, `click`, and `app_atomic`;
   - desktop/dock targets: Chrome and Files;
   - window controls: minimize/maximize/close;

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "suite": "cua_micro_tasks_native_v2",
+  "suite": "cua_micro_tasks",
   "coordinate_grid": 1000,
   "description": "Balanced one-turn native-app CUA micro-evals with semantic state verifiers.",
   "tasks": [

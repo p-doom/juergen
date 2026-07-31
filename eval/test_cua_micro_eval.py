@@ -19,8 +19,7 @@ from osworld_runtime import _call_model
 from osworld_system_prompts import SYSTEM_PROMPTS
 from sampling import qwen_sampling
 
-_SUITE = Path(__file__).with_name("cua_micro_tasks_v1.json")
-_NATIVE_SUITE = Path(__file__).with_name("cua_micro_tasks_native_v2.json")
+_SUITE = Path(__file__).with_name("cua_micro_tasks.json")
 
 
 def _tool(arguments: dict) -> str:
@@ -40,29 +39,22 @@ class SuiteContractTests(unittest.TestCase):
         self.assertEqual(self.raw["schema_version"], 1)
         self.assertEqual(self.raw["coordinate_grid"], 1000)
         ids = [task.task_id for task in self.tasks]
-        self.assertGreaterEqual(len(ids), 20)
+        self.assertGreaterEqual(len(ids), 16)
         self.assertEqual(len(ids), len(set(ids)))
 
     def test_requested_families_are_present(self) -> None:
         ids = {task.task_id for task in self.tasks}
         required_fragments = {
-            "desktop.chrome",
             "desktop.files",
-            "window.minimize",
-            "window.maximize",
-            "window.close",
-            "chrome.new_tab",
+            "desktop.libreoffice_writer",
+            "desktop.libreoffice_calc",
+            "desktop.libreoffice_impress",
             "chrome.reload",
             "chrome.back",
-            "chrome.address_bar",
-            "chrome.first_tab",
-            "editor.exact",
-            "editor.punctuation",
-            "editor.long_coalesced",
-            "terminal.exact",
+            "terminal.native_exact",
+            "text_editor.native_exact",
             "calculator.digit7",
-            "files.eval_target",
-            "settings.natural_scroll",
+            "files.open_eval_target",
             "scroll.chrome.down",
         }
         for fragment in required_fragments:
@@ -73,13 +65,13 @@ class SuiteContractTests(unittest.TestCase):
 
     def test_all_tasks_expect_one_atomic_primitive(self) -> None:
         for task in self.tasks:
-            self.assertIn(task.expected["kind"], {"move", "click", "type", "scroll"})
+            self.assertIn(task.expected["kind"], {"move", "click", "type", "scroll", "key"})
 
     def test_typing_checks_exact_action_and_exact_app_state(self) -> None:
         typing = [task for task in self.tasks if task.expected["kind"] == "type"]
-        self.assertGreaterEqual(len(typing), 4)
+        self.assertGreaterEqual(len(typing), 2)
         for task in typing:
-            self.assertEqual(task.verifier["kind"], "fixture_equals")
+            self.assertIn(task.verifier["kind"], {"guest_json_equals", "saved_file_equals"})
             self.assertEqual(task.expected["text"], task.verifier["value"])
             parsed = parse_computer_use_rel_step_action(
                 _tool({"action": "type", "text": task.expected["text"]})
@@ -87,8 +79,8 @@ class SuiteContractTests(unittest.TestCase):
             self.assertTrue(micro.action_matches_expected(parsed, task.expected))
 
     def test_native_suite_is_balanced_across_real_apps(self) -> None:
-        raw, tasks = micro.load_suite(_NATIVE_SUITE)
-        self.assertEqual(raw["suite"], "cua_micro_tasks_native_v2")
+        raw, tasks = micro.load_suite(_SUITE)
+        self.assertEqual(raw["suite"], "cua_micro_tasks")
         ids = {task.task_id for task in tasks}
         for fragment in ("files", "terminal", "text_editor", "writer", "calc", "impress"):
             self.assertTrue(any(fragment in task_id for task_id in ids), fragment)
@@ -275,7 +267,7 @@ class ResultPersistenceTests(unittest.TestCase):
             copied = Path(directory) / "suite.json"
             copied.write_text(json.dumps(raw))
             loaded, tasks = micro.load_suite(copied)
-        self.assertEqual(loaded["suite"], "cua_micro_tasks_v1")
+        self.assertEqual(loaded["suite"], "cua_micro_tasks")
         self.assertEqual(len(tasks), len(raw["tasks"]))
 
 
