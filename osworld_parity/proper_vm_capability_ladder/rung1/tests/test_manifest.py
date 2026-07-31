@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import copy
 import json
+
+import pytest
 
 from osworld_parity.proper_vm_capability_ladder.rung1.fixtures import (
     COORDINATE_CONTRACT,
@@ -10,6 +13,8 @@ from osworld_parity.proper_vm_capability_ladder.rung1.fixtures import (
 )
 from osworld_parity.proper_vm_capability_ladder.rung1.selfcheck import (
     _checkpoint_progress,
+    _reset_component_diff,
+    _reset_component_report,
     _validate_manifest_bounds,
     main,
 )
@@ -118,4 +123,105 @@ def test_active_dispatch_journal_is_durable_before_oracle(tmp_path) -> None:
     assert payload["active_cell"]["gold_cursor_journal"]["final_cursor"] == [
         365,
         345,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("component", "mutation"),
+    [
+        ("fixture", "fixture"),
+        ("logical_state", "logical"),
+        ("cursor_button", "cursor"),
+        ("cursor_button", "button"),
+        ("window_geometry", "window"),
+        ("dom_geometry", "dom"),
+    ],
+)
+def test_reset_component_diff_reports_exact_changed_component(
+    component: str, mutation: str
+) -> None:
+    state_a = {
+        "fixture_id": "r1a-click-dev-1101",
+        "fixture_sha256": "fixture-sha",
+        "ready": True,
+        "current": {"checked": False, "decoy_checked": False},
+        "geometry": {
+            "window": {"inner_width": 1850, "inner_height": 966},
+            "target": {"left": 351, "top": 331, "right": 379, "bottom": 359},
+            "decoy": {"left": 351, "top": 387, "right": 364, "bottom": 400},
+        },
+    }
+    state_b = copy.deepcopy(state_a)
+    cursor_a = (1728, 972)
+    cursor_b = cursor_a
+    buttons_a = buttons_b = 0
+    if mutation == "fixture":
+        state_b["fixture_sha256"] = "other-fixture-sha"
+    elif mutation == "logical":
+        state_b["current"]["checked"] = True
+    elif mutation == "cursor":
+        cursor_b = (1729, 972)
+    elif mutation == "button":
+        buttons_b = 1
+    elif mutation == "window":
+        state_b["geometry"]["window"]["inner_width"] = 1849
+    elif mutation == "dom":
+        state_b["geometry"]["target"]["left"] = 350
+    reset_a = _reset_component_report(
+        state_a, cursor=cursor_a, pointer_buttons=buttons_a
+    )
+    reset_b = _reset_component_report(
+        state_b, cursor=cursor_b, pointer_buttons=buttons_b
+    )
+    diff = _reset_component_diff(reset_a, reset_b)
+    assert diff["all_equal"] is False
+    assert diff["differing_components"] == [component]
+    assert diff["components"][component]["equal"] is False
+    assert (
+        diff["components"][component]["reset_a_sha256"]
+        != diff["components"][component]["reset_b_sha256"]
+    )
+    for name, detail in diff["components"].items():
+        if name != component:
+            assert detail["equal"] is True
+            assert detail["reset_a_sha256"] == detail["reset_b_sha256"]
+
+
+def test_reset_snapshots_and_component_diff_are_checkpointed_before_failure(
+    tmp_path,
+) -> None:
+    state_a = {
+        "fixture_id": "r1a-click-dev-1101",
+        "fixture_sha256": "fixture-sha",
+        "ready": True,
+        "current": {"checked": False, "decoy_checked": False},
+        "geometry": {
+            "window": {"inner_width": 1850},
+            "target": {"left": 351},
+        },
+    }
+    state_b = copy.deepcopy(state_a)
+    state_b["geometry"]["window"]["inner_width"] = 1849
+    reset_a = _reset_component_report(state_a, cursor=(10, 20), pointer_buttons=0)
+    reset_b = _reset_component_report(state_b, cursor=(10, 20), pointer_buttons=0)
+    cell = {
+        "reset_a_snapshot": {"browser_state": state_a, "cursor": [10, 20]},
+        "reset_b_snapshot": {"browser_state": state_b, "cursor": [10, 20]},
+        "reset_a_components": reset_a,
+        "reset_b_components": reset_b,
+        "reset_component_diff": _reset_component_diff(reset_a, reset_b),
+    }
+    _checkpoint_progress(
+        tmp_path,
+        cells=[],
+        expected_cell_count=16,
+        active_cell=cell,
+        stage="reset_comparison_recorded",
+    )
+    persisted = json.loads((tmp_path / "progress.json").read_text())["active_cell"]
+    assert persisted["journal_stage"] == "reset_comparison_recorded"
+    assert persisted["reset_a_snapshot"]["browser_state"] == state_a
+    assert persisted["reset_b_snapshot"]["browser_state"] == state_b
+    assert persisted["reset_component_diff"]["differing_components"] == [
+        "window_geometry"
     ]

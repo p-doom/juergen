@@ -17,6 +17,10 @@ class FixtureServerError(RuntimeError):
     pass
 
 
+STABLE_GEOMETRY_OBSERVATIONS = 3
+MAX_GEOMETRY_ANIMATION_FRAMES = 120
+
+
 def _initial_current(fixture: Fixture) -> dict[str, Any]:
     if fixture.template == "click":
         return {"checked": False, "decoy_checked": False}
@@ -53,6 +57,9 @@ class FixtureStateStore:
                 "events": [],
                 "last_pointer_buttons": 0,
                 "last_client_sequence": 0,
+                "geometry_observations": [],
+                "geometry_stabilization": None,
+                "geometry_stabilization_error": None,
             }
             self._condition.notify_all()
             return generation
@@ -84,8 +91,40 @@ class FixtureStateStore:
                 geometry = payload.get("geometry")
                 if not isinstance(geometry, dict):
                     raise FixtureServerError("ready geometry missing")
+                observations = state["geometry_observations"]
+                required = observations[-STABLE_GEOMETRY_OBSERVATIONS:]
+                if (
+                    payload.get("fonts_ready") is not True
+                    or len(required) != STABLE_GEOMETRY_OBSERVATIONS
+                    or any(item["fonts_ready"] is not True for item in required)
+                    or any(item["geometry"] != geometry for item in required)
+                    or any(
+                        required[index]["animation_frame"] + 1
+                        != required[index + 1]["animation_frame"]
+                        for index in range(len(required) - 1)
+                    )
+                    or any(
+                        required[index]["client_sequence"]
+                        >= required[index + 1]["client_sequence"]
+                        for index in range(len(required) - 1)
+                    )
+                    or required[-1]["client_sequence"] >= client_sequence
+                ):
+                    raise FixtureServerError(
+                        "ready rejected before exact geometry stabilization"
+                    )
                 state["geometry"] = copy.deepcopy(geometry)
                 state["ready"] = True
+                state["geometry_stabilization"] = {
+                    "fonts_ready": True,
+                    "observation_count": len(observations),
+                    "stable_observation_count": STABLE_GEOMETRY_OBSERVATIONS,
+                    "first_stable_client_sequence": required[0]["client_sequence"],
+                    "last_stable_client_sequence": required[-1]["client_sequence"],
+                    "ready_client_sequence": client_sequence,
+                    "first_stable_animation_frame": required[0]["animation_frame"],
+                    "last_stable_animation_frame": required[-1]["animation_frame"],
+                }
                 browser_value = payload.get("value")
                 if fixture.template == "click":
                     state["current"]["checked"] = bool(browser_value)
@@ -95,6 +134,29 @@ class FixtureStateStore:
                     state["current"]["scroll_y"] = int(browser_value)
                 elif fixture.template == "drag":
                     state["current"]["value"] = int(browser_value)
+                event["geometry_stabilization"] = copy.deepcopy(
+                    state["geometry_stabilization"]
+                )
+            elif kind == "geometry_observation":
+                geometry = payload.get("geometry")
+                if not isinstance(geometry, dict):
+                    raise FixtureServerError("geometry observation missing geometry")
+                observation = {
+                    "client_sequence": client_sequence,
+                    "client_monotonic_ms": event["client_monotonic_ms"],
+                    "animation_frame": int(payload.get("animation_frame", -1)),
+                    "fonts_ready": payload.get("fonts_ready") is True,
+                    "geometry": copy.deepcopy(geometry),
+                }
+                if observation["animation_frame"] < 1 or not observation["fonts_ready"]:
+                    raise FixtureServerError("invalid geometry observation")
+                state["geometry_observations"].append(observation)
+                event.update(copy.deepcopy(observation))
+            elif kind == "geometry_failure":
+                state["geometry_stabilization_error"] = str(
+                    payload.get("error", "geometry did not stabilize")
+                )
+                event["error"] = state["geometry_stabilization_error"]
             elif kind == "pointer":
                 buttons = int(payload.get("buttons", 0))
                 state["last_pointer_buttons"] = buttons
@@ -136,6 +198,10 @@ class FixtureStateStore:
         with self._condition:
             while time.monotonic() < deadline:
                 state = self._states[fixture_id]
+                if state["geometry_stabilization_error"] is not None:
+                    raise FixtureServerError(
+                        f"{fixture_id}: {state['geometry_stabilization_error']}"
+                    )
                 if state["ready"]:
                     return copy.deepcopy(state)
                 self._condition.wait(timeout=min(0.2, deadline - time.monotonic()))
@@ -315,7 +381,13 @@ class FixtureHttpServer:
         self.close()
 
 
-def _common_script(fixture: Fixture, generation: int, ready_js: str) -> str:
+def _common_script(
+    fixture: Fixture,
+    generation: int,
+    ready_payload_js: str,
+    *,
+    setup_js: str = "",
+) -> str:
     endpoint = f"/event/{urllib.parse.quote(fixture.id)}"
     return f"""
 <script>
@@ -370,7 +442,31 @@ for (const name of ['pointerdown', 'pointerup', 'pointermove']) {{
     }}
   }}, true);
 }}
-window.addEventListener('load', () => requestAnimationFrame(() => {{ {ready_js} }}));
+async function stabilizeGeometry() {{
+  await document.fonts.ready;
+  {setup_js}
+  let priorGeometry = null;
+  let consecutiveIdentical = 0;
+  for (let animationFrame = 1; animationFrame <= {MAX_GEOMETRY_ANIMATION_FRAMES}; animationFrame++) {{
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    const sample = {ready_payload_js};
+    const serialized = JSON.stringify(sample.geometry);
+    consecutiveIdentical = serialized === priorGeometry ? consecutiveIdentical + 1 : 1;
+    priorGeometry = serialized;
+    await post({{kind:'geometry_observation', geometry:sample.geometry,
+      animation_frame:animationFrame, fonts_ready:true,
+      consecutive_identical:consecutiveIdentical}});
+    if (consecutiveIdentical >= {STABLE_GEOMETRY_OBSERVATIONS}) {{
+      await post({{kind:'ready', geometry:sample.geometry, value:sample.value,
+        animation_frame:animationFrame, fonts_ready:true,
+        stable_observation_count:consecutiveIdentical}});
+      return;
+    }}
+  }}
+  throw new Error('geometry did not stabilize within animation-frame bound');
+}}
+window.addEventListener('load', () => stabilizeGeometry().catch(error =>
+  post({{kind:'geometry_failure', error:String(error)}})));
 </script>
 """
 
@@ -408,7 +504,8 @@ decoy.addEventListener('change', () => post({{kind:'click', checked:target.check
  decoy_checked:decoy.checked}}));
 </script>
 """
-        ready = "post({kind:'ready', geometry:measuredGeometry({target:screenRect(target), decoy:screenRect(decoy)}), value:target.checked});"
+        ready = "({geometry:measuredGeometry({target:screenRect(target), decoy:screenRect(decoy)}), value:target.checked})"
+        setup = ""
     elif fixture.template == "focus_type":
         position = _card_position(p, width=520, height=160)
         content = f"""
@@ -419,7 +516,8 @@ decoy.addEventListener('change', () => post({{kind:'click', checked:target.check
 </div>
 <script>target.addEventListener('input', () => post({{kind:'text', text:target.value}}));</script>
 """
-        ready = "post({kind:'ready', geometry:measuredGeometry({target:screenRect(target)}), value:target.value});"
+        ready = "({geometry:measuredGeometry({target:screenRect(target)}), value:target.value})"
+        setup = ""
     elif fixture.template == "drag":
         card_width = int(p["width"]) + 70
         position = _card_position(p, width=card_width, height=180)
@@ -433,7 +531,8 @@ decoy.addEventListener('change', () => post({{kind:'click', checked:target.check
 <script>target.addEventListener('input', () => {{readout.value=target.value;
  post({{kind:'drag', value:Number(target.value)}});}});</script>
 """
-        ready = "post({kind:'ready', geometry:measuredGeometry({target:screenRect(target)}), value:Number(target.value)});"
+        ready = "({geometry:measuredGeometry({target:screenRect(target)}), value:Number(target.value)})"
+        setup = ""
     elif fixture.template == "scroll":
         blocks = "".join(
             f'<section style="height:420px;padding:120px 80px;font-size:28px;background:{"#fff" if i % 2 else "#edf2f7"}">'
@@ -449,13 +548,18 @@ window.addEventListener('scroll', () => {{ clearTimeout(scrollTimer); scrollTime
 </script>
 """
         ready = (
-            f"window.scrollTo(0, {int(p['initial_y'])}); requestAnimationFrame(() => "
-            "post({kind:'ready', geometry:measuredGeometry({viewport:{width:window.innerWidth,height:window.innerHeight}}), "
-            "value:Math.round(window.scrollY)}));"
+            "({geometry:measuredGeometry({viewport:{width:window.innerWidth,"
+            "height:window.innerHeight}}), value:Math.round(window.scrollY)})"
         )
+        setup = f"window.scrollTo(0, {int(p['initial_y'])});"
     else:
         raise FixtureServerError(f"unknown template {fixture.template!r}")
-    return base + content + _common_script(fixture, generation, ready) + "</body></html>"
+    return (
+        base
+        + content
+        + _common_script(fixture, generation, ready, setup_js=setup)
+        + "</body></html>"
+    )
 
 
 def _card_position(params: dict[str, Any], *, width: int, height: int) -> str:

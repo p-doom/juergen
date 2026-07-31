@@ -20,7 +20,13 @@ from osworld_parity.proper_vm_capability_ladder.rung1.server import (
 )
 
 
-def _ready_event(fixture, generation: int) -> dict:
+def _ready_event(
+    fixture,
+    generation: int,
+    *,
+    client_sequence: int,
+    geometry: dict | None = None,
+) -> dict:
     if fixture.template == "click":
         value = False
     elif fixture.template == "focus_type":
@@ -32,9 +38,47 @@ def _ready_event(fixture, generation: int) -> dict:
     return {
         "kind": "ready",
         "generation": generation,
-        "geometry": {"target": {"center_x": 100, "center_y": 100}},
+        "client_sequence": client_sequence,
+        "client_monotonic_ms": float(client_sequence),
+        "fonts_ready": True,
+        "geometry": geometry or {"target": {"center_x": 100, "center_y": 100}},
         "value": value,
     }
+
+
+def _apply_stable_ready(
+    store: FixtureStateStore,
+    fixture,
+    generation: int,
+    *,
+    geometries: list[dict] | None = None,
+) -> int:
+    geometry = {"target": {"center_x": 100, "center_y": 100}}
+    observations = geometries or [geometry, geometry, geometry]
+    for index, observed in enumerate(observations, start=1):
+        store.apply_event(
+            fixture,
+            {
+                "kind": "geometry_observation",
+                "generation": generation,
+                "client_sequence": index,
+                "client_monotonic_ms": float(index),
+                "animation_frame": index,
+                "fonts_ready": True,
+                "geometry": observed,
+            },
+        )
+    ready_sequence = len(observations) + 1
+    store.apply_event(
+        fixture,
+        _ready_event(
+            fixture,
+            generation,
+            client_sequence=ready_sequence,
+            geometry=observations[-1],
+        ),
+    )
+    return ready_sequence
 
 
 def test_oracle_process_is_fresh_and_exact_unicode() -> None:
@@ -61,7 +105,7 @@ def test_store_reset_removes_all_state_classes_and_button_leakage() -> None:
     store = FixtureStateStore(manifest)
     for fixture in manifest.select(split="development"):
         generation = store.reset(fixture)
-        store.apply_event(fixture, _ready_event(fixture, generation))
+        _apply_stable_ready(store, fixture, generation)
         store.apply_event(
             fixture,
             {
@@ -96,10 +140,10 @@ def test_two_consecutive_fixture_resets_are_equivalent() -> None:
     store = FixtureStateStore(manifest)
     for fixture in manifest.select(split="development"):
         first_generation = store.reset(fixture)
-        store.apply_event(fixture, _ready_event(fixture, first_generation))
+        _apply_stable_ready(store, fixture, first_generation)
         first = store.snapshot(fixture.id)
         second_generation = store.reset(fixture)
-        store.apply_event(fixture, _ready_event(fixture, second_generation))
+        _apply_stable_ready(store, fixture, second_generation)
         second = store.snapshot(fixture.id)
         for state in (first, second):
             state.pop("generation")
@@ -117,11 +161,11 @@ def test_pointer_diagnostics_are_ordered_and_record_exact_hit_coordinates() -> N
     )
     store = FixtureStateStore(manifest)
     generation = store.reset(fixture)
-    store.apply_event(fixture, _ready_event(fixture, generation))
+    ready_sequence = _apply_stable_ready(store, fixture, generation)
     pointer = {
         "kind": "pointer",
         "generation": generation,
-        "client_sequence": 1,
+        "client_sequence": ready_sequence + 1,
         "client_monotonic_ms": 123.75,
         "event": "pointerdown",
         "button": 0,
@@ -135,7 +179,7 @@ def test_pointer_diagnostics_are_ordered_and_record_exact_hit_coordinates() -> N
     }
     store.apply_event(fixture, pointer)
     event = store.snapshot(fixture.id)["events"][-1]
-    assert event["client_sequence"] == 1
+    assert event["client_sequence"] == ready_sequence + 1
     assert event["client_monotonic_ms"] == 123.75
     assert (event["screen_x"], event["screen_y"]) == (365, 345)
     assert (event["hit_id"], event["hit_tag"]) == ("target", "input")
@@ -151,6 +195,85 @@ def test_pointer_diagnostics_are_ordered_and_record_exact_hit_coordinates() -> N
     assert "screen_x:" in html and "screen_y:" in html
 
 
+def test_ready_is_rejected_before_fonts_and_exact_geometry_stabilization() -> None:
+    manifest = load_manifest()
+    fixture = manifest.select(split="development")[0]
+    store = FixtureStateStore(manifest)
+    generation = store.reset(fixture)
+    with pytest.raises(FixtureServerError, match="before exact geometry"):
+        store.apply_event(
+            fixture,
+            _ready_event(fixture, generation, client_sequence=1),
+        )
+    assert store.snapshot(fixture.id)["ready"] is False
+
+    store = FixtureStateStore(manifest)
+    generation = store.reset(fixture)
+    geometry = {"target": {"left": 351, "right": 379}}
+    for sequence in (1, 2):
+        store.apply_event(
+            fixture,
+            {
+                "kind": "geometry_observation",
+                "generation": generation,
+                "client_sequence": sequence,
+                "animation_frame": sequence,
+                "fonts_ready": True,
+                "geometry": geometry,
+            },
+        )
+    with pytest.raises(FixtureServerError, match="before exact geometry"):
+        store.apply_event(
+            fixture,
+            _ready_event(
+                fixture,
+                generation,
+                client_sequence=3,
+                geometry=geometry,
+            ),
+        )
+    assert store.snapshot(fixture.id)["ready"] is False
+
+
+def test_delayed_layout_requires_three_consecutive_exact_frame_observations() -> None:
+    manifest = load_manifest()
+    fixture = manifest.select(split="development")[0]
+    store = FixtureStateStore(manifest)
+    generation = store.reset(fixture)
+    early = {
+        "window": {"inner_width": 1849, "inner_height": 966},
+        "target": {"left": 350, "top": 331, "right": 378, "bottom": 359},
+    }
+    stable = {
+        "window": {"inner_width": 1850, "inner_height": 966},
+        "target": {"left": 351, "top": 331, "right": 379, "bottom": 359},
+    }
+    ready_sequence = _apply_stable_ready(
+        store,
+        fixture,
+        generation,
+        geometries=[early, stable, stable, stable],
+    )
+    state = store.snapshot(fixture.id)
+    assert state["ready"] is True
+    assert state["geometry"] == stable
+    assert state["geometry_stabilization"] == {
+        "fonts_ready": True,
+        "observation_count": 4,
+        "stable_observation_count": 3,
+        "first_stable_client_sequence": 2,
+        "last_stable_client_sequence": 4,
+        "ready_client_sequence": ready_sequence,
+        "first_stable_animation_frame": 2,
+        "last_stable_animation_frame": 4,
+    }
+    html = render_fixture_html(fixture, generation)
+    assert "await document.fonts.ready" in html
+    assert "await new Promise(resolve => requestAnimationFrame(resolve))" in html
+    assert "consecutiveIdentical >= 3" in html
+    assert "animationFrame <= 120" in html
+
+
 def test_browser_quiescence_requires_causal_release_and_click_ack() -> None:
     manifest = load_manifest()
     fixture = next(
@@ -160,13 +283,13 @@ def test_browser_quiescence_requires_causal_release_and_click_ack() -> None:
     )
     store = FixtureStateStore(manifest)
     generation = store.reset(fixture)
-    store.apply_event(fixture, _ready_event(fixture, generation))
+    ready_sequence = _apply_stable_ready(store, fixture, generation)
     store.apply_event(
         fixture,
         {
             "kind": "pointer",
             "generation": generation,
-            "client_sequence": 1,
+            "client_sequence": ready_sequence + 1,
             "event": "pointerdown",
             "button": 0,
             "buttons": 1,
@@ -177,7 +300,7 @@ def test_browser_quiescence_requires_causal_release_and_click_ack() -> None:
         {
             "kind": "pointer",
             "generation": generation,
-            "client_sequence": 2,
+            "client_sequence": ready_sequence + 2,
             "event": "pointerup",
             "button": 0,
             "buttons": 0,
@@ -188,21 +311,21 @@ def test_browser_quiescence_requires_causal_release_and_click_ack() -> None:
         {
             "kind": "click",
             "generation": generation,
-            "client_sequence": 3,
+            "client_sequence": ready_sequence + 3,
             "checked": True,
             "decoy_checked": False,
         },
     )
     ack = store.wait_for_browser_quiescence(
         fixture.id,
-        after_sequence=0,
+        after_sequence=ready_sequence,
         required_kinds=("click",),
         require_pointer_up=True,
         expected_pointer_buttons=0,
         timeout_s=0.05,
         quiet_s=0,
     )
-    assert ack["last_sequence"] == 3
+    assert ack["last_sequence"] == ready_sequence + 3
     assert ack["pointer_up_acknowledged"] is True
     assert ack["pointer_buttons"] == 0
 
@@ -210,7 +333,7 @@ def test_browser_quiescence_requires_causal_release_and_click_ack() -> None:
     with pytest.raises(TimeoutError, match="acknowledgement timeout"):
         store.wait_for_browser_quiescence(
             fixture.id,
-            after_sequence=3,
+            after_sequence=ready_sequence + 3,
             required_kinds=("click",),
             require_pointer_up=True,
             expected_pointer_buttons=0,
@@ -231,13 +354,13 @@ def test_browser_quiescence_rejects_held_or_unacknowledged_click(
     )
     store = FixtureStateStore(manifest)
     generation = store.reset(fixture)
-    store.apply_event(fixture, _ready_event(fixture, generation))
+    ready_sequence = _apply_stable_ready(store, fixture, generation)
     store.apply_event(
         fixture,
         {
             "kind": "pointer",
             "generation": generation,
-            "client_sequence": 1,
+            "client_sequence": ready_sequence + 1,
             "event": "pointerdown",
             "button": 0,
             "buttons": 1,
@@ -249,7 +372,7 @@ def test_browser_quiescence_rejects_held_or_unacknowledged_click(
             {
                 "kind": "pointer",
                 "generation": generation,
-                "client_sequence": 2,
+                "client_sequence": ready_sequence + 2,
                 "event": "pointerup",
                 "button": 0,
                 "buttons": 0,
@@ -258,7 +381,7 @@ def test_browser_quiescence_rejects_held_or_unacknowledged_click(
     with pytest.raises(TimeoutError, match="acknowledgement timeout"):
         store.wait_for_browser_quiescence(
             fixture.id,
-            after_sequence=0,
+            after_sequence=ready_sequence,
             required_kinds=("click",),
             require_pointer_up=True,
             expected_pointer_buttons=0,
