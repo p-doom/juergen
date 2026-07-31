@@ -370,6 +370,7 @@ class FakeSession:
         probe_method="uno_readonly_state_probe",
         reported_seed_offset=0,
         close_failure=False,
+        initial_probe_failure=False,
     ) -> None:
         self.task, self.arm, self.mode, self.prefix = task, arm, mode, prefix
         self.fail, self.semantic_fail = fail, semantic_fail
@@ -383,6 +384,7 @@ class FakeSession:
         self.probe_method = probe_method
         self.reported_seed_offset = reported_seed_offset
         self.close_failure = close_failure
+        self.initial_probe_failure = initial_probe_failure
         self.executed_turns = 0
         self.binding = _binding(task, arm.name)
         self.cursor = (960, 540)
@@ -547,6 +549,22 @@ class FakeSession:
         )
 
     def probe_state(self):
+        if self.initial_probe_failure and self.executed_turns == 0:
+            raise InfrastructureFailure(
+                "observation_capture",
+                "injected initial state-probe failure",
+                source_receipt=infrastructure_failure_source_receipt(
+                    "observation_capture",
+                    operation="state_probe",
+                    raw_evidence={
+                        "event": "initial_state_probe_failure",
+                        "task_id": self.task.task_id,
+                        "fixture_sha256": self.task.fixture_sha256,
+                        "binding_sha256": self.binding["binding_sha256"],
+                        "error_code": "injected_initial_probe_failure",
+                    },
+                ),
+            )
         if self.executed_turns == 0:
             index = self.prefix
             target = (
@@ -616,6 +634,7 @@ class FakeRuntime:
         probe_method: str = "uno_readonly_state_probe",
         reported_seed_offset: int = 0,
         close_failure_arm: str | None = None,
+        initial_probe_failure_arm: str | None = None,
     ) -> None:
         self.fail_arm = fail_arm
         self.semantic_fail_arm = semantic_fail_arm
@@ -633,6 +652,7 @@ class FakeRuntime:
         self.probe_method = probe_method
         self.reported_seed_offset = reported_seed_offset
         self.close_failure_arm = close_failure_arm
+        self.initial_probe_failure_arm = initial_probe_failure_arm
         self.contract = {
             "schema": "proper_vm_paired_runtime_v1",
             "runtime_id": "fake-paired-runtime-v1",
@@ -677,13 +697,33 @@ class FakeRuntime:
             self.probe_method,
             self.reported_seed_offset,
             arm.name == self.close_failure_arm,
+            arm.name == self.initial_probe_failure_arm,
         )
 
 
 class FakeFreshVerifier:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+
     def verify(
         self, *, task, state, expected_step_index, expected_target_ref, timeout_seconds
     ):
+        if self.fail:
+            raise InfrastructureFailure(
+                "verifier",
+                "injected initial verifier failure",
+                source_receipt=infrastructure_failure_source_receipt(
+                    "verifier",
+                    operation="verify_state",
+                    raw_evidence={
+                        "event": "fresh_process_verifier_failure",
+                        "reason_code": "injected_initial_verifier_failure",
+                        "task_id": task.task_id,
+                        "fixture_sha256": task.fixture_sha256,
+                        "state_sha256": sha256_json(state),
+                    },
+                ),
+            )
         index = int(state["semantic_step_index"])
         matches = expected_step_index is None or (
             index == expected_step_index and state["target"] == expected_target_ref
@@ -729,13 +769,13 @@ def _setup(tmp_path, *, attempts: int = 8):
     return manifest, readiness, setup
 
 
-def _runner(manifest, readiness, setup, runtime):
+def _runner(manifest, readiness, setup, runtime, *, verifier=None):
     return PairedEvaluationRunner._for_contract_tests(
         manifest,
         readiness,
         setup,
         runtime,
-        verifier=FakeFreshVerifier(),
+        verifier=verifier if verifier is not None else FakeFreshVerifier(),
     )
 
 
@@ -844,6 +884,72 @@ def test_evidence_backed_close_failure_does_not_erase_success(tmp_path) -> None:
     assert caught.value.status["infra_failure_classes"] == ["harness_io"]
     assert caught.value.status["estimates_emitted"] is False
     assert caught.value.status["pass_at_k_emitted"] is False
+
+
+def test_genuine_initial_state_probe_failure_returns_typed_incomplete_status(
+    tmp_path,
+) -> None:
+    manifest, readiness, setup = _setup(tmp_path)
+    trial = build_plan(manifest)[0]
+    row = _runner(
+        manifest,
+        readiness,
+        setup,
+        FakeRuntime(initial_probe_failure_arm=ARMS[0]),
+    ).run_trial(trial)
+    failed = next(arm for arm in row["arms"] if arm["arm"] == ARMS[0])
+    assert failed["infra_failure_phase"] == "initial_state_probe"
+    assert failed["start_cursor"] is None
+    assert failed["start_binding_receipt"] is None
+    with pytest.raises(IncompleteEvaluationError) as caught:
+        aggregate_results(manifest, [trial], [row])
+    assert caught.value.status["status"] == "invalid_incomplete_evaluation"
+    assert caught.value.status["reason"] == (
+        "infrastructure_exclusion_lacks_external_attestation"
+    )
+    assert caught.value.status["infra_failure_classes"] == [
+        "observation_capture"
+    ]
+
+
+def test_genuine_initial_verifier_failure_returns_typed_incomplete_status(
+    tmp_path,
+) -> None:
+    manifest, readiness, setup = _setup(tmp_path)
+    trial = build_plan(manifest)[0]
+    row = _runner(
+        manifest,
+        readiness,
+        setup,
+        FakeRuntime(),
+        verifier=FakeFreshVerifier(fail=True),
+    ).run_trial(trial)
+    assert all(
+        arm["infra_failure_phase"] == "initial_verifier" for arm in row["arms"]
+    )
+    assert all(arm["start_cursor"] is None for arm in row["arms"])
+    with pytest.raises(IncompleteEvaluationError) as caught:
+        aggregate_results(manifest, [trial], [row])
+    assert caught.value.status["status"] == "invalid_incomplete_evaluation"
+    assert caught.value.status["reason"] == (
+        "infrastructure_exclusion_lacks_external_attestation"
+    )
+    assert caught.value.status["infra_failure_classes"] == ["verifier"]
+
+
+def test_no_exclusion_row_still_requires_persisted_live_cursor_evidence(
+    tmp_path,
+) -> None:
+    manifest, readiness, setup = _setup(tmp_path)
+    trial = build_plan(manifest)[0]
+    row = _runner(manifest, readiness, setup, FakeRuntime()).run_trial(trial)
+    tampered = copy.deepcopy(row)
+    tampered["arms"][0]["start_cursor_source"] = None
+    tampered["arms"][0]["start_cursor_precentered"] = None
+    tampered = _resign_row(tampered)
+    with pytest.raises(ValueError, match="cursor was not live-probed") as caught:
+        aggregate_results(manifest, [trial], [tampered])
+    assert not isinstance(caught.value, IncompleteEvaluationError)
 
 
 def test_reset_runtime_and_execution_failures_cannot_masquerade_as_success(tmp_path) -> None:
@@ -1045,8 +1151,20 @@ def test_aggregate_rejects_outer_resealed_self_declared_exclusion(
     unsigned = dict(tampered)
     unsigned.pop("record_payload_sha256")
     tampered["record_payload_sha256"] = sha256_json(unsigned)
-    with pytest.raises(ValueError, match="infrastructure"):
+    with pytest.raises(IncompleteEvaluationError, match="infrastructure") as caught:
         aggregate_results(manifest, [trial], [tampered])
+    status = caught.value.status
+    assert status["status"] == "invalid_incomplete_evaluation"
+    assert status["reason"] == "invalid_infrastructure_exclusion_declaration"
+    assert status["infra_failure_classes"] == [failure_class]
+    assert status["estimates_emitted"] is False
+    assert status["pass_at_k_emitted"] is False
+    assert status["automatic_replacement_or_retry"] is False
+    assert status["diagnostic_reason"] == (
+        "unknown_infrastructure_failure_label"
+        if failure_class == "invented_failure"
+        else "partial_infrastructure_failure_declaration"
+    )
 
 
 def test_aggregate_rejects_outer_resealed_failure_evidence_relabel(tmp_path) -> None:
@@ -1066,8 +1184,18 @@ def test_aggregate_rejects_outer_resealed_failure_evidence_relabel(tmp_path) -> 
     unsigned = dict(tampered)
     unsigned.pop("record_payload_sha256")
     tampered["record_payload_sha256"] = sha256_json(unsigned)
-    with pytest.raises(ValueError, match="outer infrastructure summary"):
+    with pytest.raises(
+        IncompleteEvaluationError,
+        match="outer infrastructure summary",
+    ) as caught:
         aggregate_results(manifest, [trial], [tampered])
+    assert caught.value.status["status"] == "invalid_incomplete_evaluation"
+    assert caught.value.status["diagnostic_reason"] == (
+        "mismatched_infrastructure_failure_declaration"
+    )
+    assert caught.value.status["estimates_emitted"] is False
+    assert caught.value.status["pass_at_k_emitted"] is False
+    assert caught.value.status["automatic_replacement_or_retry"] is False
 
 
 def test_aggregate_rejects_outer_resealed_inner_failure_evidence_tamper(tmp_path) -> None:
@@ -1087,8 +1215,14 @@ def test_aggregate_rejects_outer_resealed_inner_failure_evidence_tamper(tmp_path
     unsigned = dict(tampered)
     unsigned.pop("record_payload_sha256")
     tampered["record_payload_sha256"] = sha256_json(unsigned)
-    with pytest.raises(ValueError, match="failure event hash mismatch"):
+    with pytest.raises(
+        IncompleteEvaluationError,
+        match="failure event hash mismatch",
+    ) as caught:
         aggregate_results(manifest, [trial], [tampered])
+    assert caught.value.status["diagnostic_reason"] == (
+        "mismatched_infrastructure_failure_declaration"
+    )
 
 
 def test_fully_resealed_forged_exclusion_is_indistinguishable_and_fails_closed(

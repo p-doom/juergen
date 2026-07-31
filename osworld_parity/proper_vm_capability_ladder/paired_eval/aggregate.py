@@ -36,11 +36,19 @@ from .receipts import (
 class IncompleteEvaluationError(ValueError):
     """A validated result cannot contribute to any statistical estimate."""
 
-    def __init__(self, pair_id: str, failure_classes: Iterable[str]) -> None:
+    def __init__(
+        self,
+        pair_id: str,
+        failure_classes: Iterable[str],
+        *,
+        reason: str = "infrastructure_exclusion_lacks_external_attestation",
+        diagnostic_reason: str | None = None,
+        diagnostic_message: str | None = None,
+    ) -> None:
         classes = sorted(set(failure_classes))
         self.status = {
             "status": "invalid_incomplete_evaluation",
-            "reason": "infrastructure_exclusion_lacks_external_attestation",
+            "reason": reason,
             "pair_id": pair_id,
             "infra_failure_classes": classes,
             "estimates_emitted": False,
@@ -48,11 +56,20 @@ class IncompleteEvaluationError(ValueError):
             "automatic_replacement_or_retry": False,
             "required_action": "operator_review_and_new_preregistered_run",
         }
+        if diagnostic_reason is not None:
+            self.status["diagnostic_reason"] = diagnostic_reason
+        if diagnostic_message is not None:
+            self.status["diagnostic_message"] = diagnostic_message
+        detail = (
+            ""
+            if diagnostic_message is None
+            else f"; diagnostic: {diagnostic_message}"
+        )
         super().__init__(
             f"{pair_id}: incomplete evaluation: infrastructure exclusion "
             "cannot be authenticated from a self-contained result row; no "
             "estimates were produced; operator review and a new preregistered "
-            "run are required"
+            f"run are required{detail}"
         )
 
 
@@ -83,11 +100,28 @@ def aggregate_results(
     rows: dict[str, dict[str, Any]] = {}
     for row in records:
         pair_id = row.get("pair_id")
-        if pair_id in rows:
-            raise ValueError(f"duplicate pair result: {pair_id}")
-        if pair_id not in trials:
-            raise ValueError(f"result is not in the deterministic plan: {pair_id}")
-        _validate_row(manifest, trials[pair_id], row)
+        has_infra_candidate, candidate_classes = _infrastructure_candidate(row)
+        try:
+            if pair_id in rows:
+                raise ValueError(f"duplicate pair result: {pair_id}")
+            if pair_id not in trials:
+                raise ValueError(
+                    f"result is not in the deterministic plan: {pair_id}"
+                )
+            _validate_row(manifest, trials[pair_id], row)
+        except IncompleteEvaluationError:
+            raise
+        except ValueError as exc:
+            if has_infra_candidate:
+                message = str(exc)
+                raise IncompleteEvaluationError(
+                    str(pair_id),
+                    candidate_classes,
+                    reason="invalid_infrastructure_exclusion_declaration",
+                    diagnostic_reason=_infrastructure_diagnostic_reason(message),
+                    diagnostic_message=message,
+                ) from exc
+            raise
         rows[pair_id] = row
     missing = sorted(set(trials) - set(rows))
     if missing:
@@ -173,6 +207,65 @@ def aggregate_results(
     }
 
 
+def _infrastructure_candidate(row: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Find any exclusion signal without treating it as trusted evidence."""
+
+    candidate = False
+    labels: set[str] = set()
+
+    def collect(value: Any) -> None:
+        nonlocal candidate
+        if value is None:
+            return
+        candidate = True
+        if isinstance(value, str):
+            labels.add(value)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            for item in value:
+                if isinstance(item, str):
+                    labels.add(item)
+
+    exclusion = row.get("exclusion")
+    if isinstance(exclusion, dict):
+        if exclusion.get("excluded") is not False:
+            candidate = True
+        classes = exclusion.get("infra_failure_classes")
+        if classes not in (None, []):
+            collect(classes)
+    arms = row.get("arms")
+    if isinstance(arms, list):
+        for arm in arms:
+            if not isinstance(arm, dict):
+                continue
+            collect(arm.get("infra_failure_class"))
+            if arm.get("infra_failure_phase") is not None:
+                candidate = True
+            if arm.get("infra_failure_message") is not None:
+                candidate = True
+            event = arm.get("infra_failure_evidence")
+            if event is not None:
+                candidate = True
+                if isinstance(event, dict):
+                    collect(event.get("failure_class"))
+    return candidate, sorted(labels)
+
+
+def _infrastructure_diagnostic_reason(message: str) -> str:
+    lowered = message.lower()
+    if "unknown infrastructure" in lowered:
+        return "unknown_infrastructure_failure_label"
+    if "partial infrastructure" in lowered:
+        return "partial_infrastructure_failure_declaration"
+    if any(
+        marker in lowered
+        for marker in ("mismatch", "disagrees", "not derived", "drift")
+    ):
+        return "mismatched_infrastructure_failure_declaration"
+    if "hash" in lowered:
+        return "invalid_infrastructure_failure_hash"
+    return "invalid_infrastructure_failure_declaration"
+
+
 def _validate_row(
     manifest: EvaluationManifest,
     trial: TrialSpec,
@@ -256,7 +349,8 @@ def _validate_row(
         failure_event = value.get("infra_failure_evidence")
         prestart_infra = (
             isinstance(failure_event, dict)
-            and failure_event.get("phase") == "open_session"
+            and failure_event.get("phase")
+            in {"open_session", "initial_state_probe", "initial_verifier"}
             and value.get("reset_signature") is None
         )
         if prestart_infra:

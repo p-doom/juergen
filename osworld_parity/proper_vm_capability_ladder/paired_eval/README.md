@@ -111,8 +111,10 @@ schema has no independent attestation boundary for an exclusion. Offline
 aggregation therefore rejects every row with an infrastructure/exclusion
 candidate as `invalid_incomplete_evaluation`, emits no point estimate or
 pass@k value, performs no automatic replacement/retry, and requires operator
-review plus a new preregistered run. Parse and executor-dispatch errors remain
-scored system failures.
+review plus a new preregistered run. Partial, unknown, or mismatched candidate
+declarations return the same typed incomplete status with a diagnostic reason;
+they never fall back to an untyped exclusion error. Parse and
+executor-dispatch errors remain scored system failures.
 
 Aggregation rejects duplicate, missing, or unmatched pairs.  It emits arm
 rates, compact-minus-native paired differences, a deterministic task-clustered
