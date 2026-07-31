@@ -109,7 +109,7 @@
       "category": "native_app",
       "instruction": "Double-click the EvalTarget folder under the cursor in Files.",
       "setup": {"kind": "native_app", "app": "files"},
-      "target": {"kind": "fixed_norm", "bbox": [108, 210, 368, 235], "label": "EvalTarget folder row"},
+      "target": {"kind": "fixed_norm", "bbox": [110, 297, 368, 326], "label": "EvalTarget folder row"},
       "cursor": {"kind": "target_center"},
       "expected": {"kind": "click", "button": "left", "count": 2},
       "verifier": {"kind": "active_title_regex", "pattern": "EvalTarget"}
