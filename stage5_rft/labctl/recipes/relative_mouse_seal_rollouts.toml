@@ -1,5 +1,5 @@
 name = "stage5_relative_mouse_seal_rollouts_v1"
-repo = "juergen_relative_onpolicy_launch"
+repo = "juergen_relative_onpolicy_postcollection"
 
 command = ["bash", "-c", '''
 set -euo pipefail

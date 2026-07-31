@@ -33,6 +33,15 @@ from stage5_rft.util import (
 )
 
 
+SELF_WRITING_COMMANDS = {
+    "collect",
+    "build-rft",
+    "learner-plan",
+    "build-relative-mouse-rft",
+    "seal-relative-mouse-batch",
+}
+
+
 def _load_symbol(spec: str) -> Any:
     if ":" not in spec:
         raise ContractError("adapter must use module:symbol syntax")
@@ -330,7 +339,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         result = args.func(args)
-        _write_or_print(result, getattr(args, "out", None) if args.command not in {"collect", "build-rft", "learner-plan"} else None)
+        _write_or_print(
+            result,
+            getattr(args, "out", None) if args.command not in SELF_WRITING_COMMANDS else None,
+        )
     except ContractError as exc:
         print(f"stage5-rft gate failed: {exc}", file=sys.stderr)
         return 2
