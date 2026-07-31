@@ -152,10 +152,11 @@ def _scroll_server_source(
     fixture: Fixture, token: str, root: PurePosixPath
 ) -> str:
     html_b64 = _b64(_scroll_html(fixture, token))
+    root_value = str(root)
     return f"""
 import base64,json,os,tempfile
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
-TOKEN={token!r}; ROOT={root!r}; HTML=base64.b64decode({html_b64!r})
+TOKEN={token!r}; ROOT={root_value!r}; HTML=base64.b64decode({html_b64!r})
 STATE=os.path.join(ROOT,'scroll-state.json')
 class H(BaseHTTPRequestHandler):
  def log_message(self,*args): pass

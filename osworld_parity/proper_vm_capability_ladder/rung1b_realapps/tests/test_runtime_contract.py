@@ -1,10 +1,14 @@
 import os
 import subprocess
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
+from osworld_parity.proper_vm_capability_ladder.rung1b_realapps.fixtures import (
+    load_manifest,
+)
 from osworld_parity.proper_vm_capability_ladder.rung1b_realapps.vm import (
     GUEST_ROOT_NAME,
+    _scroll_server_source,
     resolve_guest_root,
 )
 
@@ -79,3 +83,12 @@ def test_recipes_use_the_declared_locked_runtime_not_ambient_python():
         assert "python3 -m pytest" not in script
     build = (RECIPE_ROOT / RUNG1B_RECIPES[0]).read_text(encoding="utf-8")
     assert "uv run --locked --group dev python -m pytest" in build
+
+
+def test_scroll_server_serializes_guest_root_as_plain_path():
+    fixture = load_manifest().by_id("r1b-scroll-dev-3201")
+    source = _scroll_server_source(
+        fixture, "development-token", PurePosixPath("/tmp/rung1b-scroll-test")
+    )
+    assert "PurePosixPath" not in source
+    compile(source, "<scroll-server>", "exec")
