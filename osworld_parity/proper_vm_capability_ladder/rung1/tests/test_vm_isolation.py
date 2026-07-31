@@ -1,15 +1,106 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from osworld_parity.proper_vm_capability_ladder.rung1.vm import (
+    FIXTURE_READINESS_MAX_ATTEMPTS,
+    FixtureReadinessError,
     KvmFixtureSession,
     VmHarnessError,
     task_unique_vm_id,
 )
+from osworld_parity.proper_vm_capability_ladder.rung1.server import (
+    FixtureServerError,
+)
+from osworld_parity.proper_vm_capability_ladder.rung1.transport import (
+    InputAudit,
+    Operation,
+)
+
+
+class _ReadinessTransport:
+    def __init__(self) -> None:
+        self.audit = InputAudit()
+        self.commands: list[list[str]] = []
+
+    def execute_argv(self, argv: list[str]) -> dict:
+        self.commands.append(argv)
+        return {"status": "success", "returncode": 0, "error": None}
+
+
+class _ReadinessStore:
+    def __init__(self, outcomes: list[object], *, sleep_for_budget: bool = False) -> None:
+        self.outcomes = list(outcomes)
+        self.sleep_for_budget = sleep_for_budget
+        self.generation = 0
+        self.wait_timeouts: list[float] = []
+        self.last_error: str | None = None
+
+    def reset(self, _fixture) -> int:
+        self.generation += 1
+        self.last_error = None
+        return self.generation
+
+    def wait_ready(self, _fixture_id: str, *, timeout_s: float) -> dict:
+        self.wait_timeouts.append(timeout_s)
+        if self.sleep_for_budget:
+            time.sleep(timeout_s + 0.002)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            self.last_error = str(outcome)
+            raise outcome
+        return dict(outcome)
+
+    def snapshot(self, _fixture_id: str) -> dict:
+        return {
+            "generation": self.generation,
+            "ready": self.last_error is None,
+            "geometry_stabilization_error": self.last_error,
+            "geometry_observations": [],
+            "events": [],
+            "last_client_sequence": 0,
+            "browser_audit_events": [],
+            "browser_audit_dropped": 0,
+            "diagnostic_journal_dropped": 0,
+            "diagnostic_journal": [
+                {
+                    "journal_sequence": self.generation,
+                    "stage": "test_readiness",
+                    "details": {"error": self.last_error},
+                }
+            ],
+        }
+
+
+class _ReadinessServer:
+    def __init__(self, store: _ReadinessStore) -> None:
+        self.store = store
+
+    @staticmethod
+    def guest_url(fixture) -> str:
+        return f"http://10.0.2.2:12345/fixture/{fixture.id}"
+
+
+def _readiness_session(tmp_path: Path) -> tuple[KvmFixtureSession, _ReadinessTransport]:
+    session = KvmFixtureSession(vm_log_dir=tmp_path / "vm_logs")
+    transport = _ReadinessTransport()
+    session.transport = transport
+    session.metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    session.metadata_path.write_text(
+        json.dumps(
+            {
+                "fixture_readiness": {"schema_version": 1, "launches": []},
+                "closed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return session, transport
 
 
 def test_vm_ids_are_unique_and_auditable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,6 +168,7 @@ def test_vm_metadata_rejects_port_collisions_and_long_qmp(
     }
     metadata = session._metadata(state=base, overlay_fds=[str(session.vm_scratch_dir / "overlay (deleted)")])
     assert len(set(metadata["ports"].values())) == 4
+    assert metadata["fixture_readiness"] == {"schema_version": 1, "launches": []}
     collided = dict(base)
     collided["ports"] = {**base["ports"], "vlc": 10001}
     with pytest.raises(VmHarnessError, match="colliding"):
@@ -85,3 +177,133 @@ def test_vm_metadata_rejects_port_collisions_and_long_qmp(
     long_qmp["qmp_path"] = "/tmp/" + "x" * 90
     with pytest.raises(VmHarnessError, match="QMP"):
         session._metadata(state=long_qmp, overlay_fds=[])
+
+
+def test_fixture_readiness_recovers_transient_fetch_before_dispatch(
+    tmp_path: Path,
+) -> None:
+    fixture = SimpleNamespace(id="r1a-click-dev-1101", fixture_sha256="fixture-sha")
+    store = _ReadinessStore(
+        [
+            FixtureServerError(
+                "r1a-click-dev-1101: TypeError: Failed to fetch"
+            ),
+            {"ready": True, "generation": 2},
+        ]
+    )
+    session, transport = _readiness_session(tmp_path)
+
+    ready = session.launch_fixture(
+        _ReadinessServer(store), fixture, timeout_s=5.0
+    )
+
+    evidence = ready["session_readiness"]
+    assert ready["generation"] == 2
+    assert evidence["status"] == "ready"
+    assert evidence["attempt_count"] == 2
+    assert evidence["successful_attempt_index"] == 2
+    assert evidence["attempts"][0]["error_type"] == "FixtureServerError"
+    assert evidence["attempts"][0]["recoverable"] is True
+    assert evidence["attempts"][0]["browser_restart"] is False
+    assert evidence["attempts"][1]["status"] == "ready"
+    assert evidence["attempts"][1]["browser_restart"] is True
+    assert evidence["attempts"][1]["deadline_remaining_ns_at_start"] < evidence[
+        "attempts"
+    ][0]["deadline_remaining_ns_at_start"]
+    assert evidence["input_audit_unchanged"] is True
+    assert evidence["model_access"] is False
+    assert evidence["trial_retry_count"] == 0
+    assert evidence["trial_replacement_count"] == 0
+    assert len(transport.commands) == 2
+    assert "pkill" not in transport.commands[0][2]
+    assert "pkill" in transport.commands[1][2]
+    assert all("pyautogui" not in command[2] for command in transport.commands)
+    assert transport.audit.operations == []
+    metadata = json.loads(session.metadata_path.read_text(encoding="utf-8"))
+    assert metadata["fixture_readiness"]["launches"] == [evidence]
+
+
+def test_fixture_readiness_does_not_retry_deterministic_geometry_error(
+    tmp_path: Path,
+) -> None:
+    fixture = SimpleNamespace(id="fixture", fixture_sha256="fixture-sha")
+    store = _ReadinessStore(
+        [FixtureServerError("fixture: ready geometry missing")]
+    )
+    session, transport = _readiness_session(tmp_path)
+
+    with pytest.raises(FixtureReadinessError, match="fixed 1.000s") as caught:
+        session.launch_fixture(
+            _ReadinessServer(store), fixture, timeout_s=1.0
+        )
+
+    evidence = caught.value.evidence
+    assert evidence["status"] == "failed"
+    assert evidence["attempt_count"] == 1
+    assert evidence["attempts"][0]["recoverable"] is False
+    assert evidence["attempts"][0]["host_state"][
+        "geometry_stabilization_error"
+    ] == "fixture: ready geometry missing"
+    assert evidence["input_audit_unchanged"] is True
+    assert len(transport.commands) == 1
+
+
+def test_fixture_readiness_attempts_are_bounded_by_one_setup_deadline(
+    tmp_path: Path,
+) -> None:
+    fixture = SimpleNamespace(id="fixture", fixture_sha256="fixture-sha")
+    store = _ReadinessStore(
+        [TimeoutError("not ready")] * FIXTURE_READINESS_MAX_ATTEMPTS,
+        sleep_for_budget=True,
+    )
+    session, transport = _readiness_session(tmp_path)
+
+    with pytest.raises(FixtureReadinessError) as caught:
+        session.launch_fixture(
+            _ReadinessServer(store), fixture, timeout_s=0.01
+        )
+
+    evidence = caught.value.evidence
+    assert evidence["attempt_count"] == 1
+    assert len(store.wait_timeouts) == 1
+    assert 0 < store.wait_timeouts[0] <= 0.01
+    assert evidence["setup_completed_host_monotonic_ns"] >= evidence[
+        "setup_deadline_host_monotonic_ns"
+    ]
+    assert evidence["attempts"][0]["recoverable"] is True
+    assert len(transport.commands) == 1
+
+
+def test_fixture_readiness_has_a_fixed_attempt_ceiling(tmp_path: Path) -> None:
+    fixture = SimpleNamespace(id="fixture", fixture_sha256="fixture-sha")
+    store = _ReadinessStore(
+        [TimeoutError("not ready")] * FIXTURE_READINESS_MAX_ATTEMPTS
+    )
+    session, transport = _readiness_session(tmp_path)
+
+    with pytest.raises(FixtureReadinessError) as caught:
+        session.launch_fixture(
+            _ReadinessServer(store), fixture, timeout_s=10.0
+        )
+
+    evidence = caught.value.evidence
+    assert evidence["attempt_count"] == FIXTURE_READINESS_MAX_ATTEMPTS
+    assert len(evidence["attempts"]) == FIXTURE_READINESS_MAX_ATTEMPTS
+    assert all(attempt["recoverable"] is True for attempt in evidence["attempts"])
+    assert len(transport.commands) == FIXTURE_READINESS_MAX_ATTEMPTS
+    assert all("pkill" in command[2] for command in transport.commands[1:])
+
+
+def test_fixture_readiness_rejects_post_action_use(tmp_path: Path) -> None:
+    fixture = SimpleNamespace(id="fixture", fixture_sha256="fixture-sha")
+    store = _ReadinessStore([{"ready": True, "generation": 1}])
+    session, transport = _readiness_session(tmp_path)
+    transport.audit.operations.append(Operation("move_to", (1, 2)))
+
+    with pytest.raises(VmHarnessError, match="before any action dispatch"):
+        session.launch_fixture(
+            _ReadinessServer(store), fixture, timeout_s=5.0
+        )
+
+    assert transport.commands == []
+    assert store.generation == 0

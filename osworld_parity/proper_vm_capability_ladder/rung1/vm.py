@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import hmac
 import importlib.util
 import json
+import math
 import os
 import re
 import secrets
@@ -26,7 +28,7 @@ from typing import Any, Iterator
 import fcntl
 
 from .fixtures import Fixture
-from .server import FixtureHttpServer
+from .server import FixtureHttpServer, FixtureServerError
 from .transport import ALL_POINTER_BUTTON_MASK, HttpVmTransport
 
 
@@ -43,6 +45,12 @@ DEFAULT_PROVIDER = Path(
 )
 READY_SNAPSHOT = "osworld_ready"
 POINTER_STATE_PREFIX = "RUNG1A_POINTER_STATE="
+FIXTURE_READINESS_SCHEMA_VERSION = 1
+FIXTURE_SETUP_DEADLINE_S = 60.0
+FIXTURE_READINESS_ATTEMPT_TIMEOUT_S = 20.0
+FIXTURE_READINESS_MAX_ATTEMPTS = 3
+FIXTURE_READINESS_DIAGNOSTIC_TAIL = 16
+FIXTURE_BROWSER_RESTART_BUDGET_S = 2.5
 
 
 class VmHarnessError(RuntimeError):
@@ -137,6 +145,12 @@ def _provider_observation(provider: object, qcow: Path) -> tuple[bytes, tuple[tu
     state = _provider_state_value(provider.state(str(qcow)))
     timings = _provider_timings(provider)
     return _canonical_json({"state": state, "timings": timings}), timings
+
+
+class FixtureReadinessError(VmHarnessError):
+    def __init__(self, message: str, *, evidence: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.evidence = evidence
 
 
 _VM_ID_COMPONENT = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -396,6 +410,7 @@ class KvmFixtureSession:
         self._task_lock_path: Path | None = None
         self.metadata_path = self.vm_log_dir.parent / "vm_metadata.json"
         self._chromium_port: int | None = None
+        self._fixture_readiness_launches: list[dict[str, Any]] = []
 
     def _set_environment(self, key: str, value: str) -> None:
         if key not in self._saved_environment:
@@ -540,6 +555,10 @@ class KvmFixtureSession:
             "qemu_log": str(log_path),
             "one_vm_per_task": True,
             "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+            "fixture_readiness": {
+                "schema_version": FIXTURE_READINESS_SCHEMA_VERSION,
+                "launches": [],
+            },
             "closed": False,
         }
 
@@ -838,22 +857,309 @@ class KvmFixtureSession:
         fixture_server: FixtureHttpServer,
         fixture: Fixture,
         *,
-        timeout_s: float = 60.0,
+        timeout_s: float = FIXTURE_SETUP_DEADLINE_S,
     ) -> dict:
+        """Reach fixture readiness before dispatch under one absolute deadline.
+
+        Readiness attempts are arm-neutral browser/session setup, never trial or
+        action retries. Only timeout and transport-fetch failures may relaunch
+        Chromium; deterministic fixture validation failures remain terminal.
+        """
         if self.transport is None:
             raise VmHarnessError("VM session is not started")
-        fixture_server.store.reset(fixture)
+        if (
+            not isinstance(timeout_s, (int, float))
+            or isinstance(timeout_s, bool)
+            or not math.isfinite(float(timeout_s))
+            or float(timeout_s) <= 0
+        ):
+            raise VmHarnessError("fixture setup deadline must be finite and positive")
+        setup_started_ns = time.monotonic_ns()
+        setup_deadline_ns = setup_started_ns + int(float(timeout_s) * 1_000_000_000)
+        audit_before = self._input_audit_summary()
+        if audit_before != {
+            "operation_count": 0,
+            "held_buttons": [],
+            "held_keys": [],
+            "scroll_total": 0,
+            "typed_text_count": 0,
+        }:
+            raise VmHarnessError(
+                "fixture readiness must begin before any action dispatch"
+            )
+        evidence: dict[str, Any] = {
+            "schema_version": FIXTURE_READINESS_SCHEMA_VERSION,
+            "fixture_id": fixture.id,
+            "fixture_sha256": fixture.fixture_sha256,
+            "status": "running",
+            "setup_started_host_monotonic_ns": setup_started_ns,
+            "setup_deadline_host_monotonic_ns": setup_deadline_ns,
+            "setup_deadline_s": float(timeout_s),
+            "readiness_attempt_timeout_cap_s": (
+                FIXTURE_READINESS_ATTEMPT_TIMEOUT_S
+            ),
+            "readiness_attempt_limit": FIXTURE_READINESS_MAX_ATTEMPTS,
+            "browser_restart_budget_s": FIXTURE_BROWSER_RESTART_BUDGET_S,
+            "attempt_count": 0,
+            "attempts": [],
+            "input_audit_before": audit_before,
+            "input_audit_after": None,
+            "input_audit_unchanged": None,
+            "model_access": False,
+            "trial_retry_count": 0,
+            "trial_replacement_count": 0,
+        }
         url = fixture_server.guest_url(fixture)
+        last_error: Exception | None = None
+        for attempt_index in range(1, FIXTURE_READINESS_MAX_ATTEMPTS + 1):
+            attempt_started_ns = time.monotonic_ns()
+            remaining_before_attempt_ns = setup_deadline_ns - attempt_started_ns
+            if remaining_before_attempt_ns <= 0 or (
+                attempt_index > 1
+                and remaining_before_attempt_ns
+                <= int(FIXTURE_BROWSER_RESTART_BUDGET_S * 1_000_000_000)
+            ):
+                break
+            attempt: dict[str, Any] = {
+                "attempt_index": attempt_index,
+                "status": "running",
+                "browser_restart": attempt_index > 1,
+                "started_host_monotonic_ns": attempt_started_ns,
+                "deadline_remaining_ns_at_start": remaining_before_attempt_ns,
+                "deadline_remaining_ns_after_launch": None,
+                "completed_host_monotonic_ns": None,
+                "duration_ns": None,
+                "generation": None,
+                "wait_timeout_s": None,
+                "error_type": None,
+                "error": None,
+                "recoverable": None,
+                "host_state": None,
+                "guest_launch": None,
+            }
+            evidence["attempts"].append(attempt)
+            evidence["attempt_count"] = attempt_index
+            try:
+                generation = fixture_server.store.reset(fixture)
+                attempt["generation"] = generation
+                launch = self._launch_fixture_browser(
+                    url,
+                    attempt_index=attempt_index,
+                    restart=attempt_index > 1,
+                )
+                attempt["guest_launch"] = {
+                    "status": launch.get("status"),
+                    "returncode": launch.get("returncode"),
+                    "error": launch.get("error"),
+                }
+                remaining_ns = setup_deadline_ns - time.monotonic_ns()
+                attempt["deadline_remaining_ns_after_launch"] = remaining_ns
+                if remaining_ns <= 0:
+                    raise TimeoutError(
+                        "fixture browser launch exhausted the fixed setup deadline"
+                    )
+                wait_timeout_s = min(
+                    FIXTURE_READINESS_ATTEMPT_TIMEOUT_S,
+                    remaining_ns / 1_000_000_000,
+                )
+                attempt["wait_timeout_s"] = wait_timeout_s
+                ready = fixture_server.store.wait_ready(
+                    fixture.id, timeout_s=wait_timeout_s
+                )
+                completed_ns = time.monotonic_ns()
+                if completed_ns > setup_deadline_ns:
+                    raise TimeoutError(
+                        "fixture reported ready after the fixed setup deadline"
+                    )
+                attempt.update(
+                    {
+                        "status": "ready",
+                        "completed_host_monotonic_ns": completed_ns,
+                        "duration_ns": completed_ns - attempt_started_ns,
+                        "host_state": self._fixture_readiness_state_summary(
+                            fixture_server, fixture.id
+                        ),
+                    }
+                )
+                evidence.update(
+                    {
+                        "status": "ready",
+                        "setup_completed_host_monotonic_ns": completed_ns,
+                        "setup_duration_ns": completed_ns - setup_started_ns,
+                        "successful_attempt_index": attempt_index,
+                    }
+                )
+            except Exception as exc:
+                last_error = exc
+                completed_ns = time.monotonic_ns()
+                recoverable = self._recoverable_fixture_readiness_error(exc)
+                attempt.update(
+                    {
+                        "status": "failed",
+                        "completed_host_monotonic_ns": completed_ns,
+                        "duration_ns": completed_ns - attempt_started_ns,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "recoverable": recoverable,
+                        "host_state": self._fixture_readiness_state_summary(
+                            fixture_server, fixture.id
+                        ),
+                    }
+                )
+                if (
+                    not recoverable
+                    or attempt_index >= FIXTURE_READINESS_MAX_ATTEMPTS
+                    or completed_ns >= setup_deadline_ns
+                ):
+                    break
+            else:
+                self._finalize_fixture_readiness_evidence(evidence)
+                ready = copy.deepcopy(ready)
+                ready["session_readiness"] = copy.deepcopy(evidence)
+                return ready
+
+        completed_ns = time.monotonic_ns()
+        evidence.update(
+            {
+                "status": "failed",
+                "setup_completed_host_monotonic_ns": completed_ns,
+                "setup_duration_ns": completed_ns - setup_started_ns,
+                "successful_attempt_index": None,
+                "terminal_error_type": (
+                    type(last_error).__name__ if last_error is not None else "TimeoutError"
+                ),
+                "terminal_error": (
+                    str(last_error)
+                    if last_error is not None
+                    else "fixed fixture setup deadline expired before an attempt started"
+                ),
+            }
+        )
+        self._finalize_fixture_readiness_evidence(evidence)
+        raise FixtureReadinessError(
+            f"{fixture.id}: fixture readiness failed within fixed "
+            f"{float(timeout_s):.3f}s setup deadline after "
+            f"{evidence['attempt_count']} attempt(s): {evidence['terminal_error']}",
+            evidence=copy.deepcopy(evidence),
+        ) from last_error
+
+    def _launch_fixture_browser(
+        self, url: str, *, attempt_index: int, restart: bool
+    ) -> dict[str, Any]:
+        if self.transport is None:
+            raise VmHarnessError("VM session is not started")
+        restart_script = ""
+        if restart:
+            restart_script = """
+pkill -TERM -f '([c]hrome|[c]hromium)' || true
+for _rung1a_wait in $(seq 1 20); do
+  if ! pgrep -f '([c]hrome|[c]hromium)' >/dev/null; then break; fi
+  sleep 0.1
+done
+pkill -KILL -f '([c]hrome|[c]hromium)' || true
+""".strip()
+        log_setup = (
+            ": >/tmp/rung1a_chrome.log"
+            if attempt_index == 1
+            else f"printf '\\n--- readiness attempt {attempt_index} ---\\n' >>/tmp/rung1a_chrome.log"
+        )
         script = f"""
 set -euo pipefail
+{restart_script}
+{log_setup}
 browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
 test -n "$browser"
 nohup "$browser" --no-first-run --no-default-browser-check \
   --disable-session-crashed-bubble --disable-features=TranslateUI \
-  --start-maximized {url!r} >/tmp/rung1a_chrome.log 2>&1 </dev/null &
+  --start-maximized {url!r} >>/tmp/rung1a_chrome.log 2>&1 </dev/null &
 """.strip()
-        self.transport.execute_argv(["bash", "-lc", script])
-        return fixture_server.store.wait_ready(fixture.id, timeout_s=timeout_s)
+        return self.transport.execute_argv(["bash", "-lc", script])
+
+    def _input_audit_summary(self) -> dict[str, Any]:
+        if self.transport is None:
+            raise VmHarnessError("VM session is not started")
+        audit = self.transport.audit
+        return {
+            "operation_count": len(audit.operations),
+            "held_buttons": sorted(audit.held_buttons),
+            "held_keys": sorted(audit.held_keys),
+            "scroll_total": audit.scroll_total,
+            "typed_text_count": len(audit.typed_texts),
+        }
+
+    @staticmethod
+    def _recoverable_fixture_readiness_error(exc: Exception) -> bool:
+        if isinstance(exc, TimeoutError):
+            return True
+        if not isinstance(exc, FixtureServerError):
+            return False
+        message = str(exc).lower()
+        return "failed to fetch" in message or "networkerror" in message
+
+    @staticmethod
+    def _fixture_readiness_state_summary(
+        fixture_server: FixtureHttpServer, fixture_id: str
+    ) -> dict[str, Any]:
+        try:
+            state = fixture_server.store.snapshot(fixture_id)
+        except Exception as exc:
+            return {
+                "snapshot_error_type": type(exc).__name__,
+                "snapshot_error": str(exc),
+            }
+        journal = state.get("diagnostic_journal")
+        diagnostic_tail = (
+            copy.deepcopy(journal[-FIXTURE_READINESS_DIAGNOSTIC_TAIL:])
+            if isinstance(journal, list)
+            else None
+        )
+        return {
+            "generation": state.get("generation"),
+            "ready": state.get("ready"),
+            "geometry_stabilization_error": state.get(
+                "geometry_stabilization_error"
+            ),
+            "geometry_observation_count": len(
+                state.get("geometry_observations", [])
+            ),
+            "event_count": len(state.get("events", [])),
+            "last_client_sequence": state.get("last_client_sequence"),
+            "browser_audit_event_count": len(
+                state.get("browser_audit_events", [])
+            ),
+            "browser_audit_dropped": state.get("browser_audit_dropped"),
+            "diagnostic_journal_dropped": state.get(
+                "diagnostic_journal_dropped"
+            ),
+            "diagnostic_tail": diagnostic_tail,
+        }
+
+    def _finalize_fixture_readiness_evidence(
+        self, evidence: dict[str, Any]
+    ) -> None:
+        audit_after = self._input_audit_summary()
+        evidence["input_audit_after"] = audit_after
+        evidence["input_audit_unchanged"] = (
+            audit_after == evidence["input_audit_before"]
+        )
+        if evidence["input_audit_unchanged"] is not True:
+            raise VmHarnessError(
+                "fixture readiness setup unexpectedly changed the input audit"
+            )
+        self._fixture_readiness_launches.append(copy.deepcopy(evidence))
+        if not self.metadata_path.is_file():
+            return
+        try:
+            metadata = json.loads(self.metadata_path.read_text(encoding="utf-8"))
+            metadata["fixture_readiness"] = {
+                "schema_version": FIXTURE_READINESS_SCHEMA_VERSION,
+                "launches": copy.deepcopy(self._fixture_readiness_launches),
+            }
+            _atomic_json(self.metadata_path, metadata)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            raise VmHarnessError(
+                f"VM readiness metadata persistence failed: {exc}"
+            ) from exc
 
     def probe_pointer_buttons(
         self, fixture_server: FixtureHttpServer, fixture: Fixture
