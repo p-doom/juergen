@@ -21,12 +21,21 @@ when that process accepts the final hidden state.
 
 ## Frozen fixture inventory
 
-`fixtures.json` contains four templates: click, focus plus Unicode-safe
+`fixtures.json` schema v2 contains four templates: click, focus plus Unicode-safe
 coalesced type, bidirectional scroll, and native range-slider drag. Each has two
 development seeds and eight frozen evaluation seeds: 8 development and 32
 evaluation fixtures total. Development fixtures are the only fixtures used by
 the CPU/KVM selfcheck. Evaluation fixtures are sealed but are not exercised by
 the selfcheck or exposed to a model.
+
+Schema v2 is a pre-science coordinate-calibration amendment. Development-only
+job 135823 showed that treating design-space pixels as viewport pixels could put
+a card outside a smaller Chrome viewport. No evaluation outcome was observed.
+Every row was resealed with a common contract that scales its 1920×1080 design
+coordinate into the measured Chrome viewport and clamps the whole card on
+screen. Before dispatch, the VM selfcheck validates the actual development DOM
+rectangles and mathematically checks all 40 manifest rows against the measured
+window; evaluation pages and oracles remain unopened.
 
 Both adapters compile to the same transport primitives. In particular,
 `compile_unicode_coalesced_type()` is the sole typing compiler for both arms: it
