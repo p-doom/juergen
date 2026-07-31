@@ -280,6 +280,32 @@ class OSWorldClient:
         "import pyautogui; import time; pyautogui.FAILSAFE = False; pyautogui.PAUSE = 0; "
     )
 
+    def run_command(
+        self, command: list[str] | str, *, shell: bool = False
+    ) -> dict:
+        """Run a command in the VM and return the agent's structured result.
+
+        Unlike :meth:`execute`, this is not limited to pyautogui expressions.
+        Micro-evals use it for deterministic setup and state-based verification
+        (for example, reading an instrumented app's JSON state).  A non-zero
+        guest return code is surfaced as ``RuntimeError`` so a broken verifier
+        cannot silently turn into a model failure.
+        """
+        r = self._sess.post(
+            f"{self.base_url}/execute",
+            json={"command": command, "shell": shell},
+            timeout=self.timeout,
+        )
+        r.raise_for_status()
+        result = r.json()
+        if result.get("status") != "success" or int(result.get("returncode", 0)) != 0:
+            raise RuntimeError(
+                "VM command failed: "
+                f"status={result.get('status')!r} rc={result.get('returncode')!r} "
+                f"stderr={result.get('error', result.get('message', ''))!r}"
+            )
+        return result
+
     def execute(self, command: str) -> None:
         """Run a pyautogui expression in the VM via /execute.
 
@@ -287,12 +313,7 @@ class OSWorldClient:
         as ``python -c "<prefix>; <command>"``.
         """
         full_code = self._PYAUTOGUI_PREFIX + command
-        r = self._sess.post(
-            f"{self.base_url}/execute",
-            json={"command": ["python", "-c", full_code], "shell": False},
-            timeout=self.timeout,
-        )
-        r.raise_for_status()
+        self.run_command(["python", "-c", full_code])
 
     def release_all_inputs(self) -> None:
         """Best-effort safety cleanup after a rejected atomic action program.

@@ -168,6 +168,7 @@ def _call_model(
     recent_actions: list[str] | None = None,
     fresh_visual_context: bool = False,
     sampling: SamplingParams,
+    seed: int | None = None,
     request_timeout_s: float = 120.0,
 ) -> tuple[str, str | None]:
     """One chat-completion call, interleaving frames and the model's prior actions.
@@ -213,14 +214,17 @@ def _call_model(
         if fresh_visual_context
         else _interleave_messages(system_prompt, instruction, image_parts, recent_actions)
     )
+    request_json = {
+        "model": model,
+        "messages": messages,
+        **sampling.as_request_json(),
+    }
+    if seed is not None:
+        request_json["seed"] = int(seed)
     r = requests.post(
         sglang_url.rstrip("/") + "/chat/completions",
         headers={"Authorization": f"Bearer {api_key}"},
-        json={
-            "model": model,
-            "messages": messages,
-            **sampling.as_request_json(),
-        },
+        json=request_json,
         timeout=request_timeout_s,
     )
     r.raise_for_status()
