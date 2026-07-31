@@ -12,10 +12,10 @@ ACTION_INTERFACES = {
     "compact_raw_phaseb": "compact_raw_phaseb_v1",
 }
 RUNTIME_CONTRACT_SCHEMA = "proper_vm_paired_runtime_v1"
-# Deliberately unset in this partial successor. Production execution remains
-# reject-all until a corrected curriculum runtime binding is independently
-# approved and pinned here by a later commit.
-APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA: str | None = None
+APPROVED_CURRICULUM_COMMIT = "c6039b7658e89ef6d1aae607bd0c19281b0354ef"
+APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA = (
+    "proper_vm_sameapp_runtime_binding_receipt_v1"
+)
 MODES = (
     "gold_history_one_step",
     "gold_prefix_horizon",
@@ -58,9 +58,12 @@ def resolved_segment_budget_payload(
     actions: tuple[Any, ...],
     resolved_primitive_actions: int,
     resolved_primitive_events: int,
+    binding_revision: int,
     binding_sha256: str,
+    expected_cursor_before: tuple[int, int],
+    expected_cursor_after: tuple[int, int],
 ) -> dict[str, Any]:
-    """Provisional canonical receipt used only by independent contract tests."""
+    """Exact approved ``CompiledSegment`` resolved-budget payload."""
 
     return {
         "schema_version": 1,
@@ -70,7 +73,10 @@ def resolved_segment_budget_payload(
         "semantic_step_index": semantic_step_index,
         "resolved_primitive_actions": resolved_primitive_actions,
         "resolved_primitive_events": resolved_primitive_events,
+        "binding_revision": binding_revision,
         "binding_sha256": binding_sha256,
+        "expected_cursor_before": list(expected_cursor_before),
+        "expected_cursor_after": list(expected_cursor_after),
         "actions": actions,
     }
 
@@ -130,6 +136,11 @@ class ExecutionReceipt:
     resolved_primitive_events: int = 0
     resolved_budget_sha256: str = ""
     binding_sha256: str = ""
+    binding_revision: int = 0
+    binding_receipt: dict[str, Any] | None = None
+    compiled_segment: dict[str, Any] | None = None
+    dispatches: tuple[tuple[dict[str, Any], ...], ...] = ()
+    executed_segment_receipt: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -166,9 +177,8 @@ class SessionStart:
     reset_signature: str
     cursor_source: str
     cursor_precentered: bool
-    reset_probe_count: int
-    binding_sha256: str
-    binding_refreshed_after_steps: tuple[int, ...]
+    binding_receipt: dict[str, Any]
+    prefix_replay: tuple[dict[str, Any], ...]
 
 
 class ArmSession(Protocol):

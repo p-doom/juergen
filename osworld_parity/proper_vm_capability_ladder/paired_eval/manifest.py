@@ -7,7 +7,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .contracts import ACTION_INTERFACES, ARMS, GOLD_PREFIX_HORIZONS, MODES, canonical_json
+from .contracts import (
+    ACTION_INTERFACES,
+    APPROVED_CURRICULUM_COMMIT,
+    APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
+    ARMS,
+    GOLD_PREFIX_HORIZONS,
+    MODES,
+    canonical_json,
+)
 
 
 class ManifestError(RuntimeError):
@@ -158,6 +166,8 @@ class EvaluationManifest:
     expected_task_setup_validation_sha256: str
     expected_task_setup_validation_artifact_id: str
     expected_task_setup_validation_schema: str
+    curriculum_commit: str
+    curriculum_runtime_binding_schema: str
     evaluator_commit: str
     order_seed: int
     shard_seed: int
@@ -266,6 +276,12 @@ def validate_evaluation_manifest(
     setup_schema = evaluation.get("expected_task_setup_validation_schema")
     if setup_schema != "multistep_sameapp_task_setup_validation_v1":
         raise ManifestError("expected task setup-validation schema drift")
+    curriculum_commit = evaluation.get("curriculum_commit")
+    if curriculum_commit != APPROVED_CURRICULUM_COMMIT:
+        raise ManifestError("evaluation does not pin the approved curriculum commit")
+    binding_schema = evaluation.get("curriculum_runtime_binding_schema")
+    if binding_schema != APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA:
+        raise ManifestError("evaluation curriculum runtime-binding schema drift")
     evaluator_commit = evaluation.get("evaluator_commit")
     if not _is_git_commit(evaluator_commit):
         raise ManifestError("evaluator_commit must be a lowercase 40-hex commit")
@@ -337,6 +353,8 @@ def validate_evaluation_manifest(
         expected_task_setup_validation_sha256=setup_sha,
         expected_task_setup_validation_artifact_id=setup_artifact_id,
         expected_task_setup_validation_schema=setup_schema,
+        curriculum_commit=curriculum_commit,
+        curriculum_runtime_binding_schema=binding_schema,
         evaluator_commit=evaluator_commit,
         order_seed=seeds["order_seed"],
         shard_seed=seeds["shard_seed"],

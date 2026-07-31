@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import copy
 import os
+import time
 
 import pytest
 
 from ..aggregate import aggregate_results
 from ..contracts import (
+    APPROVED_CURRICULUM_COMMIT,
+    APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
     ARMS,
     ExecutionReceipt,
     InfrastructureFailure,
     Observation,
     RequestedAction,
-    resolved_segment_budget_payload,
     SessionStart,
     sha256_json,
     StateProbe,
@@ -21,6 +23,7 @@ from ..contracts import (
 from ..manifest import load_evaluation_manifest
 from ..planning import build_plan
 from ..readiness import consume_executor_ready
+from ..receipts import validate_binding_receipt, validate_binding_successor
 from ..runner import PairedEvaluationRunner, PairingViolation, write_jsonl_atomic
 from ..setup_validation import consume_task_setup_validation
 from .helpers import (
@@ -33,132 +36,350 @@ from .helpers import (
 )
 
 
+def _seal(value, field):
+    value[field] = sha256_json(value)
+    return value
+
+
+def _binding(task, arm_name):
+    now = time.monotonic_ns()
+    fresh_until = now + 30_000_000_000
+    provider_session = f"provider-{arm_name}"
+    session = f"session-{arm_name}"
+    path_sha = sha256_json({"provider": "test"})
+    cycles = []
+    prior = sha256_json({"generation": arm_name, "index": 0})
+    for index in (1, 2):
+        after = sha256_json({"generation": arm_name, "index": index})
+        started = now - (5 - index * 2) * 1_000_000
+        row = {
+            "session_id": session,
+            "reset_id": f"reset-{arm_name}-{index}",
+            "generation_id": after,
+            "sequence": index,
+            "provider_reset_sequence": index,
+            "provider_session_id": provider_session,
+            "prior_provider_generation_id": prior,
+            "provider_reset_receipt_sha256": sha256_json({"reset": arm_name, "index": index}),
+            "provider_state_before_sha256": prior,
+            "provider_state_after_sha256": after,
+            "provider_path_sha256": path_sha,
+            "prior_provider_transition_index": (index - 1) * 2 + 1,
+            "new_provider_transition_index": index * 2 + 1,
+            "provider_transition_labels": ["loadvm[osworld_ready]", "loadvm_guest_ready"],
+            "provider_transition_records_sha256": sha256_json({"transitions": index}),
+            "guest_sentinel_path_sha256": sha256_json({"sentinel": "path"}),
+            "guest_sentinel_nonce_sha256": sha256_json({"nonce": index}),
+            "reset_started_monotonic_ns": started,
+            "provider_reset_completed_monotonic_ns": started + 200_000,
+            "probe_completed_monotonic_ns": started + 400_000,
+            "captured_wall_time_ns": time.time_ns(),
+            "vm_snapshot_id": task.snapshot_id,
+            "setup_commit": "7" * 40,
+            "reset_provider": "/test/provider",
+            "transport_endpoint_sha256": sha256_json({"endpoint": arm_name}),
+            "probe_sha256": sha256_json({"probe": arm_name, "index": index}),
+            "evidence_sha256": sha256_json({"evidence": arm_name, "index": index}),
+        }
+        cycles.append(row)
+        prior = after
+    geometry = {"editor": [820, 520]}
+    binding_sha = sha256_json({"binding": arm_name, "task": task.task_id})
+    return _seal(
+        {
+            "schema_version": 1,
+            "task_id": task.task_id,
+            "fixture_sha256": task.fixture_sha256,
+            "binding_revision": 1,
+            "binding_sha256": binding_sha,
+            "parent_binding_sha256": None,
+            "refresh_evidence_sha256": None,
+            "evidence_fresh_until_monotonic_ns": fresh_until,
+            "reset_cycles": cycles,
+            "resolved_initial_cursor": [960, 540],
+            "initial_geometry": geometry,
+            "initial_geometry_sha256": sha256_json(geometry),
+            "refresh_transitions": [],
+        },
+        "binding_receipt_sha256",
+    )
+
+
+def _dispatch_result(action_schema, payload, operation_index, before):
+    if action_schema == "native_absolute_sequence_v1":
+        operation = payload
+        kind = operation["action"]
+        coordinate = operation.get("coordinate")
+        after = list(coordinate) if coordinate is not None and kind in {
+            "click", "mouse_down", "mouse_move", "mouse_up"
+        } else list(before)
+        operations = []
+        if coordinate is not None and kind in {"click", "mouse_down", "mouse_move", "mouse_up"}:
+            operations.append({"kind": "move_to", "args": list(coordinate)})
+        atomic = None
+        if kind == "click":
+            atomic_ops = [
+                {"kind": "mouse_down", "args": ["left"]},
+                {"kind": "mouse_up", "args": ["left"]},
+            ]
+            operations += atomic_ops
+            atomic = {"ok": True, "operations": atomic_ops}
+            action_class = "click"
+        elif kind == "key_chord":
+            operations.append({"kind": "key_chord", "args": list(operation["keys"])})
+            action_class = "key_chord"
+        else:
+            raise AssertionError(kind)
+        adapter = "native_absolute_control"
+    else:
+        after = list(before)
+        if payload.startswith("-140 -20"):
+            after = [before[0] - 140, before[1] - 20]
+            operations = [
+                {"kind": "move_to", "args": after},
+                {"kind": "mouse_down", "args": ["left"]},
+                {"kind": "mouse_up", "args": ["left"]},
+            ]
+            action_class = "button_hold+button_release+mouse_move"
+        elif "+LMB" in payload:
+            operations = [
+                {"kind": "mouse_down", "args": ["left"]},
+                {"kind": "mouse_up", "args": ["left"]},
+            ]
+            action_class = "button_hold+button_release"
+        else:
+            operations = [
+                {"kind": "key_down", "args": ["ControlLeft"]},
+                {"kind": "key_down", "args": ["KeyS"]},
+                {"kind": "key_up", "args": ["KeyS"]},
+                {"kind": "key_up", "args": ["ControlLeft"]},
+            ]
+            action_class = "key_chord"
+        atomic = {"ok": True, "operations": operations}
+        adapter = "compact_raw_phaseb"
+    value = {
+        "adapter": adapter,
+        "parse_status": "ok",
+        "executor_dispatch_status": "ok",
+        "action_class": action_class,
+        "operations": operations,
+        "atomic_state": atomic,
+        "compiled_payload_sha256": sha256_json(payload),
+        "compiled_operation_index": operation_index,
+        "cursor_before": list(before),
+        "cursor_after": after,
+        "atomic_state_sha256": sha256_json(atomic) if atomic is not None else None,
+    }
+    return _seal(value, "dispatch_result_sha256")
+
+
+def _segment_receipts(task, arm, binding, semantic_step, actions, cursor_before):
+    dispatches = []
+    cursor = list(cursor_before)
+    events = 0
+    for action in actions:
+        if arm.action_interface == "native_absolute_sequence_v1":
+            results = []
+            for index, operation in enumerate(action["operations"]):
+                result = _dispatch_result(arm.action_interface, operation, index, cursor)
+                cursor = result["cursor_after"]
+                events += len(result["operations"])
+                results.append(result)
+        else:
+            result = _dispatch_result(arm.action_interface, action, 0, cursor)
+            cursor = result["cursor_after"]
+            events += len(result["operations"])
+            results = [result]
+        dispatches.append(results)
+    segment = {
+        "task_id": task.task_id,
+        "fixture_sha256": task.fixture_sha256,
+        "action_schema": arm.action_interface,
+        "semantic_step_index": semantic_step,
+        "actions": actions,
+        "resolved_primitive_actions": len(actions),
+        "resolved_primitive_events": events,
+        "resolved_budget_sha256": "",
+        "binding_revision": binding["binding_revision"],
+        "binding_sha256": binding["binding_sha256"],
+        "expected_cursor_before": list(cursor_before),
+        "expected_cursor_after": cursor,
+    }
+    budget_payload = dict(segment)
+    budget_payload.pop("resolved_budget_sha256")
+    budget_payload = {"schema_version": 1, **budget_payload}
+    segment["resolved_budget_sha256"] = sha256_json(budget_payload)
+    dispatch_sha = sha256_json(
+        {
+            "schema_version": 1,
+            "task_id": task.task_id,
+            "semantic_step_index": semantic_step,
+            "compiled_actions": actions,
+            "dispatches": dispatches,
+        }
+    )
+    started = time.monotonic_ns()
+    receipt = _seal(
+        {
+            "schema_version": 1,
+            "task_id": task.task_id,
+            "fixture_sha256": task.fixture_sha256,
+            "action_schema": arm.action_interface,
+            "semantic_step_index": semantic_step,
+            "resolved_primitive_actions": len(actions),
+            "resolved_primitive_events": events,
+            "resolved_budget_sha256": segment["resolved_budget_sha256"],
+            "binding_revision": binding["binding_revision"],
+            "binding_sha256": binding["binding_sha256"],
+            "dispatch_receipt_sha256": dispatch_sha,
+            "execution_started_monotonic_ns": started,
+            "execution_completed_monotonic_ns": started + 1,
+        },
+        "executed_receipt_sha256",
+    )
+    return segment, tuple(tuple(row) for row in dispatches), receipt
+
+
+def _refreshed_binding(task, binding, executed_receipt_sha256):
+    last_probe = binding["reset_cycles"][-1]["probe_completed_monotonic_ns"]
+    refresh = {
+        "session_id": binding["reset_cycles"][-1]["session_id"],
+        "refresh_id": "refresh-test",
+        "sequence": 1,
+        "task_id": task.task_id,
+        "fixture_sha256": task.fixture_sha256,
+        "reset_generation_id": binding["reset_cycles"][-1]["generation_id"],
+        "completed_step": 2,
+        "prior_binding_sha256": binding["binding_sha256"],
+        "executed_segment_sha256": executed_receipt_sha256,
+        "action_started_monotonic_ns": last_probe + 100,
+        "action_completed_monotonic_ns": last_probe + 200,
+        "probe_started_monotonic_ns": last_probe + 300,
+        "probe_completed_monotonic_ns": last_probe + 400,
+        "captured_wall_time_ns": time.time_ns(),
+        "before_scroll_y": 0,
+        "after_scroll_y": 200,
+        "observed_scroll_delta": 200,
+        "required_minimum_delta": 100,
+        "expected_scroll_direction": "down",
+        "probe_sha256": sha256_json({"refresh_probe": True}),
+        "issuer_mac": "a" * 64,
+    }
+    _seal(refresh, "evidence_sha256")
+    binding_sha = sha256_json({"binding": "refreshed", "parent": binding["binding_sha256"]})
+    transition = _seal(
+        {
+            "pre_binding_revision": 1,
+            "post_binding_revision": 2,
+            "pre_binding_sha256": binding["binding_sha256"],
+            "post_binding_sha256": binding_sha,
+            "refresh_evidence": refresh,
+        },
+        "transition_receipt_sha256",
+    )
+    return _seal(
+        {
+            **{key: copy.deepcopy(value) for key, value in binding.items()
+               if key != "binding_receipt_sha256"},
+            "binding_revision": 2,
+            "binding_sha256": binding_sha,
+            "parent_binding_sha256": binding["binding_sha256"],
+            "refresh_evidence_sha256": refresh["evidence_sha256"],
+            "refresh_transitions": [transition],
+        },
+        "binding_receipt_sha256",
+    )
+
+
 class FakeSession:
     def __init__(
-        self,
-        task,
-        arm,
-        mode,
-        prefix,
-        fail: bool = False,
-        semantic_fail: bool = False,
-        reset_mismatch: bool = False,
-        execution_status: str = "ok",
-        primitive_action_count: int = 1,
-        cursor_precentered: bool = False,
-        hidden_intervention: bool = False,
-        active_window_verified: bool = True,
-        native_click_proof: bool = True,
-        click: bool = False,
-        alternative_execution: bool = False,
-        state_probe_intervention: bool = False,
+        self, task, arm, mode, prefix, fail=False, semantic_fail=False,
+        reset_mismatch=False, execution_status="ok", primitive_action_count=1,
+        cursor_precentered=False, hidden_intervention=False,
+        active_window_verified=True, native_click_proof=True, click=False,
+        alternative_execution=False, state_probe_intervention=False,
     ) -> None:
-        self.task = task
-        self.arm = arm
-        self.mode = mode
-        self.prefix = prefix
-        self.fail = fail
-        self.semantic_fail = semantic_fail
+        self.task, self.arm, self.mode, self.prefix = task, arm, mode, prefix
+        self.fail, self.semantic_fail = fail, semantic_fail
         self.execution_status = execution_status
         self.primitive_action_count = primitive_action_count
         self.hidden_intervention = hidden_intervention
         self.active_window_verified = active_window_verified
         self.native_click_proof = native_click_proof
-        self.click = click
-        self.alternative_execution = alternative_execution
+        self.click, self.alternative_execution = click, alternative_execution
         self.state_probe_intervention = state_probe_intervention
-        self.turn = 0
-        self.cursor = (960, 540) if prefix == 0 else (820, 520)
-        self.binding_sha256 = sha256_json(
-            {
-                "task_id": task.task_id,
-                "fixture_sha256": task.fixture_sha256,
-                "prefix": prefix,
-                "cursor": self.cursor,
-                "reset_probe_count": 2,
-            }
-        )
+        self.executed_turns = 0
+        self.binding = _binding(task, arm.name)
+        self.cursor = (960, 540)
+        prefix_replay = []
+        if prefix:
+            prefix_action = (
+                {"schema": arm.action_interface, "semantic_step": 1, "operations": [
+                    {"action": "click", "coordinate": [820, 520], "button": "left"}
+                ]}
+                if arm.name == ARMS[0]
+                else "-140 -20 0; +LMB -LMB"
+            )
+            segment, dispatches, receipt = _segment_receipts(
+                task, arm, self.binding, 1, [prefix_action], self.cursor
+            )
+            prefix_replay.append(
+                {
+                    "semantic_step": 1,
+                    "binding_receipt": self.binding,
+                    "binding_sha256": self.binding["binding_sha256"],
+                    "compiled_segment": segment,
+                    "executed_receipt": receipt,
+                    "actions": [
+                        {"action_index": 0, "screenshot": None, "action": prefix_action,
+                         "dispatch": list(dispatches[0])}
+                    ],
+                }
+            )
+            self.cursor = (820, 520)
         self.start = SessionStart(
-            task.task_id,
-            task.snapshot_id,
-            task.parameter_seed,
-            task.cursor_ref_for_prefix(prefix),
-            self.cursor,
-            (
-                f"reset-{task.task_id}-{prefix}-{arm.name}"
-                if reset_mismatch
-                else f"reset-{task.task_id}-{prefix}"
-            ),
-            "live_probe_before_policy",
-            cursor_precentered,
-            2,
-            self.binding_sha256,
-            (),
+            task.task_id, task.snapshot_id, task.parameter_seed,
+            task.cursor_ref_for_prefix(prefix), self.cursor,
+            f"reset-{task.task_id}-{prefix}-{arm.name}" if reset_mismatch
+            else f"reset-{task.task_id}-{prefix}",
+            "live_probe_before_policy", cursor_precentered, self.binding,
+            tuple(prefix_replay),
         )
 
     def observe(self):
         if self.fail:
             raise InfrastructureFailure("observation_capture", "injected fake outage")
-        return Observation({"frame": self.turn, "task": self.task.task_id}, "application/json")
+        return Observation(
+            {"frame": self.executed_turns, "task": self.task.task_id},
+            "application/json",
+        )
 
     def request_action(self, *, observation, history, generation_seed, budget):
         if self.click:
             value = (
-                {
-                    "schema": "native_absolute_sequence_v1",
-                    "semantic_step": 1,
-                    "operations": [
-                        {"action": "click", "coordinate": [500, 300], "button": "left"}
-                    ],
-                }
-                if self.arm.name == ARMS[0]
-                else "0 0 0; +LMB -LMB"
+                {"schema": self.arm.action_interface, "semantic_step": 1,
+                 "operations": [{"action": "click", "coordinate": [500, 300], "button": "left"}]}
+                if self.arm.name == ARMS[0] else "0 0 0; +LMB -LMB"
             )
         else:
             value = (
-                {"action": "key", "keys": ["ControlLeft", "KeyS"]}
+                {"schema": self.arm.action_interface, "semantic_step": 1,
+                 "operations": [{"action": "key_chord", "keys": ["ControlLeft", "KeyS"]}]}
                 if self.arm.name == ARMS[0]
                 else "0 0 0; +ControlLeft +KeyS -KeyS -ControlLeft"
             )
-        return RequestedAction(value, f"{self.arm.name}-{self.turn}", {"output_tokens": 4})
+        return RequestedAction(
+            value, f"{self.arm.name}-{self.executed_turns}", {"output_tokens": 4}
+        )
 
     def execute(self, requested):
         before = self.cursor
-        after = (500, 300) if self.click and self.arm.name == ARMS[0] else before
-        executed_action = (
-            {"semantically_equivalent_alternative": True}
-            if self.alternative_execution
-            else requested.value
-        )
-        resolved_actions = tuple(
-            executed_action for _ in range(self.primitive_action_count)
-        )
-        semantic_step_index = min(
-            self.prefix + (0 if self.semantic_fail else self.turn) + 1,
-            self.task.semantic_step_count,
-        )
-        budget_payload = resolved_segment_budget_payload(
-            task_id=self.task.task_id,
-            fixture_sha256=self.task.fixture_sha256,
-            action_schema=self.arm.action_interface,
-            semantic_step_index=semantic_step_index,
-            actions=resolved_actions,
-            resolved_primitive_actions=self.primitive_action_count,
-            resolved_primitive_events=1,
-            binding_sha256=self.binding_sha256,
-        )
-        # Canonical semantic operations make the cross-interface action comparable.
-        semantic = (
-            ({"kind": "click", "button": "left"},)
-            if self.click
-            else ({"kind": "hotkey", "keys": ["ControlLeft", "KeyS"]},)
-        )
-        executor_evidence = {
+        self.executed_turns += 1
+        evidence = {
             "cursor_readback_verified": True,
             "interventions_between_policy_turns": (
                 [{"kind": "hotkey", "keys": ["ControlLeft", "KeyC"]}]
-                if self.hidden_intervention
-                else []
+                if self.hidden_intervention else []
             ),
             "active_window": {
                 "verified": self.active_window_verified,
@@ -168,87 +389,98 @@ class FakeSession:
                 "observed_application": self.task.app,
             },
         }
+        semantic = (
+            ({"kind": "click", "button": "left"},) if self.click
+            else ({"kind": "hotkey", "keys": ["ControlLeft", "KeyS"]},)
+        )
+        if self.execution_status != "ok":
+            return ExecutionReceipt(
+                executed_action=None, cursor_before=before, cursor_after=before,
+                parse_status="error", dispatch_status="error",
+                executor_evidence=evidence, binding_receipt=self.binding,
+            )
+        actions = [requested.value for _ in range(self.primitive_action_count)]
+        semantic_step = min(
+            self.prefix + (0 if self.semantic_fail else self.executed_turns - 1) + 1,
+            self.task.semantic_step_count,
+        )
+        segment, dispatches, receipt = _segment_receipts(
+            self.task, self.arm, self.binding, semantic_step, actions, before
+        )
+        after = tuple(segment["expected_cursor_after"])
+        self.cursor = after
         if self.click and self.arm.name == ARMS[0]:
-            executor_evidence.update(
+            evidence.update(
                 {
-                    "native_click_dispatches": (
-                        [
-                            {
-                                "requested_operation_index": 0,
-                                "lowered_operation_index": 0,
-                                "requested_coordinate": [500, 300],
-                                "dispatched_coordinate": [500, 300],
-                                "post_click_cursor": [500, 300],
-                            }
-                        ]
-                        if self.native_click_proof
-                        else []
-                    ),
+                    "native_click_dispatches": ([{
+                        "requested_operation_index": 0,
+                        "lowered_operation_index": 0,
+                        "requested_coordinate": [500, 300],
+                        "dispatched_coordinate": [500, 300],
+                        "post_click_cursor": [500, 300],
+                    }] if self.native_click_proof else []),
                     "post_action_cursor_verified": self.native_click_proof,
                     "post_action_cursor": list(after),
                 }
             )
+        lowered = (
+            ({"backend": self.arm.action_interface, "source_operation_index": 0,
+              "action": "click", "coordinate": [500, 300]},)
+            if self.click and self.arm.name == ARMS[0]
+            else ({"backend": self.arm.action_interface},)
+        )
         return ExecutionReceipt(
-            executed_action=executed_action,
-            cursor_before=before,
-            cursor_after=after,
-            action_classes=(("click",) if self.click else ("hotkey",)),
-            semantic_operations=semantic,
-            lowered_operations=(
-                (
-                    {
-                        "backend": self.arm.action_interface,
-                        "source_operation_index": 0,
-                        "action": "click",
-                        "coordinate": [500, 300],
-                    },
-                )
-                if self.click and self.arm.name == ARMS[0]
-                else ({"backend": self.arm.action_interface},)
+            executed_action=(
+                {"semantically_equivalent_alternative": True}
+                if self.alternative_execution else requested.value
             ),
-            operations=({"executed": "key_down/up"},),
-            backend_primitives=("key",),
-            executor_evidence=executor_evidence,
-            parse_status=self.execution_status,
-            dispatch_status=self.execution_status,
-            primitive_action_count=self.primitive_action_count,
-            resolved_actions=resolved_actions,
-            semantic_step_index=semantic_step_index,
-            resolved_primitive_actions=self.primitive_action_count,
-            resolved_primitive_events=1,
-            resolved_budget_sha256=sha256_json(budget_payload),
-            binding_sha256=self.binding_sha256,
+            cursor_before=before, cursor_after=after,
+            action_classes=(("click",) if self.click else ("hotkey",)),
+            semantic_operations=semantic, lowered_operations=lowered,
+            operations=tuple(
+                operation for action_dispatch in dispatches for result in action_dispatch
+                for operation in result["operations"]
+            ),
+            backend_primitives=("key",), executor_evidence=evidence,
+            primitive_action_count=len(actions), resolved_actions=tuple(actions),
+            semantic_step_index=semantic_step,
+            resolved_primitive_actions=len(actions),
+            resolved_primitive_events=segment["resolved_primitive_events"],
+            resolved_budget_sha256=segment["resolved_budget_sha256"],
+            binding_sha256=self.binding["binding_sha256"],
+            binding_revision=self.binding["binding_revision"],
+            binding_receipt=self.binding, compiled_segment=segment,
+            dispatches=dispatches, executed_segment_receipt=receipt,
         )
 
     def probe_state(self):
-        self.turn += 1
-        index = self.prefix + 1 if self.mode == "gold_history_one_step" else self.task.semantic_step_count
-        target = (
-            self.task.expected_target(self.prefix)
-            if self.mode == "gold_history_one_step"
-            else self.task.semantic_steps[-1].target_ref
-        )
-        if self.semantic_fail:
+        if self.executed_turns == 0:
             index = self.prefix
-            target = "wrong.semantic.target"
+            target = (
+                self.task.semantic_steps[self.prefix - 1].target_ref
+                if self.prefix else "initial"
+            )
+        else:
+            index = (
+                self.prefix + 1
+                if self.mode == "gold_history_one_step"
+                else self.task.semantic_step_count
+            )
+            target = (
+                self.task.expected_target(self.prefix)
+                if self.mode == "gold_history_one_step"
+                else self.task.semantic_steps[-1].target_ref
+            )
+            if self.semantic_fail:
+                index, target = self.prefix, "wrong.semantic.target"
         return StateProbe(
-            {
-                "fixture_id": self.task.task_id,
-                "fixture_sha256": self.task.fixture_sha256,
-                "semantic_step_index": index,
-                "target": target,
-                "task_solved": index >= self.task.semantic_step_count,
-            },
-            {
-                "read_only": True,
-                "input_events": (
-                    [{"kind": "hotkey", "keys": ["ControlLeft", "KeyS"]}]
-                    if self.state_probe_intervention
-                    else []
-                ),
-                "application": self.task.app,
-                "method": "test_readonly_state_probe",
-            },
+            {"fixture_id": self.task.task_id, "fixture_sha256": self.task.fixture_sha256,
+             "semantic_step_index": index, "target": target,
+             "task_solved": index >= self.task.semantic_step_count},
+            {"read_only": True,
+             "input_events": ([{"kind": "hotkey", "keys": ["ControlLeft", "KeyS"]}]
+                              if self.state_probe_intervention else []),
+             "application": self.task.app, "method": "test_readonly_state_probe"},
         )
 
     def close(self):
@@ -297,8 +529,10 @@ class FakeRuntime:
             "native_coordinate_dispatch": "requested_to_lowered_to_post_cursor",
             "between_turn_interventions": "forbidden",
             "active_window_check": "true_active_window_only",
-            "live_binding": "provisional_contract_test_only_reject_all",
-            "resolved_budget_receipts": "provisional_contract_test_only_reject_all",
+            "curriculum_commit": APPROVED_CURRICULUM_COMMIT,
+            "live_binding": APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
+            "resolved_budget_receipts": "executed_segment_receipt_v1",
+            "ordered_executed_aggregate": "compiled_program_receipt_v1",
         }
 
     def open_session(self, *, task, arm, mode, gold_prefix_length, horizon, generation_seed):
@@ -323,6 +557,26 @@ class FakeRuntime:
             self.click,
             self.alternative_execution,
             self.state_probe_intervention,
+        )
+
+
+class FakeFreshVerifier:
+    def verify(
+        self, *, task, state, expected_step_index, expected_target_ref, timeout_seconds
+    ):
+        index = int(state["semantic_step_index"])
+        matches = expected_step_index is None or (
+            index == expected_step_index and state["target"] == expected_target_ref
+        )
+        return VerifierState(
+            status="ok",
+            task_solved=bool(state["task_solved"] and matches),
+            semantic_step_index=index,
+            semantic_state=dict(state),
+            matched_target_ref=state["target"] if matches else None,
+            reason="isolated fake verifier contract",
+            oracle_pid=os.getpid() + 100_000,
+            verifier_module=task.verifier_module,
         )
 
 
@@ -361,6 +615,7 @@ def _runner(manifest, readiness, setup, runtime):
         readiness,
         setup,
         runtime,
+        verifier=FakeFreshVerifier(),
     )
 
 
@@ -388,10 +643,13 @@ def test_runner_logs_paired_trace_and_semantic_next_state(tmp_path) -> None:
     assert row["exclusion"]["excluded"] is False
 
 
-def test_production_runner_is_reject_all_until_binding_approval(tmp_path) -> None:
+def test_production_runner_accepts_only_the_pinned_approved_binding(tmp_path) -> None:
     manifest, readiness, setup = _setup(tmp_path)
-    with pytest.raises(PairingViolation, match="independently approved"):
-        PairedEvaluationRunner(manifest, readiness, setup, FakeRuntime())
+    PairedEvaluationRunner(manifest, readiness, setup, FakeRuntime())
+    runtime = FakeRuntime()
+    runtime.contract["live_binding"] = "invented_binding_v2"
+    with pytest.raises(PairingViolation, match="runtime identity/interface"):
+        PairedEvaluationRunner(manifest, readiness, setup, runtime)
 
 
 def test_known_infrastructure_failure_excludes_whole_pair_arm_blind(tmp_path) -> None:
@@ -536,12 +794,62 @@ def test_aggregate_rejects_stored_success_or_verifier_tampering(tmp_path) -> Non
     unsigned_row = dict(tampered)
     unsigned_row.pop("record_payload_sha256")
     tampered["record_payload_sha256"] = sha256_json(unsigned_row)
-    with pytest.raises(ValueError, match="live-resolved budget receipt"):
+    with pytest.raises(ValueError, match="turn/executed-segment mismatch"):
         aggregate_results(manifest, [trial], [tampered])
     tampered = copy.deepcopy(row)
     tampered["arms"][0]["turns"][0]["verifier_state"]["semantic_state"]["target"] = "tampered"
     with pytest.raises(ValueError, match="record payload hash mismatch"):
         aggregate_results(manifest, [trial], [tampered])
+
+
+def test_provider_generation_and_aab_refresh_receipts_are_fail_closed(tmp_path) -> None:
+    manifest, _, _ = _setup(tmp_path)
+    task = manifest.tasks[0]
+    initial = _binding(task, ARMS[0])
+    validate_binding_receipt(
+        initial,
+        task_id=task.task_id,
+        fixture_sha256=task.fixture_sha256,
+        snapshot_id=task.snapshot_id,
+        setup_commit="7" * 40,
+        require_fresh=True,
+    )
+    tampered = copy.deepcopy(initial)
+    tampered["reset_cycles"][1]["prior_provider_generation_id"] = "f" * 64
+    tampered["binding_receipt_sha256"] = sha256_json(
+        {key: value for key, value in tampered.items() if key != "binding_receipt_sha256"}
+    )
+    with pytest.raises(ValueError, match="provider generation"):
+        validate_binding_receipt(
+            tampered,
+            task_id=task.task_id,
+            fixture_sha256=task.fixture_sha256,
+            snapshot_id=task.snapshot_id,
+            setup_commit="7" * 40,
+            require_fresh=True,
+        )
+
+    step_2 = "b" * 64
+    refreshed = _refreshed_binding(task, initial, step_2)
+    validate_binding_receipt(
+        refreshed,
+        task_id=task.task_id,
+        fixture_sha256=task.fixture_sha256,
+        snapshot_id=task.snapshot_id,
+        setup_commit="7" * 40,
+        require_fresh=True,
+    )
+    validate_binding_successor(
+        initial,
+        refreshed,
+        completed_step_2_receipt_sha256=step_2,
+    )
+    with pytest.raises(ValueError, match="A/A/B successor"):
+        validate_binding_successor(
+            initial,
+            refreshed,
+            completed_step_2_receipt_sha256="c" * 64,
+        )
 
 
 def test_result_writer_never_leaves_partial_output_or_marker(tmp_path) -> None:

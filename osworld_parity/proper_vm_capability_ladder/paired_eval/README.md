@@ -69,11 +69,11 @@ execution is rejected by manifest validation.
 The result JSONL is written only after every planned pair completes, using one
 atomic final rename; there is no partial success marker.
 
-This partial successor deliberately leaves the final curriculum runtime
-binding schema unapproved. Production `run` therefore rejects before importing
-or starting a runtime. The provisional binding/receipt shape is exercised only
-by contract tests; a later independently reviewed curriculum successor must
-pin the final schema before execution can be enabled.
+Production `run` pins the independently approved curriculum commit and its
+version-1 runtime binding, provider-reset, refresh, compiled-segment, dispatch,
+and executed-segment receipt schemas. It remains fail-closed on both registered
+dependencies; in particular, no scored execution can begin without the exact
+sealed `EXECUTOR_READY.json` named by the evaluation manifest.
 
 ## Result contract
 

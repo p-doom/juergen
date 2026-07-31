@@ -9,6 +9,7 @@ from typing import Any, Iterable
 
 from .contracts import (
     ACTION_INTERFACES,
+    APPROVED_CURRICULUM_COMMIT,
     APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
     ARMS,
     ExecutionReceipt,
@@ -16,15 +17,20 @@ from .contracts import (
     PairedRuntime,
     RUNTIME_CONTRACT_SCHEMA,
     RequestedAction,
-    resolved_segment_budget_payload,
     StateProbe,
     VerifierState,
-    canonical_json,
     sha256_json,
 )
 from .manifest import Arm, EvaluationManifest, Task
 from .planning import TrialSpec
 from .readiness import ConsumedReadiness
+from .receipts import (
+    executed_aggregate,
+    validate_binding_receipt,
+    validate_binding_successor,
+    validate_executed_segment,
+    validate_prefix_replay,
+)
 from .setup_validation import ConsumedTaskSetupValidation
 from .verifier import FreshProcessTaskVerifier
 
@@ -132,11 +138,6 @@ class PairedEvaluationRunner:
         runtime: PairedRuntime,
         verifier: FreshProcessTaskVerifier | None = None,
     ) -> None:
-        if APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA is None:
-            raise PairingViolation(
-                "production paired execution is disabled until the final curriculum "
-                "runtime binding is independently approved"
-            )
         self._initialize(manifest, readiness, setup_validation, runtime, verifier)
 
     @classmethod
@@ -198,8 +199,10 @@ class PairedEvaluationRunner:
             "native_coordinate_dispatch": "requested_to_lowered_to_post_cursor",
             "between_turn_interventions": "forbidden",
             "active_window_check": "true_active_window_only",
-            "live_binding": "provisional_contract_test_only_reject_all",
-            "resolved_budget_receipts": "provisional_contract_test_only_reject_all",
+            "curriculum_commit": APPROVED_CURRICULUM_COMMIT,
+            "live_binding": APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
+            "resolved_budget_receipts": "executed_segment_receipt_v1",
+            "ordered_executed_aggregate": "compiled_program_receipt_v1",
         }
         if getattr(runtime, "contract", None) != expected_runtime_contract:
             raise PairingViolation("runtime identity/interface/executor contract mismatch")
@@ -256,18 +259,27 @@ class PairedEvaluationRunner:
             raise PairingViolation(
                 f"{trial.pair_id}: reset_signature differs across paired arms"
             )
-        initial_bindings = [arm["start_binding_sha256"] for arm in arms]
-        if all(value is not None for value in initial_bindings) and len(
-            set(initial_bindings)
-        ) != 1:
+        geometries = [
+            arm["start_binding_receipt"]["initial_geometry"]
+            for arm in arms
+            if arm["start_binding_receipt"] is not None
+        ]
+        if len(geometries) == 2 and geometries[0] != geometries[1]:
             raise PairingViolation(
-                f"{trial.pair_id}: initial live binding differs across paired arms"
+                f"{trial.pair_id}: resolved live geometry differs across paired arms"
             )
-        reset_probe_counts = [arm["reset_probe_count"] for arm in arms]
-        if all(value is not None for value in reset_probe_counts) and any(
-            int(value) < 2 for value in reset_probe_counts
-        ):
-            raise PairingViolation(f"{trial.pair_id}: repeated reset probes are missing")
+        reset_evidence = [
+            {
+                cycle["evidence_sha256"]
+                for cycle in arm["start_binding_receipt"]["reset_cycles"]
+            }
+            for arm in arms
+            if arm["start_binding_receipt"] is not None
+        ]
+        if len(reset_evidence) == 2 and reset_evidence[0] & reset_evidence[1]:
+            raise PairingViolation(
+                f"{trial.pair_id}: paired arms reused provider reset evidence"
+            )
         infra_classes = sorted(
             {
                 result["infra_failure_class"]
@@ -381,9 +393,11 @@ class PairedEvaluationRunner:
         start_cursor_ref: str | None = None
         start_cursor_source: str | None = None
         start_cursor_precentered: bool | None = None
-        reset_probe_count: int | None = None
         start_binding_sha256: str | None = None
-        binding_refreshed_after_steps: tuple[int, ...] | None = None
+        start_binding_receipt: dict[str, Any] | None = None
+        prefix_replay: tuple[dict[str, Any], ...] | None = None
+        start_prefix_verifier: dict[str, Any] | None = None
+        start_state_probe_evidence: dict[str, Any] | None = None
         budget = _BudgetTracker(trial.budget)
         try:
             session = self.runtime.open_session(
@@ -407,31 +421,77 @@ class PairedEvaluationRunner:
                 )
             if start.cursor_source != "live_probe_before_policy" or start.cursor_precentered:
                 raise PairingViolation(f"{arm.name}: target pre-centering is forbidden")
-            if start.reset_probe_count < 2:
-                raise PairingViolation(f"{arm.name}: fewer than two exact reset probes")
-            if not _is_sha256(start.binding_sha256):
-                raise PairingViolation(f"{arm.name}: live runtime binding hash is invalid")
-            expected_refreshes = (
-                (2,)
-                if task.app == "chrome" and trial.gold_prefix_length >= 2
-                else ()
-            )
-            if start.binding_refreshed_after_steps != expected_refreshes:
+            try:
+                bound = validate_binding_receipt(
+                    start.binding_receipt,
+                    task_id=task.task_id,
+                    fixture_sha256=task.fixture_sha256,
+                    snapshot_id=task.snapshot_id,
+                    setup_commit=self.setup_validation.setup_commit,
+                    require_fresh=True,
+                )
+                prefix_binding, prefix_cursor, completed_step_2_receipt = (
+                    self._validate_prefix_replay(
+                        task,
+                        arm,
+                        trial.gold_prefix_length,
+                        start.prefix_replay,
+                        bound,
+                    )
+                )
+            except ValueError as exc:
+                raise PairingViolation(f"{arm.name}: {exc}") from exc
+            if prefix_binding != bound or tuple(prefix_cursor) != start.cursor:
                 raise PairingViolation(
-                    f"{arm.name}: live binding refresh evidence does not match prefix"
+                    f"{arm.name}: gold-prefix replay does not end at session start"
+                )
+            initial_probe = session.probe_state()
+            self._validate_state_probe(task, arm, initial_probe)
+            initial_verified = self.verifier.verify(
+                task=task,
+                state=initial_probe.state,
+                expected_step_index=(
+                    trial.gold_prefix_length if trial.gold_prefix_length else None
+                ),
+                expected_target_ref=(
+                    task.semantic_steps[trial.gold_prefix_length - 1].target_ref
+                    if trial.gold_prefix_length
+                    else None
+                ),
+                timeout_seconds=float(trial.budget.get("wall_time_seconds", 30.0)),
+            )
+            if (
+                initial_verified.status != "ok"
+                or initial_verified.semantic_step_index != trial.gold_prefix_length
+                or (
+                    trial.gold_prefix_length
+                    and initial_verified.matched_target_ref
+                    != task.semantic_steps[trial.gold_prefix_length - 1].target_ref
+                )
+            ):
+                raise PairingViolation(
+                    f"{arm.name}: reset/gold-prefix semantic state verification failed"
                 )
             start_cursor = start.cursor
             start_cursor_ref = start.cursor_ref
             start_cursor_source = start.cursor_source
             start_cursor_precentered = start.cursor_precentered
-            reset_probe_count = start.reset_probe_count
-            start_binding_sha256 = start.binding_sha256
-            binding_refreshed_after_steps = start.binding_refreshed_after_steps
+            start_binding_sha256 = bound["binding_sha256"]
+            start_binding_receipt = bound
+            prefix_replay = start.prefix_replay
+            start_prefix_verifier = _verifier_record(initial_verified)
+            start_state_probe_evidence = initial_probe.evidence
             reset_signature = start.reset_signature
             current_cursor = start.cursor
-            current_binding_sha256 = start.binding_sha256
-            refreshed_after_steps = set(start.binding_refreshed_after_steps)
-            history: list[dict[str, Any]] = []
+            current_binding = bound
+            history: list[dict[str, Any]] = [
+                {
+                    "source": "gold_semantic_prefix",
+                    "semantic_step_index": index,
+                    "target_ref": task.semantic_steps[index - 1].target_ref,
+                }
+                for index in range(1, trial.gold_prefix_length + 1)
+            ]
             for turn_index in range(trial.horizon):
                 budget_before = budget.snapshot()
                 budget.start_model_turn()
@@ -459,16 +519,19 @@ class PairedEvaluationRunner:
                     trial.gold_prefix_length + budget.logical_semantic_steps + 1,
                     task.semantic_step_count,
                 )
-                current_binding_sha256 = self._validate_receipt(
-                    task,
-                    arm,
-                    current_cursor,
-                    current_binding_sha256,
-                    refreshed_after_steps,
-                    expected_semantic_step,
-                    requested,
-                    receipt,
-                )
+                try:
+                    current_binding = self._validate_receipt(
+                        task,
+                        arm,
+                        current_cursor,
+                        current_binding,
+                        completed_step_2_receipt,
+                        expected_semantic_step,
+                        requested,
+                        receipt,
+                    )
+                except ValueError as exc:
+                    raise PairingViolation(f"{arm.name}: {exc}") from exc
                 current_cursor = receipt.cursor_after
                 expected_target = (
                     task.expected_target(trial.gold_prefix_length)
@@ -492,6 +555,14 @@ class PairedEvaluationRunner:
                     verified.semantic_step_index,
                     trial.gold_prefix_length,
                 )
+                if (
+                    receipt.executed_segment_receipt is not None
+                    and receipt.semantic_step_index == 2
+                    and verified.semantic_step_index >= 2
+                ):
+                    completed_step_2_receipt = receipt.executed_segment_receipt[
+                        "executed_receipt_sha256"
+                    ]
                 turn = _turn_record(
                     turn_index,
                     observation.sha256,
@@ -558,13 +629,11 @@ class PairedEvaluationRunner:
             "start_cursor": None if start_cursor is None else list(start_cursor),
             "start_cursor_source": start_cursor_source,
             "start_cursor_precentered": start_cursor_precentered,
-            "reset_probe_count": reset_probe_count,
             "start_binding_sha256": start_binding_sha256,
-            "binding_refreshed_after_steps": (
-                None
-                if binding_refreshed_after_steps is None
-                else list(binding_refreshed_after_steps)
-            ),
+            "start_binding_receipt": start_binding_receipt,
+            "prefix_replay": None if prefix_replay is None else list(prefix_replay),
+            "start_prefix_verifier": start_prefix_verifier,
+            "start_state_probe_evidence": start_state_probe_evidence,
             "turns": turns,
             "actions_requested": len(turns),
             "actions_executed": sum(
@@ -586,17 +655,38 @@ class PairedEvaluationRunner:
             "infra_failure_message": infra_message,
         }
 
-    @staticmethod
+    def _validate_prefix_replay(
+        self,
+        task: Task,
+        arm: Arm,
+        prefix_length: int,
+        replay: Any,
+        start_binding: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[int], str | None]:
+        return validate_prefix_replay(
+            replay=replay,
+            prefix_length=prefix_length,
+            start_binding=start_binding,
+            task_id=task.task_id,
+            fixture_sha256=task.fixture_sha256,
+            snapshot_id=task.snapshot_id,
+            setup_commit=self.setup_validation.setup_commit,
+            app=task.app,
+            action_schema=arm.action_interface,
+            require_fresh=True,
+        )
+
     def _validate_receipt(
+        self,
         task: Task,
         arm: Arm,
         current_cursor: tuple[int, int],
-        current_binding_sha256: str,
-        refreshed_after_steps: set[int],
+        current_binding: dict[str, Any],
+        completed_step_2_receipt: str | None,
         expected_semantic_step: int,
         requested: RequestedAction,
         receipt: ExecutionReceipt,
-    ) -> str:
+    ) -> dict[str, Any]:
         if receipt.cursor_before != current_cursor:
             raise PairingViolation(
                 f"{arm.name}: executor cursor_before mismatch "
@@ -620,43 +710,104 @@ class PairedEvaluationRunner:
                 or receipt.cursor_after != receipt.cursor_before
             ):
                 raise PairingViolation(f"{arm.name}: invalid budget-rejected receipt")
-            return current_binding_sha256
-        if (
-            receipt.semantic_step_index != expected_semantic_step
-            or receipt.resolved_primitive_actions != receipt.primitive_action_count
-            or receipt.resolved_primitive_events != len(receipt.operations)
-            or len(receipt.resolved_actions) != receipt.resolved_primitive_actions
-            or not _is_sha256(receipt.binding_sha256)
-            or not _is_sha256(receipt.resolved_budget_sha256)
-        ):
-            raise PairingViolation(f"{arm.name}: invalid live-resolved budget receipt")
-        if task.app == "chrome" and expected_semantic_step == 3 and 2 not in refreshed_after_steps:
-            transition = receipt.executor_evidence.get("binding_refresh")
-            expected_transition = {
-                "after_completed_step": 2,
-                "previous_binding_sha256": current_binding_sha256,
-                "refreshed_binding_sha256": receipt.binding_sha256,
-                "live_probe": True,
-            }
-            if transition != expected_transition or receipt.binding_sha256 == current_binding_sha256:
-                raise PairingViolation(
-                    f"{arm.name}: Chrome step 3 lacks a refreshed post-scroll binding"
+            if any(
+                value not in (None, (), "", 0)
+                for value in (
+                    receipt.binding_receipt,
+                    receipt.compiled_segment,
+                    receipt.dispatches,
+                    receipt.executed_segment_receipt,
+                    receipt.binding_sha256,
+                    receipt.binding_revision,
+                    receipt.resolved_budget_sha256,
+                    receipt.resolved_primitive_actions,
+                    receipt.resolved_primitive_events,
+                    receipt.resolved_actions,
                 )
-            refreshed_after_steps.add(2)
-        elif receipt.binding_sha256 != current_binding_sha256:
-            raise PairingViolation(f"{arm.name}: unregistered live binding transition")
-        resolved_payload = resolved_segment_budget_payload(
+            ):
+                raise PairingViolation(f"{arm.name}: budget rejection forged execution evidence")
+            return current_binding
+        if receipt.parse_status != "ok" or receipt.dispatch_status != "ok":
+            if any(
+                value not in (None, (), "", 0)
+                for value in (
+                    receipt.compiled_segment,
+                    receipt.dispatches,
+                    receipt.executed_segment_receipt,
+                    receipt.resolved_budget_sha256,
+                    receipt.resolved_primitive_actions,
+                    receipt.resolved_primitive_events,
+                    receipt.resolved_actions,
+                )
+            ):
+                raise PairingViolation(
+                    f"{arm.name}: failed parse/dispatch carries a successful segment receipt"
+                )
+            if receipt.binding_receipt is not None:
+                failed_binding = validate_binding_receipt(
+                    receipt.binding_receipt,
+                    task_id=task.task_id,
+                    fixture_sha256=task.fixture_sha256,
+                    snapshot_id=task.snapshot_id,
+                    setup_commit=self.setup_validation.setup_commit,
+                    require_fresh=True,
+                )
+                validate_binding_successor(
+                    current_binding,
+                    failed_binding,
+                    completed_step_2_receipt_sha256=completed_step_2_receipt,
+                )
+                current_binding = failed_binding
+            return current_binding
+        binding = validate_binding_receipt(
+            receipt.binding_receipt,
+            task_id=task.task_id,
+            fixture_sha256=task.fixture_sha256,
+            snapshot_id=task.snapshot_id,
+            setup_commit=self.setup_validation.setup_commit,
+            require_fresh=True,
+        )
+        validate_binding_successor(
+            current_binding,
+            binding,
+            completed_step_2_receipt_sha256=completed_step_2_receipt,
+        )
+        if (task.app == "chrome" and (
+            (expected_semantic_step <= 2 and binding["binding_revision"] != 1)
+            or (expected_semantic_step >= 3 and binding["binding_revision"] != 2)
+        )) or (task.app != "chrome" and binding["binding_revision"] != 1):
+            raise PairingViolation(
+                f"{arm.name}: binding revision/semantic-step mismatch"
+            )
+        executed = validate_executed_segment(
+            compiled_segment=receipt.compiled_segment,
+            dispatches=receipt.dispatches,
+            executed_receipt=receipt.executed_segment_receipt,
+            binding_receipt=binding,
             task_id=task.task_id,
             fixture_sha256=task.fixture_sha256,
             action_schema=arm.action_interface,
-            semantic_step_index=receipt.semantic_step_index,
-            actions=receipt.resolved_actions,
-            resolved_primitive_actions=receipt.resolved_primitive_actions,
-            resolved_primitive_events=receipt.resolved_primitive_events,
-            binding_sha256=receipt.binding_sha256,
+            expected_semantic_step=expected_semantic_step,
+            expected_cursor_before=current_cursor,
         )
-        if sha256_json(resolved_payload) != receipt.resolved_budget_sha256:
-            raise PairingViolation(f"{arm.name}: resolved budget receipt hash mismatch")
+        segment = receipt.compiled_segment
+        assert segment is not None
+        if (
+            receipt.semantic_step_index != segment["semantic_step_index"]
+            or receipt.resolved_primitive_actions
+            != segment["resolved_primitive_actions"]
+            or receipt.resolved_primitive_events
+            != segment["resolved_primitive_events"]
+            or len(receipt.operations) != segment["resolved_primitive_events"]
+            or receipt.resolved_budget_sha256 != segment["resolved_budget_sha256"]
+            or receipt.binding_sha256 != segment["binding_sha256"]
+            or receipt.binding_revision != segment["binding_revision"]
+            or list(receipt.resolved_actions) != list(segment["actions"])
+            or receipt.primitive_action_count != segment["resolved_primitive_actions"]
+            or receipt.cursor_after != tuple(segment["expected_cursor_after"])
+            or executed != receipt.executed_segment_receipt
+        ):
+            raise PairingViolation(f"{arm.name}: execution receipt/segment mismatch")
         evidence = receipt.executor_evidence
         if evidence.get("cursor_readback_verified") is not True:
             raise PairingViolation(f"{arm.name}: post-dispatch cursor readback is missing")
@@ -699,6 +850,13 @@ class PairedEvaluationRunner:
                 for index, operation in enumerate(receipt.lowered_operations)
                 if isinstance(operation, dict) and operation.get("action") == "click"
             ]
+            compiled_clicks = [
+                operation.get("coordinate")
+                for action in segment["actions"]
+                if isinstance(action, dict)
+                for operation in action.get("operations", [])
+                if isinstance(operation, dict) and operation.get("action") == "click"
+            ]
             expected_dispatches: list[dict[str, Any]] = []
             if len(lowered_clicks) == len(requested_clicks):
                 for (requested_index, coordinate), (
@@ -722,6 +880,7 @@ class PairedEvaluationRunner:
             if (
                 len(expected_dispatches) != len(requested_clicks)
                 or dispatches != expected_dispatches
+                or compiled_clicks != [coordinate for _, coordinate in requested_clicks]
             ):
                 raise PairingViolation(
                     "native requested click coordinate did not drive lowered dispatch"
@@ -731,7 +890,7 @@ class PairedEvaluationRunner:
                 or evidence.get("post_action_cursor") != list(receipt.cursor_after)
             ):
                 raise PairingViolation("native post-action cursor was not read back")
-        return receipt.binding_sha256
+        return binding
 
     @staticmethod
     def _validate_state_probe(task: Task, arm: Arm, probe: StateProbe) -> None:
@@ -755,6 +914,20 @@ class PairedEvaluationRunner:
             raise PairingViolation(
                 f"{arm.name}: verifier state extraction was not proven input-free/read-only"
             )
+
+
+def _verifier_record(verifier: VerifierState) -> dict[str, Any]:
+    return {
+        "status": verifier.status,
+        "task_solved": verifier.task_solved,
+        "semantic_step_index": verifier.semantic_step_index,
+        "matched_target_ref": verifier.matched_target_ref,
+        "semantic_state_sha256": verifier.semantic_state_sha256,
+        "semantic_state": verifier.semantic_state,
+        "verifier_module": verifier.verifier_module,
+        "oracle_pid": verifier.oracle_pid,
+        "reason": verifier.reason,
+    }
 
 
 def _turn_record(
@@ -792,6 +965,11 @@ def _turn_record(
         "resolved_primitive_events": receipt.resolved_primitive_events,
         "resolved_budget_sha256": receipt.resolved_budget_sha256,
         "binding_sha256": receipt.binding_sha256,
+        "binding_revision": receipt.binding_revision,
+        "binding_receipt": receipt.binding_receipt,
+        "compiled_segment": receipt.compiled_segment,
+        "dispatches": [list(results) for results in receipt.dispatches],
+        "executed_segment_receipt": receipt.executed_segment_receipt,
         "executor_evidence": receipt.executor_evidence,
         "parse_status": receipt.parse_status,
         "dispatch_status": receipt.dispatch_status,
@@ -799,17 +977,7 @@ def _turn_record(
         "cursor_after": list(receipt.cursor_after),
         "action_classes": list(receipt.action_classes),
         "state_probe_evidence": state_probe_evidence,
-        "verifier_state": {
-            "status": verifier.status,
-            "task_solved": verifier.task_solved,
-            "semantic_step_index": verifier.semantic_step_index,
-            "matched_target_ref": verifier.matched_target_ref,
-            "semantic_state_sha256": verifier.semantic_state_sha256,
-            "semantic_state": verifier.semantic_state,
-            "verifier_module": verifier.verifier_module,
-            "oracle_pid": verifier.oracle_pid,
-            "reason": verifier.reason,
-        },
+        "verifier_state": _verifier_record(verifier),
         "infra_failure_class": "verifier" if verifier.status != "ok" else None,
     }
     record["turn_payload_sha256"] = sha256_json(record)
@@ -822,37 +990,18 @@ def _resolved_budget_aggregate(
     turns: list[dict[str, Any]],
 ) -> dict[str, Any]:
     resolved = [
-        turn for turn in turns if turn.get("dispatch_status") != "budget_rejected"
+        turn
+        for turn in turns
+        if turn.get("parse_status") == "ok"
+        and turn.get("dispatch_status") == "ok"
+        and isinstance(turn.get("executed_segment_receipt"), dict)
     ]
-    payload = {
-        "schema_version": 1,
-        "schema_id": "proper_vm_runtime_budget_aggregate_v1",
-        "task_id": task.task_id,
-        "fixture_sha256": task.fixture_sha256,
-        "action_schema": arm.action_interface,
-        "segment_budget_sha256": [
-            turn["resolved_budget_sha256"] for turn in resolved
-        ],
-        "binding_sha256": [turn["binding_sha256"] for turn in resolved],
-        "resolved_primitive_actions": sum(
-            int(turn["resolved_primitive_actions"]) for turn in resolved
-        ),
-        "resolved_primitive_events": sum(
-            int(turn["resolved_primitive_events"]) for turn in resolved
-        ),
-    }
-    payload["aggregate_sha256"] = sha256_json(payload)
-    return payload
-
-
-def _is_sha256(value: Any) -> bool:
-    if not isinstance(value, str) or len(value) != 64:
-        return False
-    try:
-        int(value, 16)
-    except ValueError:
-        return False
-    return value.lower() == value
+    return executed_aggregate(
+        task_id=task.task_id,
+        fixture_sha256=task.fixture_sha256,
+        action_schema=arm.action_interface,
+        receipts=[turn["executed_segment_receipt"] for turn in resolved],
+    )
 
 
 def _score_arm(

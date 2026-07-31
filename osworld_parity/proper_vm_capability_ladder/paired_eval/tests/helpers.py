@@ -5,7 +5,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..contracts import ARMS, MODES, canonical_json
+from ..contracts import (
+    APPROVED_CURRICULUM_COMMIT,
+    APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
+    ARMS,
+    MODES,
+    canonical_json,
+)
 
 
 def task_row(task_id: str = "writer-dev-1", seed: int = 101) -> dict[str, Any]:
@@ -160,6 +166,8 @@ def evaluation_manifest(
         "expected_task_setup_validation_sha256": setup_validation_sha,
         "expected_task_setup_validation_artifact_id": "artifact-task-setup-test",
         "expected_task_setup_validation_schema": "multistep_sameapp_task_setup_validation_v1",
+        "curriculum_commit": APPROVED_CURRICULUM_COMMIT,
+        "curriculum_runtime_binding_schema": APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
         "evaluator_commit": "8" * 40,
         "arms": [
             {

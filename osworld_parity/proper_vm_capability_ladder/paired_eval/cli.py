@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .aggregate import aggregate_results, load_jsonl
-from .contracts import APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA
 from .curriculum_adapter import load_curriculum_evaluation_manifest
 from .manifest import EvaluationManifest
 from .planning import build_plan
@@ -149,11 +148,6 @@ def main(argv: list[str] | None = None) -> int:
             labctl_context_path=Path(context_value),
             curriculum_manifest=curriculum,
         )
-        if APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA is None:
-            raise RuntimeError(
-                "production paired execution is disabled until the final curriculum "
-                "runtime binding is independently approved"
-            )
         factory = _load_factory(manifest)
         runtime = factory(manifest, readiness, setup_validation)
         rows = PairedEvaluationRunner(
