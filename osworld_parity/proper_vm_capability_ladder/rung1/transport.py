@@ -77,6 +77,7 @@ class AtomicExecutionResult:
     click_backend: str = PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND
     x_injection_evidence: tuple[dict[str, Any], ...] = ()
     x_injection_timestamps: tuple[dict[str, Any], ...] = ()
+    final_pointer_readback: dict[str, Any] = field(default_factory=dict)
     passive_x_observer: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
@@ -111,6 +112,7 @@ class AtomicExecutionResult:
             "click_backend": self.click_backend,
             "x_injection_evidence": list(self.x_injection_evidence),
             "x_injection_timestamps": list(self.x_injection_timestamps),
+            "final_pointer_readback": dict(self.final_pointer_readback),
             "passive_x_observer": dict(self.passive_x_observer),
         }
 
@@ -315,7 +317,7 @@ def compile_atomic_guest_program(
         "_r1a_x_injections=[]",
         "_r1a_click_timings=[]",
         "_r1a_x_injection_sequence=0",
-        "_r1a_x_phase='outside_click'",
+        "_r1a_x_phase='click_premove'",
         "_r1a_passive_x_observer={'installed':False,'observer_process_count':0,'additional_x_connection_count':0,'assessment':'omitted_not_demonstrably_non_perturbing','limitation':"
         f"{PASSIVE_X_OBSERVER_LIMITATION!r}" "}",
         "def _r1a_sync_after_x_event(_event):",
@@ -325,14 +327,25 @@ def compile_atomic_guest_program(
         "    _sync=getattr(_display,'sync',None)",
         "    _supported=callable(_flush) and callable(_sync)",
         "    _started=_r1a_time.monotonic_ns()",
-        "    if not _supported:",
+        "    _flush_attempted=False",
+        "    _flush_success=False",
+        "    _sync_attempted=False",
+        "    _sync_success=False",
+        "    _error=None",
+        "    try:",
+        "        if not _supported: raise RuntimeError('X11 flush/sync unavailable after '+_event)",
+        "        _flush_attempted=True",
+        "        _flush()",
+        "        _flush_success=True",
+        "        _sync_attempted=True",
+        "        _sync()",
+        "        _sync_success=True",
+        "    except BaseException as _exc:",
+        "        _error=''.join(traceback.format_exception_only(type(_exc),_exc)).strip()",
+        "        raise",
+        "    finally:",
         "        _completed=_r1a_time.monotonic_ns()",
-        "        _r1a_x_event_sync.append({'event':_event,'backend':getattr(_backend,'__name__',type(_backend).__name__),'flush':False,'sync':False,'started_guest_monotonic_ns':_started,'completed_guest_monotonic_ns':_completed,'duration_ns':_completed-_started})",
-        "        raise RuntimeError('X11 flush/sync unavailable after '+_event)",
-        "    _flush()",
-        "    _sync()",
-        "    _completed=_r1a_time.monotonic_ns()",
-        "    _r1a_x_event_sync.append({'event':_event,'backend':getattr(_backend,'__name__',type(_backend).__name__),'flush':True,'sync':True,'started_guest_monotonic_ns':_started,'completed_guest_monotonic_ns':_completed,'duration_ns':_completed-_started})",
+        "        _r1a_x_event_sync.append({'event':_event,'backend':getattr(_backend,'__name__',type(_backend).__name__),'supported':_supported,'flush_attempted':_flush_attempted,'flush':_flush_success,'sync_attempted':_sync_attempted,'sync':_sync_success,'success':_flush_success and _sync_success,'error':_error,'started_guest_monotonic_ns':_started,'completed_guest_monotonic_ns':_completed,'duration_ns':_completed-_started})",
         "def _r1a_click(_button):",
         "    global _r1a_x_injection_sequence,_r1a_x_phase",
         "    _backend=pyautogui.platformModule",
@@ -346,7 +359,7 @@ def compile_atomic_guest_program(
         "    _hooked=callable(_down) and callable(_up) and callable(_move) and callable(_fake_input) and _x11 is not None and isinstance(_button_map,dict) and callable(getattr(_display,'flush',None)) and callable(getattr(_display,'sync',None))",
         "    _release_motion=_r1a_click_backend=="
         f"{PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND!r}",
-        "    _primitive={'kind':'click','button':_button,'call':'pyautogui.click(clicks=1, interval=0.05)','click_backend':_r1a_click_backend,'x11_per_event_sync_hooked':_hooked,'dwell_ms':50,'release_side_motion_notify':_release_motion,'injection_attempt_count':1,'retry_count':0,'ordering':['mouse_down','flush','sync','dwell','mouse_up','flush','sync']}",
+        "    _primitive={'kind':'click','button':_button,'call':'pyautogui.click(clicks=1, interval=0.05)','click_backend':_r1a_click_backend,'x11_per_event_sync_hooked':_hooked,'dwell_ms':50,'click_premove_same_coordinate_motion_notify':True,'release_side_motion_notify':_release_motion,'injection_attempt_count':1,'retry_count':0,'ordering':['click_premove_motion','mouse_down','flush','sync','dwell','mouse_up','flush','sync']}",
         "    _r1a_backend_primitives.append(_primitive)",
         "    if not _hooked:",
         "        raise RuntimeError('X11 click primitive hooks unavailable')",
@@ -356,10 +369,18 @@ def compile_atomic_guest_program(
         "        _event_type=int(_args[1] if len(_args)>1 else _kwargs.get('event_type',-1))",
         "        _detail=int(_args[2] if len(_args)>2 else _kwargs.get('detail',0))",
         "        _started=_r1a_time.monotonic_ns()",
-        "        _result=_fake_input(*_args,**_kwargs)",
-        "        _completed=_r1a_time.monotonic_ns()",
-        "        _r1a_x_injection_sequence+=1",
-        "        _r1a_x_injections.append({'sequence':_r1a_x_injection_sequence,'phase':_r1a_x_phase,'event':_event_names.get(_event_type,'event_'+str(_event_type)),'event_type':_event_type,'detail':_detail,'x':_kwargs.get('x'),'y':_kwargs.get('y'),'started_guest_monotonic_ns':_started,'completed_guest_monotonic_ns':_completed,'duration_ns':_completed-_started})",
+        "        _success=False",
+        "        _error=None",
+        "        try:",
+        "            _result=_fake_input(*_args,**_kwargs)",
+        "            _success=True",
+        "        except BaseException as _exc:",
+        "            _error=''.join(traceback.format_exception_only(type(_exc),_exc)).strip()",
+        "            raise",
+        "        finally:",
+        "            _completed=_r1a_time.monotonic_ns()",
+        "            _r1a_x_injection_sequence+=1",
+        "            _r1a_x_injections.append({'sequence':_r1a_x_injection_sequence,'phase':_r1a_x_phase,'event':_event_names.get(_event_type,'event_'+str(_event_type)),'event_type':_event_type,'detail':_detail,'x':_kwargs.get('x'),'y':_kwargs.get('y'),'attempted':True,'success':_success,'error':_error,'started_guest_monotonic_ns':_started,'completed_guest_monotonic_ns':_completed,'duration_ns':_completed-_started})",
         "        return _result",
         "    def _r1a_direct_down(*_args,**_kwargs):",
         "        _x,_y,_raw_button=_args[:3]",
@@ -378,8 +399,14 @@ def compile_atomic_guest_program(
         "        _prior_phase=_r1a_x_phase",
         "        _r1a_x_phase='press'",
         "        _timing['press_call_before_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
+        "        _timing['press_call_success']=False",
+        "        _timing['press_call_error']=None",
         "        try:",
         "            _result=(_down if _release_motion else _r1a_direct_down)(*_args,**_kwargs)",
+        "            _timing['press_call_success']=True",
+        "        except BaseException as _exc:",
+        "            _timing['press_call_error']=''.join(traceback.format_exception_only(type(_exc),_exc)).strip()",
+        "            raise",
         "        finally:",
         "            _timing['press_call_after_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
         "            _r1a_x_phase=_prior_phase",
@@ -391,9 +418,17 @@ def compile_atomic_guest_program(
         # released final mask.  A bounded dwell after the synced press keeps
         # the fixed click primitive while making browser receipt causal.
         "        _timing['dwell_started_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
-        f"        _r1a_time.sleep({CLICK_DWELL_S!r})",
-        "        _timing['dwell_completed_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
-        "        _timing['dwell_duration_ns']=_timing['dwell_completed_guest_monotonic_ns']-_timing['dwell_started_guest_monotonic_ns']",
+        "        _timing['dwell_success']=False",
+        "        _timing['dwell_error']=None",
+        "        try:",
+        f"            _r1a_time.sleep({CLICK_DWELL_S!r})",
+        "            _timing['dwell_success']=True",
+        "        except BaseException as _exc:",
+        "            _timing['dwell_error']=''.join(traceback.format_exception_only(type(_exc),_exc)).strip()",
+        "            raise",
+        "        finally:",
+        "            _timing['dwell_completed_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
+        "            _timing['dwell_duration_ns']=_timing['dwell_completed_guest_monotonic_ns']-_timing['dwell_started_guest_monotonic_ns']",
         "        _r1a_trace.append({'kind':'mouse_down','args':[_button]})",
         "        return _result",
         "    def _r1a_up(*_args,**_kwargs):",
@@ -401,8 +436,14 @@ def compile_atomic_guest_program(
         "        _prior_phase=_r1a_x_phase",
         "        _r1a_x_phase='release'",
         "        _timing['release_call_before_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
+        "        _timing['release_call_success']=False",
+        "        _timing['release_call_error']=None",
         "        try:",
         "            _result=(_up if _release_motion else _r1a_direct_up)(*_args,**_kwargs)",
+        "            _timing['release_call_success']=True",
+        "        except BaseException as _exc:",
+        "            _timing['release_call_error']=''.join(traceback.format_exception_only(type(_exc),_exc)).strip()",
+        "            raise",
         "        finally:",
         "            _timing['release_call_after_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
         "            _r1a_x_phase=_prior_phase",
@@ -418,8 +459,11 @@ def compile_atomic_guest_program(
         "        pyautogui.click(clicks=1,interval=0.05,button=_button)",
         "    finally:",
         "        _timing['click_completed_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
-        "        _timing['press_xtest_sequence']=[_item['event'] for _item in _r1a_x_injections if _item['sequence']>_timing['x_injection_start_sequence'] and _item['phase']=='press']",
-        "        _timing['release_xtest_sequence']=[_item['event'] for _item in _r1a_x_injections if _item['sequence']>_timing['x_injection_start_sequence'] and _item['phase']=='release']",
+        "        _timing['x_injection_end_sequence']=_r1a_x_injection_sequence",
+        "        _timing['click_premove_xtest_sequence']=[_item['event'] for _item in _r1a_x_injections if _item['sequence']>_timing['x_injection_start_sequence'] and _item['sequence']<=_timing['x_injection_end_sequence'] and _item['phase']=='click_premove']",
+        "        _timing['press_xtest_sequence']=[_item['event'] for _item in _r1a_x_injections if _item['sequence']>_timing['x_injection_start_sequence'] and _item['sequence']<=_timing['x_injection_end_sequence'] and _item['phase']=='press']",
+        "        _timing['release_xtest_sequence']=[_item['event'] for _item in _r1a_x_injections if _item['sequence']>_timing['x_injection_start_sequence'] and _item['sequence']<=_timing['x_injection_end_sequence'] and _item['phase']=='release']",
+        "        _primitive['click_premove_xtest_sequence']=list(_timing['click_premove_xtest_sequence'])",
         "        _primitive['press_xtest_sequence']=list(_timing['press_xtest_sequence'])",
         "        _primitive['release_xtest_sequence']=list(_timing['release_xtest_sequence'])",
         "        _r1a_click_timings.append(_timing)",
@@ -553,9 +597,20 @@ def compile_atomic_guest_program(
             "    for _button in ('left','middle','right'):",
             "        try: pyautogui.mouseUp(button=_button)",
             "        except BaseException: pass",
-            "_r1a_cx,_r1a_cy,_r1a_final_mask=_r1a_pointer_state()",
-            "_r1a_cursor_after=[_r1a_cx,_r1a_cy]",
-            "_r1a_payload={'ok':_r1a_error is None,'cursor':[_r1a_cx,_r1a_cy],",
+            "_r1a_final_mask=-1",
+            "_r1a_final_readback_error=None",
+            "_r1a_final_readback_success=False",
+            "try:",
+            "    _r1a_cx,_r1a_cy,_r1a_final_mask=_r1a_pointer_state()",
+            "    _r1a_cursor_after=[_r1a_cx,_r1a_cy]",
+            "    _r1a_final_readback_success=True",
+            "except BaseException as _exc:",
+            "    _r1a_final_readback_error=''.join(traceback.format_exception_only(type(_exc),_exc)).strip()",
+            "    _readback_message='final pointer readback failed: '+_r1a_final_readback_error",
+            "    _r1a_error=_readback_message if _r1a_error is None else _r1a_error+'; '+_readback_message",
+            "    _r1a_failure_kind='infrastructure'",
+            "_r1a_final_pointer_readback={'attempted':True,'success':_r1a_final_readback_success,'error':_r1a_final_readback_error,'cursor':list(_r1a_cursor_after),'pointer_button_mask':_r1a_final_mask}",
+            "_r1a_payload={'ok':_r1a_error is None,'cursor':list(_r1a_cursor_after),",
             " 'cursor_before':_r1a_cursor_before,'cursor_after':_r1a_cursor_after,",
             " '_r1a_schema':1,'pointer_button_mask':_r1a_final_mask,",
             " 'observed_pointer_button_mask':_r1a_observed_mask,",
@@ -569,6 +624,7 @@ def compile_atomic_guest_program(
             " 'click_backend':_r1a_click_backend,",
             " 'x_injection_evidence':_r1a_x_injections,",
             " 'x_injection_timestamps':_r1a_click_timings,",
+            " 'final_pointer_readback':_r1a_final_pointer_readback,",
             " 'passive_x_observer':_r1a_passive_x_observer}",
             f"print({ATOMIC_RESULT_PREFIX!r}+json.dumps(_r1a_payload,separators=(',',':'),ensure_ascii=False))",
             "if _r1a_error is not None: sys.exit(1)",
@@ -641,17 +697,95 @@ class HttpVmTransport:
         )
         result = self.execute_argv(["python", "-c", program], check=False)
         output = result.get("output")
+        lines: list[str] = []
+        payload: Any = None
+
+        def build_output_failure_evidence(
+            *, expected: Any = None, observed: Any = None
+        ) -> dict[str, Any]:
+            def payload_field(name: str, default: Any = None) -> Any:
+                return payload.get(name, default) if isinstance(payload, dict) else default
+
+            return {
+                "schema_version": "rung1_atomic_output_failure_v2",
+                "click_backend_expected": click_backend,
+                "expected": expected,
+                "observed": observed,
+                "execute_result": {
+                    "status": result.get("status"),
+                    "returncode": result.get("returncode"),
+                    "error": result.get("error"),
+                },
+                "raw_stdout": output,
+                "raw_result_markers": list(lines),
+                "raw_payload": payload,
+                "raw_backend_primitives": payload_field("backend_primitives"),
+                "raw_x_event_sync_evidence": payload_field(
+                    "x_event_sync_evidence"
+                ),
+                "raw_x_injection_timestamps": payload_field(
+                    "x_injection_timestamps"
+                ),
+                "raw_x_injection_evidence": payload_field(
+                    "x_injection_evidence"
+                ),
+                "guest_error": payload_field("error"),
+                "guest_failure_kind": payload_field("failure_kind"),
+                "pointer_masks": {
+                    "final": payload_field("pointer_button_mask"),
+                    "observed": payload_field("observed_pointer_button_mask"),
+                    "expected": payload_field("expected_pointer_button_mask"),
+                },
+                "final_pointer_readback": payload_field(
+                    "final_pointer_readback"
+                ),
+            }
+
+        def raise_output_integrity(
+            message: str,
+            *,
+            expected: Any = None,
+            observed: Any = None,
+            cause: BaseException | None = None,
+        ) -> None:
+            error = TransportError(
+                message,
+                evidence=build_output_failure_evidence(
+                    expected=expected, observed=observed
+                ),
+            )
+            if cause is not None:
+                raise error from cause
+            raise error
+
         if not isinstance(output, str):
-            raise TransportError("atomic guest action returned no stdout")
+            raise_output_integrity(
+                "atomic guest action returned no stdout",
+                expected="str stdout with one atomic result marker",
+                observed=output,
+            )
         lines = [line for line in output.splitlines() if line.startswith(ATOMIC_RESULT_PREFIX)]
         if len(lines) != 1:
-            raise TransportError(f"atomic guest result marker count was {len(lines)}")
+            raise_output_integrity(
+                f"atomic guest result marker count was {len(lines)}",
+                expected=1,
+                observed=len(lines),
+            )
         try:
             payload = json.loads(lines[0][len(ATOMIC_RESULT_PREFIX) :])
         except json.JSONDecodeError as exc:
-            raise TransportError("atomic guest action returned invalid JSON") from exc
+            raise_output_integrity(
+                "atomic guest action returned invalid JSON",
+                expected="JSON object",
+                observed=lines[0],
+                cause=exc,
+            )
         if not isinstance(payload, dict) or payload.get("_r1a_schema") != 1:
-            raise TransportError("atomic guest action returned an invalid schema")
+            raise_output_integrity(
+                "atomic guest action returned an invalid schema",
+                expected={"_r1a_schema": 1},
+                observed=payload,
+            )
         cursor = payload.get("cursor")
         cursor_before = payload.get("cursor_before")
         cursor_after = payload.get("cursor_after")
@@ -663,6 +797,7 @@ class HttpVmTransport:
         raw_x_injections = payload.get("x_injection_evidence", [])
         raw_click_timings = payload.get("x_injection_timestamps", [])
         passive_x_observer = payload.get("passive_x_observer")
+        final_pointer_readback = payload.get("final_pointer_readback")
         if (
             not isinstance(cursor, list)
             or len(cursor) != 2
@@ -678,14 +813,55 @@ class HttpVmTransport:
             or not isinstance(raw_x_injections, list)
             or not isinstance(raw_click_timings, list)
             or not isinstance(passive_x_observer, dict)
+            or not isinstance(final_pointer_readback, dict)
             or not all(isinstance(item, dict) for item in raw_primitives)
             or not all(isinstance(item, dict) for item in raw_sync_evidence)
             or not all(isinstance(item, dict) for item in raw_x_injections)
             or not all(isinstance(item, dict) for item in raw_click_timings)
         ):
-            raise TransportError("atomic guest action returned invalid state")
+            raise_output_integrity(
+                "atomic guest action returned invalid state",
+                expected="complete atomic payload collections and cursor triples",
+                observed=payload,
+            )
+
+        def raise_x_identity(
+            message: str,
+            *,
+            expected: Any = None,
+            observed: Any = None,
+        ) -> None:
+            raise_output_integrity(
+                message,
+                expected=expected,
+                observed=observed,
+            )
+
         if payload.get("click_backend") != click_backend:
-            raise TransportError("atomic guest action click backend drifted")
+            raise_x_identity(
+                "atomic guest action click backend drifted",
+                expected=click_backend,
+                observed=payload.get("click_backend"),
+            )
+        if (
+            final_pointer_readback.get("attempted") is not True
+            or final_pointer_readback.get("success") is not True
+            or final_pointer_readback.get("error") is not None
+            or final_pointer_readback.get("cursor") != cursor_after
+            or final_pointer_readback.get("pointer_button_mask")
+            != payload.get("pointer_button_mask")
+        ):
+            raise_output_integrity(
+                "atomic guest action final pointer readback failed or drifted",
+                expected={
+                    "attempted": True,
+                    "success": True,
+                    "error": None,
+                    "cursor": cursor_after,
+                    "pointer_button_mask": payload.get("pointer_button_mask"),
+                },
+                observed=final_pointer_readback,
+            )
         if passive_x_observer != {
             "installed": False,
             "observer_process_count": 0,
@@ -693,7 +869,17 @@ class HttpVmTransport:
             "assessment": "omitted_not_demonstrably_non_perturbing",
             "limitation": PASSIVE_X_OBSERVER_LIMITATION,
         }:
-            raise TransportError("atomic guest action passive X observer evidence drifted")
+            raise_output_integrity(
+                "atomic guest action passive X observer evidence drifted",
+                expected={
+                    "installed": False,
+                    "observer_process_count": 0,
+                    "additional_x_connection_count": 0,
+                    "assessment": "omitted_not_demonstrably_non_perturbing",
+                    "limitation": PASSIVE_X_OBSERVER_LIMITATION,
+                },
+                observed=passive_x_observer,
+            )
 
         def validate_guest_timestamps(
             records: list[dict[str, Any]], *, fields: tuple[str, str]
@@ -713,8 +899,14 @@ class HttpVmTransport:
                     or isinstance(duration, bool)
                     or duration != completed - started
                 ):
-                    raise TransportError(
-                        "atomic guest action returned invalid monotonic timestamp evidence"
+                    raise_x_identity(
+                        "atomic guest action returned invalid monotonic timestamp evidence",
+                        expected={
+                            "started_field": started_field,
+                            "completed_field": completed_field,
+                            "duration": "completed - started",
+                        },
+                        observed=record,
                     )
 
         validate_guest_timestamps(
@@ -731,6 +923,46 @@ class HttpVmTransport:
                 "completed_guest_monotonic_ns",
             ),
         )
+        expected_sync_events = [
+            event
+            for operation in lower_guest_operations(operations)
+            for event in (
+                ("mouse_down", "mouse_up")
+                if operation.kind == "click"
+                else (operation.kind,)
+                if operation.kind in {"mouse_down", "mouse_up"}
+                else ()
+            )
+        ]
+        if [item.get("event") for item in raw_sync_evidence] != expected_sync_events:
+            raise_x_identity(
+                "atomic guest action X sync event sequence drifted",
+                expected=expected_sync_events,
+                observed=[item.get("event") for item in raw_sync_evidence],
+            )
+        for item in raw_sync_evidence:
+            if (
+                item.get("supported") is not True
+                or item.get("flush_attempted") is not True
+                or item.get("flush") is not True
+                or item.get("sync_attempted") is not True
+                or item.get("sync") is not True
+                or item.get("success") is not True
+                or item.get("error") is not None
+            ):
+                raise_x_identity(
+                    "atomic guest action X sync attempt failed or drifted",
+                    expected={
+                        "supported": True,
+                        "flush_attempted": True,
+                        "flush": True,
+                        "sync_attempted": True,
+                        "sync": True,
+                        "success": True,
+                        "error": None,
+                    },
+                    observed=item,
+                )
         injection_sequences = [item.get("sequence") for item in raw_x_injections]
         if (
             not all(
@@ -739,7 +971,11 @@ class HttpVmTransport:
             )
             or injection_sequences != list(range(1, len(raw_x_injections) + 1))
         ):
-            raise TransportError("atomic guest action X injection sequence drifted")
+            raise_x_identity(
+                "atomic guest action X injection sequence drifted",
+                expected=list(range(1, len(raw_x_injections) + 1)),
+                observed=injection_sequences,
+            )
         x_event_names = {4: "button_press", 5: "button_release", 6: "motion_notify"}
         for item in raw_x_injections:
             event_type = item.get("event_type")
@@ -747,13 +983,16 @@ class HttpVmTransport:
             x = item.get("x")
             y = item.get("y")
             if (
-                item.get("phase") not in {"outside_click", "press", "release"}
+                item.get("phase") not in {"click_premove", "press", "release"}
                 or not isinstance(event_type, int)
                 or isinstance(event_type, bool)
                 or event_type not in x_event_names
                 or item.get("event") != x_event_names[event_type]
                 or not isinstance(detail, int)
                 or isinstance(detail, bool)
+                or item.get("attempted") is not True
+                or item.get("success") is not True
+                or item.get("error") is not None
                 or ((x is None) != (y is None))
                 or (
                     x is not None
@@ -765,11 +1004,24 @@ class HttpVmTransport:
                     )
                 )
             ):
-                raise TransportError("atomic guest action X injection identity drifted")
+                raise_x_identity(
+                    "atomic guest action X injection identity drifted",
+                    expected={
+                        "phase": ["click_premove", "press", "release"],
+                        "event_type_to_name": x_event_names,
+                        "detail_type": "int",
+                        "attempted": True,
+                        "success": True,
+                        "error": None,
+                        "coordinates": "both null or both int",
+                    },
+                    observed=item,
+                )
         expected_click_count = sum(
             operation.kind == "click" for operation in lower_guest_operations(operations)
         )
         expected_press_sequence = ["motion_notify", "button_press"]
+        expected_click_premove_sequence = ["motion_notify"]
         expected_release_sequence = (
             ["motion_notify", "button_release"]
             if click_backend == PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND
@@ -781,22 +1033,73 @@ class HttpVmTransport:
             if primitive.get("kind") == "click"
         ]
         if len(click_primitives) != expected_click_count:
-            raise TransportError("atomic guest action click primitive count drifted")
+            raise_x_identity(
+                "atomic guest action click primitive count drifted",
+                expected=expected_click_count,
+                observed=len(click_primitives),
+            )
         for primitive in click_primitives:
             if (
                 primitive.get("click_backend") != click_backend
+                or primitive.get("call")
+                != "pyautogui.click(clicks=1, interval=0.05)"
+                or primitive.get("x11_per_event_sync_hooked") is not True
+                or primitive.get("ordering")
+                != [
+                    "click_premove_motion",
+                    "mouse_down",
+                    "flush",
+                    "sync",
+                    "dwell",
+                    "mouse_up",
+                    "flush",
+                    "sync",
+                ]
+                or primitive.get("click_premove_same_coordinate_motion_notify")
+                is not True
                 or primitive.get("release_side_motion_notify")
                 != (click_backend == PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND)
                 or primitive.get("injection_attempt_count") != 1
                 or primitive.get("retry_count") != 0
                 or primitive.get("dwell_ms") != int(CLICK_DWELL_S * 1000)
+                or primitive.get("click_premove_xtest_sequence")
+                != expected_click_premove_sequence
                 or primitive.get("press_xtest_sequence") != expected_press_sequence
                 or primitive.get("release_xtest_sequence")
                 != expected_release_sequence
             ):
-                raise TransportError("atomic guest action click primitive drifted")
+                raise_x_identity(
+                    "atomic guest action click primitive drifted",
+                    expected={
+                        "click_backend": click_backend,
+                        "call": "pyautogui.click(clicks=1, interval=0.05)",
+                        "x11_per_event_sync_hooked": True,
+                        "ordering": [
+                            "click_premove_motion",
+                            "mouse_down",
+                            "flush",
+                            "sync",
+                            "dwell",
+                            "mouse_up",
+                            "flush",
+                            "sync",
+                        ],
+                        "click_premove_same_coordinate_motion_notify": True,
+                        "click_premove_xtest_sequence": expected_click_premove_sequence,
+                        "press_xtest_sequence": expected_press_sequence,
+                        "release_xtest_sequence": expected_release_sequence,
+                        "dwell_ms": int(CLICK_DWELL_S * 1000),
+                        "injection_attempt_count": 1,
+                        "retry_count": 0,
+                    },
+                    observed=primitive,
+                )
         if len(raw_click_timings) != expected_click_count:
-            raise TransportError("atomic guest action click timing count drifted")
+            raise_x_identity(
+                "atomic guest action click timing count drifted",
+                expected=expected_click_count,
+                observed=len(raw_click_timings),
+            )
         covered_controlled_sequences: set[int] = set()
         for timing, primitive in zip(raw_click_timings, click_primitives):
             required_timestamps = (
@@ -819,21 +1122,49 @@ class HttpVmTransport:
                 != (click_backend == PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND)
                 or timing.get("clock") != "time.monotonic_ns"
                 or timing.get("dwell_requested_ns") != int(CLICK_DWELL_S * 1e9)
+                or timing.get("press_call_success") is not True
+                or timing.get("press_call_error") is not None
+                or timing.get("dwell_success") is not True
+                or timing.get("dwell_error") is not None
+                or timing.get("release_call_success") is not True
+                or timing.get("release_call_error") is not None
+                or timing.get("click_premove_xtest_sequence")
+                != expected_click_premove_sequence
                 or timing.get("press_xtest_sequence") != expected_press_sequence
                 or timing.get("release_xtest_sequence")
                 != expected_release_sequence
-                or any(not isinstance(value, int) for value in values)
+                or any(
+                    not isinstance(value, int) or isinstance(value, bool)
+                    for value in values
+                )
                 or values != sorted(values)
                 or timing.get("dwell_duration_ns")
                 != timing.get("dwell_completed_guest_monotonic_ns")
                 - timing.get("dwell_started_guest_monotonic_ns")
             ):
-                raise TransportError("atomic guest action click timing evidence drifted")
+                raise_x_identity(
+                    "atomic guest action click timing evidence drifted",
+                    expected={
+                        "click_backend": click_backend,
+                        "clock": "time.monotonic_ns",
+                        "click_premove_xtest_sequence": expected_click_premove_sequence,
+                        "press_xtest_sequence": expected_press_sequence,
+                        "release_xtest_sequence": expected_release_sequence,
+                        "dwell_requested_ns": int(CLICK_DWELL_S * 1e9),
+                        "press_call_success": True,
+                        "press_call_error": None,
+                        "dwell_success": True,
+                        "dwell_error": None,
+                        "release_call_success": True,
+                        "release_call_error": None,
+                    },
+                    observed=timing,
+                )
             start_sequence = timing.get("x_injection_start_sequence")
             button_detail = {"left": 1, "middle": 2, "right": 3}.get(
                 primitive.get("button")
             )
-            expected_injections = [
+            expected_controlled = [
                 ("press", "motion_notify", 6, 0),
                 ("press", "button_press", 4, button_detail),
                 *(
@@ -843,54 +1174,123 @@ class HttpVmTransport:
                 ),
                 ("release", "button_release", 5, button_detail),
             ]
+            expected_click_window = [
+                ("click_premove", "motion_notify", 6, 0),
+                *expected_controlled,
+            ]
+            end_sequence = timing.get("x_injection_end_sequence")
             if (
                 not isinstance(start_sequence, int)
                 or isinstance(start_sequence, bool)
+                or not isinstance(end_sequence, int)
+                or isinstance(end_sequence, bool)
+                or end_sequence != start_sequence + len(expected_click_window)
                 or button_detail is None
             ):
-                raise TransportError("atomic guest action click X sequence origin drifted")
-            controlled = [
+                raise_x_identity(
+                    "atomic guest action click X sequence boundary drifted",
+                    expected={
+                        "start_sequence_type": "int",
+                        "end_sequence": (
+                            start_sequence + len(expected_click_window)
+                            if isinstance(start_sequence, int)
+                            and not isinstance(start_sequence, bool)
+                            else None
+                        ),
+                        "event_count": len(expected_click_window),
+                    },
+                    observed={
+                        "start_sequence": start_sequence,
+                        "end_sequence": end_sequence,
+                        "button_detail": button_detail,
+                    },
+                )
+            click_window = [
                 item
                 for item in raw_x_injections
-                if start_sequence
-                < item["sequence"]
-                <= start_sequence + len(expected_injections)
+                if start_sequence < item["sequence"] <= end_sequence
             ]
-            if [item["sequence"] for item in controlled] != list(
-                range(start_sequence + 1, start_sequence + 1 + len(expected_injections))
+            if [item["sequence"] for item in click_window] != list(
+                range(start_sequence + 1, end_sequence + 1)
             ):
-                raise TransportError("atomic guest action controlled X sequence drifted")
-            for item, expected in zip(controlled, expected_injections):
+                raise_x_identity(
+                    "atomic guest action click X sequence drifted",
+                    expected=list(range(start_sequence + 1, end_sequence + 1)),
+                    observed=[item.get("sequence") for item in click_window],
+                )
+            for item, expected in zip(click_window, expected_click_window):
                 if (
                     item.get("phase"),
                     item.get("event"),
                     item.get("event_type"),
                     item.get("detail"),
                 ) != expected:
-                    raise TransportError("atomic guest action controlled X identity drifted")
+                    raise_x_identity(
+                        "atomic guest action click X identity drifted",
+                        expected=[
+                            {
+                                "phase": phase,
+                                "event": event,
+                                "event_type": event_type,
+                                "detail": detail,
+                            }
+                            for phase, event, event_type, detail in expected_click_window
+                        ],
+                        observed=[
+                            {
+                                key: record.get(key)
+                                for key in ("phase", "event", "event_type", "detail")
+                            }
+                            for record in click_window
+                        ],
+                    )
+            click_premove = click_window[0]
+            controlled = click_window[1:]
+            for item in controlled:
                 covered_controlled_sequences.add(item["sequence"])
-            controlled_clock_values = [
+            click_clock_values = [
                 value
-                for item in controlled
+                for item in click_window
                 for value in (
                     item["started_guest_monotonic_ns"],
                     item["completed_guest_monotonic_ns"],
                 )
             ]
-            if controlled_clock_values != sorted(controlled_clock_values):
-                raise TransportError("atomic guest action controlled X clock drifted")
+            if click_clock_values != sorted(click_clock_values):
+                raise_x_identity(
+                    "atomic guest action click X clock drifted",
+                    expected="nondecreasing start/completion clock in X sequence order",
+                    observed=click_clock_values,
+                )
             press_motion = controlled[0]
             press_coordinates = (press_motion.get("x"), press_motion.get("y"))
             if not all(
                 isinstance(value, int) and not isinstance(value, bool)
                 for value in press_coordinates
             ):
-                raise TransportError("atomic guest action press coordinates drifted")
+                raise_x_identity(
+                    "atomic guest action press coordinates drifted",
+                    expected="two integer coordinates",
+                    observed=press_coordinates,
+                )
+            if (
+                click_premove.get("x"),
+                click_premove.get("y"),
+            ) != press_coordinates:
+                raise_x_identity(
+                    "atomic guest action click premove coordinates drifted",
+                    expected=press_coordinates,
+                    observed=(click_premove.get("x"), click_premove.get("y")),
+                )
             for item in controlled:
                 if item["event"] in {"button_press", "button_release"} and (
                     item.get("x") is not None or item.get("y") is not None
                 ):
-                    raise TransportError("atomic guest action button coordinates drifted")
+                    raise_x_identity(
+                        "atomic guest action button coordinates drifted",
+                        expected={"x": None, "y": None},
+                        observed=item,
+                    )
             release_motions = [
                 item
                 for item in controlled
@@ -899,11 +1299,19 @@ class HttpVmTransport:
             if release_motions and (
                 release_motions[0].get("x"), release_motions[0].get("y")
             ) != press_coordinates:
-                raise TransportError(
-                    "atomic guest action release motion coordinates drifted"
+                raise_x_identity(
+                    "atomic guest action release motion coordinates drifted",
+                    expected=press_coordinates,
+                    observed=(
+                        release_motions[0].get("x"),
+                        release_motions[0].get("y"),
+                    ),
                 )
             if not (
-                timing["press_call_before_guest_monotonic_ns"]
+                timing["click_started_guest_monotonic_ns"]
+                <= click_premove["started_guest_monotonic_ns"]
+                <= click_premove["completed_guest_monotonic_ns"]
+                <= timing["press_call_before_guest_monotonic_ns"]
                 <= controlled[0]["started_guest_monotonic_ns"]
                 <= controlled[1]["completed_guest_monotonic_ns"]
                 <= timing["press_call_after_guest_monotonic_ns"]
@@ -915,22 +1323,39 @@ class HttpVmTransport:
                 <= controlled[-1]["completed_guest_monotonic_ns"]
                 <= timing["release_call_after_guest_monotonic_ns"]
                 <= timing["release_sync_completed_guest_monotonic_ns"]
+                <= timing["click_completed_guest_monotonic_ns"]
             ):
-                raise TransportError("atomic guest action X timing order drifted")
+                raise_x_identity(
+                    "atomic guest action X timing order drifted",
+                    expected=(
+                        "click start <= premove <= press call/sync <= dwell <= "
+                        "release call/sync <= click complete"
+                    ),
+                    observed={
+                        "timing": timing,
+                        "click_window": click_window,
+                    },
+                )
         all_controlled_sequences = {
             item["sequence"]
             for item in raw_x_injections
             if item.get("phase") in {"press", "release"}
         }
         if covered_controlled_sequences != all_controlled_sequences:
-            raise TransportError("atomic guest action unbound controlled X event")
+            raise_x_identity(
+                "atomic guest action unbound controlled X event",
+                expected=sorted(covered_controlled_sequences),
+                observed=sorted(all_controlled_sequences),
+            )
 
         def parse_operations(raw: list[Any], label: str) -> tuple[Operation, ...]:
             parsed: list[Operation] = []
             for item in raw:
                 if not isinstance(item, dict) or not isinstance(item.get("args"), list):
-                    raise TransportError(
-                        f"atomic guest action returned invalid {label} trace"
+                    raise_output_integrity(
+                        f"atomic guest action returned invalid {label} trace",
+                        expected={"kind": "str", "args": "list"},
+                        observed=item,
                     )
                 parsed.append(Operation(str(item.get("kind", "")), tuple(item["args"])))
             return tuple(parsed)
@@ -939,43 +1364,128 @@ class HttpVmTransport:
         semantic = parse_operations(raw_semantic, "semantic")
         lowered = parse_operations(raw_lowered, "lowered")
         if semantic != operations or lowered != lower_guest_operations(operations):
-            raise TransportError("atomic guest action operation streams drifted")
-        pointer_mask = int(payload.get("pointer_button_mask", -1))
-        reported_expected = int(payload.get("expected_pointer_button_mask", -1))
+            raise_output_integrity(
+                "atomic guest action operation streams drifted",
+                expected={
+                    "semantic": [
+                        {"kind": item.kind, "args": list(item.args)}
+                        for item in operations
+                    ],
+                    "lowered": [
+                        {"kind": item.kind, "args": list(item.args)}
+                        for item in lower_guest_operations(operations)
+                    ],
+                },
+                observed={
+                    "semantic": [
+                        {"kind": item.kind, "args": list(item.args)}
+                        for item in semantic
+                    ],
+                    "lowered": [
+                        {"kind": item.kind, "args": list(item.args)}
+                        for item in lowered
+                    ],
+                },
+            )
+
+        def parse_payload_int(name: str, value: Any) -> int:
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise_output_integrity(
+                    f"atomic guest action {name} was not an integer",
+                    expected="int",
+                    observed=value,
+                )
+            return value
+
+        pointer_mask = parse_payload_int(
+            "pointer button mask", payload.get("pointer_button_mask")
+        )
+        reported_expected = parse_payload_int(
+            "expected pointer button mask",
+            payload.get("expected_pointer_button_mask"),
+        )
+        observed_pointer_mask = parse_payload_int(
+            "observed pointer button mask",
+            payload.get("observed_pointer_button_mask"),
+        )
         if reported_expected != expected_mask or pointer_mask < 0:
-            raise TransportError("atomic guest action mask contract mismatch")
-        ok = bool(payload.get("ok"))
-        returncode = int(result.get("returncode", -1))
+            raise_output_integrity(
+                "atomic guest action mask contract mismatch",
+                expected={"final_nonnegative": True, "expected": expected_mask},
+                observed={"final": pointer_mask, "expected": reported_expected},
+            )
+        ok = payload.get("ok")
+        if not isinstance(ok, bool):
+            raise_output_integrity(
+                "atomic guest action ok field was not boolean",
+                expected="bool",
+                observed=ok,
+            )
+        returncode = parse_payload_int("guest returncode", result.get("returncode"))
         if ok != (returncode == 0):
-            raise TransportError(
-                "atomic guest action success/returncode contract mismatch"
+            raise_output_integrity(
+                "atomic guest action success/returncode contract mismatch",
+                expected={"ok": returncode == 0, "returncode": returncode},
+                observed={"ok": ok, "returncode": returncode},
             )
         if ok and result.get("status") != "success":
-            raise TransportError("atomic guest action returned an invalid status")
+            raise_output_integrity(
+                "atomic guest action returned an invalid status",
+                expected="success",
+                observed=result.get("status"),
+            )
         failure_kind = payload.get("failure_kind")
         if failure_kind not in {None, "verification", "infrastructure", "injected"}:
-            raise TransportError("atomic guest action returned invalid failure kind")
+            raise_output_integrity(
+                "atomic guest action returned invalid failure kind",
+                expected=[None, "verification", "infrastructure", "injected"],
+                observed=failure_kind,
+            )
         if ok != (failure_kind is None):
-            raise TransportError("atomic guest action failure classification mismatch")
+            raise_output_integrity(
+                "atomic guest action failure classification mismatch",
+                expected={"failure_kind_is_none": ok},
+                observed=failure_kind,
+            )
         if ok != (payload.get("error") is None):
-            raise TransportError("atomic guest action error contract mismatch")
-        if [int(cursor[0]), int(cursor[1])] != [
-            int(cursor_after[0]),
-            int(cursor_after[1]),
-        ]:
-            raise TransportError("atomic guest cursor alias/readback mismatch")
-        guest_process_count = int(payload.get("guest_process_count", 0))
+            raise_output_integrity(
+                "atomic guest action error contract mismatch",
+                expected={"error_is_none": ok},
+                observed=payload.get("error"),
+            )
+        cursor_values = [
+            parse_payload_int("cursor coordinate", value) for value in cursor
+        ]
+        cursor_before_values = [
+            parse_payload_int("cursor-before coordinate", value)
+            for value in cursor_before
+        ]
+        cursor_after_values = [
+            parse_payload_int("cursor-after coordinate", value)
+            for value in cursor_after
+        ]
+        if cursor_values != cursor_after_values:
+            raise_output_integrity(
+                "atomic guest cursor alias/readback mismatch",
+                expected=cursor_after_values,
+                observed=cursor_values,
+            )
+        guest_process_count = parse_payload_int(
+            "guest process count", payload.get("guest_process_count")
+        )
         if guest_process_count != 1:
-            raise TransportError("atomic action did not use exactly one guest process")
+            raise_output_integrity(
+                "atomic action did not use exactly one guest process",
+                expected=1,
+                observed=guest_process_count,
+            )
         atomic_result = AtomicExecutionResult(
             ok=ok,
-            cursor=(int(cursor[0]), int(cursor[1])),
-            cursor_before=(int(cursor_before[0]), int(cursor_before[1])),
-            cursor_after=(int(cursor_after[0]), int(cursor_after[1])),
+            cursor=(cursor_values[0], cursor_values[1]),
+            cursor_before=(cursor_before_values[0], cursor_before_values[1]),
+            cursor_after=(cursor_after_values[0], cursor_after_values[1]),
             pointer_button_mask=pointer_mask,
-            observed_pointer_button_mask=int(
-                payload.get("observed_pointer_button_mask", -1)
-            ),
+            observed_pointer_button_mask=observed_pointer_mask,
             expected_pointer_button_mask=reported_expected,
             guest_process_count=guest_process_count,
             guest_returncode=returncode,
@@ -991,6 +1501,7 @@ class HttpVmTransport:
             click_backend=click_backend,
             x_injection_evidence=tuple(dict(item) for item in raw_x_injections),
             x_injection_timestamps=tuple(dict(item) for item in raw_click_timings),
+            final_pointer_readback=dict(final_pointer_readback),
             passive_x_observer=dict(passive_x_observer),
         )
         self.audit.operations.extend(traced)

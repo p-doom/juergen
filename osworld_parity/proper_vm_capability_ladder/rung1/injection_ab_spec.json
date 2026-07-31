@@ -1,7 +1,23 @@
 {
   "schema_version": 1,
-  "suite": "rung1_click_release_injection_ab_v1",
+  "suite": "rung1_click_release_injection_ab_v2",
   "status": "preregistered_cpu_development_diagnostic",
+  "supersedes": {
+    "suite": "rung1_click_release_injection_ab_v1",
+    "pipeline_id": "pipeline_019fb9aa926f7ba198bc237a383e9a49",
+    "run_id": "run_019fb9aa926f7ba198bc2362ead2f37a",
+    "job_id": "136152",
+    "terminal_state": "pre_science_integrity_abort",
+    "reason": "v1 omitted the arm-neutral PyAutoGUI top-level same-coordinate pre-click MotionNotify"
+  },
+  "control_plane_guardrail": {
+    "authoritative_host": "hai-login2.haicore.berlin",
+    "required_invocation": "ssh hai-login2.haicore.berlin labctl ...",
+    "reason": "the PostgreSQL Unix socket is host-local despite its shared NFS path",
+    "direct_compute_node_failure": "ECONNREFUSED followed by a misleading 30-second pool timeout",
+    "submission_authorized": false,
+    "manual_reconcile_authorized": false
+  },
   "parent_evidence": {
     "pipeline_id": "pipeline_019fb96c7d6f7f5397b24d572b97e6be",
     "run_id": "run_019fb96c7d6f7f5397b24d41375ebc7a",
@@ -43,10 +59,64 @@
     "move_relative",
     "click"
   ],
+  "common_pyautogui_click_premove": {
+    "source": "PyAutoGUI 0.9.54 top-level click _mouseMoveDrag before platform _click",
+    "phase": "click_premove",
+    "xtest_sequence": [
+      "motion_notify"
+    ],
+    "event_type": 6,
+    "detail": 0,
+    "same_coordinates_as_press": true,
+    "arm_neutral": true
+  },
+  "failure_evidence_contract": {
+    "schema_version": "rung1_atomic_output_failure_v2",
+    "x_test_attempt_fields": [
+      "attempted",
+      "success",
+      "error"
+    ],
+    "sync_attempt_fields": [
+      "supported",
+      "flush_attempted",
+      "flush",
+      "sync_attempted",
+      "sync",
+      "success",
+      "error"
+    ],
+    "final_pointer_readback_fields": [
+      "attempted",
+      "success",
+      "error",
+      "cursor",
+      "pointer_button_mask"
+    ],
+    "post_output_error_fields": [
+      "click_backend_expected",
+      "expected",
+      "observed",
+      "execute_result",
+      "raw_stdout",
+      "raw_result_markers",
+      "raw_payload",
+      "raw_backend_primitives",
+      "raw_x_event_sync_evidence",
+      "raw_x_injection_timestamps",
+      "raw_x_injection_evidence",
+      "guest_error",
+      "guest_failure_kind",
+      "pointer_masks",
+      "final_pointer_readback"
+    ],
+    "checkpoint_immediately_after_dispatch": true
+  },
   "backend_arms": {
     "A": {
       "name": "pyautogui_release_motion",
       "order": [
+        "pyautogui_top_level_same_coordinate_motion",
         "pyautogui_press",
         "x_sync",
         "dwell_50ms",
@@ -59,6 +129,7 @@
     "B": {
       "name": "direct_xtest_no_release_motion",
       "order": [
+        "pyautogui_top_level_same_coordinate_motion",
         "xtest_press",
         "x_sync",
         "dwell_50ms",
@@ -137,6 +208,7 @@
   },
   "guest_timestamp_clock": "time.monotonic_ns",
   "required_guest_timestamp_stages": [
+    "click_started",
     "press_call_before",
     "press_call_after",
     "press_sync_completed",
@@ -144,7 +216,8 @@
     "dwell_completed",
     "release_call_before",
     "release_call_after",
-    "release_sync_completed"
+    "release_sync_completed",
+    "click_completed"
   ],
   "passive_x_observer": {
     "enabled": false,
@@ -162,6 +235,27 @@
     "canonical action format, semantic operations, endpoint, or only-backend-difference contract drift",
     "missing guest injection timestamps, one-process contract failure, nonzero final pointer mask, or dispatch count other than one"
   ],
+  "pre_science_integrity_abort_history": {
+    "pipeline_id": "pipeline_019fb9aa926f7ba198bc237a383e9a49",
+    "run_id": "run_019fb9aa926f7ba198bc2362ead2f37a",
+    "job_id": "136152",
+    "completed_trial_count": 0,
+    "retry_count": 0,
+    "replacement_count": 0,
+    "integrity_error": "atomic guest action controlled X identity drifted",
+    "root_cause": "validator omitted the arm-neutral PyAutoGUI top-level same-coordinate pre-click MotionNotify",
+    "artifact_index_sha256": "92988882cdd0cecd3df94ce404af16f37f8439351515ac51ed8620c4d023ff03",
+    "content_address": "sha256:1a7a7eaf80f51803b5f557311d61c9961007719407f8662b189dea226621e3b4",
+    "failure_sha256": "a1b40b559be6a575e01ecdbc911f1a86b6d2cb26d2406c64399df092a9a55b4e",
+    "progress_sha256": "15bfeefb8fbfff19b8d017ab955b280bc194aee6f6a10955e13cc025ca8ec550",
+    "vm_closed": true,
+    "overlay_removed": true,
+    "accidental_control_plane_action": {
+      "command": "labctl reconcile",
+      "result": "duplicate artifact primary key artifact_7143accb7e53783d",
+      "effect": "no run revival, relabel, replacement, or additional Slurm job"
+    }
+  },
   "interpretation_table": [
     {
       "condition": "any integrity abort",

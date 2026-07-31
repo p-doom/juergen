@@ -27,6 +27,7 @@ from osworld_parity.proper_vm_capability_ladder.rung1.injection_ab_diagnostic im
 from osworld_parity.proper_vm_capability_ladder.rung1.transport import (
     PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
     Operation,
+    TransportError,
     compile_atomic_guest_program,
 )
 
@@ -42,6 +43,28 @@ def test_preregistration_and_schedule_are_exact_and_development_only() -> None:
     assert spec["model_access"] is False
     assert spec["sealed_evaluation_access"] is False
     assert spec["passive_x_observer"]["enabled"] is False
+    assert spec["common_pyautogui_click_premove"]["arm_neutral"] is True
+    assert spec["control_plane_guardrail"]["authoritative_host"] == (
+        "hai-login2.haicore.berlin"
+    )
+    assert spec["control_plane_guardrail"]["submission_authorized"] is False
+    assert spec["control_plane_guardrail"]["manual_reconcile_authorized"] is False
+    assert spec["failure_evidence_contract"]["schema_version"] == (
+        "rung1_atomic_output_failure_v2"
+    )
+    assert spec["failure_evidence_contract"][
+        "checkpoint_immediately_after_dispatch"
+    ] is True
+    history = spec["pre_science_integrity_abort_history"]
+    assert history["job_id"] == "136152"
+    assert history["completed_trial_count"] == 0
+    assert history["retry_count"] == history["replacement_count"] == 0
+    assert history["vm_closed"] is history["overlay_removed"] is True
+    assert history["accidental_control_plane_action"] == {
+        "command": "labctl reconcile",
+        "result": "duplicate artifact primary key artifact_7143accb7e53783d",
+        "effect": "no run revival, relabel, replacement, or additional Slurm job",
+    }
     schedule = fixed_trial_schedule()
     assert len(schedule) == 48
     assert [item["arm"] for item in schedule] == list(ORDER_BLOCK) * 6
@@ -243,7 +266,15 @@ def _atomic(arm: str) -> dict:
         "clock": "time.monotonic_ns",
         "dwell_requested_ns": 50_000_000,
         "dwell_duration_ns": 50_000_000,
-        "x_injection_start_sequence": 1,
+        "press_call_success": True,
+        "press_call_error": None,
+        "dwell_success": True,
+        "dwell_error": None,
+        "release_call_success": True,
+        "release_call_error": None,
+        "x_injection_start_sequence": 0,
+        "x_injection_end_sequence": 5 if arm == "A" else 4,
+        "click_started_guest_monotonic_ns": 90,
         "press_call_before_guest_monotonic_ns": 100,
         "press_call_after_guest_monotonic_ns": 130,
         "press_sync_completed_guest_monotonic_ns": 140,
@@ -252,7 +283,16 @@ def _atomic(arm: str) -> dict:
         "release_call_before_guest_monotonic_ns": 50_000_160,
         "release_call_after_guest_monotonic_ns": 50_000_190,
         "release_sync_completed_guest_monotonic_ns": 50_000_200,
+        "click_completed_guest_monotonic_ns": 50_000_210,
+        "click_premove_xtest_sequence": ["motion_notify"],
+        "press_xtest_sequence": ["motion_notify", "button_press"],
+        "release_xtest_sequence": (
+            ["motion_notify", "button_release"]
+            if arm == "A"
+            else ["button_release"]
+        ),
     }
+
     def x_event(
         sequence: int,
         phase: str,
@@ -272,13 +312,16 @@ def _atomic(arm: str) -> dict:
             "detail": detail,
             "x": x,
             "y": y,
+            "attempted": True,
+            "success": True,
+            "error": None,
             "started_guest_monotonic_ns": started,
             "completed_guest_monotonic_ns": started + 1,
             "duration_ns": 1,
         }
 
     evidence = [
-        x_event(1, "outside_click", "motion_notify", 6, 0, 50, x=365, y=345),
+        x_event(1, "click_premove", "motion_notify", 6, 0, 95, x=365, y=345),
         x_event(2, "press", "motion_notify", 6, 0, 110, x=365, y=345),
         x_event(3, "press", "button_press", 4, 1, 120),
         x_event(
@@ -324,11 +367,25 @@ def _atomic(arm: str) -> dict:
             {
                 "kind": "click",
                 "button": "left",
+                "call": "pyautogui.click(clicks=1, interval=0.05)",
                 "click_backend": BACKEND_BY_ARM[arm],
+                "x11_per_event_sync_hooked": True,
                 "dwell_ms": 50,
+                "ordering": [
+                    "click_premove_motion",
+                    "mouse_down",
+                    "flush",
+                    "sync",
+                    "dwell",
+                    "mouse_up",
+                    "flush",
+                    "sync",
+                ],
+                "click_premove_same_coordinate_motion_notify": True,
                 "release_side_motion_notify": arm == "A",
                 "injection_attempt_count": 1,
                 "retry_count": 0,
+                "click_premove_xtest_sequence": ["motion_notify"],
                 "press_xtest_sequence": ["motion_notify", "button_press"],
                 "release_xtest_sequence": (
                     ["motion_notify", "button_release"]
@@ -339,6 +396,43 @@ def _atomic(arm: str) -> dict:
         ],
         "x_injection_timestamps": [timestamp],
         "x_injection_evidence": evidence,
+        "x_event_sync_evidence": [
+            {
+                "event": "mouse_down",
+                "backend": "fake_x11",
+                "supported": True,
+                "flush_attempted": True,
+                "flush": True,
+                "sync_attempted": True,
+                "sync": True,
+                "success": True,
+                "error": None,
+                "started_guest_monotonic_ns": 130,
+                "completed_guest_monotonic_ns": 140,
+                "duration_ns": 10,
+            },
+            {
+                "event": "mouse_up",
+                "backend": "fake_x11",
+                "supported": True,
+                "flush_attempted": True,
+                "flush": True,
+                "sync_attempted": True,
+                "sync": True,
+                "success": True,
+                "error": None,
+                "started_guest_monotonic_ns": 50_000_190,
+                "completed_guest_monotonic_ns": 50_000_200,
+                "duration_ns": 10,
+            },
+        ],
+        "final_pointer_readback": {
+            "attempted": True,
+            "success": True,
+            "error": None,
+            "cursor": [365, 345],
+            "pointer_button_mask": 0,
+        },
         "passive_x_observer": {
             "installed": False,
             "observer_process_count": 0,
@@ -416,6 +510,33 @@ def test_a_release_motion_identity_corruption_aborts(mutation: str, value) -> No
         release_motion["x"], release_motion["y"] = value
     else:
         release_motion[mutation] = value
+    with pytest.raises(InjectionAbIntegrityError):
+        validate_atomic_contract(
+            atomic, arm="A", expected_endpoint=(365, 345)
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["omission", "phase", "coordinates", "event_type", "order"],
+)
+def test_click_premove_identity_corruption_aborts(mutation: str) -> None:
+    atomic = _atomic("A")
+    records = atomic["x_injection_evidence"]
+    premove = records[0]
+    if mutation == "omission":
+        records.pop(0)
+        for sequence, record in enumerate(records, 1):
+            record["sequence"] = sequence
+        atomic["x_injection_timestamps"][0]["x_injection_end_sequence"] = 4
+    elif mutation == "phase":
+        premove["phase"] = "press"
+    elif mutation == "coordinates":
+        premove["x"], premove["y"] = 9999, -9999
+    elif mutation == "event_type":
+        premove["event_type"] = 5
+    else:
+        premove["sequence"], records[1]["sequence"] = 2, 1
     with pytest.raises(InjectionAbIntegrityError):
         validate_atomic_contract(
             atomic, arm="A", expected_endpoint=(365, 345)
@@ -501,3 +622,110 @@ def test_vm_integrity_abort_always_persists_failure_and_progress(
     assert progress["status"] == "integrity_abort"
     assert progress["stage"] == "integrity_abort"
     assert not (tmp_path / "injection_ab_result.json").exists()
+
+
+def test_vm_transport_identity_abort_persists_full_raw_x_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence = {
+        "schema_version": "rung1_atomic_output_failure_v2",
+        "click_backend_expected": BACKEND_BY_ARM["A"],
+        "expected": [{"phase": "click_premove", "event": "motion_notify"}],
+        "observed": [],
+        "execute_result": {"status": "error", "returncode": 1, "error": None},
+        "raw_stdout": "RUNG1A_ATOMIC_RESULT={...}",
+        "raw_result_markers": ["RUNG1A_ATOMIC_RESULT={...}"],
+        "raw_payload": {"error": "injected identity failure"},
+        "raw_backend_primitives": [{"kind": "click"}],
+        "raw_x_event_sync_evidence": [{"event": "mouse_down"}],
+        "raw_x_injection_timestamps": [{"x_injection_start_sequence": 0}],
+        "raw_x_injection_evidence": [
+            {"sequence": 1, "phase": "click_premove", "event": "motion_notify"}
+        ],
+        "guest_error": "injected identity failure",
+        "guest_failure_kind": "infrastructure",
+        "pointer_masks": {"final": 0, "observed": -1, "expected": 0},
+        "final_pointer_readback": {"attempted": True, "success": True},
+    }
+
+    def fail(**_kwargs):
+        raise TransportError("atomic guest action click X identity drifted", evidence=evidence)
+
+    monkeypatch.setattr(injection_ab, "run_vm_injection_ab", fail)
+    rc = injection_ab.main(
+        [
+            "--mode=vm",
+            f"--output={tmp_path}",
+            f"--qcow={tmp_path / 'vm.qcow2'}",
+            f"--qemu={tmp_path / 'qemu'}",
+            f"--provider={tmp_path / 'provider.py'}",
+        ]
+    )
+    assert rc == 2
+    failure = json.loads((tmp_path / "injection_ab_failure.json").read_text())
+    progress = json.loads((tmp_path / "injection_ab_progress.json").read_text())
+    assert failure["integrity_error"]["evidence"] == evidence
+    assert progress["integrity_error"]["evidence"] == evidence
+
+
+@pytest.mark.parametrize("failure_stage", ["dispatch_assert", "atomic", "audit"])
+def test_post_dispatch_abort_preserves_current_dispatch_and_journal(
+    failure_stage: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatch = [{"action": "sealed-dispatch"}]
+    journal = {
+        "completed_action_count": 1,
+        "atomic_action_states": [{"raw": "sealed-atomic-state"}],
+    }
+
+    def assert_dispatch(*_args, **_kwargs) -> None:
+        if failure_stage == "dispatch_assert":
+            raise InjectionAbIntegrityError("injected dispatch assertion failure")
+
+    def validate_atomic(*_args, **_kwargs) -> dict:
+        if failure_stage == "atomic":
+            raise InjectionAbIntegrityError("injected atomic validation failure")
+        return {"sealed": True}
+
+    monkeypatch.setattr(injection_ab, "_assert_dispatch_journal", assert_dispatch)
+    monkeypatch.setattr(injection_ab, "validate_atomic_contract", validate_atomic)
+
+    def fail(**kwargs):
+        _, active = injection_ab._checkpoint_dispatched_trial(
+            output=kwargs["output"],
+            trials=[],
+            active={"trial_id": "trial-001"},
+            fixture=object(),
+            dispatch=dispatch,
+            journal=journal,
+            arm="A",
+            expected_endpoint=(365, 345),
+            dispatch_started_ns=10,
+            dispatch_completed_ns=20,
+        )
+        assert active["journal"] == journal
+        raise InjectionAbIntegrityError("injected audit failure")
+
+    monkeypatch.setattr(injection_ab, "run_vm_injection_ab", fail)
+    rc = injection_ab.main(
+        [
+            "--mode=vm",
+            f"--output={tmp_path}",
+            f"--qcow={tmp_path / 'vm.qcow2'}",
+            f"--qemu={tmp_path / 'qemu'}",
+            f"--provider={tmp_path / 'provider.py'}",
+        ]
+    )
+    assert rc == 2
+    progress = json.loads((tmp_path / "injection_ab_progress.json").read_text())
+    assert progress["status"] == "integrity_abort"
+    assert progress["active_trial"]["dispatch"] == dispatch
+    assert progress["active_trial"]["journal"] == journal
+    expected_checkpoint_stage = (
+        "atomic_validated" if failure_stage == "audit" else "dispatched"
+    )
+    assert progress["active_trial"].get("atomic_contract") == (
+        {"sealed": True} if expected_checkpoint_stage == "atomic_validated" else None
+    )

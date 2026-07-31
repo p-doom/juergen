@@ -170,7 +170,7 @@ def test_instrumented_diagnostic_is_a_separate_fail_closed_identity() -> None:
 def test_injection_ab_is_a_new_cpu_only_fail_closed_identity() -> None:
     pipeline = tomllib.loads(INJECTION_AB_PIPELINE.read_text(encoding="utf-8"))
     assert pipeline == {
-        "name": "proper_vm_executor_click_release_injection_ab_v1",
+        "name": "proper_vm_executor_click_release_injection_ab_v2",
         "stages": {
             "build": {"recipe": "../recipes/executor_injection_ab_build_cpu.toml"},
             "injection_ab": {
@@ -181,6 +181,8 @@ def test_injection_ab_is_a_new_cpu_only_fail_closed_identity() -> None:
     build = tomllib.loads(INJECTION_AB_BUILD_RECIPE.read_text(encoding="utf-8"))
     raw = tomllib.loads(INJECTION_AB_RECIPE.read_text(encoding="utf-8"))
     text = INJECTION_AB_RECIPE.read_text(encoding="utf-8")
+    assert build["name"] == "proper_vm_executor_injection_ab_build_cpu_v2"
+    assert raw["name"] == "proper_vm_executor_click_release_injection_ab_cpu_kvm_v2"
     assert build["repo"] == raw["repo"] == "juergen_gui_executor_injection_ab"
     assert build["resources"]["gpus"] == raw["resources"]["gpus"] == 0
     assert build["env"]["CUDA_VISIBLE_DEVICES"] == ""

@@ -36,7 +36,7 @@ from .vm import (
 
 
 SPEC_PATH = Path(__file__).with_name("injection_ab_spec.json")
-EXPECTED_SPEC_SHA256 = "36c804467519014d96310ae85608639a19ffe8b322e2529b7c90648784d0f176"
+EXPECTED_SPEC_SHA256 = "3a6bc7de1b569da635fca856a5abb92967ad94a9cb5834a411d149a213b53bf8"
 ORDER_BLOCK = ("A", "B", "B", "A", "B", "A", "A", "B")
 TRIAL_ORDER = ORDER_BLOCK * 6
 BACKEND_BY_ARM = {
@@ -90,6 +90,7 @@ AUDIT_ENVELOPE_FIELDS = (
     "host_wall_time_ns",
 )
 TIMESTAMP_STAGES = (
+    "click_started",
     "press_call_before",
     "press_call_after",
     "press_sync_completed",
@@ -98,6 +99,7 @@ TIMESTAMP_STAGES = (
     "release_call_before",
     "release_call_after",
     "release_sync_completed",
+    "click_completed",
 )
 OBSERVATION_WINDOW_S = 3.0
 AUDIT_DRAIN_S = 0.75
@@ -146,7 +148,7 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         raise InjectionAbIntegrityError("injection A/B spec must be an object")
     exact = {
         "schema_version": 1,
-        "suite": "rung1_click_release_injection_ab_v1",
+        "suite": "rung1_click_release_injection_ab_v2",
         "status": "preregistered_cpu_development_diagnostic",
         "manifest_payload_sha256": MANIFEST_PAYLOAD_SHA256,
         "fixture_id": FIXTURE_ID,
@@ -186,10 +188,36 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         raise InjectionAbIntegrityError(
             f"injection A/B preregistration drifted: {sorted(differing)}"
         )
+    if spec.get("supersedes") != {
+        "suite": "rung1_click_release_injection_ab_v1",
+        "pipeline_id": "pipeline_019fb9aa926f7ba198bc237a383e9a49",
+        "run_id": "run_019fb9aa926f7ba198bc2362ead2f37a",
+        "job_id": "136152",
+        "terminal_state": "pre_science_integrity_abort",
+        "reason": (
+            "v1 omitted the arm-neutral PyAutoGUI top-level same-coordinate "
+            "pre-click MotionNotify"
+        ),
+    }:
+        raise InjectionAbIntegrityError("successor identity provenance drifted")
+    if spec.get("control_plane_guardrail") != {
+        "authoritative_host": "hai-login2.haicore.berlin",
+        "required_invocation": "ssh hai-login2.haicore.berlin labctl ...",
+        "reason": (
+            "the PostgreSQL Unix socket is host-local despite its shared NFS path"
+        ),
+        "direct_compute_node_failure": (
+            "ECONNREFUSED followed by a misleading 30-second pool timeout"
+        ),
+        "submission_authorized": False,
+        "manual_reconcile_authorized": False,
+    }:
+        raise InjectionAbIntegrityError("control-plane guardrail drifted")
     if spec.get("backend_arms") != {
         "A": {
             "name": BACKEND_BY_ARM["A"],
             "order": [
+                "pyautogui_top_level_same_coordinate_motion",
                 "pyautogui_press",
                 "x_sync",
                 "dwell_50ms",
@@ -202,6 +230,7 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         "B": {
             "name": BACKEND_BY_ARM["B"],
             "order": [
+                "pyautogui_top_level_same_coordinate_motion",
                 "xtest_press",
                 "x_sync",
                 "dwell_50ms",
@@ -212,6 +241,57 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         },
     }:
         raise InjectionAbIntegrityError("backend arm contract drifted")
+    if spec.get("common_pyautogui_click_premove") != {
+        "source": (
+            "PyAutoGUI 0.9.54 top-level click _mouseMoveDrag before platform _click"
+        ),
+        "phase": "click_premove",
+        "xtest_sequence": ["motion_notify"],
+        "event_type": X_MOTION_NOTIFY,
+        "detail": 0,
+        "same_coordinates_as_press": True,
+        "arm_neutral": True,
+    }:
+        raise InjectionAbIntegrityError("common click premove contract drifted")
+    if spec.get("failure_evidence_contract") != {
+        "schema_version": "rung1_atomic_output_failure_v2",
+        "x_test_attempt_fields": ["attempted", "success", "error"],
+        "sync_attempt_fields": [
+            "supported",
+            "flush_attempted",
+            "flush",
+            "sync_attempted",
+            "sync",
+            "success",
+            "error",
+        ],
+        "final_pointer_readback_fields": [
+            "attempted",
+            "success",
+            "error",
+            "cursor",
+            "pointer_button_mask",
+        ],
+        "post_output_error_fields": [
+            "click_backend_expected",
+            "expected",
+            "observed",
+            "execute_result",
+            "raw_stdout",
+            "raw_result_markers",
+            "raw_payload",
+            "raw_backend_primitives",
+            "raw_x_event_sync_evidence",
+            "raw_x_injection_timestamps",
+            "raw_x_injection_evidence",
+            "guest_error",
+            "guest_failure_kind",
+            "pointer_masks",
+            "final_pointer_readback",
+        ],
+        "checkpoint_immediately_after_dispatch": True,
+    }:
+        raise InjectionAbIntegrityError("failure evidence contract drifted")
     audit = spec.get("browser_audit")
     if not isinstance(audit, dict) or (
         audit.get("dom_events") != list(AUDIT_DOM_EVENTS)
@@ -248,6 +328,39 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
     parent = spec.get("parent_evidence")
     if not isinstance(parent, dict) or parent.get("job_id") != "136131":
         raise InjectionAbIntegrityError("registered parent evidence drifted")
+    if spec.get("pre_science_integrity_abort_history") != {
+        "pipeline_id": "pipeline_019fb9aa926f7ba198bc237a383e9a49",
+        "run_id": "run_019fb9aa926f7ba198bc2362ead2f37a",
+        "job_id": "136152",
+        "completed_trial_count": 0,
+        "retry_count": 0,
+        "replacement_count": 0,
+        "integrity_error": "atomic guest action controlled X identity drifted",
+        "root_cause": (
+            "validator omitted the arm-neutral PyAutoGUI top-level same-coordinate "
+            "pre-click MotionNotify"
+        ),
+        "artifact_index_sha256": (
+            "92988882cdd0cecd3df94ce404af16f37f8439351515ac51ed8620c4d023ff03"
+        ),
+        "content_address": (
+            "sha256:1a7a7eaf80f51803b5f557311d61c9961007719407f8662b189dea226621e3b4"
+        ),
+        "failure_sha256": (
+            "a1b40b559be6a575e01ecdbc911f1a86b6d2cb26d2406c64399df092a9a55b4e"
+        ),
+        "progress_sha256": (
+            "15bfeefb8fbfff19b8d017ab955b280bc194aee6f6a10955e13cc025ca8ec550"
+        ),
+        "vm_closed": True,
+        "overlay_removed": True,
+        "accidental_control_plane_action": {
+            "command": "labctl reconcile",
+            "result": "duplicate artifact primary key artifact_7143accb7e53783d",
+            "effect": "no run revival, relabel, replacement, or additional Slurm job",
+        },
+    }:
+        raise InjectionAbIntegrityError("pre-science failure provenance drifted")
     return spec, digest
 
 
@@ -584,6 +697,12 @@ def validate_atomic_contract(
         timestamp.get("click_backend") != BACKEND_BY_ARM[arm]
         or timestamp.get("clock") != "time.monotonic_ns"
         or timestamp.get("dwell_requested_ns") != 50_000_000
+        or timestamp.get("press_call_success") is not True
+        or timestamp.get("press_call_error") is not None
+        or timestamp.get("dwell_success") is not True
+        or timestamp.get("dwell_error") is not None
+        or timestamp.get("release_call_success") is not True
+        or timestamp.get("release_call_error") is not None
         or timestamp.get("release_side_motion_notify")
         is not RELEASE_MOTION_BY_ARM[arm]
     ):
@@ -607,11 +726,26 @@ def validate_atomic_contract(
         not isinstance(click, dict)
         or click.get("button") != "left"
         or click.get("click_backend") != BACKEND_BY_ARM[arm]
+        or click.get("call") != "pyautogui.click(clicks=1, interval=0.05)"
+        or click.get("x11_per_event_sync_hooked") is not True
+        or click.get("ordering")
+        != [
+            "click_premove_motion",
+            "mouse_down",
+            "flush",
+            "sync",
+            "dwell",
+            "mouse_up",
+            "flush",
+            "sync",
+        ]
         or click.get("dwell_ms") != 50
+        or click.get("click_premove_same_coordinate_motion_notify") is not True
         or click.get("release_side_motion_notify")
         is not RELEASE_MOTION_BY_ARM[arm]
         or click.get("injection_attempt_count") != 1
         or click.get("retry_count") != 0
+        or click.get("click_premove_xtest_sequence") != ["motion_notify"]
         or click.get("press_xtest_sequence")
         != ["motion_notify", "button_press"]
         or click.get("release_xtest_sequence")
@@ -635,11 +769,14 @@ def validate_atomic_contract(
         raise InjectionAbIntegrityError("X injection global sequence drifted")
     for item in evidence:
         if (
-            item.get("phase") not in {"outside_click", "press", "release"}
+            item.get("phase") not in {"click_premove", "press", "release"}
             or not isinstance(item.get("event_type"), int)
             or isinstance(item.get("event_type"), bool)
             or not isinstance(item.get("detail"), int)
             or isinstance(item.get("detail"), bool)
+            or item.get("attempted") is not True
+            or item.get("success") is not True
+            or item.get("error") is not None
             or not isinstance(item.get("started_guest_monotonic_ns"), int)
             or not isinstance(item.get("completed_guest_monotonic_ns"), int)
             or item["completed_guest_monotonic_ns"] < item["started_guest_monotonic_ns"]
@@ -647,6 +784,34 @@ def validate_atomic_contract(
             != item["completed_guest_monotonic_ns"] - item["started_guest_monotonic_ns"]
         ):
             raise InjectionAbIntegrityError("X injection evidence schema drifted")
+    sync_evidence = atomic.get("x_event_sync_evidence")
+    if (
+        not isinstance(sync_evidence, list)
+        or not all(isinstance(item, dict) for item in sync_evidence)
+        or [item.get("event") for item in sync_evidence]
+        != ["mouse_down", "mouse_up"]
+    ):
+        raise InjectionAbIntegrityError("X sync evidence sequence drifted")
+    for item in sync_evidence:
+        if (
+            item.get("supported") is not True
+            or item.get("flush_attempted") is not True
+            or item.get("flush") is not True
+            or item.get("sync_attempted") is not True
+            or item.get("sync") is not True
+            or item.get("success") is not True
+            or item.get("error") is not None
+            or not isinstance(item.get("started_guest_monotonic_ns"), int)
+            or isinstance(item.get("started_guest_monotonic_ns"), bool)
+            or not isinstance(item.get("completed_guest_monotonic_ns"), int)
+            or isinstance(item.get("completed_guest_monotonic_ns"), bool)
+            or item["completed_guest_monotonic_ns"]
+            < item["started_guest_monotonic_ns"]
+            or item.get("duration_ns")
+            != item["completed_guest_monotonic_ns"]
+            - item["started_guest_monotonic_ns"]
+        ):
+            raise InjectionAbIntegrityError("X sync attempt evidence drifted")
     controlled = [
         item for item in evidence if item.get("phase") in {"press", "release"}
     ]
@@ -678,15 +843,36 @@ def validate_atomic_contract(
         ),
         ("release", "button_release", X_BUTTON_RELEASE, 1),
     ]
+    expected_click_window = [
+        ("click_premove", "motion_notify", X_MOTION_NOTIFY, 0),
+        *expected_events,
+    ]
+    end_sequence = timestamp.get("x_injection_end_sequence")
     if (
         not isinstance(start_sequence, int)
         or isinstance(start_sequence, bool)
-        or start_sequence != 1
-        or len(evidence) != start_sequence + len(expected_events)
+        or start_sequence != 0
+        or not isinstance(end_sequence, int)
+        or isinstance(end_sequence, bool)
+        or end_sequence != start_sequence + len(expected_click_window)
+        or len(evidence) != end_sequence
+        or timestamp.get("click_premove_xtest_sequence") != ["motion_notify"]
         or [item["sequence"] for item in controlled]
-        != list(range(start_sequence + 1, start_sequence + 1 + len(expected_events)))
+        != list(range(start_sequence + 2, end_sequence + 1))
     ):
         raise InjectionAbIntegrityError("controlled XTest event order drifted")
+    click_premove = evidence[start_sequence]
+    if (
+        click_premove.get("sequence") != start_sequence + 1
+        or (
+            click_premove.get("phase"),
+            click_premove.get("event"),
+            click_premove.get("event_type"),
+            click_premove.get("detail"),
+        )
+        != expected_click_window[0]
+    ):
+        raise InjectionAbIntegrityError("click premove XTest identity drifted")
     for item, (phase, name, event_type, detail) in zip(controlled, expected_events):
         if (
             item.get("phase") != phase
@@ -695,15 +881,15 @@ def validate_atomic_contract(
             or item.get("detail") != detail
         ):
             raise InjectionAbIntegrityError("controlled XTest event identity drifted")
-    controlled_clock_values = [
+    click_clock_values = [
         value
-        for item in controlled
+        for item in [click_premove, *controlled]
         for value in (
             item["started_guest_monotonic_ns"],
             item["completed_guest_monotonic_ns"],
         )
     ]
-    if controlled_clock_values != sorted(controlled_clock_values):
+    if click_clock_values != sorted(click_clock_values):
         raise InjectionAbIntegrityError("controlled XTest event clock order drifted")
     press_motion = controlled[0]
     press_coordinates = (press_motion.get("x"), press_motion.get("y"))
@@ -711,15 +897,10 @@ def validate_atomic_contract(
         raise InjectionAbIntegrityError("press MotionNotify coordinates malformed")
     if expected_endpoint is not None and press_coordinates != expected_endpoint:
         raise InjectionAbIntegrityError("press MotionNotify missed the fixed endpoint")
-    outside_motion = evidence[0]
-    if (
-        outside_motion.get("phase") != "outside_click"
-        or outside_motion.get("event") != "motion_notify"
-        or outside_motion.get("event_type") != X_MOTION_NOTIFY
-        or outside_motion.get("detail") != 0
-        or (outside_motion.get("x"), outside_motion.get("y")) != press_coordinates
-    ):
-        raise InjectionAbIntegrityError("canonical move XTest evidence drifted")
+    if (click_premove.get("x"), click_premove.get("y")) != press_coordinates:
+        raise InjectionAbIntegrityError(
+            "click premove MotionNotify was not at the same cursor coordinates"
+        )
     cursor_after = atomic.get("cursor_after")
     if (
         not isinstance(cursor_after, list)
@@ -728,6 +909,14 @@ def validate_atomic_contract(
         or list(press_coordinates) != cursor_after
     ):
         raise InjectionAbIntegrityError("XTest click coordinates disagree with cursor readback")
+    if atomic.get("final_pointer_readback") != {
+        "attempted": True,
+        "success": True,
+        "error": None,
+        "cursor": cursor_after,
+        "pointer_button_mask": 0,
+    }:
+        raise InjectionAbIntegrityError("final pointer readback evidence drifted")
     for item in controlled:
         if item["event"] in {"button_press", "button_release"} and (
             item.get("x") is not None or item.get("y") is not None
@@ -740,7 +929,10 @@ def validate_atomic_contract(
             "release MotionNotify was not at the same cursor coordinates"
         )
     if not (
-        timestamp["press_call_before_guest_monotonic_ns"]
+        timestamp["click_started_guest_monotonic_ns"]
+        <= click_premove["started_guest_monotonic_ns"]
+        <= click_premove["completed_guest_monotonic_ns"]
+        <= timestamp["press_call_before_guest_monotonic_ns"]
         <= controlled[0]["started_guest_monotonic_ns"]
         <= controlled[1]["completed_guest_monotonic_ns"]
         <= timestamp["press_call_after_guest_monotonic_ns"]
@@ -752,6 +944,7 @@ def validate_atomic_contract(
         <= controlled[-1]["completed_guest_monotonic_ns"]
         <= timestamp["release_call_after_guest_monotonic_ns"]
         <= timestamp["release_sync_completed_guest_monotonic_ns"]
+        <= timestamp["click_completed_guest_monotonic_ns"]
     ):
         raise InjectionAbIntegrityError("XTest event/timestamp ordering drifted")
     actual_dwell_ns = timestamp.get("dwell_duration_ns")
@@ -780,6 +973,8 @@ def validate_atomic_contract(
         "click_primitive": click,
         "x_injection_timestamps": timestamps,
         "x_injection_evidence": evidence,
+        "x_event_sync_evidence": sync_evidence,
+        "final_pointer_readback": atomic.get("final_pointer_readback"),
         "passive_x_observer": atomic.get("passive_x_observer"),
     }
 
@@ -898,7 +1093,7 @@ def _checkpoint(
         output / "injection_ab_progress.json",
         {
             "schema_version": 1,
-            "suite": "rung1_click_release_injection_ab_v1",
+            "suite": "rung1_click_release_injection_ab_v2",
             "status": (
                 "integrity_abort"
                 if integrity_error
@@ -923,6 +1118,57 @@ def _checkpoint(
             "trials": trials,
         },
     )
+
+
+def _checkpoint_dispatched_trial(
+    *,
+    output: Path,
+    trials: list[dict[str, Any]],
+    active: dict[str, Any],
+    fixture: Fixture,
+    dispatch: list[dict[str, Any]],
+    journal: dict[str, Any],
+    arm: str,
+    expected_endpoint: tuple[int, int],
+    dispatch_started_ns: int,
+    dispatch_completed_ns: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    active = {
+        **active,
+        "dispatch": dispatch,
+        "journal": journal,
+        "dispatch_started_host_monotonic_ns": dispatch_started_ns,
+        "dispatch_completed_host_monotonic_ns": dispatch_completed_ns,
+    }
+    _checkpoint(
+        output,
+        trials=trials,
+        active_trial=active,
+        stage="dispatched",
+    )
+    _assert_dispatch_journal(
+        fixture, "compact_raw_phaseb", "injection A/B", journal
+    )
+    atomic_states = journal.get("atomic_action_states")
+    if (
+        len(dispatch) != 1
+        or journal.get("completed_action_count") != 1
+        or not isinstance(atomic_states, list)
+        or len(atomic_states) != 1
+        or not isinstance(atomic_states[0], dict)
+    ):
+        raise InjectionAbIntegrityError("dispatch count or atomic state drifted")
+    atomic_contract = validate_atomic_contract(
+        atomic_states[0], arm=arm, expected_endpoint=expected_endpoint
+    )
+    active = {**active, "atomic_contract": atomic_contract}
+    _checkpoint(
+        output,
+        trials=trials,
+        active_trial=active,
+        stage="atomic_validated",
+    )
+    return atomic_contract, active
 
 
 def validate_injection_ab() -> dict[str, Any]:
@@ -1021,16 +1267,17 @@ def run_vm_injection_ab(
                 "compact_raw_phaseb", bound, trajectory
             )
             dispatch_completed_ns = time.monotonic_ns()
-            _assert_dispatch_journal(
-                fixture, "compact_raw_phaseb", "injection A/B", journal
-            )
-            if len(dispatch) != 1 or journal["completed_action_count"] != 1:
-                raise InjectionAbIntegrityError("dispatch count drifted")
-            atomic = journal["atomic_action_states"][0]
-            atomic_contract = validate_atomic_contract(
-                atomic,
+            atomic_contract, active = _checkpoint_dispatched_trial(
+                output=output,
+                trials=trials,
+                active=active,
+                fixture=fixture,
+                dispatch=dispatch,
+                journal=journal,
                 arm=scheduled["arm"],
                 expected_endpoint=trajectory.expected_endpoint,
+                dispatch_started_ns=dispatch_started_ns,
+                dispatch_completed_ns=dispatch_completed_ns,
             )
             observation_deadline_ns = dispatch_completed_ns + int(
                 OBSERVATION_WINDOW_S * 1_000_000_000
@@ -1208,7 +1455,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "schema_version": 1,
                 "status": "integrity_abort",
-                "suite": "rung1_click_release_injection_ab_v1",
+                "suite": "rung1_click_release_injection_ab_v2",
                 "failure_kind": "infrastructure",
                 "integrity_error": integrity_error,
                 "progress": progress,
