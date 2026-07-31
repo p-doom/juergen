@@ -6,8 +6,9 @@
   "additionalProperties": false,
   "required": [
     "schema_version", "task_id", "family_id", "app", "split",
-    "parameter_seed", "instruction", "natural_multistep", "semantic_steps",
-    "semantic_step_count", "budgets", "snapshot", "assets",
+    "parameter_seed", "gate_role", "coverage_label", "instruction",
+    "natural_multistep", "semantic_steps",
+    "semantic_step_count", "budget_contract", "snapshot", "assets",
     "params", "expected", "near_miss", "verifier", "geometry_contract", "initial_cursor",
     "gold_cursor_history", "coverage", "exclusions",
     "transport_requirements", "reset_contract", "fixture_sha256"
@@ -19,6 +20,8 @@
     "app": {"enum": ["writer", "calc", "files", "chrome", "vscode"]},
     "split": {"enum": ["train", "development"]},
     "parameter_seed": {"type": "integer"},
+    "gate_role": {"enum": ["primary_gate", "capability_probe"]},
+    "coverage_label": {"type": "string", "minLength": 1},
     "instruction": {"type": "string", "minLength": 1},
     "natural_multistep": {"const": true},
     "semantic_steps": {
@@ -39,13 +42,17 @@
       }
     },
     "semantic_step_count": {"type": "integer", "minimum": 2, "maximum": 4},
-    "budgets": {
+    "budget_contract": {
       "type": "object",
-      "required": ["semantic_steps", "primitive_actions", "primitive_events"],
+      "additionalProperties": false,
+      "required": ["kind", "semantic_steps", "primitive_action_caps", "primitive_event_caps", "resolution", "resolved_budget_hash_required"],
       "properties": {
+        "kind": {"const": "conservative_caps"},
         "semantic_steps": {"type": "integer", "minimum": 2, "maximum": 4},
-        "primitive_actions": {"$ref": "#/$defs/interfaceCounts"},
-        "primitive_events": {"$ref": "#/$defs/interfaceCounts"}
+        "primitive_action_caps": {"$ref": "#/$defs/interfaceCounts"},
+        "primitive_event_caps": {"$ref": "#/$defs/interfaceCounts"},
+        "resolution": {"const": "after_live_binding"},
+        "resolved_budget_hash_required": {"const": true}
       }
     },
     "snapshot": {

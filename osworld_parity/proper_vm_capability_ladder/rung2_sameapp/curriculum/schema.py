@@ -67,11 +67,13 @@ class SemanticTask:
     app: str
     split: str
     parameter_seed: int
+    gate_role: str
+    coverage_label: str
     instruction: str
     natural_multistep: bool
     semantic_steps: tuple[SemanticStep, ...]
     semantic_step_count: int
-    budgets: dict[str, Any]
+    budget_contract: dict[str, Any]
     snapshot: dict[str, Any]
     assets: tuple[AssetSpec, ...]
     params: dict[str, Any]
@@ -99,17 +101,29 @@ class SemanticTask:
             raise CurriculumSchemaError(f"{self.task_id}: non-materialized split")
         if self.app not in APPS:
             raise CurriculumSchemaError(f"{self.task_id}: unsupported app")
+        if self.gate_role not in {"primary_gate", "capability_probe"}:
+            raise CurriculumSchemaError(f"{self.task_id}: gate role is missing")
+        if self.gate_role == "capability_probe" and not self.coverage_label.endswith(
+            "_probe"
+        ):
+            raise CurriculumSchemaError(f"{self.task_id}: capability probe label drift")
         if self.natural_multistep is not True:
             raise CurriculumSchemaError(f"{self.task_id}: task is not natural multistep")
         if self.semantic_step_count != len(self.semantic_steps):
             raise CurriculumSchemaError(f"{self.task_id}: semantic-step count mismatch")
         if not 2 <= self.semantic_step_count <= 4:
             raise CurriculumSchemaError(f"{self.task_id}: task must have 2-4 semantic steps")
-        if self.budgets.get("semantic_steps") != self.semantic_step_count:
+        if self.budget_contract.get("kind") != "conservative_caps":
+            raise CurriculumSchemaError(f"{self.task_id}: budget contract is not an honest cap")
+        if self.budget_contract.get("resolution") != "after_live_binding":
+            raise CurriculumSchemaError(f"{self.task_id}: budget resolution timing drift")
+        if self.budget_contract.get("resolved_budget_hash_required") is not True:
+            raise CurriculumSchemaError(f"{self.task_id}: resolved budget hash is optional")
+        if self.budget_contract.get("semantic_steps") != self.semantic_step_count:
             raise CurriculumSchemaError(f"{self.task_id}: semantic budget mismatch")
         arms = {"native_absolute_sequence_v1", "compact_raw_phaseb_v1"}
-        for field in ("primitive_actions", "primitive_events"):
-            values = self.budgets.get(field)
+        for field in ("primitive_action_caps", "primitive_event_caps"):
+            values = self.budget_contract.get(field)
             if not isinstance(values, dict) or set(values) != arms:
                 raise CurriculumSchemaError(f"{self.task_id}: {field} budget mismatch")
             if any(not isinstance(value, int) or value < 1 for value in values.values()):
@@ -205,6 +219,8 @@ def seal_task(values: dict[str, Any]) -> SemanticTask:
         app=str(unsigned["app"]),
         split=str(unsigned["split"]),
         parameter_seed=int(unsigned["parameter_seed"]),
+        gate_role=str(unsigned["gate_role"]),
+        coverage_label=str(unsigned["coverage_label"]),
         instruction=str(unsigned["instruction"]),
         natural_multistep=bool(unsigned["natural_multistep"]),
         semantic_steps=tuple(
@@ -218,7 +234,7 @@ def seal_task(values: dict[str, Any]) -> SemanticTask:
             for item in unsigned["semantic_steps"]
         ),
         semantic_step_count=int(unsigned["semantic_step_count"]),
-        budgets=dict(unsigned["budgets"]),
+        budget_contract=dict(unsigned["budget_contract"]),
         snapshot=dict(unsigned["snapshot"]),
         assets=tuple(
             AssetSpec(

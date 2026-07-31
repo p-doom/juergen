@@ -7,6 +7,8 @@ objects, which the existing native and compact compilers can then encode.
 
 from __future__ import annotations
 
+import hashlib
+from dataclasses import dataclass
 from typing import Any
 
 from ..actions import (
@@ -17,7 +19,38 @@ from ..actions import (
     compile_compact,
     compile_native,
 )
+from ...rung1.executor import parse_compact_raw
+from ..fixtures import canonical_json
 from .schema import SemanticTask
+
+
+@dataclass(frozen=True)
+class CompiledSegment:
+    """One live-bound semantic segment and its resolved budget receipt."""
+
+    task_id: str
+    fixture_sha256: str
+    action_schema: str
+    semantic_step_index: int
+    actions: tuple[dict[str, Any] | str, ...]
+    resolved_primitive_actions: int
+    resolved_primitive_events: int
+    resolved_budget_sha256: str
+    binding_sha256: str
+
+
+@dataclass(frozen=True)
+class CompiledProgram:
+    """Aggregate receipt obtained by summing and re-hashing its segments."""
+
+    task_id: str
+    fixture_sha256: str
+    action_schema: str
+    segments: tuple[CompiledSegment, ...]
+    resolved_primitive_actions: int
+    resolved_primitive_events: int
+    resolved_budget_sha256: str
+    binding_sha256: str
 
 
 def _op(kind: str, **kwargs: object) -> SymbolicOperation:
@@ -98,22 +131,20 @@ def validate_program(task: SemanticTask, program: ScriptedTrajectory) -> None:
                 held.remove(button)
     if held:
         raise ValueError(f"{task.task_id}: program leaves held inputs: {sorted(held)}")
-    observed = program_budgets(program)
-    if not program.near_miss and observed != task.budgets:
-        raise ValueError(
-            f"{task.task_id}: declared/observed program budgets differ: "
-            f"{task.budgets!r} != {observed!r}"
-        )
-    if program.near_miss:
-        for field in ("primitive_actions", "primitive_events"):
-            for interface, count in observed[field].items():
-                if count > task.budgets[field][interface]:
-                    raise ValueError(
-                        f"{task.task_id}: near miss exceeds {field}/{interface} budget"
-                    )
+    observed = program_budget_upper_bounds(program)
+    contract = task.budget_contract
+    for observed_field, cap_field in (
+        ("primitive_actions", "primitive_action_caps"),
+        ("primitive_events", "primitive_event_caps"),
+    ):
+        for interface, count in observed[observed_field].items():
+            if count > contract[cap_field][interface]:
+                raise ValueError(
+                    f"{task.task_id}: program exceeds {cap_field}/{interface} cap"
+                )
 
 
-def program_budgets(program: ScriptedTrajectory) -> dict[str, Any]:
+def program_budget_upper_bounds(program: ScriptedTrajectory) -> dict[str, Any]:
     """Count emitted dispatch lines and their lowered executor events.
 
     A target-bearing native operation always lowers an absolute move before its
@@ -167,30 +198,189 @@ def program_budgets(program: ScriptedTrajectory) -> dict[str, Any]:
     }
 
 
+# Compatibility for scaffold consumers. These values are conservative upper
+# bounds, not coordinate-independent exact budgets.
+program_budgets = program_budget_upper_bounds
+
+
+def _resolved_event_count(
+    action_schema: str, actions: tuple[dict[str, Any] | str, ...]
+) -> int:
+    if action_schema == "compact_raw_phaseb_v1":
+        result = 0
+        for value in actions:
+            if not isinstance(value, str):  # pragma: no cover - compiler invariant
+                raise TypeError("compact action must be text")
+            parsed = parse_compact_raw(value)
+            result += int(bool(parsed.dx or parsed.dy))
+            result += int(bool(parsed.scroll))
+            result += len(parsed.elements)
+        return result
+
+    result = 0
+    for value in actions:
+        if not isinstance(value, dict):  # pragma: no cover - compiler invariant
+            raise TypeError("native action must be an object")
+        for operation in value["operations"]:
+            kind = operation["action"]
+            if kind == "click":
+                result += int("coordinate" in operation) + 2
+            elif kind in {"mouse_down", "mouse_up"}:
+                result += int("coordinate" in operation) + 1
+            elif kind == "mouse_move":
+                result += 1
+            elif kind == "scroll":
+                result += 1
+            elif kind == "key_chord":
+                result += 2 * len(operation["keys"])
+            elif kind == "type":
+                result += 1
+            else:  # pragma: no cover - SymbolicOperation validates this boundary.
+                raise ValueError(f"unsupported native operation: {kind!r}")
+    return result
+
+
+def _cursor_before(
+    task: SemanticTask,
+    program: ScriptedTrajectory,
+    semantic_step_index: int,
+    geometry: dict[str, tuple[int, int]],
+    initial_cursor: tuple[int, int],
+) -> tuple[int, int]:
+    cursor = initial_cursor
+    for turn in program.turns:
+        if turn.semantic_step >= semantic_step_index:
+            break
+        targets = [operation.target for operation in turn.operations if operation.target]
+        if targets:
+            try:
+                cursor = geometry[targets[0]]
+            except KeyError as exc:
+                raise ValueError(f"unresolved cursor target: {targets[0]}") from exc
+    return cursor
+
+
+def compile_semantic_step(
+    task: SemanticTask,
+    action_schema: str,
+    *,
+    binding: Any,
+    semantic_step_index: int,
+    near_miss: bool = False,
+) -> CompiledSegment:
+    """Compile one segment only from a validated repeated-reset binding."""
+
+    from .runtime import ValidatedRuntimeBinding
+
+    if action_schema not in ACTION_SCHEMAS:
+        raise ValueError(f"unsupported action schema: {action_schema!r}")
+    if not isinstance(binding, ValidatedRuntimeBinding):
+        raise TypeError("compilation requires a ValidatedRuntimeBinding")
+    if not 1 <= semantic_step_index <= task.semantic_step_count:
+        raise ValueError(f"invalid semantic step: {semantic_step_index}")
+    probe = binding.probe_for_step(task, semantic_step_index)
+    program = build_program(task, near_miss=near_miss)
+    turns = tuple(
+        turn for turn in program.turns if turn.semantic_step == semantic_step_index
+    )
+    geometry = probe.geometry
+    if action_schema == "native_absolute_sequence_v1":
+        actions: tuple[dict[str, Any] | str, ...] = tuple(
+            compile_native(turn, geometry) for turn in turns
+        )
+    else:
+        # A refreshed Chrome probe reports the actual cursor after scrolling;
+        # other segments resolve their declared prior semantic milestone.
+        cursor = (
+            probe.initial_cursor
+            if task.app == "chrome" and semantic_step_index > 2
+            else _cursor_before(
+                task,
+                program,
+                semantic_step_index,
+                geometry,
+                binding.resolved_initial_cursor,
+            )
+        )
+        compact: list[str] = []
+        for turn in turns:
+            action, cursor = compile_compact(turn, geometry, cursor)
+            compact.append(action)
+        actions = tuple(compact)
+
+    resolved_actions = len(actions)
+    resolved_events = _resolved_event_count(action_schema, actions)
+    contract = task.budget_contract
+    if resolved_actions > contract["primitive_action_caps"][action_schema]:
+        raise ValueError(f"{task.task_id}: resolved primitive actions exceed cap")
+    if resolved_events > contract["primitive_event_caps"][action_schema]:
+        raise ValueError(f"{task.task_id}: resolved primitive events exceed cap")
+    receipt = {
+        "schema_version": 1,
+        "task_id": task.task_id,
+        "fixture_sha256": task.fixture_sha256,
+        "action_schema": action_schema,
+        "semantic_step_index": semantic_step_index,
+        "resolved_primitive_actions": resolved_actions,
+        "resolved_primitive_events": resolved_events,
+        "binding_sha256": binding.binding_sha256,
+        "actions": actions,
+    }
+    return CompiledSegment(
+        task_id=task.task_id,
+        fixture_sha256=task.fixture_sha256,
+        action_schema=action_schema,
+        semantic_step_index=semantic_step_index,
+        actions=actions,
+        resolved_primitive_actions=resolved_actions,
+        resolved_primitive_events=resolved_events,
+        resolved_budget_sha256=hashlib.sha256(canonical_json(receipt)).hexdigest(),
+        binding_sha256=binding.binding_sha256,
+    )
+
+
 def compile_program(
     task: SemanticTask,
     action_schema: str,
     *,
-    geometry: dict[str, tuple[int, int]],
-    initial_cursor: tuple[int, int],
+    binding: Any,
     near_miss: bool = False,
-) -> list[dict[str, Any] | str]:
-    """Compile after task selection; action encoding is never task identity."""
+) -> CompiledProgram:
+    """Compile all segments and aggregate their live-resolved receipts."""
 
-    if action_schema not in ACTION_SCHEMAS:
-        raise ValueError(f"unsupported action schema: {action_schema!r}")
-    program = build_program(task, near_miss=near_miss)
-    required = set(task.geometry_contract["required_targets"])
-    if set(geometry) != required:
-        raise ValueError(
-            f"{task.task_id}: live geometry keys drifted: "
-            f"{sorted(geometry)} != {sorted(required)}"
+    segments = tuple(
+        compile_semantic_step(
+            task,
+            action_schema,
+            binding=binding,
+            semantic_step_index=index,
+            near_miss=near_miss,
         )
-    if action_schema == "native_absolute_sequence_v1":
-        return [compile_native(turn, geometry) for turn in program.turns]
-    cursor = tuple(initial_cursor)
-    compiled: list[str] = []
-    for turn in program.turns:
-        action, cursor = compile_compact(turn, geometry, cursor)
-        compiled.append(action)
-    return compiled
+        for index in range(1, task.semantic_step_count + 1)
+    )
+    resolved_actions = sum(item.resolved_primitive_actions for item in segments)
+    resolved_events = sum(item.resolved_primitive_events for item in segments)
+    if resolved_actions > task.budget_contract["primitive_action_caps"][action_schema]:
+        raise ValueError(f"{task.task_id}: aggregate primitive actions exceed cap")
+    if resolved_events > task.budget_contract["primitive_event_caps"][action_schema]:
+        raise ValueError(f"{task.task_id}: aggregate primitive events exceed cap")
+    payload = {
+        "schema_version": 1,
+        "task_id": task.task_id,
+        "fixture_sha256": task.fixture_sha256,
+        "action_schema": action_schema,
+        "segment_budget_sha256": [item.resolved_budget_sha256 for item in segments],
+        "resolved_primitive_actions": resolved_actions,
+        "resolved_primitive_events": resolved_events,
+        "binding_sha256": binding.binding_sha256,
+    }
+    return CompiledProgram(
+        task_id=task.task_id,
+        fixture_sha256=task.fixture_sha256,
+        action_schema=action_schema,
+        segments=segments,
+        resolved_primitive_actions=resolved_actions,
+        resolved_primitive_events=resolved_events,
+        resolved_budget_sha256=hashlib.sha256(canonical_json(payload)).hexdigest(),
+        binding_sha256=binding.binding_sha256,
+    )

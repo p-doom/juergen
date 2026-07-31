@@ -12,7 +12,9 @@ Stage-4 teacher-SFT branch. It intentionally reuses these contracts:
   scoring and fresh-process oracle execution.
 - `rung2_sameapp/actions.py`: the existing symbolic operation model and the two
   native-absolute/compact-relative compilers. Semantic task identity is above
-  this layer; action encoding is selected only by `program.compile_program`.
+  this layer; action encoding is selected only after a repeated-reset live
+  binding. Resolved action/event counts and hashes are compiler receipts, while
+  manifest counts are conservative admission caps.
 - `rung2_sameapp/fixtures.py`, `oracle.py`, and `trajectory.py`: sealed task
   hashes, 2–4-step/horizon checks, exact reset signatures, reset/near-miss/gold
   oracle polarity, and Writer/Calc/Files/Chrome state probes.
@@ -34,4 +36,8 @@ near miss.
 The initial implementation also generated seed-based coordinates. The
 successor removes them: tasks now name targets only, existing VM probes provide
 versioned live geometry/cursor values, and runtime validation rejects setup
-state or repeated-reset geometry drift before compilation.
+state or repeated-reset geometry/cursor/viewport drift before compilation.
+Chrome refreshes geometry and cursor after scrolling before its final target is
+compiled. Fixture contract checks read application artifacts through the
+declared extractor and use isolated oracle processes rather than scripted
+expected-state echoes.

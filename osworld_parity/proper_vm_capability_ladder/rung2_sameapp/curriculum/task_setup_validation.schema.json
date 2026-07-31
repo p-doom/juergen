@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "multistep_sameapp_task_setup_validation_v1",
+  "title": "Development-only same-app task setup validation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "schema_id", "artifact_role", "artifact_id", "status",
+    "development_only", "heldout_inputs_present", "sealed_eval_executed",
+    "task_manifest_payload_sha256", "vm_snapshot_id", "setup_commit",
+    "fixtures", "coverage"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "schema_id": {"const": "multistep_sameapp_task_setup_validation_v1"},
+    "artifact_role": {"const": "task_setup_validation"},
+    "artifact_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["ready", "passed"]},
+    "development_only": {"const": true},
+    "heldout_inputs_present": {"const": false},
+    "sealed_eval_executed": {"const": false},
+    "task_manifest_payload_sha256": {"$ref": "#/$defs/sha256"},
+    "vm_snapshot_id": {"const": "osworld_ready"},
+    "setup_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "fixtures": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["task_id", "fixture_sha256", "assets"],
+        "properties": {
+          "task_id": {"type": "string", "minLength": 1},
+          "fixture_sha256": {"$ref": "#/$defs/sha256"},
+          "assets": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["asset_id", "content_sha256"],
+              "properties": {
+                "asset_id": {"type": "string", "minLength": 1},
+                "content_sha256": {"$ref": "#/$defs/sha256"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected_task_ids", "validated_task_ids", "full_fixture_coverage"],
+      "properties": {
+        "expected_task_ids": {"$ref": "#/$defs/taskIds"},
+        "validated_task_ids": {"$ref": "#/$defs/taskIds"},
+        "full_fixture_coverage": {"const": true}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "taskIds": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    }
+  }
+}

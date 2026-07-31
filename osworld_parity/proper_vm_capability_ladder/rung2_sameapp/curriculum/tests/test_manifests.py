@@ -64,8 +64,10 @@ def test_materialized_tasks_cover_phase_b_and_edge_labels() -> None:
     assert all(task.initial_cursor["source"] == "live_probe" for task in tasks)
     assert all("geometry" not in task.params for task in tasks)
     assert all(
-        set(task.budgets["primitive_actions"]) == set(ACTION_SCHEMAS)
-        and set(task.budgets["primitive_events"]) == set(ACTION_SCHEMAS)
+        task.budget_contract["kind"] == "conservative_caps"
+        and task.budget_contract["resolution"] == "after_live_binding"
+        and set(task.budget_contract["primitive_action_caps"]) == set(ACTION_SCHEMAS)
+        and set(task.budget_contract["primitive_event_caps"]) == set(ACTION_SCHEMAS)
         for task in tasks
     )
     assert all(task.fixture_sha256 for task in tasks)

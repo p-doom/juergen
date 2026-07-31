@@ -15,6 +15,7 @@ from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.oracle 
 from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.runtime import (
     RuntimeProbe,
     RuntimeProbeError,
+    bind_repeated_runtime_probes,
     resolved_cursor_history,
     validate_repeated_runtime_probes,
     validate_runtime_probe,
@@ -64,7 +65,13 @@ def test_geometry_drift_across_exact_resets_is_rejected() -> None:
     name = next(iter(second.geometry))
     second.geometry[name] = (second.geometry[name][0] + 1, second.geometry[name][1])
     with pytest.raises(RuntimeProbeError, match="geometry drift"):
-        validate_repeated_runtime_probes(task, first, second)
+        bind_repeated_runtime_probes(task, (first, second))
+
+
+def test_production_binding_requires_two_reset_probes() -> None:
+    task = load_manifest("development").tasks[0]
+    with pytest.raises(RuntimeProbeError, match="at least two reset probes"):
+        bind_repeated_runtime_probes(task, (_probe(task),))
 
 
 def test_runtime_resolves_cursor_refs_and_fresh_semantic_oracle() -> None:

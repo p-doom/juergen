@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import json
-import importlib
-import os
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
+
+import pytest
 
 from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.manifests import (
     load_materialized_curriculum,
 )
 from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.oracle import (
-    evaluate_in_fresh_process,
     evaluate_state,
-    reset_signature,
+    verify_fixture_contract,
 )
 
 
@@ -119,29 +119,46 @@ def _artifact(task, root: Path, mode: str) -> Path:
 
 def test_every_fixture_uses_independent_extraction_and_fresh_oracle(tmp_path: Path) -> None:
     for task in _tasks():
-        extractor = getattr(
-            importlib.import_module(task.verifier["state_extractor_module"]),
-            task.verifier["state_extractor_entrypoint"],
-        )
-        states = {
-            mode: extractor(task, _artifact(task, tmp_path / task.task_id / mode, mode))
-            for mode in ("reset", "near", "gold")
+        roots = {
+            mode: _artifact(
+                task,
+                tmp_path / task.task_id / mode,
+                "reset" if mode == "reset_repeat" else mode,
+            )
+            for mode in ("reset", "reset_repeat", "near", "gold")
         }
-        assert reset_signature(task, states["reset"]) == reset_signature(
+        result = verify_fixture_contract(task, artifact_roots=roots)
+        assert result == {
+            "task_id": task.task_id,
+            "fixture_sha256": task.fixture_sha256,
+            "reset_rejected": True,
+            "near_miss_rejected": True,
+            "gold_passed": True,
+            "reset_reproducible": True,
+            "fresh_process_final_oracle": True,
+            "zero_held_inputs": True,
+        }
+
+
+def test_fixture_contract_propagates_extraction_failure(tmp_path: Path) -> None:
+    task = next(task for task in _tasks() if task.app == "vscode")
+    roots = {
+        mode: _artifact(
             task,
-            extractor(task, _artifact(task, tmp_path / task.task_id / "reset2", "reset")),
+            tmp_path / mode,
+            "reset" if mode == "reset_repeat" else mode,
         )
-        assert evaluate_state(task, states["reset"]).MOUSE_SOLVED is False
-        assert evaluate_state(task, states["near"]).MOUSE_SOLVED is False
-        gold = evaluate_in_fresh_process(task, states["gold"])
-        assert gold.oracle_pid != os.getpid()
-        assert gold.oracle_status == "ok"
-        assert gold.MOUSE_SOLVED is True
-        assert gold.semantic_state_sha256
+        for mode in ("reset", "reset_repeat", "near", "gold")
+    }
+    (roots["gold"] / task.params["file_name"]).write_bytes(b"\xff")
+    with pytest.raises(UnicodeDecodeError):
+        verify_fixture_contract(task, artifact_roots=roots)
 
 
 def test_final_oracle_rejects_held_input_from_extracted_gold(tmp_path: Path) -> None:
     task = _tasks()[0]
+    import importlib
+
     extractor = getattr(
         importlib.import_module(task.verifier["state_extractor_module"]),
         task.verifier["state_extractor_entrypoint"],
@@ -153,3 +170,28 @@ def test_final_oracle_rejects_held_input_from_extracted_gold(tmp_path: Path) -> 
     assert result.oracle_status == "ok"
     assert result.MOUSE_SOLVED is False
     assert "not fully released" in result.reason
+
+
+def test_vscode_bridge_supplies_merged_harness_gate_fields(monkeypatch) -> None:
+    from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum import oracle
+
+    @dataclass(frozen=True)
+    class MergedFixture:
+        id: str
+        template: str
+        split: str
+        parameter_seed: int
+        horizon: int
+        instruction: str
+        params: dict
+        expected: dict
+        near_miss: dict
+        fixture_sha256: str
+        gate_role: str
+        coverage_label: str
+
+    monkeypatch.setattr(oracle, "RealAppFixture", MergedFixture)
+    task = next(task for task in _tasks() if task.app == "vscode")
+    fixture = oracle.as_vscode_fixture(task)
+    assert fixture.gate_role == "capability_probe"
+    assert fixture.coverage_label == "unicode_coalesced_typing_probe"

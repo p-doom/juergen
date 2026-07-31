@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import importlib
 import json
 import os
 import subprocess
@@ -51,7 +52,7 @@ def as_sameapp_fixture(task: SemanticTask) -> SameAppFixture:
         split=task.split,
         parameter_seed=task.parameter_seed,
         semantic_steps=task.semantic_step_count,
-        horizon=max(task.budgets["primitive_actions"].values()),
+        horizon=max(task.budget_contract["primitive_action_caps"].values()),
         instruction=task.instruction,
         params=task.params,
         expected=task.expected,
@@ -61,18 +62,26 @@ def as_sameapp_fixture(task: SemanticTask) -> SameAppFixture:
 
 
 def as_vscode_fixture(task: SemanticTask) -> RealAppFixture:
-    return RealAppFixture(
+    values: dict[str, Any] = dict(
         id=task.task_id,
         template="vscode_focus_type",
         split=task.split,
         parameter_seed=task.parameter_seed,
-        horizon=max(task.budgets["primitive_actions"].values()),
+        horizon=max(task.budget_contract["primitive_action_caps"].values()),
         instruction=task.instruction,
         params=task.params,
         expected=task.expected,
         near_miss=task.near_miss,
         fixture_sha256=task.fixture_sha256,
     )
+    # Harness commit 173a9d5 adds these required fields. Keep this bridge
+    # compatible with both its parent and merged constructor.
+    fields = getattr(RealAppFixture, "__dataclass_fields__", {})
+    if "gate_role" in fields:
+        values["gate_role"] = task.gate_role
+    if "coverage_label" in fields:
+        values["coverage_label"] = task.coverage_label
+    return RealAppFixture(**values)
 
 
 # Compatibility aliases for the first scaffold consumer. New integrations
@@ -290,14 +299,26 @@ def evaluate_in_fresh_process(
         path.unlink(missing_ok=True)
 
 
-def verify_fixture_contract(task: SemanticTask) -> dict[str, Any]:
-    first_reset = initial_state(task)
-    second_reset = initial_state(task)
-    reset_one = reset_signature(task, first_reset)
-    reset_two = reset_signature(task, second_reset)
-    reset_oracle = evaluate_state(task, first_reset)
-    near_miss = evaluate_state(task, scripted_state(task, near_miss=True))
-    gold = evaluate_in_fresh_process(task, scripted_state(task, near_miss=False))
+def verify_fixture_contract(
+    task: SemanticTask, *, artifact_roots: dict[str, Path]
+) -> dict[str, Any]:
+    """Verify independently extracted artifacts through isolated oracles."""
+
+    required = {"reset", "reset_repeat", "near", "gold"}
+    if set(artifact_roots) != required:
+        raise ValueError(
+            f"{task.task_id}: artifact roots must be exactly {sorted(required)}"
+        )
+    module = importlib.import_module(task.verifier["state_extractor_module"])
+    extractor = getattr(module, task.verifier["state_extractor_entrypoint"])
+    states = {
+        name: extractor(task, Path(artifact_roots[name])) for name in sorted(required)
+    }
+    reset_one = reset_signature(task, states["reset"])
+    reset_two = reset_signature(task, states["reset_repeat"])
+    reset_oracle = evaluate_in_fresh_process(task, states["reset"])
+    near_miss = evaluate_in_fresh_process(task, states["near"])
+    gold = evaluate_in_fresh_process(task, states["gold"])
     return {
         "task_id": task.task_id,
         "fixture_sha256": task.fixture_sha256,
@@ -306,7 +327,7 @@ def verify_fixture_contract(task: SemanticTask) -> dict[str, Any]:
         "gold_passed": gold.MOUSE_SOLVED is True,
         "reset_reproducible": reset_one == reset_two,
         "fresh_process_final_oracle": gold.oracle_pid != os.getpid(),
-        "zero_held_inputs": scripted_state(task, near_miss=False)["held_inputs"] == [],
+        "zero_held_inputs": states["gold"].get("held_inputs") == [],
     }
 
 
