@@ -67,19 +67,32 @@ def compile_unicode_coalesced_type(text: str) -> str:
 
     This compiler is the sole production-semantics typing path used by both
     action adapters.  ``pyautogui.write`` is deliberately forbidden because it
-    is not Unicode-safe on the pinned Ubuntu guest.
+    is not Unicode-safe on the pinned Ubuntu guest.  Focus/type trajectories
+    select the current field before this operation; GTK clipboard ownership
+    collapses that selection in the pinned image, so the single clipboard
+    process reasserts select-all immediately before its one paste.
     """
     if not isinstance(text, str):
         raise TypeError("coalesced type text must be a string")
     encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
-    return (
-        "import base64, time, tkinter as _r1a_tk; "
-        f"_r1a_text=base64.b64decode({encoded!r}).decode('utf-8'); "
-        "_r1a_root=_r1a_tk.Tk(); _r1a_root.withdraw(); "
-        "_r1a_root.clipboard_clear(); _r1a_root.clipboard_append(_r1a_text); "
-        "_r1a_root.update(); pyautogui.hotkey('ctrl', 'v'); "
-        "time.sleep(0.25); _r1a_root.update(); _r1a_root.destroy()"
-    )
+    program = f"""
+import base64,gi
+gi.require_version('Gtk','3.0')
+from gi.repository import Gtk,Gdk,GLib
+value=base64.b64decode({encoded!r}).decode('utf-8')
+clipboard=Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+clipboard.set_text(value,-1)
+if clipboard.wait_for_text()!=value:
+ raise RuntimeError('clipboard round-trip failed')
+def paste():
+ pyautogui.hotkey('ctrl','a')
+ pyautogui.hotkey('ctrl','v')
+ return False
+GLib.timeout_add(150,paste)
+GLib.timeout_add(750,Gtk.main_quit)
+Gtk.main()
+""".strip()
+    return f"exec({program!r})"
 
 
 _KEYS = {

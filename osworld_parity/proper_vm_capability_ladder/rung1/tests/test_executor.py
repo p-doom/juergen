@@ -264,10 +264,12 @@ def test_unicode_coalesced_type_is_one_shared_operation() -> None:
     assert native_transport.audit.typed_texts == raw_transport.audit.typed_texts == [text]
     assert _kinds(native_transport) == _kinds(raw_transport) == ["coalesced_type"]
     compiled = compile_unicode_coalesced_type(text)
-    assert "tkinter" in compiled
-    assert "clipboard_append(_r1a_text)" in compiled
+    assert "gi.require_version('Gtk','3.0')" in compiled
+    assert "clipboard.set_text(value,-1)" in compiled
+    assert "clipboard.wait_for_text()!=value" in compiled
+    assert "pyautogui.hotkey('ctrl','a')" in compiled
     assert "pyperclip" not in compiled
-    assert "pyautogui.hotkey('ctrl', 'v')" in compiled
+    assert "pyautogui.hotkey('ctrl','v')" in compiled
     assert "pyautogui.write" not in compiled
     atomic_program, _ = compile_atomic_guest_program(
         (Operation("coalesced_type", (text,)),),
