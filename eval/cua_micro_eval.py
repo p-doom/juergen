@@ -66,6 +66,8 @@ _DIRECTIONS = (
 )
 _FIXTURE_GUEST_PATH = "/tmp/cua_micro_fixture.py"
 _FIXTURE_STATE_PATH = "/tmp/cua_micro_fixture_state.json"
+_NATIVE_TERMINAL_STATE_PATH = "/tmp/cua_native_terminal_state.json"
+_NATIVE_EDITOR_PATH = "/tmp/cua_native_editor.txt"
 _DEFAULT_SUITE = Path(__file__).with_name("cua_micro_tasks_v1.json")
 _REL_STEP_FORMAT = "computer_use_rel_step_v1"
 _QWEN3VL_NATIVE_FORMAT = "qwen3vl_native_cua_v1"
@@ -337,10 +339,14 @@ def action_matches_expected(action: OrderedAction | None, expected: dict[str, An
         matches = (
             primitive.kind == "click"
             and primitive.name == expected.get("button", "left")
-            and primitive.count == 1
+            and primitive.count == int(expected.get("count", 1))
         )
     elif kind == "type":
         matches = primitive.kind == "type" and primitive.text == expected.get("text")
+    elif kind == "key":
+        matches = primitive.kind == "key_combo" and tuple(
+            str(key).upper() for key in primitive.keys
+        ) == tuple(str(key).upper() for key in expected.get("keys", []))
     elif kind == "scroll" and (
         primitive.kind == "scroll" and primitive.dx == 0 and primitive.dy != 0
     ):
@@ -531,6 +537,97 @@ def _launch_fixture(client: OSWorldClient, mode: str) -> dict[str, Any]:
     return state
 
 
+def _launch_native_app(client: OSWorldClient, app: str) -> dict[str, Any]:
+    commands = {
+        "files": (
+            "rm -rf /tmp/cua_native_files; "
+            "mkdir -p /tmp/cua_native_files/EvalTarget; "
+            "printf 'native files task\\n' >/tmp/cua_native_files/Alpha.txt; "
+            "gsettings set org.gnome.nautilus.preferences default-folder-viewer 'list-view'; "
+            "nohup env DISPLAY=:0 nautilus --new-window /tmp/cua_native_files "
+            ">/tmp/cua_native_files.log 2>&1 &"
+        ),
+        "writer": (
+            "nohup env DISPLAY=:0 libreoffice --writer --nologo --norestore --nolockcheck "
+            ">/tmp/cua_native_writer.log 2>&1 &"
+        ),
+        "calc": (
+            "nohup env DISPLAY=:0 libreoffice --calc --nologo --norestore --nolockcheck "
+            ">/tmp/cua_native_calc.log 2>&1 &"
+        ),
+        "impress": (
+            "nohup env DISPLAY=:0 libreoffice --impress --nologo --norestore --nolockcheck "
+            ">/tmp/cua_native_impress.log 2>&1 &"
+        ),
+        "text_editor": (
+            f": >{_NATIVE_EDITOR_PATH}; "
+            f"nohup env DISPLAY=:0 gnome-text-editor {_NATIVE_EDITOR_PATH} "
+            ">/tmp/cua_native_editor.log 2>&1 &"
+        ),
+        "calculator": (
+            "nohup env DISPLAY=:0 gnome-calculator >/tmp/cua_native_calculator.log 2>&1 &"
+        ),
+    }
+    patterns = {
+        "files": r"cua_native_files|Files",
+        "writer": r"LibreOffice Writer",
+        "calc": r"LibreOffice Calc",
+        "impress": r"LibreOffice Impress",
+        "text_editor": r"cua_native_editor|Text Editor",
+        "calculator": r"Calculator",
+    }
+    if app not in commands:
+        raise ValueError(f"unknown native app {app!r}")
+    client.run_command(commands[app], shell=True)
+    pattern = re.compile(patterns[app], re.IGNORECASE)
+    _wait_until(lambda: pattern.search(_active_title(client)), timeout_s=30)
+    time.sleep(0.8)
+    if app == "text_editor":
+        width, height = client.screen_size()
+        client.execute(f"pyautogui.click(x={width // 2}, y={height // 2}, button='left')")
+    return {"native_app": app}
+
+
+def _launch_native_terminal_capture(client: OSWorldClient, text: str) -> dict[str, Any]:
+    script_path = "/tmp/cua_native_terminal_capture.py"
+    script = f"""import json, os, sys, termios, time, tty
+from pathlib import Path
+state = Path({_NATIVE_TERMINAL_STATE_PATH!r})
+state.write_text(json.dumps({{'ready': True, 'value': ''}}))
+fd = sys.stdin.fileno()
+old = termios.tcgetattr(fd)
+data = bytearray()
+try:
+    tty.setraw(fd)
+    while len(data) < {len(text.encode("utf-8"))}:
+        data.extend(os.read(fd, 1))
+finally:
+    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+value = data.decode('utf-8', errors='replace')
+state.write_text(json.dumps({{'ready': True, 'value': value}}))
+print('\\r\\nCaptured:', value, flush=True)
+time.sleep(30)
+"""
+    _upload_bytes(client, script_path, script.encode())
+    command = (
+        f"rm -f {_NATIVE_TERMINAL_STATE_PATH}; "
+        "nohup env DISPLAY=:0 gnome-terminal --title='CUA Native Terminal' -- "
+        f"python3 {script_path} >/tmp/cua_native_terminal.log 2>&1 &"
+    )
+    client.run_command(command, shell=True)
+    _wait_until(lambda: "CUA Native Terminal" in _active_title(client), timeout_s=20)
+    state = _wait_until(
+        lambda: (
+            value
+            if (value := _guest_json(client, _NATIVE_TERMINAL_STATE_PATH)).get("ready")
+            else None
+        ),
+        timeout_s=10,
+    )
+    time.sleep(0.5)
+    return state
+
+
 def prepare_task(client: OSWorldClient, task: Task) -> dict[str, Any]:
     kind = task.setup.get("kind")
     if kind == "desktop":
@@ -551,6 +648,10 @@ def prepare_task(client: OSWorldClient, task: Task) -> dict[str, Any]:
         return {}
     if kind == "fixture":
         return _launch_fixture(client, str(task.setup["mode"]))
+    if kind == "native_app":
+        return _launch_native_app(client, str(task.setup["app"]))
+    if kind == "native_terminal_capture":
+        return _launch_native_terminal_capture(client, str(task.expected["text"]))
     raise ValueError(f"unknown setup kind {kind!r}")
 
 
@@ -598,6 +699,27 @@ def read_verifier_state(client: OSWorldClient, verifier: dict[str, Any]) -> Any:
         return _active_title(client)
     if kind == "fixture_equals":
         return _guest_json(client, _FIXTURE_STATE_PATH).get("values", {}).get(verifier.get("field"))
+    if kind == "guest_json_equals":
+        return _guest_json(client, str(verifier["path"])).get(verifier.get("field", "value"))
+    if kind == "saved_file_equals":
+        client.execute("pyautogui.hotkey('ctrl', 's')")
+        time.sleep(0.4)
+        return str(
+            client.run_command(
+                [
+                    "python3",
+                    "-c",
+                    f"from pathlib import Path; print(Path({str(verifier['path'])!r}).read_text())",
+                ]
+            ).get("output", "")
+        ).rstrip("\n")
+    if kind == "calculator_clipboard_equals":
+        client.execute("pyautogui.hotkey('ctrl', 'c')")
+        code = (
+            "import tkinter as tk; r=tk.Tk(); r.withdraw(); r.update(); "
+            "print(r.clipboard_get()); r.destroy()"
+        )
+        return str(client.run_command(["python3", "-c", code]).get("output", "")).strip()
     raise ValueError(f"unknown verifier kind {kind!r}")
 
 
@@ -611,6 +733,8 @@ def verifier_passed(client: OSWorldClient, verifier: dict[str, Any]) -> tuple[bo
         if kind == "active_title_regex":
             return state if re.search(str(verifier["pattern"]), str(state), re.IGNORECASE) else None
         if kind == "fixture_equals":
+            return {"matched": True, "value": state} if state == verifier.get("value") else None
+        if kind in {"guest_json_equals", "saved_file_equals", "calculator_clipboard_equals"}:
             return {"matched": True, "value": state} if state == verifier.get("value") else None
         return None
 
@@ -856,7 +980,13 @@ def validate_task_setup(
         )
     elif expected_kind == "click":
         synthetic = OrderedAction(
-            primitives=(OrderedPrimitive(kind="click", name="left", count=1),),
+            primitives=(
+                OrderedPrimitive(
+                    kind="click",
+                    name=str(task.expected.get("button", "left")),
+                    count=int(task.expected.get("count", 1)),
+                ),
+            ),
             no_op=False,
         )
     elif expected_kind == "type":
@@ -868,6 +998,16 @@ def validate_task_setup(
         direction = -5 if task.expected.get("sign") == "down" else 5
         synthetic = OrderedAction(
             primitives=(OrderedPrimitive(kind="scroll", dx=0, dy=direction),),
+            no_op=False,
+        )
+    elif expected_kind == "key":
+        synthetic = OrderedAction(
+            primitives=(
+                OrderedPrimitive(
+                    kind="key_combo",
+                    keys=tuple(str(key) for key in task.expected.get("keys", [])),
+                ),
+            ),
             no_op=False,
         )
     else:

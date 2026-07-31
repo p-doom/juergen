@@ -20,6 +20,7 @@ from osworld_system_prompts import SYSTEM_PROMPTS
 from sampling import qwen_sampling
 
 _SUITE = Path(__file__).with_name("cua_micro_tasks_v1.json")
+_NATIVE_SUITE = Path(__file__).with_name("cua_micro_tasks_native_v2.json")
 
 
 def _tool(arguments: dict) -> str:
@@ -84,6 +85,14 @@ class SuiteContractTests(unittest.TestCase):
                 _tool({"action": "type", "text": task.expected["text"]})
             )
             self.assertTrue(micro.action_matches_expected(parsed, task.expected))
+
+    def test_native_suite_is_balanced_across_real_apps(self) -> None:
+        raw, tasks = micro.load_suite(_NATIVE_SUITE)
+        self.assertEqual(raw["suite"], "cua_micro_tasks_native_v2")
+        ids = {task.task_id for task in tasks}
+        for fragment in ("files", "terminal", "text_editor", "writer", "calc", "impress"):
+            self.assertTrue(any(fragment in task_id for task_id in ids), fragment)
+        self.assertLessEqual(sum("chrome" in task_id for task_id in ids), len(tasks) // 3)
 
 
 class GeometryTests(unittest.TestCase):
@@ -186,6 +195,25 @@ class ActionAndAggregationTests(unittest.TestCase):
             micro.action_matches_expected(typed, {"kind": "type", "text": "rollout-ok"})
         )
         self.assertFalse(micro.action_matches_expected(typed, {"kind": "type", "text": "other"}))
+
+    def test_expected_action_supports_exact_key_chords_and_double_clicks(self) -> None:
+        chord = micro.OrderedAction(
+            primitives=(micro.OrderedPrimitive(kind="key_combo", keys=("CTRL", "SHIFT", "S")),),
+            no_op=False,
+        )
+        double = parse_computer_use_rel_step_action(_tool({"action": "double_click"}))
+        self.assertTrue(
+            micro.action_matches_expected(
+                chord,
+                {"kind": "key", "keys": ["ctrl", "shift", "s"]},
+            )
+        )
+        self.assertTrue(
+            micro.action_matches_expected(
+                double,
+                {"kind": "click", "button": "left", "count": 2},
+            )
+        )
 
     def test_pass_at_four_and_best_progress(self) -> None:
         task = micro.Task(

@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "suite": "cua_micro_tasks_native_v2",
+  "coordinate_grid": 1000,
+  "description": "Balanced one-turn native-app CUA micro-evals with semantic state verifiers.",
+  "tasks": [
+    {
+      "id": "click.desktop.files",
+      "category": "native_launch",
+      "instruction": "Click the Files icon under the cursor.",
+      "setup": {"kind": "desktop"},
+      "target": {"kind": "fixed_norm", "bbox": [2, 540, 38, 610], "label": "Files dock icon"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "click", "button": "left"},
+      "verifier": {"kind": "active_title_regex", "pattern": "Home|Files"}
+    },
+    {
+      "id": "click.desktop.libreoffice_writer",
+      "category": "native_launch",
+      "instruction": "Click the LibreOffice Writer icon under the cursor.",
+      "setup": {"kind": "desktop"},
+      "target": {"kind": "fixed_norm", "bbox": [2, 285, 38, 345], "label": "LibreOffice Writer dock icon"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "click", "button": "left"},
+      "verifier": {"kind": "active_title_regex", "pattern": "LibreOffice Writer"}
+    },
+    {
+      "id": "click.desktop.libreoffice_calc",
+      "category": "native_launch",
+      "instruction": "Click the LibreOffice Calc icon under the cursor.",
+      "setup": {"kind": "desktop"},
+      "target": {"kind": "fixed_norm", "bbox": [2, 350, 38, 410], "label": "LibreOffice Calc dock icon"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "click", "button": "left"},
+      "verifier": {"kind": "active_title_regex", "pattern": "LibreOffice Calc"}
+    },
+    {
+      "id": "click.desktop.libreoffice_impress",
+      "category": "native_launch",
+      "instruction": "Click the LibreOffice Impress icon under the cursor.",
+      "setup": {"kind": "desktop"},
+      "target": {"kind": "fixed_norm", "bbox": [2, 415, 38, 475], "label": "LibreOffice Impress dock icon"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "click", "button": "left"},
+      "verifier": {"kind": "active_title_regex", "pattern": "LibreOffice Impress"}
+    },
+    {
+      "id": "key.desktop.open_terminal",
+      "category": "native_launch",
+      "instruction": "Open Terminal with the Ctrl+Alt+T keyboard shortcut.",
+      "setup": {"kind": "desktop"},
+      "target": {"kind": "fixed_norm", "bbox": [50, 100, 950, 900], "label": "Desktop"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "key", "keys": ["CTRL", "ALT", "T"]},
+      "verifier": {"kind": "active_title_regex", "pattern": "Terminal|user-virtual-machine"}
+    },
+    {
+      "id": "type.terminal.native_exact",
+      "category": "native_app",
+      "instruction": "Type exactly into the focused Terminal: echo native-terminal-ok",
+      "setup": {"kind": "native_terminal_capture"},
+      "target": {"kind": "fixed_norm", "bbox": [100, 150, 900, 850], "label": "Terminal input"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "type", "text": "echo native-terminal-ok"},
+      "verifier": {"kind": "guest_json_equals", "path": "/tmp/cua_native_terminal_state.json", "field": "value", "value": "echo native-terminal-ok"}
+    },
+    {
+      "id": "type.text_editor.native_exact",
+      "category": "native_app",
+      "instruction": "Type exactly into the focused Text Editor document: native editor payload",
+      "setup": {"kind": "native_app", "app": "text_editor"},
+      "target": {"kind": "fixed_norm", "bbox": [150, 150, 850, 850], "label": "Text Editor document"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "type", "text": "native editor payload"},
+      "verifier": {"kind": "saved_file_equals", "path": "/tmp/cua_native_editor.txt", "value": "native editor payload"}
+    },
+    {
+      "id": "key.writer.open_save_as",
+      "category": "native_app",
+      "instruction": "Open the Save As dialog in LibreOffice Writer using Ctrl+Shift+S.",
+      "setup": {"kind": "native_app", "app": "writer"},
+      "target": {"kind": "fixed_norm", "bbox": [100, 100, 900, 900], "label": "LibreOffice Writer window"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "key", "keys": ["CTRL", "SHIFT", "S"]},
+      "verifier": {"kind": "active_title_regex", "pattern": "Save As"}
+    },
+    {
+      "id": "key.calc.open_save_as",
+      "category": "native_app",
+      "instruction": "Open the Save As dialog in LibreOffice Calc using Ctrl+Shift+S.",
+      "setup": {"kind": "native_app", "app": "calc"},
+      "target": {"kind": "fixed_norm", "bbox": [100, 100, 900, 900], "label": "LibreOffice Calc window"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "key", "keys": ["CTRL", "SHIFT", "S"]},
+      "verifier": {"kind": "active_title_regex", "pattern": "Save As"}
+    },
+    {
+      "id": "key.impress.open_save_as",
+      "category": "native_app",
+      "instruction": "Open the Save As dialog in LibreOffice Impress using Ctrl+Shift+S.",
+      "setup": {"kind": "native_app", "app": "impress"},
+      "target": {"kind": "fixed_norm", "bbox": [100, 100, 900, 900], "label": "LibreOffice Impress window"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "key", "keys": ["CTRL", "SHIFT", "S"]},
+      "verifier": {"kind": "active_title_regex", "pattern": "Save As"}
+    },
+    {
+      "id": "click.files.open_eval_target",
+      "category": "native_app",
+      "instruction": "Double-click the EvalTarget folder under the cursor in Files.",
+      "setup": {"kind": "native_app", "app": "files"},
+      "target": {"kind": "fixed_norm", "bbox": [92, 168, 360, 215], "label": "EvalTarget folder row"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "click", "button": "left", "count": 2},
+      "verifier": {"kind": "active_title_regex", "pattern": "EvalTarget"}
+    },
+    {
+      "id": "key.calculator.digit7",
+      "category": "native_app",
+      "instruction": "Enter the digit 7 in Calculator using the keyboard.",
+      "setup": {"kind": "native_app", "app": "calculator"},
+      "target": {"kind": "fixed_norm", "bbox": [250, 150, 750, 850], "label": "Calculator window"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "key", "keys": ["7"]},
+      "verifier": {"kind": "calculator_clipboard_equals", "value": "7"}
+    },
+    {
+      "id": "click.chrome.back",
+      "category": "chrome_control",
+      "instruction": "Click Chrome's Back button under the cursor.",
+      "setup": {"kind": "chrome", "variant": "history"},
+      "target": {"kind": "fixed_norm", "bbox": [41, 69, 55, 97], "label": "Back button"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "click", "button": "left"},
+      "verifier": {"kind": "active_title_regex", "pattern": "PAGE_A.*Chrome"}
+    },
+    {
+      "id": "click.chrome.reload",
+      "category": "chrome_control",
+      "instruction": "Click Chrome's Reload button under the cursor.",
+      "setup": {"kind": "chrome", "variant": "reload"},
+      "target": {"kind": "fixed_norm", "bbox": [75, 65, 96, 100], "label": "Reload button"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "click", "button": "left"},
+      "verifier": {"kind": "active_title_regex", "pattern": "LOAD_2.*Chrome"}
+    },
+    {
+      "id": "click.chrome.deterministic_button",
+      "category": "chrome_control",
+      "instruction": "Click the blue COMPLETE button under the cursor.",
+      "setup": {"kind": "chrome", "variant": "button"},
+      "target": {"kind": "fixed_norm", "bbox": [421, 463, 615, 562], "label": "COMPLETE button"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "click", "button": "left"},
+      "verifier": {"kind": "active_title_regex", "pattern": "PASS_BUTTON.*Chrome"}
+    },
+    {
+      "id": "scroll.chrome.down",
+      "category": "chrome_control",
+      "instruction": "Scroll down on the page under the cursor.",
+      "setup": {"kind": "chrome", "variant": "scroll"},
+      "target": {"kind": "fixed_norm", "bbox": [300, 250, 700, 750], "label": "Scrollable page"},
+      "cursor": {"kind": "target_center"},
+      "expected": {"kind": "scroll", "sign": "down"},
+      "verifier": {"kind": "active_title_regex", "pattern": "PASS_SCROLL.*Chrome"}
+    }
+  ]
+}
