@@ -79,7 +79,7 @@
       "category": "move",
       "instruction": "Move the cursor onto Chrome's Back button. Do not click.",
       "setup": {"kind": "chrome", "variant": "history"},
-      "target": {"kind": "fixed_norm", "bbox": [37, 65, 58, 100], "label": "Back button"},
+      "target": {"kind": "fixed_norm", "bbox": [41, 69, 55, 97], "label": "Back button"},
       "cursor": {"kind": "relative_to_target", "delta_norm": [32, 0]},
       "expected": {"kind": "move"},
       "verifier": {"kind": "bbox_hit"}
@@ -129,7 +129,7 @@
       "category": "click",
       "instruction": "Click Chrome's Back button under the cursor.",
       "setup": {"kind": "chrome", "variant": "history"},
-      "target": {"kind": "fixed_norm", "bbox": [37, 65, 58, 100], "label": "Back button"},
+      "target": {"kind": "fixed_norm", "bbox": [41, 69, 55, 97], "label": "Back button"},
       "cursor": {"kind": "target_center"},
       "expected": {"kind": "click", "button": "left"},
       "verifier": {"kind": "active_title_regex", "pattern": "PAGE_A.*Chrome"}

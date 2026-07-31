@@ -501,6 +501,11 @@ def _launch_chrome(client: OSWorldClient, variant: str) -> None:
     if activate_title is not None:
         _wait_until(lambda: _activate_chrome_target(client, activate_title), timeout_s=20)
     _wait_until(lambda: expected_title in _active_title(client), timeout_s=20)
+    if variant == "history":
+        client.execute("pyautogui.hotkey('alt', 'left')")
+        _wait_until(lambda: "PAGE_A" in _active_title(client), timeout_s=20)
+        client.execute("pyautogui.hotkey('alt', 'right')")
+        _wait_until(lambda: "PAGE_B" in _active_title(client), timeout_s=20)
 
 
 def _launch_fixture(client: OSWorldClient, mode: str) -> dict[str, Any]:
