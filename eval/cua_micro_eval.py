@@ -458,6 +458,7 @@ def _launch_chrome(client: OSWorldClient, variant: str) -> None:
     files = _chrome_html(variant)
     urls: list[str]
     activate_title: str | None = None
+    navigate_url: str | None = None
     if variant == "tabs":
         files = {
             "/tmp/cua_alpha.html": "<title>ALPHA</title><h1>ALPHA tab</h1>",
@@ -466,6 +467,14 @@ def _launch_chrome(client: OSWorldClient, variant: str) -> None:
         urls = ["file:///tmp/cua_alpha.html", "file:///tmp/cua_beta.html"]
         expected_title = "BETA"
         activate_title = expected_title
+    elif variant == "history":
+        files = {
+            "/tmp/cua_history_a.html": "<title>PAGE_A</title><h1>PAGE A</h1>",
+            "/tmp/cua_history_b.html": "<title>PAGE_B</title><h1>PAGE B — use Chrome Back</h1>",
+        }
+        urls = ["file:///tmp/cua_history_a.html"]
+        expected_title = "PAGE_A"
+        navigate_url = "file:///tmp/cua_history_b.html"
     else:
         urls = ["file:///tmp/cua_micro.html"]
         expected_title = {
@@ -490,6 +499,13 @@ def _launch_chrome(client: OSWorldClient, variant: str) -> None:
     if activate_title is not None:
         _wait_until(lambda: _activate_chrome_target(client, activate_title), timeout_s=20)
     _wait_until(lambda: expected_title in _active_title(client), timeout_s=20)
+    if navigate_url is not None:
+        client.execute(
+            "pyautogui.hotkey('ctrl', 'l'); "
+            f"pyautogui.write({navigate_url!r}); "
+            "pyautogui.press('enter')"
+        )
+        _wait_until(lambda: "PAGE_B" in _active_title(client), timeout_s=20)
 
 
 def _launch_fixture(client: OSWorldClient, mode: str) -> dict[str, Any]:

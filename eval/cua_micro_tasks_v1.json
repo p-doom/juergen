@@ -159,7 +159,7 @@
       "category": "click",
       "instruction": "Click the blue COMPLETE button under the cursor.",
       "setup": {"kind": "chrome", "variant": "button"},
-      "target": {"kind": "fixed_norm", "bbox": [400, 405, 600, 515], "label": "COMPLETE button"},
+      "target": {"kind": "fixed_norm", "bbox": [421, 463, 615, 562], "label": "COMPLETE button"},
       "cursor": {"kind": "target_center"},
       "expected": {"kind": "click", "button": "left"},
       "verifier": {"kind": "active_title_regex", "pattern": "PASS_BUTTON.*Chrome"}
