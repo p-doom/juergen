@@ -73,9 +73,12 @@ def compile_unicode_coalesced_type(text: str) -> str:
         raise TypeError("coalesced type text must be a string")
     encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
     return (
-        "import base64, pyperclip; "
+        "import base64, time, tkinter as _r1a_tk; "
         f"_r1a_text=base64.b64decode({encoded!r}).decode('utf-8'); "
-        "pyperclip.copy(_r1a_text); pyautogui.hotkey('ctrl', 'v')"
+        "_r1a_root=_r1a_tk.Tk(); _r1a_root.withdraw(); "
+        "_r1a_root.clipboard_clear(); _r1a_root.clipboard_append(_r1a_text); "
+        "_r1a_root.update(); pyautogui.hotkey('ctrl', 'v'); "
+        "time.sleep(0.25); _r1a_root.update(); _r1a_root.destroy()"
     )
 
 

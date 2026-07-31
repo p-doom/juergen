@@ -264,7 +264,9 @@ def test_unicode_coalesced_type_is_one_shared_operation() -> None:
     assert native_transport.audit.typed_texts == raw_transport.audit.typed_texts == [text]
     assert _kinds(native_transport) == _kinds(raw_transport) == ["coalesced_type"]
     compiled = compile_unicode_coalesced_type(text)
-    assert "pyperclip.copy" in compiled
+    assert "tkinter" in compiled
+    assert "clipboard_append(_r1a_text)" in compiled
+    assert "pyperclip" not in compiled
     assert "pyautogui.hotkey('ctrl', 'v')" in compiled
     assert "pyautogui.write" not in compiled
     atomic_program, _ = compile_atomic_guest_program(
