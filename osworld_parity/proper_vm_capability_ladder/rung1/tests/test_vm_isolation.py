@@ -315,9 +315,18 @@ def test_fixture_readiness_timeout_allowlist_walks_wrapped_causes() -> None:
         except TimeoutError as exc:
             raise RuntimeError("transport wrapper") from exc
     except RuntimeError as wrapped:
-        assert KvmFixtureSession._recoverable_fixture_readiness_error(wrapped)
+        assert KvmFixtureSession._recoverable_fixture_readiness_error(
+            wrapped, fixture_id="fixture"
+        )
     assert not KvmFixtureSession._recoverable_fixture_readiness_error(
-        FixtureServerError("fixture: NetworkError without a Chromium fetch failure")
+        FixtureServerError("fixture: NetworkError without a Chromium fetch failure"),
+        fixture_id="fixture",
+    )
+    assert not KvmFixtureSession._recoverable_fixture_readiness_error(
+        FixtureServerError(
+            "fixture: deterministic validation: TypeError: Failed to fetch"
+        ),
+        fixture_id="fixture",
     )
 
 

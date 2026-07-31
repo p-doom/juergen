@@ -1058,7 +1058,9 @@ class KvmFixtureSession:
             except Exception as exc:
                 last_error = exc
                 completed_ns = time.monotonic_ns()
-                recoverable = self._recoverable_fixture_readiness_error(exc)
+                recoverable = self._recoverable_fixture_readiness_error(
+                    exc, fixture_id=fixture.id
+                )
                 attempt.update(
                     {
                         "status": "failed",
@@ -1164,7 +1166,9 @@ nohup "$browser" --no-first-run --no-default-browser-check \
         }
 
     @staticmethod
-    def _recoverable_fixture_readiness_error(exc: Exception) -> bool:
+    def _recoverable_fixture_readiness_error(
+        exc: Exception, *, fixture_id: str
+    ) -> bool:
         pending: list[BaseException] = [exc]
         seen: set[int] = set()
         while pending:
@@ -1182,8 +1186,7 @@ nohup "$browser" --no-first-run --no-default-browser-check \
                     pending.append(nested)
         if not isinstance(exc, FixtureServerError):
             return False
-        message = str(exc).lower()
-        return "typeerror: failed to fetch" in message
+        return str(exc) == f"{fixture_id}: TypeError: Failed to fetch"
 
     @staticmethod
     def _fixture_readiness_state_summary(
