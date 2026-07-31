@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -18,9 +20,14 @@ from osworld_parity.proper_vm_capability_ladder.rung1.selfcheck import (
 from osworld_parity.proper_vm_capability_ladder.rung1.transport import (
     CLIPBOARD_OWNER_LIFETIME_MS,
     CLIPBOARD_PASTE_DELAY_MS,
+    CLICK_BACKENDS,
+    CLICK_DWELL_S,
+    DIRECT_XTEST_CLICK_BACKEND,
     ATOMIC_RESULT_PREFIX,
     HttpVmTransport,
     Operation,
+    PASSIVE_X_OBSERVER_LIMITATION,
+    PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
     RecordingTransport,
     TransportError,
     compile_atomic_guest_program,
@@ -99,14 +106,175 @@ class SingleProcessHttpTransport(HttpVmTransport):
                 {"kind": "move_relative", "args": [290, 380]},
                 {"kind": "click", "args": ["left"]},
             ],
-            "backend_primitives": [],
+            "backend_primitives": [
+                {
+                    "kind": "click",
+                    "click_backend": PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
+                    "release_side_motion_notify": True,
+                    "injection_attempt_count": 1,
+                    "retry_count": 0,
+                    "dwell_ms": 50,
+                    "press_xtest_sequence": ["motion_notify", "button_press"],
+                    "release_xtest_sequence": [
+                        "motion_notify",
+                        "button_release",
+                    ],
+                }
+            ],
             "x_event_sync_evidence": [],
+            "click_backend": PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
+            "x_injection_evidence": [],
+            "x_injection_timestamps": [
+                {
+                    "click_backend": PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
+                    "backend_identity": "fake_x11",
+                    "release_side_motion_notify": True,
+                    "clock": "time.monotonic_ns",
+                    "dwell_requested_ns": 50_000_000,
+                    "click_started_guest_monotonic_ns": 1,
+                    "press_call_before_guest_monotonic_ns": 2,
+                    "press_call_after_guest_monotonic_ns": 3,
+                    "press_sync_completed_guest_monotonic_ns": 4,
+                    "dwell_started_guest_monotonic_ns": 5,
+                    "dwell_completed_guest_monotonic_ns": 6,
+                    "dwell_duration_ns": 1,
+                    "release_call_before_guest_monotonic_ns": 7,
+                    "release_call_after_guest_monotonic_ns": 8,
+                    "release_sync_completed_guest_monotonic_ns": 9,
+                    "click_completed_guest_monotonic_ns": 10,
+                    "press_xtest_sequence": ["motion_notify", "button_press"],
+                    "release_xtest_sequence": [
+                        "motion_notify",
+                        "button_release",
+                    ],
+                }
+            ],
+            "passive_x_observer": {
+                "installed": False,
+                "observer_process_count": 0,
+                "additional_x_connection_count": 0,
+                "assessment": "omitted_not_demonstrably_non_perturbing",
+                "limitation": PASSIVE_X_OBSERVER_LIMITATION,
+            },
         }
         return {
             "status": "success",
             "returncode": 0,
             "output": ATOMIC_RESULT_PREFIX + json.dumps(payload),
         }
+
+
+def _execute_compiled_click(
+    operations: tuple[Operation, ...],
+    click_backend: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> dict:
+    state = {"x": 10, "y": 20, "mask": 0}
+
+    class FakeX:
+        ButtonPress = 4
+        ButtonRelease = 5
+        MotionNotify = 6
+
+    class FakeDisplay:
+        def flush(self) -> None:
+            return None
+
+        def sync(self) -> None:
+            return None
+
+        def screen(self):
+            root = SimpleNamespace(
+                query_pointer=lambda: SimpleNamespace(
+                    root_x=state["x"], root_y=state["y"], mask=state["mask"]
+                )
+            )
+            return SimpleNamespace(root=root)
+
+    backend = ModuleType("fake_pyautogui_x11")
+    backend.X = FakeX
+    backend.BUTTON_NAME_MAPPING = {
+        "left": 1,
+        "middle": 2,
+        "right": 3,
+        1: 1,
+        2: 2,
+        3: 3,
+    }
+    backend._display = FakeDisplay()
+
+    def fake_input(_display, event_type, detail=0, **kwargs) -> None:
+        if event_type == FakeX.MotionNotify:
+            state["x"] = int(kwargs["x"])
+            state["y"] = int(kwargs["y"])
+        elif event_type == FakeX.ButtonPress:
+            state["mask"] |= 1 << (7 + int(detail))
+        elif event_type == FakeX.ButtonRelease:
+            state["mask"] &= ~(1 << (7 + int(detail)))
+
+    backend.fake_input = fake_input
+
+    def move_to(x, y) -> None:
+        backend.fake_input(backend._display, FakeX.MotionNotify, x=x, y=y)
+        backend._display.sync()
+
+    def mouse_down(x, y, button) -> None:
+        move_to(x, y)
+        backend.fake_input(
+            backend._display, FakeX.ButtonPress, backend.BUTTON_NAME_MAPPING[button]
+        )
+        backend._display.sync()
+
+    def mouse_up(x, y, button) -> None:
+        move_to(x, y)
+        backend.fake_input(
+            backend._display, FakeX.ButtonRelease, backend.BUTTON_NAME_MAPPING[button]
+        )
+        backend._display.sync()
+
+    def click(x, y, button) -> None:
+        mapped = backend.BUTTON_NAME_MAPPING[button]
+        backend._mouseDown(x, y, mapped)
+        backend._mouseUp(x, y, mapped)
+
+    backend._moveTo = move_to
+    backend._mouseDown = mouse_down
+    backend._mouseUp = mouse_up
+    backend._click = click
+
+    pyautogui = ModuleType("pyautogui")
+    pyautogui.platformModule = backend
+    pyautogui.FAILSAFE = True
+    pyautogui.PAUSE = 0.1
+    pyautogui.position = lambda: (state["x"], state["y"])
+    pyautogui.size = lambda: (1920, 1080)
+    pyautogui.moveTo = lambda x, y: move_to(int(x), int(y))
+    pyautogui.click = lambda *, clicks, interval, button: backend._click(
+        state["x"], state["y"], button
+    )
+    pyautogui.keyUp = lambda _key: None
+    pyautogui.mouseUp = lambda *, button: mouse_up(
+        state["x"], state["y"], button
+    )
+    monkeypatch.setitem(sys.modules, "pyautogui", pyautogui)
+
+    program, expected_mask = compile_atomic_guest_program(
+        operations,
+        initial_buttons=set(),
+        initial_keys=set(),
+        click_backend=click_backend,
+    )
+    assert expected_mask == 0
+    compile(program, "<rung1a-atomic-ab>", "exec")
+    exec(program, {})
+    markers = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith(ATOMIC_RESULT_PREFIX)
+    ]
+    assert len(markers) == 1
+    return json.loads(markers[0][len(ATOMIC_RESULT_PREFIX) :])
 
 def test_click_adapters_match_cursor_and_button_transitions() -> None:
     native_transport = RecordingTransport(cursor=(10, 20))
@@ -170,6 +338,175 @@ def test_compact_click_is_one_guest_process_with_compiled_order() -> None:
     assert result.atomic_state["cursor_readback_verified"] is True
 
 
+@pytest.mark.parametrize("click_backend", sorted(CLICK_BACKENDS))
+def test_click_backend_is_action_format_neutral(
+    click_backend: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    native = _execute_compiled_click(
+        (
+            Operation("move_to", (300, 400)),
+            Operation("mouse_down", ("left",)),
+            Operation("mouse_up", ("left",)),
+        ),
+        click_backend,
+        monkeypatch,
+        capsys,
+    )
+    compact = _execute_compiled_click(
+        (
+            Operation("move_relative", (290, 380)),
+            Operation("mouse_down", ("left",)),
+            Operation("mouse_up", ("left",)),
+        ),
+        click_backend,
+        monkeypatch,
+        capsys,
+    )
+
+    assert native["semantic_operations"][-2:] == compact["semantic_operations"][-2:] == [
+        {"kind": "mouse_down", "args": ["left"]},
+        {"kind": "mouse_up", "args": ["left"]},
+    ]
+    assert native["lowered_operations"][-1] == compact["lowered_operations"][-1] == {
+        "kind": "click",
+        "args": ["left"],
+    }
+    native_click = [
+        item for item in native["backend_primitives"] if item["kind"] == "click"
+    ]
+    compact_click = [
+        item for item in compact["backend_primitives"] if item["kind"] == "click"
+    ]
+    assert native_click == compact_click
+    assert native_click[0]["injection_attempt_count"] == 1
+    assert native_click[0]["retry_count"] == 0
+    assert native["guest_process_count"] == compact["guest_process_count"] == 1
+    assert [
+        (item["phase"], item["event"], item["detail"])
+        for item in native["x_injection_evidence"]
+    ] == [
+        (item["phase"], item["event"], item["detail"])
+        for item in compact["x_injection_evidence"]
+    ]
+    assert native["passive_x_observer"] == compact["passive_x_observer"] == {
+        "installed": False,
+        "observer_process_count": 0,
+        "additional_x_connection_count": 0,
+        "assessment": "omitted_not_demonstrably_non_perturbing",
+        "limitation": PASSIVE_X_OBSERVER_LIMITATION,
+    }
+
+
+def test_click_backends_differ_only_by_release_side_motion_notify(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    operations = (
+        Operation("move_to", (300, 400)),
+        Operation("mouse_down", ("left",)),
+        Operation("mouse_up", ("left",)),
+    )
+    current = _execute_compiled_click(
+        operations,
+        PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
+        monkeypatch,
+        capsys,
+    )
+    direct = _execute_compiled_click(
+        operations,
+        DIRECT_XTEST_CLICK_BACKEND,
+        monkeypatch,
+        capsys,
+    )
+
+    assert current["semantic_operations"] == direct["semantic_operations"]
+    assert current["lowered_operations"] == direct["lowered_operations"]
+    assert [item["event"] for item in current["x_injection_evidence"] if item["phase"] == "press"] == [
+        "motion_notify",
+        "button_press",
+    ]
+    assert [item["event"] for item in direct["x_injection_evidence"] if item["phase"] == "press"] == [
+        "motion_notify",
+        "button_press",
+    ]
+    current_release = [
+        item for item in current["x_injection_evidence"] if item["phase"] == "release"
+    ]
+    direct_release = [
+        item for item in direct["x_injection_evidence"] if item["phase"] == "release"
+    ]
+    assert [item["event"] for item in current_release] == [
+        "motion_notify",
+        "button_release",
+    ]
+    assert [item["event"] for item in direct_release] == ["button_release"]
+    assert current_release[1]["detail"] == direct_release[0]["detail"] == 1
+    assert current_release[1]["x"] == direct_release[0]["x"] is None
+    assert current_release[1]["y"] == direct_release[0]["y"] is None
+    current_primitive = next(
+        item for item in current["backend_primitives"] if item["kind"] == "click"
+    )
+    direct_primitive = next(
+        item for item in direct["backend_primitives"] if item["kind"] == "click"
+    )
+    for invariant in (
+        "call",
+        "dwell_ms",
+        "ordering",
+        "injection_attempt_count",
+        "retry_count",
+        "press_xtest_sequence",
+    ):
+        assert current_primitive[invariant] == direct_primitive[invariant]
+    assert [item["event"] for item in current["x_event_sync_evidence"]] == [
+        "mouse_down",
+        "mouse_up",
+    ]
+    assert [item["event"] for item in direct["x_event_sync_evidence"]] == [
+        "mouse_down",
+        "mouse_up",
+    ]
+
+    timestamp_fields = (
+        "press_call_before_guest_monotonic_ns",
+        "press_call_after_guest_monotonic_ns",
+        "press_sync_completed_guest_monotonic_ns",
+        "dwell_started_guest_monotonic_ns",
+        "dwell_completed_guest_monotonic_ns",
+        "release_call_before_guest_monotonic_ns",
+        "release_call_after_guest_monotonic_ns",
+        "release_sync_completed_guest_monotonic_ns",
+    )
+    for payload, backend, release_motion in (
+        (current, PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND, True),
+        (direct, DIRECT_XTEST_CLICK_BACKEND, False),
+    ):
+        assert len(payload["x_injection_timestamps"]) == 1
+        timing = payload["x_injection_timestamps"][0]
+        assert timing["click_backend"] == backend
+        assert timing["backend_identity"] == "fake_pyautogui_x11"
+        assert timing["release_side_motion_notify"] is release_motion
+        assert timing["dwell_requested_ns"] == int(CLICK_DWELL_S * 1e9)
+        assert timing["dwell_duration_ns"] >= int(CLICK_DWELL_S * 1e9)
+        timestamps = [timing[field] for field in timestamp_fields]
+        assert timestamps == sorted(timestamps)
+
+
+def test_unknown_click_backend_fails_before_guest_dispatch() -> None:
+    transport = SingleProcessHttpTransport()
+    with pytest.raises(TransportError, match="unsupported click backend"):
+        transport.execute_atomic(
+            (
+                Operation("mouse_down", ("left",)),
+                Operation("mouse_up", ("left",)),
+            ),
+            click_backend="unknown",
+        )
+    assert transport.execute_calls == []
+
+
 def test_atomic_exception_releases_preexisting_and_new_buttons() -> None:
     transport = RecordingTransport()
     transport.mouse_down("right")
@@ -229,6 +566,16 @@ def test_http_atomic_failure_preserves_nonzero_marker_evidence() -> None:
                 ],
                 "backend_primitives": [],
                 "x_event_sync_evidence": [],
+                "click_backend": PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
+                "x_injection_evidence": [],
+                "x_injection_timestamps": [],
+                "passive_x_observer": {
+                    "installed": False,
+                    "observer_process_count": 0,
+                    "additional_x_connection_count": 0,
+                    "assessment": "omitted_not_demonstrably_non_perturbing",
+                    "limitation": PASSIVE_X_OBSERVER_LIMITATION,
+                },
             }
             return {
                 "status": "error",

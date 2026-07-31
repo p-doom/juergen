@@ -41,6 +41,17 @@ ALL_POINTER_BUTTON_MASK = sum(BUTTON_MASKS.values())
 CLIPBOARD_PASTE_DELAY_MS = 150
 CLIPBOARD_OWNER_LIFETIME_MS = 750
 ATOMIC_RESULT_PREFIX = "RUNG1A_ATOMIC_RESULT="
+PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND = "pyautogui_release_motion"
+DIRECT_XTEST_CLICK_BACKEND = "direct_xtest_no_release_motion"
+CLICK_BACKENDS = frozenset(
+    {PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND, DIRECT_XTEST_CLICK_BACKEND}
+)
+CLICK_DWELL_S = 0.05
+PASSIVE_X_OBSERVER_LIMITATION = (
+    "not installed: a same-process XRecord/XI2 observer requires a second X "
+    "connection and concurrent event consumption, which is not demonstrably "
+    "non-perturbing for this timing experiment"
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +74,10 @@ class AtomicExecutionResult:
     lowered_operations: tuple[Operation, ...]
     backend_primitives: tuple[dict[str, Any], ...] = ()
     x_event_sync_evidence: tuple[dict[str, Any], ...] = ()
+    click_backend: str = PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND
+    x_injection_evidence: tuple[dict[str, Any], ...] = ()
+    x_injection_timestamps: tuple[dict[str, Any], ...] = ()
+    passive_x_observer: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -93,6 +108,10 @@ class AtomicExecutionResult:
             ],
             "backend_primitives": list(self.backend_primitives),
             "x_event_sync_evidence": list(self.x_event_sync_evidence),
+            "click_backend": self.click_backend,
+            "x_injection_evidence": list(self.x_injection_evidence),
+            "x_injection_timestamps": list(self.x_injection_timestamps),
+            "passive_x_observer": dict(self.passive_x_observer),
         }
 
 
@@ -253,8 +272,11 @@ def compile_atomic_guest_program(
     *,
     initial_buttons: set[str],
     initial_keys: set[str],
+    click_backend: str = PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
 ) -> tuple[str, int]:
     """Compile one adapter action to exactly one ordered guest process."""
+    if click_backend not in CLICK_BACKENDS:
+        raise TransportError(f"unsupported click backend: {click_backend}")
     final_buttons, _ = expected_atomic_input_state(
         operations,
         initial_buttons=initial_buttons,
@@ -287,52 +309,123 @@ def compile_atomic_guest_program(
         "_r1a_cursor_after=[-1,-1]",
         f"_r1a_semantic_operations={semantic_payload!r}",
         f"_r1a_lowered_operations={lowered_payload!r}",
+        f"_r1a_click_backend={click_backend!r}",
         "_r1a_backend_primitives=[]",
         "_r1a_x_event_sync=[]",
+        "_r1a_x_injections=[]",
+        "_r1a_click_timings=[]",
+        "_r1a_x_injection_sequence=0",
+        "_r1a_x_phase='outside_click'",
+        "_r1a_passive_x_observer={'installed':False,'observer_process_count':0,'additional_x_connection_count':0,'assessment':'omitted_not_demonstrably_non_perturbing','limitation':"
+        f"{PASSIVE_X_OBSERVER_LIMITATION!r}" "}",
         "def _r1a_sync_after_x_event(_event):",
         "    _backend=pyautogui.platformModule",
         "    _display=getattr(_backend,'_display',None)",
         "    _flush=getattr(_display,'flush',None)",
         "    _sync=getattr(_display,'sync',None)",
         "    _supported=callable(_flush) and callable(_sync)",
+        "    _started=_r1a_time.monotonic_ns()",
         "    if not _supported:",
-        "        _r1a_x_event_sync.append({'event':_event,'backend':getattr(_backend,'__name__',type(_backend).__name__),'flush':False,'sync':False})",
+        "        _completed=_r1a_time.monotonic_ns()",
+        "        _r1a_x_event_sync.append({'event':_event,'backend':getattr(_backend,'__name__',type(_backend).__name__),'flush':False,'sync':False,'started_guest_monotonic_ns':_started,'completed_guest_monotonic_ns':_completed,'duration_ns':_completed-_started})",
         "        raise RuntimeError('X11 flush/sync unavailable after '+_event)",
         "    _flush()",
         "    _sync()",
-        "    _r1a_x_event_sync.append({'event':_event,'backend':getattr(_backend,'__name__',type(_backend).__name__),'flush':True,'sync':True})",
+        "    _completed=_r1a_time.monotonic_ns()",
+        "    _r1a_x_event_sync.append({'event':_event,'backend':getattr(_backend,'__name__',type(_backend).__name__),'flush':True,'sync':True,'started_guest_monotonic_ns':_started,'completed_guest_monotonic_ns':_completed,'duration_ns':_completed-_started})",
         "def _r1a_click(_button):",
+        "    global _r1a_x_injection_sequence,_r1a_x_phase",
         "    _backend=pyautogui.platformModule",
         "    _display=getattr(_backend,'_display',None)",
         "    _down=getattr(_backend,'_mouseDown',None)",
         "    _up=getattr(_backend,'_mouseUp',None)",
-        "    _hooked=callable(_down) and callable(_up) and callable(getattr(_display,'flush',None)) and callable(getattr(_display,'sync',None))",
-        "    _r1a_backend_primitives.append({'kind':'click','button':_button,'call':'pyautogui.click(clicks=1, interval=0.05)','x11_per_event_sync_hooked':_hooked,'dwell_ms':50,'ordering':['mouse_down','flush','sync','dwell','mouse_up','flush','sync']})",
+        "    _move=getattr(_backend,'_moveTo',None)",
+        "    _fake_input=getattr(_backend,'fake_input',None)",
+        "    _x11=getattr(_backend,'X',None)",
+        "    _button_map=getattr(_backend,'BUTTON_NAME_MAPPING',None)",
+        "    _hooked=callable(_down) and callable(_up) and callable(_move) and callable(_fake_input) and _x11 is not None and isinstance(_button_map,dict) and callable(getattr(_display,'flush',None)) and callable(getattr(_display,'sync',None))",
+        "    _release_motion=_r1a_click_backend=="
+        f"{PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND!r}",
+        "    _primitive={'kind':'click','button':_button,'call':'pyautogui.click(clicks=1, interval=0.05)','click_backend':_r1a_click_backend,'x11_per_event_sync_hooked':_hooked,'dwell_ms':50,'release_side_motion_notify':_release_motion,'injection_attempt_count':1,'retry_count':0,'ordering':['mouse_down','flush','sync','dwell','mouse_up','flush','sync']}",
+        "    _r1a_backend_primitives.append(_primitive)",
         "    if not _hooked:",
         "        raise RuntimeError('X11 click primitive hooks unavailable')",
+        "    _event_names={int(_x11.MotionNotify):'motion_notify',int(_x11.ButtonPress):'button_press',int(_x11.ButtonRelease):'button_release'}",
+        "    def _r1a_traced_fake_input(*_args,**_kwargs):",
+        "        global _r1a_x_injection_sequence",
+        "        _event_type=int(_args[1] if len(_args)>1 else _kwargs.get('event_type',-1))",
+        "        _detail=int(_args[2] if len(_args)>2 else _kwargs.get('detail',0))",
+        "        _started=_r1a_time.monotonic_ns()",
+        "        _result=_fake_input(*_args,**_kwargs)",
+        "        _completed=_r1a_time.monotonic_ns()",
+        "        _r1a_x_injection_sequence+=1",
+        "        _r1a_x_injections.append({'sequence':_r1a_x_injection_sequence,'phase':_r1a_x_phase,'event':_event_names.get(_event_type,'event_'+str(_event_type)),'event_type':_event_type,'detail':_detail,'x':_kwargs.get('x'),'y':_kwargs.get('y'),'started_guest_monotonic_ns':_started,'completed_guest_monotonic_ns':_completed,'duration_ns':_completed-_started})",
+        "        return _result",
+        "    def _r1a_direct_down(*_args,**_kwargs):",
+        "        _x,_y,_raw_button=_args[:3]",
+        # Preserve the current backend's press-side XTest stream exactly.  The
+        # experimental delta is only the release-side MotionNotify below.
+        "        _move(_x,_y)",
+        "        _backend.fake_input(_display,_x11.ButtonPress,_button_map[_raw_button])",
+        "        _display.sync()",
+        "    def _r1a_direct_up(*_args,**_kwargs):",
+        "        _raw_button=_args[2]",
+        "        _backend.fake_input(_display,_x11.ButtonRelease,_button_map[_raw_button])",
+        "        _display.sync()",
+        "    _timing={'click_backend':_r1a_click_backend,'backend_identity':getattr(_backend,'__name__',type(_backend).__name__),'release_side_motion_notify':_release_motion,'clock':'time.monotonic_ns','dwell_requested_ns':50000000,'x_injection_start_sequence':_r1a_x_injection_sequence}",
         "    def _r1a_down(*_args,**_kwargs):",
-        "        _result=_down(*_args,**_kwargs)",
+        "        global _r1a_x_phase",
+        "        _prior_phase=_r1a_x_phase",
+        "        _r1a_x_phase='press'",
+        "        _timing['press_call_before_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
+        "        try:",
+        "            _result=(_down if _release_motion else _r1a_direct_down)(*_args,**_kwargs)",
+        "        finally:",
+        "            _timing['press_call_after_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
+        "            _r1a_x_phase=_prior_phase",
         "        _r1a_sync_after_x_event('mouse_down')",
+        "        _timing['press_sync_completed_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
         # pyautogui.click's interval is between repeated clicks, not between
         # press and release.  Chromium intermittently observed only pointerdown
         # when the two XTest events were adjacent even though X11 reported a
         # released final mask.  A bounded dwell after the synced press keeps
         # the fixed click primitive while making browser receipt causal.
-        "        _r1a_time.sleep(0.05)",
+        "        _timing['dwell_started_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
+        f"        _r1a_time.sleep({CLICK_DWELL_S!r})",
+        "        _timing['dwell_completed_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
+        "        _timing['dwell_duration_ns']=_timing['dwell_completed_guest_monotonic_ns']-_timing['dwell_started_guest_monotonic_ns']",
         "        _r1a_trace.append({'kind':'mouse_down','args':[_button]})",
         "        return _result",
         "    def _r1a_up(*_args,**_kwargs):",
-        "        _result=_up(*_args,**_kwargs)",
+        "        global _r1a_x_phase",
+        "        _prior_phase=_r1a_x_phase",
+        "        _r1a_x_phase='release'",
+        "        _timing['release_call_before_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
+        "        try:",
+        "            _result=(_up if _release_motion else _r1a_direct_up)(*_args,**_kwargs)",
+        "        finally:",
+        "            _timing['release_call_after_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
+        "            _r1a_x_phase=_prior_phase",
         "        _r1a_sync_after_x_event('mouse_up')",
+        "        _timing['release_sync_completed_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
         "        _r1a_trace.append({'kind':'mouse_up','args':[_button]})",
         "        return _result",
+        "    _backend.fake_input=_r1a_traced_fake_input",
         "    _backend._mouseDown=_r1a_down",
         "    _backend._mouseUp=_r1a_up",
+        "    _timing['click_started_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
         "    try:",
         "        pyautogui.click(clicks=1,interval=0.05,button=_button)",
         "    finally:",
+        "        _timing['click_completed_guest_monotonic_ns']=_r1a_time.monotonic_ns()",
+        "        _timing['press_xtest_sequence']=[_item['event'] for _item in _r1a_x_injections if _item['sequence']>_timing['x_injection_start_sequence'] and _item['phase']=='press']",
+        "        _timing['release_xtest_sequence']=[_item['event'] for _item in _r1a_x_injections if _item['sequence']>_timing['x_injection_start_sequence'] and _item['phase']=='release']",
+        "        _primitive['press_xtest_sequence']=list(_timing['press_xtest_sequence'])",
+        "        _primitive['release_xtest_sequence']=list(_timing['release_xtest_sequence'])",
+        "        _r1a_click_timings.append(_timing)",
         "        _backend._mouseDown=_down",
         "        _backend._mouseUp=_up",
+        "        _backend.fake_input=_fake_input",
         "def _r1a_pointer_state():",
         "    _backend=pyautogui.platformModule",
         "    _backend._display.sync()",
@@ -472,7 +565,11 @@ def compile_atomic_guest_program(
             " 'operations':_r1a_trace,'semantic_operations':_r1a_semantic_operations,",
             " 'lowered_operations':_r1a_lowered_operations,",
             " 'backend_primitives':_r1a_backend_primitives,",
-            " 'x_event_sync_evidence':_r1a_x_event_sync}",
+            " 'x_event_sync_evidence':_r1a_x_event_sync,",
+            " 'click_backend':_r1a_click_backend,",
+            " 'x_injection_evidence':_r1a_x_injections,",
+            " 'x_injection_timestamps':_r1a_click_timings,",
+            " 'passive_x_observer':_r1a_passive_x_observer}",
             f"print({ATOMIC_RESULT_PREFIX!r}+json.dumps(_r1a_payload,separators=(',',':'),ensure_ascii=False))",
             "if _r1a_error is not None: sys.exit(1)",
         ]
@@ -526,12 +623,16 @@ class HttpVmTransport:
         self.execute_argv(["python", "-c", self._PREFIX + code])
 
     def execute_atomic(
-        self, operations: tuple[Operation, ...]
+        self,
+        operations: tuple[Operation, ...],
+        *,
+        click_backend: str = PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
     ) -> AtomicExecutionResult:
         program, expected_mask = compile_atomic_guest_program(
             operations,
             initial_buttons=set(self.audit.held_buttons),
             initial_keys=set(self.audit.held_keys),
+            click_backend=click_backend,
         )
         _, expected_keys = expected_atomic_input_state(
             operations,
@@ -559,6 +660,9 @@ class HttpVmTransport:
         raw_lowered = payload.get("lowered_operations")
         raw_primitives = payload.get("backend_primitives", [])
         raw_sync_evidence = payload.get("x_event_sync_evidence", [])
+        raw_x_injections = payload.get("x_injection_evidence", [])
+        raw_click_timings = payload.get("x_injection_timestamps", [])
+        passive_x_observer = payload.get("passive_x_observer")
         if (
             not isinstance(cursor, list)
             or len(cursor) != 2
@@ -571,10 +675,124 @@ class HttpVmTransport:
             or not isinstance(raw_lowered, list)
             or not isinstance(raw_primitives, list)
             or not isinstance(raw_sync_evidence, list)
+            or not isinstance(raw_x_injections, list)
+            or not isinstance(raw_click_timings, list)
+            or not isinstance(passive_x_observer, dict)
             or not all(isinstance(item, dict) for item in raw_primitives)
             or not all(isinstance(item, dict) for item in raw_sync_evidence)
+            or not all(isinstance(item, dict) for item in raw_x_injections)
+            or not all(isinstance(item, dict) for item in raw_click_timings)
         ):
             raise TransportError("atomic guest action returned invalid state")
+        if payload.get("click_backend") != click_backend:
+            raise TransportError("atomic guest action click backend drifted")
+        if passive_x_observer != {
+            "installed": False,
+            "observer_process_count": 0,
+            "additional_x_connection_count": 0,
+            "assessment": "omitted_not_demonstrably_non_perturbing",
+            "limitation": PASSIVE_X_OBSERVER_LIMITATION,
+        }:
+            raise TransportError("atomic guest action passive X observer evidence drifted")
+
+        def validate_guest_timestamps(
+            records: list[dict[str, Any]], *, fields: tuple[str, str]
+        ) -> None:
+            started_field, completed_field = fields
+            for record in records:
+                started = record.get(started_field)
+                completed = record.get(completed_field)
+                duration = record.get("duration_ns")
+                if (
+                    not isinstance(started, int)
+                    or not isinstance(completed, int)
+                    or completed < started
+                    or duration != completed - started
+                ):
+                    raise TransportError(
+                        "atomic guest action returned invalid monotonic timestamp evidence"
+                    )
+
+        validate_guest_timestamps(
+            raw_sync_evidence,
+            fields=(
+                "started_guest_monotonic_ns",
+                "completed_guest_monotonic_ns",
+            ),
+        )
+        validate_guest_timestamps(
+            raw_x_injections,
+            fields=(
+                "started_guest_monotonic_ns",
+                "completed_guest_monotonic_ns",
+            ),
+        )
+        if [item.get("sequence") for item in raw_x_injections] != list(
+            range(1, len(raw_x_injections) + 1)
+        ):
+            raise TransportError("atomic guest action X injection sequence drifted")
+        expected_click_count = sum(
+            operation.kind == "click" for operation in lower_guest_operations(operations)
+        )
+        expected_press_sequence = ["motion_notify", "button_press"]
+        expected_release_sequence = (
+            ["motion_notify", "button_release"]
+            if click_backend == PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND
+            else ["button_release"]
+        )
+        click_primitives = [
+            primitive
+            for primitive in raw_primitives
+            if primitive.get("kind") == "click"
+        ]
+        if len(click_primitives) != expected_click_count:
+            raise TransportError("atomic guest action click primitive count drifted")
+        for primitive in click_primitives:
+            if (
+                primitive.get("click_backend") != click_backend
+                or primitive.get("release_side_motion_notify")
+                != (click_backend == PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND)
+                or primitive.get("injection_attempt_count") != 1
+                or primitive.get("retry_count") != 0
+                or primitive.get("dwell_ms") != int(CLICK_DWELL_S * 1000)
+                or primitive.get("press_xtest_sequence") != expected_press_sequence
+                or primitive.get("release_xtest_sequence")
+                != expected_release_sequence
+            ):
+                raise TransportError("atomic guest action click primitive drifted")
+        if len(raw_click_timings) != expected_click_count:
+            raise TransportError("atomic guest action click timing count drifted")
+        for timing in raw_click_timings:
+            required_timestamps = (
+                "click_started_guest_monotonic_ns",
+                "press_call_before_guest_monotonic_ns",
+                "press_call_after_guest_monotonic_ns",
+                "press_sync_completed_guest_monotonic_ns",
+                "dwell_started_guest_monotonic_ns",
+                "dwell_completed_guest_monotonic_ns",
+                "release_call_before_guest_monotonic_ns",
+                "release_call_after_guest_monotonic_ns",
+                "release_sync_completed_guest_monotonic_ns",
+                "click_completed_guest_monotonic_ns",
+            )
+            values = [timing.get(field) for field in required_timestamps]
+            if (
+                timing.get("click_backend") != click_backend
+                or not isinstance(timing.get("backend_identity"), str)
+                or timing.get("release_side_motion_notify")
+                != (click_backend == PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND)
+                or timing.get("clock") != "time.monotonic_ns"
+                or timing.get("dwell_requested_ns") != int(CLICK_DWELL_S * 1e9)
+                or timing.get("press_xtest_sequence") != expected_press_sequence
+                or timing.get("release_xtest_sequence")
+                != expected_release_sequence
+                or any(not isinstance(value, int) for value in values)
+                or values != sorted(values)
+                or timing.get("dwell_duration_ns")
+                != timing.get("dwell_completed_guest_monotonic_ns")
+                - timing.get("dwell_started_guest_monotonic_ns")
+            ):
+                raise TransportError("atomic guest action click timing evidence drifted")
 
         def parse_operations(raw: list[Any], label: str) -> tuple[Operation, ...]:
             parsed: list[Operation] = []
@@ -639,6 +857,10 @@ class HttpVmTransport:
             lowered_operations=lowered,
             backend_primitives=tuple(dict(item) for item in raw_primitives),
             x_event_sync_evidence=tuple(dict(item) for item in raw_sync_evidence),
+            click_backend=click_backend,
+            x_injection_evidence=tuple(dict(item) for item in raw_x_injections),
+            x_injection_timestamps=tuple(dict(item) for item in raw_click_timings),
+            passive_x_observer=dict(passive_x_observer),
         )
         self.audit.operations.extend(traced)
         self.audit.held_buttons = {
