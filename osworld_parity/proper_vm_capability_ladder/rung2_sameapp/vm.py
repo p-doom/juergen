@@ -168,8 +168,12 @@ sleep 0.75
 
 def _chrome_html(fixture: Fixture) -> str:
     p = fixture.params
+    initial_scroll_y = int(p.get("initial_scroll_y", 0))
+    # Down-scroll tasks reveal a control below the fold; up-scroll tasks start
+    # below a control near the top and reveal it while returning upward.
+    settings_margin = 400 if p.get("scroll_direction") == "up" else 900
     return f"""<!doctype html><meta charset="utf-8"><title>Same-app settings</title>
-<style>body{{font:22px sans-serif;margin:0}}nav{{position:sticky;top:0;background:white;padding:20px}}button{{margin:8px;padding:14px}}main{{height:1700px;padding:40px}}#settings{{margin-top:900px}}</style>
+<style>body{{font:22px sans-serif;margin:0}}nav{{position:sticky;top:0;background:white;padding:20px}}button{{margin:8px;padding:14px}}main{{height:1700px;padding:40px}}#settings{{margin-top:{settings_margin}px}}</style>
 <nav><button id="nav">{p['section']}</button><button id="decoy_nav">appearance</button></nav>
 <main><h1>Local deterministic Chrome settings</h1><div id="settings"><label><input id="toggle" type="checkbox">{p['setting']}</label><br><label><input id="decoy_toggle" type="checkbox">Unrelated setting</label></div></main>
 <script>
@@ -178,7 +182,8 @@ const send=()=>fetch('/event',{{method:'POST',headers:{{'Content-Type':'applicat
  geometry:Object.fromEntries(['nav','decoy_nav','toggle','decoy_toggle'].map(id=>{{let e=document.getElementById(id),r=e.getBoundingClientRect(),top=Math.max(0,outerHeight-innerHeight);return [id,[Math.round(screenX+r.left+r.width/2),Math.round(screenY+top+r.top+r.height/2)]]}}).concat([['scroll_surface',[Math.round(screenX+innerWidth/2),Math.round(screenY+(outerHeight-innerHeight)+innerHeight/2)]]]))
 }})}});
 nav.onclick=()=>{{window.section={json.dumps(str(p['section']))};send()}};decoy_nav.onclick=()=>{{window.section='appearance';send()}};
-toggle.onchange=send;decoy_toggle.onchange=send;addEventListener('scroll',send,{{passive:true}});addEventListener('load',()=>requestAnimationFrame(send));
+toggle.onchange=send;decoy_toggle.onchange=send;addEventListener('scroll',send,{{passive:true}});
+addEventListener('load',()=>requestAnimationFrame(()=>{{scrollTo(0,{initial_scroll_y});requestAnimationFrame(send)}}));
 </script>"""
 
 

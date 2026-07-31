@@ -15,6 +15,19 @@ seal. `program.py` is a runtime bridge to the existing rung-2 symbolic compiler;
 native absolute and compact raw-relative actions are never stored in task
 identity.
 
+Task budgets deliberately separate `semantic_steps`, emitted
+`primitive_actions`, and lowered `primitive_events`, keyed by the real compiler
+interface IDs `native_absolute_sequence_v1` and `compact_raw_phaseb_v1`. For
+example, Files has three semantic steps but permits eight compact action lines
+and 22 lowered compact events, preserving explicit hold/move/release and rename.
+
+Coordinates are never seeded or invented. Each task carries a versioned
+`geometry_contract` and live-cursor contract. Setup must return exact initial
+state plus all required targets from the existing VM probes; a second reset must
+return identical geometry and cursor. Only then does `program.compile_program`
+bind the live coordinates. Cursor history stores semantic refs, and evaluated
+rows log each ref with its resolved live value.
+
 The initial materialized matrix contains one train and one development seed for
 each family:
 
@@ -36,15 +49,26 @@ Every fixture must reject exact reset, reject its deterministic near miss,
 accept gold, reproduce the same reset signature, run its final oracle in a new
 process, and finish with zero held inputs. Writer/Calc/Files/Chrome delegate to
 the existing same-app state oracles; VS Code delegates to the existing UTF-8
-file oracle.
+file oracle. `state_extraction.py` independently reads ODF, filesystem, Chrome
+event-state, or UTF-8 artifacts without consulting expected values. The
+declared verifier is the CLI in `oracle.py`; evaluator-owned processes may run
+final mode or semantic mode with `--expected-step-index` and
+`--expected-target-ref` and verify PID, identity, and semantic-state hash.
+Model termination is not a task-state transition and cannot set `MOUSE_SOLVED`.
+
+The upward Chrome fixture establishes its nonzero initial offset in page load
+with `scrollTo`, reports it through the local event endpoint, and cannot pass
+runtime setup validation if the probed offset differs.
 
 ## Split boundary
 
-Only `manifests/train.json` and `manifests/development.json` exist. The family
-registry commits to a future sealed count per family, but assigns no sealed
-seeds or inputs. `load_manifest("sealed_eval")` rejects before any file access.
-No official task IDs, benchmark assets, GPU recipes, or training stages are in
-this directory.
+Only `manifests/train.json` and `manifests/development.json` exist. They share
+the five family IDs and are explicitly a within-family, disjoint-seed
+development split—not family-heldout validation. Future family-heldout and
+sealed sets require new family IDs assigned externally and disjointly; neither
+set is materialized and neither has seeds or inputs. `load_manifest("sealed_eval")`
+rejects before any file access. No official task IDs, benchmark assets, GPU
+recipes, or training stages are in this directory.
 
 Run the local contract suite with:
 

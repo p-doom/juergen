@@ -46,8 +46,8 @@ class CursorMilestone:
     prefix_length: int
     step_id: int
     target_ref: str
-    cursor_before: tuple[int, int]
-    cursor_after: tuple[int, int]
+    cursor_before_ref: str
+    cursor_after_ref: str
 
 
 @dataclass(frozen=True)
@@ -71,14 +71,15 @@ class SemanticTask:
     natural_multistep: bool
     semantic_steps: tuple[SemanticStep, ...]
     semantic_step_count: int
-    max_action_turns: int
+    budgets: dict[str, Any]
     snapshot: dict[str, Any]
     assets: tuple[AssetSpec, ...]
     params: dict[str, Any]
     expected: dict[str, Any]
     near_miss: dict[str, Any]
     verifier: dict[str, Any]
-    initial_cursor: tuple[int, int]
+    geometry_contract: dict[str, Any]
+    initial_cursor: dict[str, Any]
     gold_cursor_history: tuple[CursorMilestone, ...]
     coverage: dict[str, Any]
     exclusions: tuple[str, ...]
@@ -104,8 +105,15 @@ class SemanticTask:
             raise CurriculumSchemaError(f"{self.task_id}: semantic-step count mismatch")
         if not 2 <= self.semantic_step_count <= 4:
             raise CurriculumSchemaError(f"{self.task_id}: task must have 2-4 semantic steps")
-        if self.max_action_turns < self.semantic_step_count:
-            raise CurriculumSchemaError(f"{self.task_id}: action horizon is too small")
+        if self.budgets.get("semantic_steps") != self.semantic_step_count:
+            raise CurriculumSchemaError(f"{self.task_id}: semantic budget mismatch")
+        arms = {"native_absolute_sequence_v1", "compact_raw_phaseb_v1"}
+        for field in ("primitive_actions", "primitive_events"):
+            values = self.budgets.get(field)
+            if not isinstance(values, dict) or set(values) != arms:
+                raise CurriculumSchemaError(f"{self.task_id}: {field} budget mismatch")
+            if any(not isinstance(value, int) or value < 1 for value in values.values()):
+                raise CurriculumSchemaError(f"{self.task_id}: invalid {field} budget")
         if tuple(step.step_id for step in self.semantic_steps) != tuple(
             range(1, self.semantic_step_count + 1)
         ):
@@ -121,14 +129,36 @@ class SemanticTask:
                 raise CurriculumSchemaError(
                     f"{self.task_id}: cursor milestone does not identify its semantic step"
                 )
+            if not cursor.cursor_before_ref or not cursor.cursor_after_ref:
+                raise CurriculumSchemaError(f"{self.task_id}: cursor refs are missing")
+        if self.geometry_contract.get("source") != "live_probe":
+            raise CurriculumSchemaError(f"{self.task_id}: geometry is not live-probed")
+        if not self.geometry_contract.get("probe_version"):
+            raise CurriculumSchemaError(f"{self.task_id}: geometry probe is unversioned")
+        if self.initial_cursor != {
+            "source": "live_probe",
+            "probe_version": "rung1_cursor_position_v1",
+        }:
+            raise CurriculumSchemaError(f"{self.task_id}: cursor source is not live-probed")
         if self.snapshot.get("id") != "osworld_ready":
             raise CurriculumSchemaError(f"{self.task_id}: snapshot id drift")
         if self.snapshot.get("reset_strategy") != "restore_snapshot_then_seeded_setup":
             raise CurriculumSchemaError(f"{self.task_id}: reset strategy drift")
         if self.verifier.get("fresh_process") is not True:
             raise CurriculumSchemaError(f"{self.task_id}: final verifier is not isolated")
+        if self.verifier.get("entrypoint") != "main" or self.verifier.get(
+            "result_schema"
+        ) != "semantic_oracle_result_v2":
+            raise CurriculumSchemaError(f"{self.task_id}: verifier API drift")
+        if self.verifier.get("state_extractor_entrypoint") != "extract_state":
+            raise CurriculumSchemaError(f"{self.task_id}: state extractor API drift")
         if tuple(self.exclusions) != EXCLUSIONS:
             raise CurriculumSchemaError(f"{self.task_id}: unsupported-action exclusions drift")
+        if self.transport_requirements.get("action_interface_ids") != [
+            "native_absolute_sequence_v1",
+            "compact_raw_phaseb_v1",
+        ]:
+            raise CurriculumSchemaError(f"{self.task_id}: action interface ID drift")
         if self.reset_contract != {
             "reset_reject": True,
             "near_miss_reject": True,
@@ -188,7 +218,7 @@ def seal_task(values: dict[str, Any]) -> SemanticTask:
             for item in unsigned["semantic_steps"]
         ),
         semantic_step_count=int(unsigned["semantic_step_count"]),
-        max_action_turns=int(unsigned["max_action_turns"]),
+        budgets=dict(unsigned["budgets"]),
         snapshot=dict(unsigned["snapshot"]),
         assets=tuple(
             AssetSpec(
@@ -204,14 +234,15 @@ def seal_task(values: dict[str, Any]) -> SemanticTask:
         expected=dict(unsigned["expected"]),
         near_miss=dict(unsigned["near_miss"]),
         verifier=dict(unsigned["verifier"]),
-        initial_cursor=tuple(unsigned["initial_cursor"]),
+        geometry_contract=dict(unsigned["geometry_contract"]),
+        initial_cursor=dict(unsigned["initial_cursor"]),
         gold_cursor_history=tuple(
             CursorMilestone(
                 prefix_length=int(item["prefix_length"]),
                 step_id=int(item["step_id"]),
                 target_ref=str(item["target_ref"]),
-                cursor_before=tuple(item["cursor_before"]),
-                cursor_after=tuple(item["cursor_after"]),
+                cursor_before_ref=str(item["cursor_before_ref"]),
+                cursor_after_ref=str(item["cursor_after_ref"]),
             )
             for item in unsigned["gold_cursor_history"]
         ),

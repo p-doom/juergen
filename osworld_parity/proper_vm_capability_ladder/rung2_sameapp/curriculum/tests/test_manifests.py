@@ -6,6 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.actions import (
+    ACTION_SCHEMAS,
+)
 from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.manifests import (
     ROOT,
     load_family_commitments,
@@ -32,11 +35,18 @@ def test_only_train_and_development_are_materialized() -> None:
 def test_family_registry_has_commitments_but_zero_sealed_inputs() -> None:
     registry = load_family_commitments()
     assert registry["held_inputs_present"] is False
+    assert registry["split_design"]["development_claim"] == "within_family_only"
     for family in registry["families"]:
-        sealed = family["split_commitments"]["sealed_eval"]
-        assert sealed["materialized"] is False
-        assert sealed["inputs_present"] is False
-        assert "seed" not in sealed
+        assert set(family["within_family_split_commitments"]) == {
+            "train",
+            "development",
+        }
+        assert family["eligible_for_future_family_holdout"] is False
+    for commitment in registry["future_family_splits"].values():
+        assert commitment["materialized"] is False
+        assert commitment["inputs_present"] is False
+        assert "disjoint" in commitment["family_id_assignment"]
+        assert "seed" not in commitment
 
 
 def test_materialized_tasks_cover_phase_b_and_edge_labels() -> None:
@@ -47,7 +57,17 @@ def test_materialized_tasks_cover_phase_b_and_edge_labels() -> None:
     assert all(2 <= task.semantic_step_count <= 4 for task in tasks)
     assert all(tuple(task.exclusions) == EXCLUSIONS for task in tasks)
     assert all(task.verifier["fresh_process"] is True for task in tasks)
+    assert all(task.verifier["entrypoint"] == "main" for task in tasks)
+    assert all(task.verifier["state_extractor_entrypoint"] == "extract_state" for task in tasks)
     assert all(task.snapshot["id"] == "osworld_ready" for task in tasks)
+    assert all(task.geometry_contract["source"] == "live_probe" for task in tasks)
+    assert all(task.initial_cursor["source"] == "live_probe" for task in tasks)
+    assert all("geometry" not in task.params for task in tasks)
+    assert all(
+        set(task.budgets["primitive_actions"]) == set(ACTION_SCHEMAS)
+        and set(task.budgets["primitive_events"]) == set(ACTION_SCHEMAS)
+        for task in tasks
+    )
     assert all(task.fixture_sha256 for task in tasks)
     assert {task.app for task in tasks} == set(APPS)
     capabilities = {
@@ -82,3 +102,5 @@ def test_task_schema_has_action_independent_correlatable_history() -> None:
                 milestone.step_id,
                 milestone.target_ref,
             )
+            assert milestone.cursor_before_ref
+            assert milestone.cursor_after_ref

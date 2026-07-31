@@ -33,6 +33,9 @@ class OracleResult:
     fixture_sha256: str
     oracle_status: str
     MOUSE_SOLVED: bool
+    semantic_step_index: int | None
+    matched_target_ref: str | None
+    semantic_state_sha256: str
     reason: str
     oracle_pid: int
 
@@ -41,14 +44,14 @@ def _content_sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _sameapp_fixture(task: SemanticTask) -> SameAppFixture:
+def as_sameapp_fixture(task: SemanticTask) -> SameAppFixture:
     return SameAppFixture(
         id=task.task_id,
         app=task.app,
         split=task.split,
         parameter_seed=task.parameter_seed,
         semantic_steps=task.semantic_step_count,
-        horizon=task.max_action_turns,
+        horizon=max(task.budgets["primitive_actions"].values()),
         instruction=task.instruction,
         params=task.params,
         expected=task.expected,
@@ -57,13 +60,13 @@ def _sameapp_fixture(task: SemanticTask) -> SameAppFixture:
     )
 
 
-def _vscode_fixture(task: SemanticTask) -> RealAppFixture:
+def as_vscode_fixture(task: SemanticTask) -> RealAppFixture:
     return RealAppFixture(
         id=task.task_id,
         template="vscode_focus_type",
         split=task.split,
         parameter_seed=task.parameter_seed,
-        horizon=task.max_action_turns,
+        horizon=max(task.budgets["primitive_actions"].values()),
         instruction=task.instruction,
         params=task.params,
         expected=task.expected,
@@ -72,9 +75,15 @@ def _vscode_fixture(task: SemanticTask) -> RealAppFixture:
     )
 
 
+# Compatibility aliases for the first scaffold consumer. New integrations
+# should use the public ``as_*`` names above.
+_sameapp_fixture = as_sameapp_fixture
+_vscode_fixture = as_vscode_fixture
+
+
 def initial_state(task: SemanticTask) -> dict[str, Any]:
     if task.app != "vscode":
-        state = sameapp_initial_state(_sameapp_fixture(task))
+        state = sameapp_initial_state(as_sameapp_fixture(task))
     else:
         content = str(task.params["initial_text"])
         state = {
@@ -85,7 +94,6 @@ def initial_state(task: SemanticTask) -> dict[str, Any]:
             "file_name": task.params["file_name"],
             "content_b64": base64.b64encode(content.encode("utf-8")).decode("ascii"),
             "content_sha256": _content_sha256(content),
-            "saved": False,
         }
     state["held_inputs"] = []
     return state
@@ -93,7 +101,7 @@ def initial_state(task: SemanticTask) -> dict[str, Any]:
 
 def scripted_state(task: SemanticTask, *, near_miss: bool) -> dict[str, Any]:
     if task.app != "vscode":
-        state = sameapp_scripted_state(_sameapp_fixture(task), near_miss=near_miss)
+        state = sameapp_scripted_state(as_sameapp_fixture(task), near_miss=near_miss)
     else:
         expected = task.near_miss if near_miss else task.expected
         content = str(expected["text"])
@@ -105,7 +113,6 @@ def scripted_state(task: SemanticTask, *, near_miss: bool) -> dict[str, Any]:
             "file_name": task.params["file_name"],
             "content_b64": base64.b64encode(content.encode("utf-8")).decode("ascii"),
             "content_sha256": _content_sha256(content),
-            "saved": bool(expected.get("saved", True)),
         }
     state["held_inputs"] = []
     return state
@@ -119,12 +126,16 @@ def reset_signature(task: SemanticTask, state: dict[str, Any]) -> str:
 
 
 def evaluate_state(task: SemanticTask, state: dict[str, Any]) -> OracleResult:
+    state_sha256 = hashlib.sha256(canonical_json(state)).hexdigest()
     if state.get("held_inputs") != []:
         return OracleResult(
             task.task_id,
             task.fixture_sha256,
             "ok",
             False,
+            None,
+            None,
+            state_sha256,
             "final input state is not fully released",
             os.getpid(),
         )
@@ -134,26 +145,103 @@ def evaluate_state(task: SemanticTask, state: dict[str, Any]) -> OracleResult:
             task.fixture_sha256,
             "error",
             False,
+            None,
+            None,
+            state_sha256,
             "task identity or fixture seal mismatch",
             os.getpid(),
         )
     legacy = (
-        evaluate_realapp_state(_vscode_fixture(task), state)
+        evaluate_realapp_state(as_vscode_fixture(task), state)
         if task.app == "vscode"
-        else evaluate_sameapp_state(_sameapp_fixture(task), state)
+        else evaluate_sameapp_state(as_sameapp_fixture(task), state)
     )
     return OracleResult(
         task.task_id,
         task.fixture_sha256,
         legacy.oracle_status,
         legacy.MOUSE_SOLVED,
+        None,
+        None,
+        state_sha256,
         legacy.reason,
         os.getpid(),
     )
 
 
+def evaluate_semantic_state(
+    task: SemanticTask,
+    state: dict[str, Any],
+    *,
+    expected_step_index: int,
+    expected_target_ref: str,
+) -> OracleResult:
+    """Verify a live semantic cursor transition from task-owned history."""
+
+    state_sha256 = hashlib.sha256(canonical_json(state)).hexdigest()
+    try:
+        if state.get("task_id") != task.task_id or state.get("fixture_sha256") != task.fixture_sha256:
+            raise ValueError("task identity or fixture seal mismatch")
+        if state.get("held_inputs") != []:
+            raise ValueError("semantic state has held inputs")
+        if not 1 <= expected_step_index <= len(task.gold_cursor_history):
+            raise ValueError("semantic step index is outside task history")
+        milestone = task.gold_cursor_history[expected_step_index - 1]
+        if milestone.step_id != expected_step_index:
+            raise ValueError("task semantic history is not index-aligned")
+        if milestone.target_ref != expected_target_ref:
+            raise ValueError("expected target does not match task-owned history")
+        geometry = state.get("geometry")
+        if not isinstance(geometry, dict):
+            raise ValueError("live geometry is missing")
+        if milestone.cursor_after_ref == "runtime.initial_cursor":
+            resolved = state.get("initial_cursor")
+        else:
+            prefix = "geometry."
+            if not milestone.cursor_after_ref.startswith(prefix):
+                raise ValueError("unsupported cursor reference")
+            resolved = geometry.get(milestone.cursor_after_ref[len(prefix) :])
+        cursor = state.get("cursor")
+        if not isinstance(resolved, (list, tuple)) or not isinstance(cursor, (list, tuple)):
+            raise ValueError("live cursor resolution is missing")
+        solved = list(cursor) == list(resolved)
+        reason = (
+            "live cursor matches task-owned semantic target"
+            if solved
+            else "live cursor does not match task-owned semantic target"
+        )
+        return OracleResult(
+            task.task_id,
+            task.fixture_sha256,
+            "ok",
+            solved,
+            expected_step_index,
+            milestone.target_ref if solved else None,
+            state_sha256,
+            reason,
+            os.getpid(),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        return OracleResult(
+            task.task_id,
+            task.fixture_sha256,
+            "error",
+            False,
+            expected_step_index,
+            None,
+            state_sha256,
+            str(exc),
+            os.getpid(),
+        )
+
+
 def evaluate_in_fresh_process(
-    task: SemanticTask, state: dict[str, Any], *, timeout_s: float = 30.0
+    task: SemanticTask,
+    state: dict[str, Any],
+    *,
+    expected_step_index: int | None = None,
+    expected_target_ref: str | None = None,
+    timeout_s: float = 30.0,
 ) -> OracleResult:
     fd, raw_path = tempfile.mkstemp(prefix="r2_semantic_oracle_", suffix=".json")
     path = Path(raw_path)
@@ -161,8 +249,7 @@ def evaluate_in_fresh_process(
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(state, handle, ensure_ascii=False, sort_keys=True)
-        completed = subprocess.run(
-            [
+        command = [
                 sys.executable,
                 "-m",
                 "osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.oracle",
@@ -172,7 +259,20 @@ def evaluate_in_fresh_process(
                 task.task_id,
                 "--state",
                 str(path),
-            ],
+            ]
+        if expected_step_index is not None:
+            if expected_target_ref is None:
+                raise ValueError("semantic oracle requires expected_target_ref")
+            command.extend(
+                [
+                    "--expected-step-index",
+                    str(expected_step_index),
+                    "--expected-target-ref",
+                    expected_target_ref,
+                ]
+            )
+        completed = subprocess.run(
+            command,
             check=False,
             capture_output=True,
             text=True,
@@ -215,10 +315,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--split", required=True)
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--state", type=Path, required=True)
+    parser.add_argument("--expected-step-index", type=int)
+    parser.add_argument("--expected-target-ref")
     args = parser.parse_args(argv)
     task = load_manifest(args.split).by_id(args.task_id)
     state = json.loads(args.state.read_text(encoding="utf-8"))
-    result = evaluate_state(task, state)
+    if (args.expected_step_index is None) != (args.expected_target_ref is None):
+        parser.error("semantic mode requires both expected-step-index and expected-target-ref")
+    result = (
+        evaluate_semantic_state(
+            task,
+            state,
+            expected_step_index=args.expected_step_index,
+            expected_target_ref=args.expected_target_ref,
+        )
+        if args.expected_step_index is not None
+        else evaluate_state(task, state)
+    )
     print(json.dumps(asdict(result), ensure_ascii=False, sort_keys=True))
     return 0 if result.oracle_status == "ok" else 3
 

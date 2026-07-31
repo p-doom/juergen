@@ -20,14 +20,27 @@ def _tasks():
     ]
 
 
+def _live_bindings(task):
+    geometry = {
+        name: (200 + index * 70, 200 + index * 40)
+        for index, name in enumerate(task.geometry_contract["required_targets"])
+    }
+    return geometry, (50, 50)
+
+
 def test_gold_and_near_miss_programs_compile_for_both_transports() -> None:
     for task in _tasks():
         for near_miss in (False, True):
             program = build_program(task, near_miss=near_miss)
-            assert len(program.turns) <= task.max_action_turns
+            assert len(program.turns) <= max(task.budgets["primitive_actions"].values())
+            geometry, initial_cursor = _live_bindings(task)
             for action_schema in ACTION_SCHEMAS:
                 compiled = compile_program(
-                    task, action_schema, near_miss=near_miss
+                    task,
+                    action_schema,
+                    geometry=geometry,
+                    initial_cursor=initial_cursor,
+                    near_miss=near_miss,
                 )
                 assert len(compiled) == len(program.turns)
 
@@ -36,12 +49,24 @@ def test_compact_program_preserves_signed_scroll_drag_and_unicode_type() -> None
     tasks = _tasks()
     chrome = [task for task in tasks if task.app == "chrome"]
     assert {
-        int(compile_program(task, "compact_raw_phaseb_v1")[1].split()[2])
+        int(
+            compile_program(
+                task,
+                "compact_raw_phaseb_v1",
+                geometry=_live_bindings(task)[0],
+                initial_cursor=_live_bindings(task)[1],
+            )[1].split()[2]
+        )
         for task in chrome
     } == {-6, 6}
 
     files = next(task for task in tasks if task.app == "files")
-    file_actions = compile_program(files, "compact_raw_phaseb_v1")
+    file_actions = compile_program(
+        files,
+        "compact_raw_phaseb_v1",
+        geometry=_live_bindings(files)[0],
+        initial_cursor=_live_bindings(files)[1],
+    )
     press = next(index for index, action in enumerate(file_actions) if "+LMB" in action and "-LMB" not in action)
     release = next(index for index, action in enumerate(file_actions) if "-LMB" in action and "+LMB" not in action)
     assert release - press == 2
@@ -49,7 +74,12 @@ def test_compact_program_preserves_signed_scroll_drag_and_unicode_type() -> None
     vscode = next(task for task in tasks if task.app == "vscode")
     assert any(
         "Zürich μ" in action
-        for action in compile_program(vscode, "compact_raw_phaseb_v1")
+        for action in compile_program(
+            vscode,
+            "compact_raw_phaseb_v1",
+            geometry=_live_bindings(vscode)[0],
+            initial_cursor=_live_bindings(vscode)[1],
+        )
     )
 
 

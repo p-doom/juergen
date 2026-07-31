@@ -7,8 +7,8 @@
   "required": [
     "schema_version", "task_id", "family_id", "app", "split",
     "parameter_seed", "instruction", "natural_multistep", "semantic_steps",
-    "semantic_step_count", "max_action_turns", "snapshot", "assets",
-    "params", "expected", "near_miss", "verifier", "initial_cursor",
+    "semantic_step_count", "budgets", "snapshot", "assets",
+    "params", "expected", "near_miss", "verifier", "geometry_contract", "initial_cursor",
     "gold_cursor_history", "coverage", "exclusions",
     "transport_requirements", "reset_contract", "fixture_sha256"
   ],
@@ -39,7 +39,15 @@
       }
     },
     "semantic_step_count": {"type": "integer", "minimum": 2, "maximum": 4},
-    "max_action_turns": {"type": "integer", "minimum": 2},
+    "budgets": {
+      "type": "object",
+      "required": ["semantic_steps", "primitive_actions", "primitive_events"],
+      "properties": {
+        "semantic_steps": {"type": "integer", "minimum": 2, "maximum": 4},
+        "primitive_actions": {"$ref": "#/$defs/interfaceCounts"},
+        "primitive_events": {"$ref": "#/$defs/interfaceCounts"}
+      }
+    },
     "snapshot": {
       "type": "object",
       "required": ["id", "reset_strategy", "fresh_process_per_episode"],
@@ -55,26 +63,49 @@
     "near_miss": {"type": "object"},
     "verifier": {
       "type": "object",
-      "required": ["kind", "module", "fresh_process", "policy_visible"],
+      "required": ["kind", "module", "entrypoint", "result_schema", "state_extractor_module", "state_extractor_entrypoint", "fresh_process", "policy_visible"],
       "properties": {
         "kind": {"type": "string"},
         "module": {"type": "string"},
+        "entrypoint": {"const": "main"},
+        "result_schema": {"const": "semantic_oracle_result_v2"},
+        "state_extractor_module": {"type": "string"},
+        "state_extractor_entrypoint": {"const": "extract_state"},
         "fresh_process": {"const": true},
         "policy_visible": {"const": false}
       }
     },
-    "initial_cursor": {"$ref": "#/$defs/point"},
+    "geometry_contract": {
+      "type": "object",
+      "required": ["source", "probe_version", "state_probe_version", "required_targets", "target_bindings", "runtime_validation"],
+      "properties": {
+        "source": {"const": "live_probe"},
+        "probe_version": {"type": "string"},
+        "state_probe_version": {"type": "string"},
+        "required_targets": {"type": "array", "items": {"type": "string"}},
+        "target_bindings": {"type": "object"},
+        "runtime_validation": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "initial_cursor": {
+      "type": "object",
+      "required": ["source", "probe_version"],
+      "properties": {
+        "source": {"const": "live_probe"},
+        "probe_version": {"const": "rung1_cursor_position_v1"}
+      }
+    },
     "gold_cursor_history": {
       "type": "array", "minItems": 2, "maxItems": 4,
       "items": {
         "type": "object",
-        "required": ["prefix_length", "step_id", "target_ref", "cursor_before", "cursor_after"],
+        "required": ["prefix_length", "step_id", "target_ref", "cursor_before_ref", "cursor_after_ref"],
         "properties": {
           "prefix_length": {"type": "integer", "minimum": 1, "maximum": 4},
           "step_id": {"type": "integer", "minimum": 1, "maximum": 4},
           "target_ref": {"type": "string"},
-          "cursor_before": {"$ref": "#/$defs/point"},
-          "cursor_after": {"$ref": "#/$defs/point"}
+          "cursor_before_ref": {"type": "string"},
+          "cursor_after_ref": {"type": "string"}
         }
       }
     },
@@ -87,6 +118,15 @@
     "fixture_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
   },
   "$defs": {
+    "interfaceCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["native_absolute_sequence_v1", "compact_raw_phaseb_v1"],
+      "properties": {
+        "native_absolute_sequence_v1": {"type": "integer", "minimum": 1},
+        "compact_raw_phaseb_v1": {"type": "integer", "minimum": 1}
+      }
+    },
     "point": {
       "type": "array", "prefixItems": [{"type": "integer"}, {"type": "integer"}],
       "minItems": 2, "maxItems": 2

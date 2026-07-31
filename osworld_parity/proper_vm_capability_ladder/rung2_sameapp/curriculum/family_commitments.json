@@ -16,82 +16,76 @@
     "horizontal_scroll",
     "timing_sensitive_double_click"
   ],
+  "split_design": {
+    "train_development_relationship": "within_family_disjoint_seed_split",
+    "shared_family_ids": true,
+    "parameter_seeds_disjoint": true,
+    "development_claim": "within_family_only"
+  },
+  "future_family_splits": {
+    "family_heldout_validation": {
+      "materialized": false,
+      "family_id_assignment": "future_external_sealer_disjoint_from_materialized",
+      "inputs_present": false
+    },
+    "sealed_eval": {
+      "materialized": false,
+      "family_id_assignment": "future_external_sealer_disjoint_from_all_prior_families",
+      "task_count_commitment_per_family": 8,
+      "inputs_present": false
+    }
+  },
   "families": [
     {
       "family_id": "writer_replace_format_save_v1",
       "app": "writer",
       "semantic_step_range": [3, 3],
-      "split_commitments": {
+      "within_family_split_commitments": {
         "train": {"materialized": true, "task_count": 1},
-        "development": {"materialized": true, "task_count": 1},
-        "sealed_eval": {
-          "materialized": false,
-          "task_count_commitment": 8,
-          "seed_assignment": "future_external_sealer_only",
-          "inputs_present": false
-        }
-      }
+        "development": {"materialized": true, "task_count": 1}
+      },
+      "eligible_for_future_family_holdout": false
     },
     {
       "family_id": "calc_formula_confirm_save_v1",
       "app": "calc",
       "semantic_step_range": [4, 4],
-      "split_commitments": {
+      "within_family_split_commitments": {
         "train": {"materialized": true, "task_count": 1},
-        "development": {"materialized": true, "task_count": 1},
-        "sealed_eval": {
-          "materialized": false,
-          "task_count_commitment": 8,
-          "seed_assignment": "future_external_sealer_only",
-          "inputs_present": false
-        }
-      }
+        "development": {"materialized": true, "task_count": 1}
+      },
+      "eligible_for_future_family_holdout": false
     },
     {
       "family_id": "files_drag_rename_v1",
       "app": "files",
       "semantic_step_range": [3, 3],
-      "split_commitments": {
+      "within_family_split_commitments": {
         "train": {"materialized": true, "task_count": 1},
-        "development": {"materialized": true, "task_count": 1},
-        "sealed_eval": {
-          "materialized": false,
-          "task_count_commitment": 8,
-          "seed_assignment": "future_external_sealer_only",
-          "inputs_present": false
-        }
-      }
+        "development": {"materialized": true, "task_count": 1}
+      },
+      "eligible_for_future_family_holdout": false
     },
     {
       "family_id": "chrome_navigate_signed_scroll_toggle_v1",
       "app": "chrome",
       "semantic_step_range": [3, 3],
-      "split_commitments": {
+      "within_family_split_commitments": {
         "train": {"materialized": true, "task_count": 1},
-        "development": {"materialized": true, "task_count": 1},
-        "sealed_eval": {
-          "materialized": false,
-          "task_count_commitment": 8,
-          "seed_assignment": "future_external_sealer_only",
-          "inputs_present": false
-        }
-      }
+        "development": {"materialized": true, "task_count": 1}
+      },
+      "eligible_for_future_family_holdout": false
     },
     {
       "family_id": "vscode_unicode_replace_save_v1",
       "app": "vscode",
       "semantic_step_range": [3, 3],
-      "split_commitments": {
+      "within_family_split_commitments": {
         "train": {"materialized": true, "task_count": 1},
-        "development": {"materialized": true, "task_count": 1},
-        "sealed_eval": {
-          "materialized": false,
-          "task_count_commitment": 8,
-          "seed_assignment": "future_external_sealer_only",
-          "inputs_present": false
-        }
-      }
+        "development": {"materialized": true, "task_count": 1}
+      },
+      "eligible_for_future_family_holdout": false
     }
   ],
-  "registry_payload_sha256": "948bbc3c32ba921e1b99ec993ed40d8250e6c7838ef65d77b12f5583d0c975f8"
+  "registry_payload_sha256": "a0a2f55049f7b96af09a0d6e2501218841935b6964deb4c8122cba27e8227e3b"
 }

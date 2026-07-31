@@ -23,7 +23,15 @@ Stage-4 teacher-SFT branch. It intentionally reuses these contracts:
 
 The old rung-2 package includes an earlier sealed-eval manifest. This scaffold
 does not load, copy, enumerate, hash, or depend on that file. Its loader rejects
-anything except `train` and `development` before constructing a path. The new
-family registry contains only an abstract future sealed count and assignment
-policy; it contains no sealed seed, task ID, instruction, asset, expected state,
-or near miss.
+anything except `train` and `development` before constructing a path. Those two
+materialized splits reuse family IDs only as a clearly labelled within-family
+development split with disjoint seeds. Future family-heldout validation and
+sealed evaluation require externally assigned family IDs disjoint from the five
+materialized families. The registry contains only those abstract commitments;
+it contains no future family ID, seed, instruction, asset, expected state, or
+near miss.
+
+The initial implementation also generated seed-based coordinates. The
+successor removes them: tasks now name targets only, existing VM probes provide
+versioned live geometry/cursor values, and runtime validation rejects setup
+state or repeated-reset geometry drift before compilation.

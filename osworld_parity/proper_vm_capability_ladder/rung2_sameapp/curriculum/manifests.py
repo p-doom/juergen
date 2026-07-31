@@ -69,6 +69,27 @@ def load_family_commitments(path: Path = FAMILY_REGISTRY) -> dict[str, Any]:
         "timing_sensitive_double_click",
     ]:
         raise CurriculumSchemaError("unsupported-action commitment drift")
+    if raw.get("split_design") != {
+        "train_development_relationship": "within_family_disjoint_seed_split",
+        "shared_family_ids": True,
+        "parameter_seeds_disjoint": True,
+        "development_claim": "within_family_only",
+    }:
+        raise CurriculumSchemaError("within-family development split drift")
+    if raw.get("future_family_splits") != {
+        "family_heldout_validation": {
+            "materialized": False,
+            "family_id_assignment": "future_external_sealer_disjoint_from_materialized",
+            "inputs_present": False,
+        },
+        "sealed_eval": {
+            "materialized": False,
+            "family_id_assignment": "future_external_sealer_disjoint_from_all_prior_families",
+            "task_count_commitment_per_family": 8,
+            "inputs_present": False,
+        },
+    }:
+        raise CurriculumSchemaError("future disjoint-family split commitment drift")
     families = raw.get("families")
     if not isinstance(families, list) or {
         item.get("family_id") for item in families if isinstance(item, dict)
@@ -77,25 +98,17 @@ def load_family_commitments(path: Path = FAMILY_REGISTRY) -> dict[str, Any]:
     for family in families:
         if not isinstance(family, dict) or family.get("app") not in APPS:
             raise CurriculumSchemaError("invalid family commitment")
-        commitments = family.get("split_commitments")
-        if not isinstance(commitments, dict) or set(commitments) != {
-            "train",
-            "development",
-            "sealed_eval",
-        }:
-            raise CurriculumSchemaError("family split commitments are incomplete")
+        commitments = family.get("within_family_split_commitments")
+        if not isinstance(commitments, dict) or set(commitments) != set(
+            MATERIALIZED_SPLITS
+        ):
+            raise CurriculumSchemaError("within-family split commitments are incomplete")
         for split in MATERIALIZED_SPLITS:
             if commitments[split] != {"materialized": True, "task_count": 1}:
                 raise CurriculumSchemaError(f"{family['family_id']}: {split} drift")
-        sealed = commitments["sealed_eval"]
-        if sealed != {
-            "materialized": False,
-            "task_count_commitment": 8,
-            "seed_assignment": "future_external_sealer_only",
-            "inputs_present": False,
-        }:
+        if family.get("eligible_for_future_family_holdout") is not False:
             raise CurriculumSchemaError(
-                f"{family['family_id']}: sealed commitment contains inputs or drifted"
+                f"{family['family_id']}: materialized family leaked into future holdout"
             )
     raw["registry_payload_sha256"] = seal
     return raw

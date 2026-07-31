@@ -38,7 +38,7 @@ def build_program(task: SemanticTask, *, near_miss: bool = False) -> ScriptedTra
     elif task.app == "calc":
         formula = str(task.near_miss["formula"] if near_miss else task.expected["formula"]).removeprefix("of:")
         turns = (
-            ActionTurn(1, (_op("click", target="name_box"), _op("key_chord", keys=("ControlLeft", "KeyA")), _op("type", text=str(task.params["cell"])), _op("key_chord", keys=("Return",)))),
+            ActionTurn(1, (_op("click", target="cell"), _op("key_chord", keys=("ControlLeft", "KeyA")), _op("type", text=str(task.params["cell"])), _op("key_chord", keys=("Return",)))),
             ActionTurn(2, (_op("type", text=formula),)),
             ActionTurn(3, (_op("key_chord", keys=("Return",)),)),
             ActionTurn(4, (_op("key_chord", keys=("ControlLeft", "KeyS")),)),
@@ -79,8 +79,6 @@ def build_program(task: SemanticTask, *, near_miss: bool = False) -> ScriptedTra
 
 
 def validate_program(task: SemanticTask, program: ScriptedTrajectory) -> None:
-    if len(program.turns) > task.max_action_turns:
-        raise ValueError(f"{task.task_id}: program exceeds the frozen horizon")
     if {turn.semantic_step for turn in program.turns} != set(
         range(1, task.semantic_step_count + 1)
     ):
@@ -100,22 +98,97 @@ def validate_program(task: SemanticTask, program: ScriptedTrajectory) -> None:
                 held.remove(button)
     if held:
         raise ValueError(f"{task.task_id}: program leaves held inputs: {sorted(held)}")
+    observed = program_budgets(program)
+    if not program.near_miss and observed != task.budgets:
+        raise ValueError(
+            f"{task.task_id}: declared/observed program budgets differ: "
+            f"{task.budgets!r} != {observed!r}"
+        )
+    if program.near_miss:
+        for field in ("primitive_actions", "primitive_events"):
+            for interface, count in observed[field].items():
+                if count > task.budgets[field][interface]:
+                    raise ValueError(
+                        f"{task.task_id}: near miss exceeds {field}/{interface} budget"
+                    )
+
+
+def program_budgets(program: ScriptedTrajectory) -> dict[str, Any]:
+    """Count emitted dispatch lines and their lowered executor events.
+
+    A target-bearing native operation always lowers an absolute move before its
+    mouse event. Compact relative movement is emitted at most once per line and
+    only when the symbolic target reference changes. Keyboard chords count the
+    ordered down/up events that the executor emits. These are caps, independent
+    of the live coordinate values bound later.
+    """
+
+    native_events = 0
+    compact_events = 0
+    compact_cursor_ref = "runtime.initial_cursor"
+    for turn in program.turns:
+        target_refs = [operation.target for operation in turn.operations if operation.target]
+        compact_target = target_refs[0] if target_refs else None
+        if compact_target is not None and compact_target != compact_cursor_ref:
+            compact_events += 1
+            compact_cursor_ref = compact_target
+        for operation in turn.operations:
+            if operation.target is not None and operation.kind in {
+                "click", "mouse_down", "mouse_move", "mouse_up"
+            }:
+                native_events += 1
+            if operation.kind == "click":
+                native_events += 2
+                compact_events += 2
+            elif operation.kind in {"mouse_down", "mouse_up"}:
+                native_events += 1
+                compact_events += 1
+            elif operation.kind == "scroll":
+                native_events += 1
+                compact_events += 1
+            elif operation.kind == "key_chord":
+                events = 2 * len(operation.keys)
+                native_events += events
+                compact_events += events
+            elif operation.kind == "type":
+                native_events += 1
+                compact_events += 1
+    action_count = len(program.turns)
+    return {
+        "semantic_steps": len({turn.semantic_step for turn in program.turns}),
+        "primitive_actions": {
+            "native_absolute_sequence_v1": action_count,
+            "compact_raw_phaseb_v1": action_count,
+        },
+        "primitive_events": {
+            "native_absolute_sequence_v1": native_events,
+            "compact_raw_phaseb_v1": compact_events,
+        },
+    }
 
 
 def compile_program(
-    task: SemanticTask, action_schema: str, *, near_miss: bool = False
+    task: SemanticTask,
+    action_schema: str,
+    *,
+    geometry: dict[str, tuple[int, int]],
+    initial_cursor: tuple[int, int],
+    near_miss: bool = False,
 ) -> list[dict[str, Any] | str]:
     """Compile after task selection; action encoding is never task identity."""
 
     if action_schema not in ACTION_SCHEMAS:
         raise ValueError(f"unsupported action schema: {action_schema!r}")
     program = build_program(task, near_miss=near_miss)
-    geometry = {
-        key: tuple(value) for key, value in task.params["geometry"].items()
-    }
+    required = set(task.geometry_contract["required_targets"])
+    if set(geometry) != required:
+        raise ValueError(
+            f"{task.task_id}: live geometry keys drifted: "
+            f"{sorted(geometry)} != {sorted(required)}"
+        )
     if action_schema == "native_absolute_sequence_v1":
         return [compile_native(turn, geometry) for turn in program.turns]
-    cursor = tuple(task.initial_cursor)
+    cursor = tuple(initial_cursor)
     compiled: list[str] = []
     for turn in program.turns:
         action, cursor = compile_compact(turn, geometry, cursor)
