@@ -253,7 +253,10 @@ class FixtureStateStore:
                 state,
                 "store_apply_committed",
                 {
+                    "host_request_id": host_request_id,
                     "kind": kind,
+                    "event": event.get("event"),
+                    "buttons": event.get("buttons"),
                     "client_sequence": client_sequence,
                     "last_client_sequence": state["last_client_sequence"],
                     "last_pointer_buttons": state["last_pointer_buttons"],
@@ -296,6 +299,7 @@ class FixtureStateStore:
     ) -> dict[str, Any]:
         """Wait for causal acknowledgements and a stable client sequence."""
         deadline = time.monotonic() + timeout_s
+        deadline_host_monotonic_ns = int(deadline * 1_000_000_000)
         quiet_sequence: int | None = None
         quiet_since: float | None = None
         prior_observation: tuple[Any, ...] | None = None
@@ -313,6 +317,7 @@ class FixtureStateStore:
                     "expected_pointer_buttons": expected_pointer_buttons,
                     "timeout_s": timeout_s,
                     "quiet_s": quiet_s,
+                    "deadline_host_monotonic_ns": deadline_host_monotonic_ns,
                 },
             )
             while True:
@@ -370,6 +375,13 @@ class FixtureStateStore:
                             "pointer_up_observed": has_up,
                             "pointer_buttons": state["last_pointer_buttons"],
                             "acknowledged": acknowledged,
+                            "quiet_s": quiet_s,
+                            "quiet_window_started_host_monotonic_ns": (
+                                int(now * 1_000_000_000) if acknowledged else None
+                            ),
+                            "deadline_host_monotonic_ns": (
+                                deadline_host_monotonic_ns
+                            ),
                         },
                     )
                     prior_observation = observation
@@ -385,6 +397,10 @@ class FixtureStateStore:
                                 "decision": "acknowledged",
                                 "last_client_sequence": current_sequence,
                                 "pointer_buttons": state["last_pointer_buttons"],
+                                "quiet_s": quiet_s,
+                                "deadline_host_monotonic_ns": (
+                                    deadline_host_monotonic_ns
+                                ),
                             },
                         )
                         return {
@@ -412,6 +428,15 @@ class FixtureStateStore:
                             "pointer_down_observed": has_down,
                             "pointer_up_observed": has_up,
                             "pointer_buttons": state["last_pointer_buttons"],
+                            "after_sequence": after_sequence,
+                            "required_kinds": list(required_kinds),
+                            "require_pointer_up": require_pointer_up,
+                            "require_pointer_down": require_pointer_down,
+                            "expected_pointer_buttons": expected_pointer_buttons,
+                            "quiet_s": quiet_s,
+                            "deadline_host_monotonic_ns": (
+                                deadline_host_monotonic_ns
+                            ),
                         },
                     )
                     raise TimeoutError(

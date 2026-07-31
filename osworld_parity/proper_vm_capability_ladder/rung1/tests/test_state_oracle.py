@@ -312,6 +312,7 @@ def test_browser_quiescence_requires_causal_release_and_click_ack() -> None:
             "button": 0,
             "buttons": 1,
         },
+        host_request_id=5,
     )
     store.apply_event(
         fixture,
@@ -323,6 +324,7 @@ def test_browser_quiescence_requires_causal_release_and_click_ack() -> None:
             "button": 0,
             "buttons": 0,
         },
+        host_request_id=6,
     )
     store.apply_event(
         fixture,
@@ -333,6 +335,7 @@ def test_browser_quiescence_requires_causal_release_and_click_ack() -> None:
             "checked": True,
             "decoy_checked": False,
         },
+        host_request_id=7,
     )
     ack = store.wait_for_browser_quiescence(
         fixture.id,
@@ -346,12 +349,45 @@ def test_browser_quiescence_requires_causal_release_and_click_ack() -> None:
     assert ack["last_sequence"] == ready_sequence + 3
     assert ack["pointer_up_acknowledged"] is True
     assert ack["pointer_buttons"] == 0
-    stages = [
-        item["stage"] for item in store.snapshot(fixture.id)["diagnostic_journal"]
-    ]
+    journal = store.snapshot(fixture.id)["diagnostic_journal"]
+    stages = [item["stage"] for item in journal]
     assert "waiter_started" in stages
     assert "waiter_observation" in stages
     assert "waiter_decision" in stages
+    committed = [
+        item["details"]
+        for item in journal
+        if item["stage"] == "store_apply_committed"
+        and item["details"]["client_sequence"] > ready_sequence
+    ]
+    assert [
+        (item["host_request_id"], item["event"], item["buttons"])
+        for item in committed
+    ] == [(5, "pointerdown", 1), (6, "pointerup", 0), (7, None, None)]
+    waiter_started = next(
+        item for item in journal if item["stage"] == "waiter_started"
+    )
+    waiter_observation = next(
+        item
+        for item in journal
+        if item["stage"] == "waiter_observation"
+        and item["details"]["acknowledged"] is True
+    )
+    waiter_decision = next(
+        item
+        for item in journal
+        if item["stage"] == "waiter_decision"
+        and item["details"]["decision"] == "acknowledged"
+    )
+    deadline_ns = waiter_started["details"]["deadline_host_monotonic_ns"]
+    assert (
+        waiter_observation["details"]["deadline_host_monotonic_ns"] == deadline_ns
+    )
+    assert waiter_decision["details"]["deadline_host_monotonic_ns"] == deadline_ns
+    assert (
+        waiter_observation["details"]["quiet_window_started_host_monotonic_ns"]
+        <= waiter_observation["host_monotonic_ns"]
+    )
 
     # Already-consumed events are stale and cannot acknowledge another action.
     with pytest.raises(TimeoutError, match="acknowledgement timeout"):

@@ -584,6 +584,139 @@ def _classifier_attempt(
     return attempt
 
 
+def _host_item(host_ns, stage, details):
+    return {
+        "host_monotonic_ns": host_ns,
+        "stage": stage,
+        "details": details,
+    }
+
+
+def _host_request(
+    request_id,
+    client_sequence,
+    *,
+    kind,
+    event=None,
+    buttons=None,
+    terminal_ns,
+    final_buttons,
+    rejected=False,
+):
+    payload = {
+        "kind": kind,
+        "client_sequence": client_sequence,
+    }
+    if event is not None:
+        payload["event"] = event
+    if buttons is not None:
+        payload["buttons"] = buttons
+    shared = {
+        "host_request_id": request_id,
+        "client_sequence": client_sequence,
+    }
+    terminal_stage = "store_apply_rejected" if rejected else "store_apply_committed"
+    terminal_details = {
+        **shared,
+        **(
+            {"error": "rejected fixture event"}
+            if rejected
+            else {
+                "kind": kind,
+                "event": event,
+                "buttons": buttons,
+                "last_client_sequence": client_sequence,
+                "last_pointer_buttons": final_buttons,
+            }
+        ),
+    }
+    return [
+        _host_item(terminal_ns - 3, "http_ingress", {"host_request_id": request_id}),
+        _host_item(
+            terminal_ns - 2,
+            "http_body_received",
+            {**shared, "kind": kind, "payload": payload},
+        ),
+        _host_item(
+            terminal_ns - 1,
+            "store_apply_started",
+            {**shared, "kind": kind},
+        ),
+        _host_item(terminal_ns, terminal_stage, terminal_details),
+        _host_item(
+            terminal_ns + 1,
+            "http_response_started",
+            {**shared, "status": 400 if rejected else 200},
+        ),
+        _host_item(
+            terminal_ns + 2,
+            "http_response_completed",
+            {**shared, "status": 400 if rejected else 200},
+        ),
+    ]
+
+
+def _waiter_timeout_journal(
+    *,
+    deadline_ns=3_000_000_000,
+    decision_ns=3_000_000_010,
+    observation_ns=None,
+    observation_acknowledged=True,
+    observation_down=True,
+    observation_up=True,
+):
+    requirements = {
+        "after_sequence": 4,
+        "required_kinds": ["click"],
+        "require_pointer_down": True,
+        "require_pointer_up": True,
+        "expected_pointer_buttons": 0,
+        "quiet_s": 0.1,
+        "deadline_host_monotonic_ns": deadline_ns,
+    }
+    journal = [_host_item(1_000_000_000, "waiter_started", requirements)]
+    if observation_ns is not None:
+        journal.append(
+            _host_item(
+                observation_ns + 50_000_000,
+                "waiter_observation",
+                {
+                    "last_client_sequence": 7,
+                    "relevant_client_sequences": [5, 6, 7],
+                    "observed_kinds": ["click", "pointer"],
+                    "pointer_down_observed": observation_down,
+                    "pointer_up_observed": observation_up,
+                    "pointer_buttons": 0,
+                    "acknowledged": observation_acknowledged,
+                    "quiet_s": 0.1,
+                    "quiet_window_started_host_monotonic_ns": (
+                        observation_ns if observation_acknowledged else None
+                    ),
+                    "deadline_host_monotonic_ns": deadline_ns,
+                },
+            )
+        )
+    journal.append(
+        _host_item(
+            decision_ns,
+            "waiter_decision",
+            {**requirements, "decision": "timeout", "last_client_sequence": 7},
+        )
+    )
+    return journal
+
+
+_CLICK_PAGE_EVENTS = [
+    {"kind": "pointer", "event": "pointerdown", "client_sequence": 5},
+    {"kind": "pointer", "event": "pointerup", "client_sequence": 6},
+    {"kind": "click", "client_sequence": 7},
+]
+_RESOLVED_CLICK_RECORDS = [
+    {"client_sequence": sequence, "state": "resolved"}
+    for sequence in (5, 6, 7)
+]
+
+
 @pytest.mark.parametrize(
     ("attempt", "expected"),
     [
@@ -609,45 +742,14 @@ def _classifier_attempt(
         ),
         (
             _classifier_attempt(
-                page_events=[
-                    {"kind": "pointer", "event": "pointerup", "client_sequence": 6},
-                    {"kind": "click", "client_sequence": 7},
-                ],
+                page_events=_CLICK_PAGE_EVENTS,
                 records=[
+                    {"client_sequence": 5, "state": "resolved"},
                     {"client_sequence": 6, "state": "resolved"},
                     {"client_sequence": 7, "state": "fetch_started"},
-                ],
-                journal=[
-                    {
-                        "stage": "http_body_received",
-                        "details": {"client_sequence": 6},
-                    },
-                    {
-                        "stage": "store_apply_committed",
-                        "details": {"client_sequence": 6},
-                    },
                 ],
             ),
             "browser_reporter",
-        ),
-        (
-            _classifier_attempt(
-                page_events=[
-                    {"kind": "pointer", "event": "pointerup", "client_sequence": 6},
-                    {"kind": "click", "client_sequence": 7},
-                ],
-                records=[
-                    {"client_sequence": 6, "state": "resolved"},
-                    {"client_sequence": 7, "state": "fetch_started"},
-                ],
-                journal=[
-                    {
-                        "stage": "http_body_received",
-                        "details": {"client_sequence": 7},
-                    }
-                ],
-            ),
-            "host_harness",
         ),
         (_classifier_attempt(pointer_mask=0), "inconclusive"),
     ],
@@ -659,3 +761,309 @@ def test_timeout_outcome_classifier_rules_are_sequence_specific(
     assert result["classification"] == expected
     if expected in {"browser_reporter", "host_harness"}:
         assert result["observed"]["click_client_sequences"] == [7]
+
+
+def _complete_host_click_journal(*, observation_ns):
+    return [
+        *_host_request(
+            1,
+            5,
+            kind="pointer",
+            event="pointerdown",
+            buttons=1,
+            terminal_ns=2_500_000_000,
+            final_buttons=1,
+        ),
+        *_host_request(
+            2,
+            6,
+            kind="pointer",
+            event="pointerup",
+            buttons=0,
+            terminal_ns=2_600_000_000,
+            final_buttons=0,
+        ),
+        *_host_request(
+            3,
+            7,
+            kind="click",
+            terminal_ns=2_700_000_000,
+            final_buttons=0,
+        ),
+        *_waiter_timeout_journal(observation_ns=observation_ns),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("observation_ns", "expected"),
+    [
+        (2_899_999_999, "host_harness"),
+        (2_900_000_000, "inconclusive"),
+        (2_900_000_001, "inconclusive"),
+    ],
+)
+def test_waiter_miss_requires_quiet_window_strictly_before_timeout(
+    observation_ns, expected
+) -> None:
+    result = _classify_timeout_outcome(
+        _classifier_attempt(
+            page_events=_CLICK_PAGE_EVENTS,
+            records=_RESOLVED_CLICK_RECORDS,
+            journal=_complete_host_click_journal(observation_ns=observation_ns),
+        )
+    )
+    assert result["classification"] == expected
+    assert result["observed"]["quiet_ready_host_monotonic_ns"] == (
+        observation_ns + 100_000_000
+    )
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    ["missing_start", "future_start", "wrong_deadline", "wrong_quiet_s"],
+)
+def test_waiter_miss_rejects_inexact_quiet_window_metadata(malformation) -> None:
+    journal = _complete_host_click_journal(observation_ns=2_800_000_000)
+    observation = next(
+        item for item in journal if item["stage"] == "waiter_observation"
+    )
+    if malformation == "missing_start":
+        observation["details"].pop("quiet_window_started_host_monotonic_ns")
+    elif malformation == "future_start":
+        observation["details"]["quiet_window_started_host_monotonic_ns"] = (
+            observation["host_monotonic_ns"] + 1
+        )
+    elif malformation == "wrong_deadline":
+        observation["details"]["deadline_host_monotonic_ns"] += 1
+    else:
+        observation["details"]["quiet_s"] = 0.2
+    result = _classify_timeout_outcome(
+        _classifier_attempt(
+            page_events=_CLICK_PAGE_EVENTS,
+            records=_RESOLVED_CLICK_RECORDS,
+            journal=journal,
+        )
+    )
+    assert result["classification"] == "inconclusive"
+    assert result["observed"]["quiet_window_started_host_monotonic_ns"] is None
+
+
+@pytest.mark.parametrize(
+    ("terminal_ns", "expected"),
+    [
+        (2_999_999_999, "host_harness"),
+        (3_000_000_000, "inconclusive"),
+        (3_000_000_001, "inconclusive"),
+    ],
+)
+def test_exact_apply_rejection_uses_strict_timeout_boundary(
+    terminal_ns, expected
+) -> None:
+    journal = [
+        *_host_request(
+            3,
+            7,
+            kind="click",
+            terminal_ns=terminal_ns,
+            final_buttons=0,
+            rejected=True,
+        ),
+        *_waiter_timeout_journal(),
+    ]
+    result = _classify_timeout_outcome(
+        _classifier_attempt(
+            page_events=[{"kind": "click", "client_sequence": 7}],
+            records=[{"client_sequence": 7, "state": "resolved"}],
+            journal=journal,
+        )
+    )
+    assert result["classification"] == expected
+
+
+def test_post_timeout_commits_are_not_a_host_waiter_miss() -> None:
+    journal = [
+        *_host_request(
+            1,
+            5,
+            kind="pointer",
+            event="pointerdown",
+            buttons=1,
+            terminal_ns=2_500_000_000,
+            final_buttons=1,
+        ),
+        *_waiter_timeout_journal(
+            observation_ns=2_800_000_000,
+            observation_acknowledged=False,
+            observation_up=False,
+        ),
+        *_host_request(
+            2,
+            6,
+            kind="pointer",
+            event="pointerup",
+            buttons=0,
+            terminal_ns=3_100_000_000,
+            final_buttons=0,
+        ),
+        *_host_request(
+            3,
+            7,
+            kind="click",
+            terminal_ns=3_130_000_000,
+            final_buttons=0,
+        ),
+    ]
+    result = _classify_timeout_outcome(
+        _classifier_attempt(
+            page_events=_CLICK_PAGE_EVENTS,
+            records=_RESOLVED_CLICK_RECORDS,
+            journal=journal,
+        )
+    )
+    assert result["classification"] == "inconclusive"
+    assert result["observed"]["late_terminal_sequences"] == [6, 7]
+    assert result["observed"]["waiter_miss_proven"] is False
+
+
+@pytest.mark.parametrize("later_stage", ["commit", "observation"])
+def test_sequence_change_after_acknowledged_observation_prevents_waiter_miss(
+    later_stage,
+) -> None:
+    journal = _complete_host_click_journal(observation_ns=2_750_000_000)
+    if later_stage == "commit":
+        journal.extend(
+            _host_request(
+                4,
+                8,
+                kind="pointer",
+                event="pointermove",
+                buttons=0,
+                terminal_ns=2_900_000_000,
+                final_buttons=0,
+            )
+        )
+    else:
+        journal.append(
+            _host_item(
+                2_900_000_000,
+                "waiter_observation",
+                {
+                    "last_client_sequence": 8,
+                    "acknowledged": False,
+                },
+            )
+        )
+    result = _classify_timeout_outcome(
+        _classifier_attempt(
+            page_events=_CLICK_PAGE_EVENTS,
+            records=_RESOLVED_CLICK_RECORDS,
+            journal=journal,
+        )
+    )
+    assert result["classification"] == "inconclusive"
+    assert result["observed"]["later_sequence_change_before_timeout"] is True
+
+
+@pytest.mark.parametrize("pointerdown_mode", ["missing", "late"])
+def test_missing_or_late_pointerdown_cannot_prove_waiter_miss(
+    pointerdown_mode
+) -> None:
+    journal = [
+        *_host_request(
+            2,
+            6,
+            kind="pointer",
+            event="pointerup",
+            buttons=0,
+            terminal_ns=2_500_000_000,
+            final_buttons=0,
+        ),
+        *_host_request(
+            3,
+            7,
+            kind="click",
+            terminal_ns=2_600_000_000,
+            final_buttons=0,
+        ),
+        *_waiter_timeout_journal(
+            observation_ns=2_800_000_000,
+            observation_down=False,
+        ),
+    ]
+    if pointerdown_mode == "late":
+        journal.extend(
+            _host_request(
+                1,
+                5,
+                kind="pointer",
+                event="pointerdown",
+                buttons=1,
+                terminal_ns=3_050_000_000,
+                final_buttons=1,
+            )
+        )
+    result = _classify_timeout_outcome(
+        _classifier_attempt(
+            page_events=_CLICK_PAGE_EVENTS,
+            records=_RESOLVED_CLICK_RECORDS,
+            journal=journal,
+        )
+    )
+    assert result["classification"] == "inconclusive"
+    assert "pointerdown" not in result["observed"][
+        "committed_host_labels_before_timeout"
+    ]
+
+
+@pytest.mark.parametrize("malformation", ["mixed", "partial", "reordered"])
+def test_mixed_partial_or_reordered_requests_do_not_prove_host_failure(
+    malformation
+) -> None:
+    pointerdown = _host_request(
+        1,
+        5,
+        kind="pointer",
+        event="pointerdown",
+        buttons=1,
+        terminal_ns=2_500_000_000,
+        final_buttons=1,
+    )
+    if malformation == "mixed":
+        pointerdown[3]["details"]["host_request_id"] = 99
+    elif malformation == "partial":
+        pointerdown = [
+            item
+            for item in pointerdown
+            if item["stage"] != "store_apply_started"
+        ]
+    else:
+        pointerdown[2]["host_monotonic_ns"] = 2_500_000_001
+    journal = [
+        *pointerdown,
+        *_host_request(
+            2,
+            6,
+            kind="pointer",
+            event="pointerup",
+            buttons=0,
+            terminal_ns=2_600_000_000,
+            final_buttons=0,
+        ),
+        *_host_request(
+            3,
+            7,
+            kind="click",
+            terminal_ns=2_700_000_000,
+            final_buttons=0,
+        ),
+        *_waiter_timeout_journal(observation_ns=2_800_000_000),
+    ]
+    result = _classify_timeout_outcome(
+        _classifier_attempt(
+            page_events=_CLICK_PAGE_EVENTS,
+            records=_RESOLVED_CLICK_RECORDS,
+            journal=journal,
+        )
+    )
+    assert result["classification"] == "inconclusive"
+    assert result["observed"]["waiter_miss_proven"] is False

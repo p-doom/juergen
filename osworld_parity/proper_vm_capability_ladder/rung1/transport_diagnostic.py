@@ -65,7 +65,9 @@ TIMEOUT_CLASSIFIER_RULES = {
         "queued or unresolved"
     ),
     "host_harness": (
-        "host HTTP journal has pointerup or click ingress that store/waiter evidence misses"
+        "one request-correlated required event was rejected before timeout, or the full "
+        "required predicate was committed and acknowledged with its quiet window strictly "
+        "complete before timeout but the waiter still timed out"
     ),
     "inconclusive": "none of the identifying evidence rules is satisfied",
 }
@@ -825,40 +827,438 @@ def _classify_timeout_outcome(attempt: dict[str, Any]) -> dict[str, Any]:
     )
 
     host_snapshot = _captured_value(attempt.get("host_oracle_snapshot"))
-    journal = host_snapshot.get("diagnostic_journal", [])
-    journal = journal if isinstance(journal, list) else []
-    ingress_sequences = {
-        details.get("client_sequence")
-        for item in journal
-        if isinstance(item, dict)
-        and item.get("stage") == "http_body_received"
-        and isinstance((details := item.get("details")), dict)
-    }
-    committed_sequences = {
-        item["details"].get("client_sequence")
-        for item in journal
-        if isinstance(item, dict)
-        and item.get("stage") == "store_apply_committed"
-        and isinstance(item.get("details"), dict)
-    }
-    missing_store_sequences = sorted(
-        sequence
-        for sequence in (relevant_sequences & ingress_sequences) - committed_sequences
-        if isinstance(sequence, int)
+    raw_journal = host_snapshot.get("diagnostic_journal", [])
+    journal = (
+        [
+            item
+            for item in raw_journal
+            if isinstance(item, dict)
+            and isinstance(item.get("details"), dict)
+            and isinstance(item.get("host_monotonic_ns"), int)
+            and not isinstance(item.get("host_monotonic_ns"), bool)
+        ]
+        if isinstance(raw_journal, list)
+        else []
     )
-    relevant_absent_from_host = sorted(relevant_sequences - ingress_sequences)
-    waiter_timed_out = any(
-        isinstance(item, dict)
-        and item.get("stage") == "waiter_decision"
-        and isinstance(item.get("details"), dict)
+
+    def journal_order(item: dict[str, Any]) -> tuple[int, int]:
+        journal_sequence = item.get("journal_sequence")
+        return (
+            int(item["host_monotonic_ns"]),
+            int(journal_sequence)
+            if isinstance(journal_sequence, int)
+            and not isinstance(journal_sequence, bool)
+            else 0,
+        )
+
+    journal.sort(key=journal_order)
+    timeout_decisions = [
+        item
+        for item in journal
+        if item.get("stage") == "waiter_decision"
         and item["details"].get("decision") == "timeout"
-        for item in journal
+    ]
+    timeout_decision = timeout_decisions[-1] if timeout_decisions else None
+    decision_ns = (
+        int(timeout_decision["host_monotonic_ns"])
+        if timeout_decision is not None
+        else None
     )
-    waiter_missed_sequences = sorted(
-        relevant_sequences & committed_sequences
-        if waiter_timed_out and relevant_sequences <= committed_sequences
+    deadline_value = (
+        timeout_decision["details"].get("deadline_host_monotonic_ns")
+        if timeout_decision is not None
+        else None
+    )
+    deadline_ns = (
+        int(deadline_value)
+        if isinstance(deadline_value, int) and not isinstance(deadline_value, bool)
+        else None
+    )
+    cutoff_ns = (
+        min(decision_ns, deadline_ns)
+        if decision_ns is not None and deadline_ns is not None
+        else None
+    )
+    waiter_starts = [
+        item
+        for item in journal
+        if item.get("stage") == "waiter_started"
+        and (decision_ns is None or int(item["host_monotonic_ns"]) <= decision_ns)
+    ]
+    waiter_start = waiter_starts[-1] if waiter_starts else None
+    waiter_start_deadline = (
+        waiter_start["details"].get("deadline_host_monotonic_ns")
+        if waiter_start is not None
+        else None
+    )
+    waiter_scope_exact = (
+        waiter_start is not None
+        and timeout_decision is not None
+        and deadline_ns is not None
+        and isinstance(waiter_start_deadline, int)
+        and not isinstance(waiter_start_deadline, bool)
+        and waiter_start_deadline == deadline_ns
+        and journal_order(waiter_start) < journal_order(timeout_decision)
+        and all(
+            waiter_start["details"].get(field)
+            == timeout_decision["details"].get(field)
+            for field in (
+                "after_sequence",
+                "required_kinds",
+                "require_pointer_up",
+                "require_pointer_down",
+                "expected_pointer_buttons",
+                "quiet_s",
+            )
+        )
+    )
+    requirements: dict[str, Any] = {}
+    if waiter_start is not None:
+        requirements.update(waiter_start["details"])
+    if timeout_decision is not None:
+        requirements.update(timeout_decision["details"])
+    after_sequence = requirements.get("after_sequence")
+    after_sequence = (
+        int(after_sequence)
+        if isinstance(after_sequence, int) and not isinstance(after_sequence, bool)
+        else -1
+    )
+    required_kinds = requirements.get("required_kinds", [])
+    required_kinds = (
+        {str(kind) for kind in required_kinds}
+        if isinstance(required_kinds, list)
         else set()
     )
+    require_pointer_down = requirements.get("require_pointer_down") is True
+    require_pointer_up = requirements.get("require_pointer_up") is True
+    expected_buttons = requirements.get("expected_pointer_buttons")
+    expected_buttons = (
+        int(expected_buttons)
+        if isinstance(expected_buttons, int) and not isinstance(expected_buttons, bool)
+        else None
+    )
+    quiet_s = requirements.get("quiet_s")
+    quiet_s = (
+        float(quiet_s)
+        if isinstance(quiet_s, (int, float)) and not isinstance(quiet_s, bool)
+        else None
+    )
+
+    request_stages = {
+        "http_ingress",
+        "http_body_received",
+        "store_apply_started",
+        "store_apply_committed",
+        "store_apply_rejected",
+        "http_response_started",
+        "http_response_completed",
+    }
+    by_request: dict[Any, list[dict[str, Any]]] = {}
+    for item in journal:
+        request_id = item["details"].get("host_request_id")
+        if (
+            item.get("stage") in request_stages
+            and isinstance(request_id, int)
+            and not isinstance(request_id, bool)
+        ):
+            by_request.setdefault(request_id, []).append(item)
+
+    correlations: list[dict[str, Any]] = []
+    correlated_commits: list[dict[str, Any]] = []
+    correlated_rejections: list[dict[str, Any]] = []
+    ingress_sequences: set[int] = set()
+    for request_id, entries in by_request.items():
+        entries.sort(key=journal_order)
+        phases: dict[str, list[dict[str, Any]]] = {}
+        for item in entries:
+            phases.setdefault(str(item.get("stage")), []).append(item)
+        sequence_values = {
+            int(value)
+            for item in entries
+            if isinstance((value := item["details"].get("client_sequence")), int)
+            and not isinstance(value, bool)
+        }
+        sequence = next(iter(sequence_values)) if len(sequence_values) == 1 else None
+        body = phases.get("http_body_received", [None])[0]
+        apply_started = phases.get("store_apply_started", [None])[0]
+        ingress = phases.get("http_ingress", [None])[0]
+        commit = phases.get("store_apply_committed", [None])[0]
+        rejection = phases.get("store_apply_rejected", [None])[0]
+        response_started = phases.get("http_response_started", [None])[0]
+        response_completed = phases.get("http_response_completed", [None])[0]
+        terminal = commit if commit is not None else rejection
+        ordered = (
+            ingress is not None
+            and body is not None
+            and apply_started is not None
+            and terminal is not None
+            and response_started is not None
+            and response_completed is not None
+            and journal_order(ingress)
+            < journal_order(body)
+            < journal_order(apply_started)
+            < journal_order(terminal)
+            < journal_order(response_started)
+            < journal_order(response_completed)
+        )
+        payload = body["details"].get("payload") if body is not None else None
+        payload = payload if isinstance(payload, dict) else {}
+        event_kind = payload.get("kind")
+        event_name = payload.get("event")
+        event_buttons = payload.get("buttons")
+        expected_status = 200 if commit is not None else 400
+        correlated_sequence_stages = (
+            body,
+            apply_started,
+            terminal,
+            response_started,
+            response_completed,
+        )
+        sequence_matches = sequence is not None and all(
+            item is not None and item["details"].get("client_sequence") == sequence
+            for item in correlated_sequence_stages
+        )
+        request_payload_matches = (
+            sequence is not None
+            and payload.get("client_sequence") == sequence
+            and body is not None
+            and body["details"].get("kind") == event_kind
+            and apply_started is not None
+            and apply_started["details"].get("kind") == event_kind
+        )
+        terminal_matches = terminal is not None and (
+            rejection is not None
+            or (
+                all(
+                    field in terminal["details"]
+                    for field in ("kind", "event", "buttons")
+                )
+                and terminal["details"].get("kind") == event_kind
+                and terminal["details"].get("event") == event_name
+                and terminal["details"].get("buttons") == event_buttons
+            )
+        )
+        response_matches = (
+            response_started is not None
+            and response_completed is not None
+            and response_started["details"].get("status") == expected_status
+            and response_completed["details"].get("status") == expected_status
+        )
+        exact = (
+            sequence is not None
+            and ordered
+            and sequence_matches
+            and request_payload_matches
+            and len(phases.get("http_ingress", [])) == 1
+            and len(phases.get("http_body_received", [])) == 1
+            and len(phases.get("store_apply_started", [])) == 1
+            and len(phases.get("store_apply_committed", []))
+            + len(phases.get("store_apply_rejected", []))
+            == 1
+            and len(phases.get("http_response_started", [])) == 1
+            and len(phases.get("http_response_completed", [])) == 1
+            and terminal_matches
+            and response_matches
+        )
+        if (
+            sequence is not None
+            and ingress is not None
+            and body is not None
+            and int(ingress["host_monotonic_ns"])
+            <= int(body["host_monotonic_ns"])
+        ):
+            ingress_sequences.add(sequence)
+        correlation = {
+            "host_request_id": request_id,
+            "client_sequence": sequence,
+            "phases": [str(item.get("stage")) for item in entries],
+            "exact": exact,
+            "kind": event_kind,
+            "event": event_name,
+            "buttons": event_buttons,
+            "terminal_stage": terminal.get("stage") if terminal is not None else None,
+            "terminal_host_monotonic_ns": (
+                int(terminal["host_monotonic_ns"])
+                if terminal is not None
+                else None
+            ),
+        }
+        correlations.append(correlation)
+        if exact and sequence > after_sequence and commit is not None:
+            correlated_commits.append({**correlation, "item": commit})
+        if exact and sequence > after_sequence and rejection is not None:
+            correlated_rejections.append({**correlation, "item": rejection})
+
+    def label(item: dict[str, Any]) -> str:
+        if item.get("kind") == "pointer":
+            return str(item.get("event"))
+        return str(item.get("kind"))
+
+    required_labels = set(required_kinds)
+    if require_pointer_down:
+        required_labels.add("pointerdown")
+    if require_pointer_up:
+        required_labels.add("pointerup")
+    commits_before_cutoff = [
+        item
+        for item in correlated_commits
+        if cutoff_ns is not None
+        and int(item["terminal_host_monotonic_ns"]) < cutoff_ns
+    ]
+    commits_before_cutoff.sort(key=lambda item: int(item["terminal_host_monotonic_ns"]))
+    committed_labels = {label(item) for item in commits_before_cutoff}
+    final_commit = commits_before_cutoff[-1] if commits_before_cutoff else None
+    final_buttons = (
+        final_commit["item"]["details"].get("last_pointer_buttons")
+        if final_commit is not None
+        else None
+    )
+    full_predicate_committed = (
+        waiter_scope_exact
+        and cutoff_ns is not None
+        and required_labels <= committed_labels
+        and expected_buttons is not None
+        and final_buttons == expected_buttons
+    )
+    exact_rejections_before_cutoff = [
+        item
+        for item in correlated_rejections
+        if waiter_scope_exact
+        and cutoff_ns is not None
+        and int(item["terminal_host_monotonic_ns"]) < cutoff_ns
+        and label(item) in required_labels
+    ]
+    late_terminal_sequences = sorted(
+        int(item["client_sequence"])
+        for item in (*correlated_commits, *correlated_rejections)
+        if cutoff_ns is not None
+        and int(item["terminal_host_monotonic_ns"]) >= cutoff_ns
+    )
+
+    acknowledged_observations = [
+        item
+        for item in journal
+        if item.get("stage") == "waiter_observation"
+        and item["details"].get("acknowledged") is True
+        and cutoff_ns is not None
+        and int(item["host_monotonic_ns"]) < cutoff_ns
+    ]
+    acknowledged_observation = (
+        acknowledged_observations[-1] if acknowledged_observations else None
+    )
+    observation_ns = (
+        int(acknowledged_observation["host_monotonic_ns"])
+        if acknowledged_observation is not None
+        else None
+    )
+    quiet_window_started_value = (
+        acknowledged_observation["details"].get(
+            "quiet_window_started_host_monotonic_ns"
+        )
+        if acknowledged_observation is not None
+        else None
+    )
+    observation_deadline_value = (
+        acknowledged_observation["details"].get("deadline_host_monotonic_ns")
+        if acknowledged_observation is not None
+        else None
+    )
+    observation_quiet_s_value = (
+        acknowledged_observation["details"].get("quiet_s")
+        if acknowledged_observation is not None
+        else None
+    )
+    waiter_start_ns = (
+        int(waiter_start["host_monotonic_ns"])
+        if waiter_start is not None
+        else None
+    )
+    quiet_window_started_ns = (
+        int(quiet_window_started_value)
+        if isinstance(quiet_window_started_value, int)
+        and not isinstance(quiet_window_started_value, bool)
+        and observation_ns is not None
+        and waiter_start_ns is not None
+        and waiter_start_ns <= quiet_window_started_value
+        and quiet_window_started_value <= observation_ns
+        and isinstance(observation_deadline_value, int)
+        and not isinstance(observation_deadline_value, bool)
+        and observation_deadline_value == deadline_ns
+        and isinstance(observation_quiet_s_value, (int, float))
+        and not isinstance(observation_quiet_s_value, bool)
+        and quiet_s is not None
+        and float(observation_quiet_s_value) == quiet_s
+        else None
+    )
+    observation_sequence = (
+        acknowledged_observation["details"].get("last_client_sequence")
+        if acknowledged_observation is not None
+        else None
+    )
+    observation_predicate = (
+        acknowledged_observation is not None
+        and (
+            not require_pointer_down
+            or acknowledged_observation["details"].get("pointer_down_observed") is True
+        )
+        and (
+            not require_pointer_up
+            or acknowledged_observation["details"].get("pointer_up_observed") is True
+        )
+        and required_kinds
+        <= set(acknowledged_observation["details"].get("observed_kinds", []))
+        and acknowledged_observation["details"].get("pointer_buttons")
+        == expected_buttons
+    )
+    quiet_ready_ns = (
+        quiet_window_started_ns + int(quiet_s * 1_000_000_000)
+        if quiet_window_started_ns is not None
+        and quiet_s is not None
+        and quiet_s >= 0
+        else None
+    )
+    quiet_completed_strictly_before_timeout = (
+        quiet_ready_ns is not None
+        and cutoff_ns is not None
+        and quiet_ready_ns < cutoff_ns
+    )
+    required_commit_ns = max(
+        (int(item["terminal_host_monotonic_ns"]) for item in commits_before_cutoff),
+        default=None,
+    )
+    observation_after_commits = (
+        quiet_window_started_ns is not None
+        and required_commit_ns is not None
+        and required_commit_ns <= quiet_window_started_ns
+    )
+    later_sequence_change = False
+    if quiet_window_started_ns is not None and cutoff_ns is not None:
+        for item in journal:
+            item_ns = int(item["host_monotonic_ns"])
+            if not quiet_window_started_ns < item_ns < cutoff_ns:
+                continue
+            if item.get("stage") == "store_apply_committed" and item["details"].get(
+                "last_client_sequence"
+            ) != observation_sequence:
+                later_sequence_change = True
+            if item.get("stage") == "waiter_observation" and (
+                item["details"].get("last_client_sequence") != observation_sequence
+                or item["details"].get("acknowledged") is not True
+            ):
+                later_sequence_change = True
+    waiter_miss_proven = (
+        full_predicate_committed
+        and observation_predicate
+        and observation_after_commits
+        and quiet_completed_strictly_before_timeout
+        and not later_sequence_change
+    )
+    proven_waiter_missed_sequences = (
+        sorted(int(item["client_sequence"]) for item in commits_before_cutoff)
+        if waiter_miss_proven
+        else []
+    )
+    relevant_absent_from_host = sorted(relevant_sequences - ingress_sequences)
 
     x_observer = attempt.get("passive_x_observer")
     x_observer_available = isinstance(x_observer, dict) and x_observer.get(
@@ -877,7 +1277,7 @@ def _classify_timeout_outcome(attempt: dict[str, Any]) -> dict[str, Any]:
         classification = "guest_input_path"
     elif x_observer_available and x_has_release and pointer_mask == 0 and not page_has_pointer_up:
         classification = "chromium_input_delivery"
-    elif missing_store_sequences or waiter_missed_sequences:
+    elif exact_rejections_before_cutoff or waiter_miss_proven:
         classification = "host_harness"
     elif page_has_pointer_up and page_has_click and (
         unresolved_relevant_sequences or relevant_absent_from_host
@@ -905,8 +1305,33 @@ def _classify_timeout_outcome(attempt: dict[str, Any]) -> dict[str, Any]:
                 unresolved_relevant_sequences
             ),
             "relevant_sequences_absent_from_host": relevant_absent_from_host,
-            "host_ingress_missing_store_sequences": missing_store_sequences,
-            "host_waiter_missed_sequences": waiter_missed_sequences,
+            "host_request_correlations": correlations,
+            "waiter_timeout_decision_host_monotonic_ns": decision_ns,
+            "waiter_deadline_host_monotonic_ns": deadline_ns,
+            "waiter_timeout_cutoff_host_monotonic_ns": cutoff_ns,
+            "waiter_scope_exact": waiter_scope_exact,
+            "required_host_labels": sorted(required_labels),
+            "committed_host_labels_before_timeout": sorted(committed_labels),
+            "full_required_predicate_committed": full_predicate_committed,
+            "exact_rejected_sequences_before_timeout": sorted(
+                int(item["client_sequence"])
+                for item in exact_rejections_before_cutoff
+            ),
+            "host_ingress_missing_store_sequences": sorted(
+                int(item["client_sequence"])
+                for item in exact_rejections_before_cutoff
+            ),
+            "host_waiter_missed_sequences": proven_waiter_missed_sequences,
+            "late_terminal_sequences": late_terminal_sequences,
+            "acknowledged_observation_host_monotonic_ns": observation_ns,
+            "acknowledged_observation_last_client_sequence": observation_sequence,
+            "quiet_window_started_host_monotonic_ns": quiet_window_started_ns,
+            "quiet_ready_host_monotonic_ns": quiet_ready_ns,
+            "quiet_completed_strictly_before_timeout": (
+                quiet_completed_strictly_before_timeout
+            ),
+            "later_sequence_change_before_timeout": later_sequence_change,
+            "waiter_miss_proven": waiter_miss_proven,
             "post_grace_pointer_button_mask": pointer_mask,
             "passive_x_observer_available": x_observer_available,
             "passive_x_release_observed": x_has_release,
