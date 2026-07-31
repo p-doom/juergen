@@ -103,7 +103,14 @@ def _load_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _model_provenance(model_dir: Path, grammar: str, preamble: bool) -> dict[str, Any]:
+def _model_provenance(
+    model_dir: Path,
+    grammar: str,
+    preamble: bool,
+    *,
+    expected_lora_rank: int = 32,
+    expected_lora_alpha: int = 32,
+) -> dict[str, Any]:
     model_dir = model_dir.resolve()
     config_path = model_dir / "config.json"
     if not config_path.is_file():
@@ -127,8 +134,8 @@ def _model_provenance(model_dir: Path, grammar: str, preamble: bool) -> dict[str
         "arm": expected_arm,
         "model_id": "Qwen/Qwen3-VL-8B-Instruct",
         "step": 750,
-        "lora_rank": 32,
-        "lora_alpha": 32,
+        "lora_rank": expected_lora_rank,
+        "lora_alpha": expected_lora_alpha,
         "max_length": 4096,
         "hf_subdir": "hf",
     }
@@ -358,6 +365,8 @@ def main() -> int:
     parser.add_argument("--grammar", choices=sorted(GRAMMAR_LEVELS), required=True)
     parser.add_argument("--preamble", action="store_true")
     parser.add_argument("--concurrency", type=int, default=24)
+    parser.add_argument("--expected-lora-rank", type=int, default=32)
+    parser.add_argument("--expected-lora-alpha", type=int, default=32)
     args = parser.parse_args()
 
     script = (args.audit_dir / "rung2_scene.py").resolve()
@@ -367,7 +376,13 @@ def main() -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     _clear_trusted_artifacts(args.out)
     try:
-        model_provenance = _model_provenance(args.model_dir, args.grammar, args.preamble)
+        model_provenance = _model_provenance(
+            args.model_dir,
+            args.grammar,
+            args.preamble,
+            expected_lora_rank=args.expected_lora_rank,
+            expected_lora_alpha=args.expected_lora_alpha,
+        )
     except EvalError as exc:
         print(f"FATAL model provenance: {exc}", file=sys.stderr)
         return 2

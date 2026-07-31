@@ -1,0 +1,62 @@
+name = "relative_factorial_effects_pinned_019fb4a7_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+python3 "$REPO/experiments/relative_factorial/effects.py" "$@"
+''', "--"]
+
+[resources]
+cpus = 2
+mem = "8GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.abs_tool_act]
+type = "artifact"
+artifact = "relative_factorial_eval_abstool_act_pinned_019fb44a_v1_run_019fb45f57937b109f7c8e131fbb252a"
+[inputs.abs_bare_act]
+type = "artifact"
+artifact = "relative_factorial_eval_absraw_act_pinned_019fb44a_v1_run_019fb45f3ca57e318af9c9feea3273e7"
+[inputs.abs_tool_pre]
+type = "artifact"
+artifact = "relative_factorial_eval_abstool_pre_pinned_019fb44a_v1_run_019fb45f64d9769187d7d5b2023a07cd"
+[inputs.abs_bare_pre]
+type = "artifact"
+artifact = "relative_factorial_eval_absraw_pre_pinned_019fb44a_v1_run_019fb45f4a697bc3acc6d7c309255d37"
+[inputs.rel_tool_act]
+type = "artifact"
+artifact = "relative_factorial_eval_reltool_act_pinned_019fb44a_v1_run_019fb4a7c2097f409a50387cf802cc7a"
+[inputs.rel_bare_act]
+type = "artifact"
+artifact = "relative_factorial_eval_relraw_act_pinned_019fb44a_v1_run_019fb4a7ae2f72429c13df40200baaab"
+[inputs.rel_tool_pre]
+type = "artifact"
+artifact = "relative_factorial_eval_reltool_pre_pinned_019fb44a_v1_run_019fb4a7cbf97042af4b57fdaa24e295"
+[inputs.rel_bare_pre]
+type = "artifact"
+artifact = "relative_factorial_eval_relraw_pre_pinned_019fb44a_v1_run_019fb4a7b8737761bb7874935aa0f246"
+
+[outputs.result]
+type = "eval_result"
+marker = "effects.json"
+alias = "relative_factorial_effects_pinned_019fb4a7_v1_{run.id}"
+
+[args]
+abs_tool_act = "{inputs.abs_tool_act.path}"
+abs_bare_act = "{inputs.abs_bare_act.path}"
+abs_tool_pre = "{inputs.abs_tool_pre.path}"
+abs_bare_pre = "{inputs.abs_bare_pre.path}"
+rel_tool_act = "{inputs.rel_tool_act.path}"
+rel_bare_act = "{inputs.rel_bare_act.path}"
+rel_tool_pre = "{inputs.rel_tool_pre.path}"
+rel_bare_pre = "{inputs.rel_bare_pre.path}"
+metric = "in_box"
+out = "{outputs.result.path}/effects.json"
+
+[env]
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"

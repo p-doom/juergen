@@ -1,0 +1,82 @@
+name = "relative_factorial_capacity_pinned_019fb502_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+PYTHONPATH="$REPO" python3 "$REPO/experiments/relative_factorial/capacity.py" "$@" \
+  "--labctl-context=$LABCTL_CONTEXT"
+''', "--"]
+
+[resources]
+cpus = 4
+mem = "16GB"
+time = "00:30:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1"]
+
+[inputs.r32_relraw_act]
+type = "artifact"
+artifact = "relative_factorial_eval_relraw_act_pinned_019fb44a_v1_run_019fb4a7ae2f72429c13df40200baaab"
+[inputs.r32_relraw_pre]
+type = "artifact"
+artifact = "relative_factorial_eval_relraw_pre_pinned_019fb44a_v1_run_019fb4a7b8737761bb7874935aa0f246"
+[inputs.r32_reltool_act]
+type = "artifact"
+artifact = "relative_factorial_eval_reltool_act_pinned_019fb44a_v1_run_019fb4a7c2097f409a50387cf802cc7a"
+[inputs.r32_reltool_pre]
+type = "artifact"
+artifact = "relative_factorial_eval_reltool_pre_pinned_019fb44a_v1_run_019fb4a7cbf97042af4b57fdaa24e295"
+
+[inputs.r64_relraw_act]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_relraw_act_r64_v1_run_019fb50277b27591865acdf4efa94524"
+[inputs.r64_relraw_pre]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_relraw_pre_r64_v1_run_019fb50286b67510b06630930796a209"
+[inputs.r64_reltool_act]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_reltool_act_r64_v1_run_019fb50296ba73019aa12189618c09ca"
+[inputs.r64_reltool_pre]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_reltool_pre_r64_v1_run_019fb502a56f7de08bc7927d310aa6ae"
+
+[inputs.r256_relraw_act]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_relraw_act_r256_v1_run_019fb5023b067e338f6993d35e0541e5"
+[inputs.r256_relraw_pre]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_relraw_pre_r256_v1_run_019fb5024a6173008d118ed87e0f6822"
+[inputs.r256_reltool_act]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_reltool_act_r256_v1_run_019fb50259b672818126041d1c6c05d8"
+[inputs.r256_reltool_pre]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_reltool_pre_r256_v1_run_019fb50268857b6397c21864e951176b"
+
+[outputs.result]
+type = "eval_result"
+marker = "capacity.json"
+alias = "relative_factorial_capacity_pinned_019fb502_v1_{run.id}"
+
+[args]
+r32_relraw_act = "{inputs.r32_relraw_act.path}"
+r32_relraw_pre = "{inputs.r32_relraw_pre.path}"
+r32_reltool_act = "{inputs.r32_reltool_act.path}"
+r32_reltool_pre = "{inputs.r32_reltool_pre.path}"
+r64_relraw_act = "{inputs.r64_relraw_act.path}"
+r64_relraw_pre = "{inputs.r64_relraw_pre.path}"
+r64_reltool_act = "{inputs.r64_reltool_act.path}"
+r64_reltool_pre = "{inputs.r64_reltool_pre.path}"
+r256_relraw_act = "{inputs.r256_relraw_act.path}"
+r256_relraw_pre = "{inputs.r256_relraw_pre.path}"
+r256_reltool_act = "{inputs.r256_reltool_act.path}"
+r256_reltool_pre = "{inputs.r256_reltool_pre.path}"
+bootstrap_resamples = "50000"
+bootstrap_seed = "20260730"
+out = "{outputs.result.path}/capacity.json"
+
+[env]
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"

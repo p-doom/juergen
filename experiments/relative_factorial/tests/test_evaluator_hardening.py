@@ -22,7 +22,7 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _model(tmp_path: Path, arm: str) -> Path:
+def _model(tmp_path: Path, arm: str, *, rank: int = 32) -> Path:
     root = tmp_path / f"model_{arm}"
     hf = root / "hf"
     hf.mkdir(parents=True)
@@ -39,12 +39,26 @@ def _model(tmp_path: Path, arm: str) -> Path:
         "model_id": "Qwen/Qwen3-VL-8B-Instruct",
         "source_checkpoint": str(checkpoint),
         "step": 750,
-        "lora_rank": 32,
-        "lora_alpha": 32,
+        "lora_rank": rank,
+        "lora_alpha": rank,
         "max_length": 4096,
         "hf_subdir": "hf",
     }))
     return hf
+
+
+def test_model_provenance_requires_declared_capacity(tmp_path):
+    model = _model(tmp_path, "relraw_act", rank=256)
+    with pytest.raises(evaluate.EvalError, match="wrong model artifact"):
+        evaluate._model_provenance(model, "deltatype_raw", False)
+    provenance = evaluate._model_provenance(
+        model,
+        "deltatype_raw",
+        False,
+        expected_lora_rank=256,
+        expected_lora_alpha=256,
+    )
+    assert provenance["arm"] == "relraw_act"
 
 
 def _raw(grammar: str, action: str, coord: list[int]) -> str:

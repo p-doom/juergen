@@ -12,6 +12,11 @@ for k in omegalax_repo checkpoint_path output arm model_id; do
 done
 MANIFEST="${A[manifest_name]:-export_manifest.json}"
 [[ "$MANIFEST" != */* ]] || { echo "FATAL manifest_name must be a basename" >&2; exit 2; }
+LORA_RANK="${A[lora_rank]:-32}"
+LORA_ALPHA="${A[lora_alpha]:-$LORA_RANK}"
+[[ "$LORA_RANK" =~ ^[1-9][0-9]*$ && "$LORA_ALPHA" =~ ^[1-9][0-9]*$ ]] || {
+  echo "FATAL lora_rank/lora_alpha must be positive integers" >&2; exit 2;
+}
 OMX="${A[omegalax_repo]}"; CKPT="${A[checkpoint_path]}"; OUT="${A[output]}"; HF="$OUT/hf"
 [[ -f "$OMX/scripts/export_to_hf.py" ]] || { echo "FATAL bad Omegalax: $OMX" >&2; exit 2; }
 [[ -d "$CKPT" && -f "$CKPT/_CHECKPOINT_METADATA" ]] || {
@@ -39,11 +44,17 @@ done
 SHA="$(git -C "$OMX" rev-parse HEAD)"
 DIFF="$(git -C "$OMX" diff --binary | sha256sum | awk '{print $1}')"
 python3 - "$STOCK/config.json" "$HF/config.json" "$OUT/$MANIFEST" \
-  "${A[arm]}" "${A[model_id]}" "$CKPT" "$STEP" "$SHA" "$DIFF" <<'PY'
+  "${A[arm]}" "${A[model_id]}" "$CKPT" "$STEP" "$SHA" "$DIFF" \
+  "$LORA_RANK" "$LORA_ALPHA" <<'PY'
 import json,sys
 from pathlib import Path
 stock,out,manifest=map(Path,sys.argv[1:4])
 arm,model,ckpt,step,sha,diff=sys.argv[4:10]
+rank=int(sys.argv[10]); alpha=int(sys.argv[11])
+meta=json.loads((Path(ckpt).parent/"lora_metadata.json").read_text())
+if (int(meta.get("lora_rank", -1)) != rank
+        or float(meta.get("lora_alpha", -1)) != float(alpha)):
+    raise SystemExit(f"FATAL LoRA metadata mismatch: {meta} vs r={rank} alpha={alpha}")
 s=json.loads(stock.read_text()); o=json.loads(out.read_text())
 for k in ("architectures","transformers_version","vision_end_token_id"):
     if k in s and k not in o: o[k]=s[k]
@@ -55,7 +66,7 @@ for f in ("tokenizer_config.json","chat_template.json","preprocessor_config.json
     if not (hf/f).is_file(): raise SystemExit(f"FATAL runtime file missing: {f}")
 manifest.write_text(json.dumps({"artifact_type":"relative_factorial_hf_checkpoint",
  "schema_version":1,"status":"complete","arm":arm,"model_id":model,
- "source_checkpoint":ckpt,"step":int(step),"lora_rank":32,"lora_alpha":32,
+ "source_checkpoint":ckpt,"step":int(step),"lora_rank":rank,"lora_alpha":alpha,
  "max_length":4096,"hf_subdir":"hf","export_ran_inside_srun":True,
  "omegalax_commit":sha,"omegalax_tracked_diff_sha256":diff},indent=2,sort_keys=True)+"\n")
 PY

@@ -86,7 +86,12 @@ def _jsonl_rows(path: Path) -> list[dict[str, Any]]:
 
 
 def _require_model_provenance(
-    cell: str, provenance: Any, expected_arm: str,
+    cell: str,
+    provenance: Any,
+    expected_arm: str,
+    *,
+    require_source_checkpoint: bool = True,
+    expected_lora_rank: int = 32,
 ) -> dict[str, Any]:
     if not isinstance(provenance, dict) or provenance.get("arm") != expected_arm:
         raise EffectError(f"{cell}: model provenance does not identify arm {expected_arm}")
@@ -115,8 +120,8 @@ def _require_model_provenance(
         "arm": expected_arm,
         "model_id": "Qwen/Qwen3-VL-8B-Instruct",
         "step": 750,
-        "lora_rank": 32,
-        "lora_alpha": 32,
+        "lora_rank": expected_lora_rank,
+        "lora_alpha": expected_lora_rank,
         "max_length": 4096,
         "hf_subdir": "hf",
     }
@@ -127,9 +132,15 @@ def _require_model_provenance(
     if artifact_mismatches or model_root != (artifact_path.parent / "hf").resolve():
         raise EffectError(f"{cell}: wrong model artifact mapping: {artifact_mismatches}")
     source_checkpoint = Path(str(artifact.get("source_checkpoint", "")))
-    if (provenance.get("source_checkpoint") != artifact.get("source_checkpoint")
-            or source_checkpoint.name != "000750" or not source_checkpoint.is_dir()
-            or not (source_checkpoint / "_CHECKPOINT_METADATA").is_file()):
+    source_mismatch = (
+        provenance.get("source_checkpoint") != artifact.get("source_checkpoint")
+        or source_checkpoint.name != "000750"
+    )
+    source_missing = (
+        not source_checkpoint.is_dir()
+        or not (source_checkpoint / "_CHECKPOINT_METADATA").is_file()
+    )
+    if source_mismatch or (require_source_checkpoint and source_missing):
         raise EffectError(f"{cell}: source checkpoint provenance mismatch")
     if Path(provenance["config"]).resolve() != model_root / "config.json":
         raise EffectError(f"{cell}: config provenance is outside the model directory")
@@ -148,7 +159,14 @@ def _require_model_provenance(
     return provenance
 
 
-def _load_cell(cell: str, directory: Path, metric: str) -> tuple[float, dict[str, Any]]:
+def _load_cell(
+    cell: str,
+    directory: Path,
+    metric: str,
+    *,
+    require_source_checkpoint: bool = True,
+    expected_lora_rank: int = 32,
+) -> tuple[float, dict[str, Any]]:
     if metric != "in_box":
         raise EffectError(f"{cell}: only the bounded row-verifiable metric 'in_box' is supported")
     r, g, p, grammar, expected_arm, expected_space = CELLS[cell]
@@ -190,7 +208,11 @@ def _load_cell(cell: str, directory: Path, metric: str) -> tuple[float, dict[str
     if manifest.get("rows_sha256") != _sha256(rows_path):
         raise EffectError(f"{cell}: rows checksum does not match manifest")
     model_provenance = _require_model_provenance(
-        cell, manifest.get("model_provenance"), expected_arm,
+        cell,
+        manifest.get("model_provenance"),
+        expected_arm,
+        require_source_checkpoint=require_source_checkpoint,
+        expected_lora_rank=expected_lora_rank,
     )
 
     meta = report.get("meta")

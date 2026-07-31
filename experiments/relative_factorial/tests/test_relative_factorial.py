@@ -118,8 +118,8 @@ def test_labctl_training_and_eval_contracts():
     script = (EXPERIMENT / "train_export.sh").read_text()
     exporter = (EXPERIMENT / "export_checkpoint.sh").read_text()
     for required in (
-        "--lora_rank=32",
-        "--lora_alpha=32",
+        '--lora_rank="$LORA_RANK"',
+        '--lora_alpha="$LORA_ALPHA"',
         "--max_length=4096",
         "--num_steps=750",
         "--num_loss_tiles=8",
@@ -153,6 +153,8 @@ def test_labctl_training_and_eval_contracts():
         assert recipe["args"]["arm"] == name
 
     assert 'bash "$SCRIPT_DIR/export_checkpoint.sh"' in script
+    assert '--lora_rank="$LORA_RANK" --lora_alpha="$LORA_ALPHA"' in script
+    assert '"lora_rank":rank,"lora_alpha":alpha' in exporter
     assert "JAX_PLATFORMS=cpu srun --ntasks=1 --nodes=1 uv run" in exporter
     assert 'python scripts/export_to_hf.py' in exporter
     assert '"export_ran_inside_srun":True' in exporter
@@ -205,3 +207,92 @@ def test_labctl_training_and_eval_contracts():
         (EXPERIMENT / "labctl/pipelines/full_factorial.toml").read_text()
     )
     assert len(pipeline["stages"]) == 18
+
+
+def test_capacity_followup_recipe_matrix_is_pinned_and_unique():
+    recipes = EXPERIMENT / "labctl/recipes"
+    dataset = "relative_factorial_r3data_2k_v1_run_019fb43ff2927ee093a50f2f8577c7db"
+    arms = ("relraw_act", "relraw_pre", "reltool_act", "reltool_pre")
+    seen_names = set()
+    seen_aliases = set()
+    train_runs = {
+        (256, "relraw_act"): "run_019fb4be951f7e80880fe137e734287e",
+        (256, "relraw_pre"): "run_019fb4bec0167122b655a36ea3a4237e",
+        (256, "reltool_act"): "run_019fb4becd3c75f0809cb9acce69ba5e",
+        (256, "reltool_pre"): "run_019fb4beda3472b289ae60fc612c1cea",
+        (64, "relraw_act"): "run_019fb4bf3e987ca38d4813c7a323abff",
+        (64, "relraw_pre"): "run_019fb4bf4b7b7750b31209051e8643f6",
+        (64, "reltool_act"): "run_019fb4bf589e7bc184a34976f58a658a",
+        (64, "reltool_pre"): "run_019fb4bf65277a31b925b007366caad3",
+    }
+    for rank in (64, 256):
+        for arm in arms:
+            recipe = tomllib.loads(
+                (recipes / f"train_{arm}_r{rank}.toml").read_text()
+            )
+            assert recipe["name"] not in seen_names
+            seen_names.add(recipe["name"])
+            alias = recipe["outputs"]["model"]["alias"]
+            assert alias not in seen_aliases
+            seen_aliases.add(alias)
+            assert recipe["resources"]["gpus"] == 1
+            assert recipe["resources"]["time"] == "03:00:00"
+            assert recipe["inputs"]["dataset"] == {
+                "type": "artifact",
+                "artifact": dataset,
+            }
+            assert recipe["args"]["arm"] == arm
+            assert recipe["args"]["lora_rank"] == str(rank)
+            assert recipe["args"]["lora_alpha"] == str(rank)
+            assert f"_{arm}_r{rank}_s750_capacity_v1_" in alias
+
+            evaluation = tomllib.loads(
+                (recipes / f"eval_{arm}_r{rank}.toml").read_text()
+            )
+            assert evaluation["resources"]["time"] == "01:00:00"
+            assert evaluation["inputs"]["model"] == {
+                "type": "artifact",
+                "artifact": (
+                    f"relative_factorial_{arm}_r{rank}_s750_capacity_v1_"
+                    f"{train_runs[(rank, arm)]}"
+                ),
+            }
+            expected_grammar = "move_rel" if "tool" in arm else "deltatype_raw"
+            expected_preamble = "true" if arm.endswith("pre") else "false"
+            assert evaluation["args"]["grammar"] == expected_grammar
+            assert evaluation["args"]["preamble"] == expected_preamble
+            assert evaluation["args"]["lora_rank"] == str(rank)
+            assert evaluation["args"]["lora_alpha"] == str(rank)
+
+    preregistration = (EXPERIMENT / "CAPACITY_PREREGISTRATION.md").read_text()
+    for threshold in (
+        "at least 5 percentage points",
+        "at least 10 percentage points",
+        "at least 95%",
+        "at least 90%",
+    ):
+        assert threshold in preregistration
+
+    capacity_recipe = tomllib.loads(
+        (recipes / "capacity_pinned_019fb502.toml").read_text()
+    )
+    assert set(capacity_recipe["args"]) == {
+        *(f"r{rank}_{arm}" for rank in (32, 64, 256) for arm in arms),
+        "bootstrap_resamples", "bootstrap_seed", "out",
+    }
+    capacity_script = (EXPERIMENT / "capacity.py").read_text()
+    assert '"--bootstrap-resamples", "--bootstrap_resamples"' in capacity_script
+    assert '"--bootstrap-seed", "--bootstrap_seed"' in capacity_script
+
+    cleanup = tomllib.loads(
+        (recipes / "cleanup_capacity_orbax_pinned_019fb502.toml").read_text()
+    )
+    assert "gpus" not in cleanup["resources"]
+    assert cleanup["resources"]["time"] == "00:30:00"
+    assert len(cleanup["inputs"]) == 16
+    assert set(cleanup["inputs"]) == {
+        f"{kind}_r{rank}_{arm}"
+        for kind in ("model", "eval")
+        for rank in (64, 256)
+        for arm in arms
+    }

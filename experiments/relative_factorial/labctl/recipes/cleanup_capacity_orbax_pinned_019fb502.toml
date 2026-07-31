@@ -1,0 +1,80 @@
+name = "relative_factorial_cleanup_capacity_orbax_pinned_019fb502_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+PYTHONPATH="$REPO" python3 \
+  "$REPO/experiments/relative_factorial/cleanup_capacity_orbax.py" \
+  "--labctl-context=$LABCTL_CONTEXT" "$@"
+''', "--"]
+
+[resources]
+cpus = 2
+mem = "8GB"
+time = "00:30:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.model_r64_relraw_act]
+type = "artifact"
+artifact = "relative_factorial_relraw_act_r64_s750_capacity_v1_run_019fb4bf3e987ca38d4813c7a323abff"
+[inputs.eval_r64_relraw_act]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_relraw_act_r64_v1_run_019fb50277b27591865acdf4efa94524"
+[inputs.model_r64_relraw_pre]
+type = "artifact"
+artifact = "relative_factorial_relraw_pre_r64_s750_capacity_v1_run_019fb4bf4b7b7750b31209051e8643f6"
+[inputs.eval_r64_relraw_pre]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_relraw_pre_r64_v1_run_019fb50286b67510b06630930796a209"
+[inputs.model_r64_reltool_act]
+type = "artifact"
+artifact = "relative_factorial_reltool_act_r64_s750_capacity_v1_run_019fb4bf589e7bc184a34976f58a658a"
+[inputs.eval_r64_reltool_act]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_reltool_act_r64_v1_run_019fb50296ba73019aa12189618c09ca"
+[inputs.model_r64_reltool_pre]
+type = "artifact"
+artifact = "relative_factorial_reltool_pre_r64_s750_capacity_v1_run_019fb4bf65277a31b925b007366caad3"
+[inputs.eval_r64_reltool_pre]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_reltool_pre_r64_v1_run_019fb502a56f7de08bc7927d310aa6ae"
+
+[inputs.model_r256_relraw_act]
+type = "artifact"
+artifact = "relative_factorial_relraw_act_r256_s750_capacity_v1_run_019fb4be951f7e80880fe137e734287e"
+[inputs.eval_r256_relraw_act]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_relraw_act_r256_v1_run_019fb5023b067e338f6993d35e0541e5"
+[inputs.model_r256_relraw_pre]
+type = "artifact"
+artifact = "relative_factorial_relraw_pre_r256_s750_capacity_v1_run_019fb4bec0167122b655a36ea3a4237e"
+[inputs.eval_r256_relraw_pre]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_relraw_pre_r256_v1_run_019fb5024a6173008d118ed87e0f6822"
+[inputs.model_r256_reltool_act]
+type = "artifact"
+artifact = "relative_factorial_reltool_act_r256_s750_capacity_v1_run_019fb4becd3c75f0809cb9acce69ba5e"
+[inputs.eval_r256_reltool_act]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_reltool_act_r256_v1_run_019fb50259b672818126041d1c6c05d8"
+[inputs.model_r256_reltool_pre]
+type = "artifact"
+artifact = "relative_factorial_reltool_pre_r256_s750_capacity_v1_run_019fb4beda3472b289ae60fc612c1cea"
+[inputs.eval_r256_reltool_pre]
+type = "artifact"
+artifact = "relative_factorial_capacity_eval_reltool_pre_r256_v1_run_019fb50268857b6397c21864e951176b"
+
+[outputs.result]
+type = "eval_result"
+marker = "cleanup.json"
+alias = "relative_factorial_cleanup_capacity_orbax_pinned_019fb502_v1_{run.id}"
+
+[args]
+out = "{outputs.result.path}/cleanup.json"
+
+[env]
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"

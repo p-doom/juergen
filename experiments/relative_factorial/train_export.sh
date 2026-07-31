@@ -15,6 +15,14 @@ for key in omegalax_repo dataset arm output model_id; do
         exit 2
     fi
 done
+LORA_RANK="${A[lora_rank]:-32}"
+LORA_ALPHA="${A[lora_alpha]:-$LORA_RANK}"
+[[ "$LORA_RANK" =~ ^[1-9][0-9]*$ ]] || {
+    echo "FATAL lora_rank must be a positive integer: $LORA_RANK" >&2; exit 2;
+}
+[[ "$LORA_ALPHA" =~ ^[1-9][0-9]*$ ]] || {
+    echo "FATAL lora_alpha must be a positive integer: $LORA_ALPHA" >&2; exit 2;
+}
 case "${A[arm]}" in
     reltool_act|relraw_act|reltool_pre|relraw_pre) ;;
     *) echo "FATAL invalid arm: ${A[arm]}" >&2; exit 2 ;;
@@ -38,7 +46,7 @@ if meta.get("max_length") != 4096:
 PY
 done
 
-job_tag="${SLURM_JOB_ID:-local}_${A[arm]}"
+job_tag="${SLURM_JOB_ID:-local}_${A[arm]}_r${LORA_RANK}"
 JAX_CACHE="/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/jax_cache/relative_factorial_${job_tag}"
 mkdir -p "$JAX_CACHE" "$ORBAX"
 
@@ -50,7 +58,7 @@ uv run --project="$OMX" -- srun python scripts/train_vlm_sft.py \
     --data_path="$DATA/train" \
     --val_data_path="$DATA/val" \
     --save_dir="$ORBAX" \
-    --enable_lora=true --lora_rank=32 --lora_alpha=32 --freeze_vision_tower=false \
+    --enable_lora=true --lora_rank="$LORA_RANK" --lora_alpha="$LORA_ALPHA" --freeze_vision_tower=false \
     --tp_size=1 --fsdp_size=1 --dp_size=1 \
     --batch_size=1 --grad_accum_steps=8 \
     --learning_rate=1e-4 --lr_schedule=wsd --lr_stable_fraction=0.7 \
@@ -64,9 +72,9 @@ uv run --project="$OMX" -- srun python scripts/train_vlm_sft.py \
     --grain_read_threads=4 --grain_read_buffer_size=4 \
     --grain_workers=2 --grain_worker_buffer_size=2 \
     --wandb_entity=pdoom --wandb_project=omegalax \
-    --wandb_group="relative_factorial_${A[arm]}" \
+    --wandb_group="relative_factorial_${A[arm]}_r${LORA_RANK}" \
     --wandb_name="relative_factorial_${job_tag}" \
-    --wandb_tags=berlin,rung3,relative_factorial,lora,r32
+    --wandb_tags="berlin,rung3,relative_factorial,lora,r${LORA_RANK}"
 
 CKPT="$ORBAX/000750"
 [[ -d "$CKPT" ]] || { echo "FATAL step-750 checkpoint missing: $CKPT" >&2; exit 3; }
@@ -74,6 +82,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 bash "$SCRIPT_DIR/export_checkpoint.sh" \
     --omegalax_repo="$OMX" --checkpoint_path="$CKPT" --output="$OUT" \
     --arm="${A[arm]}" --model_id="${A[model_id]}" \
+    --lora_rank="$LORA_RANK" --lora_alpha="$LORA_ALPHA" \
     --manifest_name=train_export_manifest.json
 
 echo "relative factorial train+export complete: ${A[arm]} -> $OUT/hf"

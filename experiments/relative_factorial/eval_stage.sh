@@ -17,6 +17,11 @@ case "${A[grammar]}" in
     *) echo "FATAL unsupported grammar: ${A[grammar]}" >&2; exit 2 ;;
 esac
 case "${A[preamble]}" in true|false) ;; *) echo "FATAL preamble must be true/false" >&2; exit 2 ;; esac
+LORA_RANK="${A[lora_rank]:-32}"
+LORA_ALPHA="${A[lora_alpha]:-$LORA_RANK}"
+[[ "$LORA_RANK" =~ ^[1-9][0-9]*$ && "$LORA_ALPHA" =~ ^[1-9][0-9]*$ ]] || {
+    echo "FATAL lora_rank/lora_alpha must be positive integers" >&2; exit 2;
+}
 
 MODEL_PATH="${A[model_path]}"
 OUT="${A[out]}"
@@ -67,6 +72,8 @@ eval_args=(
     --model policy
     --model-dir "$MODEL_PATH"
     --grammar "${A[grammar]}"
+    --expected-lora-rank "$LORA_RANK"
+    --expected-lora-alpha "$LORA_ALPHA"
     --concurrency 24
 )
 if [[ "${A[preamble]}" == true ]]; then
