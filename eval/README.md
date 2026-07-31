@@ -152,7 +152,9 @@ off-the-shelf model solved four times out of four. Multi-turn partial credit is
 the verified prefix fraction, with scheduled-turn parse, expected-action,
 completion, and verifier rates reported alongside task-level metrics. Each turn
 persists its prompt, response, before/after frames, overlay, parsed action, and
-semantic verifier states.
+semantic verifier states. `result.json` is rewritten after every attempt for
+live monitoring; labctl recipes use the final-only `completed.json` marker so
+artifact metadata cannot capture an early partial score.
 
 ## Output contract
 
