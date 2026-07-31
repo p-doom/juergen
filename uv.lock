@@ -1848,6 +1848,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "av" },
+    { name = "requests" },
 ]
 
 [package.dev-dependencies]
@@ -1856,7 +1857,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "av", specifier = ">=16.1.0" }]
+requires-dist = [
+    { name = "av", specifier = ">=16.1.0" },
+    { name = "requests", specifier = ">=2.31" },
+]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.4,<9" }]

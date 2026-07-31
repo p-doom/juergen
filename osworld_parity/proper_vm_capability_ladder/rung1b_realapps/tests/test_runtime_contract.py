@@ -66,6 +66,9 @@ def test_guest_root_falls_back_to_validated_temp_when_home_is_missing(tmp_path):
 def test_recipes_use_the_declared_locked_runtime_not_ambient_python():
     project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert any(
+        requirement.startswith("requests") for requirement in project["project"]["dependencies"]
+    )
+    assert any(
         requirement.startswith("pytest")
         for requirement in project["dependency-groups"]["dev"]
     )

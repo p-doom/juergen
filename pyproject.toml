@@ -5,6 +5,7 @@ description = "Crowd-cast SFT supply-chain monorepo: data pipeline, eval harness
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "av>=16.1.0",
+    "requests>=2.31",
 ]
 
 [dependency-groups]
