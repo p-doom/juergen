@@ -13,7 +13,8 @@ RL_VENV="$RL_ROOT/prime-rl/.venv"
 (cd / && sha256sum -c "$RUNTIME_SUMS")
 jq -e '.status == "complete" and .method == "pure_rejection_sft"
   and .training_steps == 100 and .contains_official_heldout == false
-  and .contains_crowd_cast == false' "$MODEL_PATH/pilot_manifest.json" >/dev/null
+  and .contains_real_vm_eval == false and .contains_crowd_cast == false' \
+  "$MODEL_PATH/pilot_manifest.json" >/dev/null
 
 mkdir -p "$OUTPUT_DIR"
 find "$MODEL_PATH" -maxdepth 1 -type f -name '*.safetensors' -print0 \

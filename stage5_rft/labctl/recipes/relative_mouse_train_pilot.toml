@@ -13,7 +13,7 @@ jq -e '.threshold_crossed == true and .launch_authorized == false' "$GATE"
 jq -e '.method == "pure_rejection_sft" and .tokenized == true
   and .synthetic_actions_added == 0 and .synthetic_terminate_added == false
   and .no_op_actions_dropped == 0 and .contains_official_heldout == false
-  and .contains_crowd_cast == false' "$DATASET/manifest.json"
+  and .contains_real_vm_eval == false and .contains_crowd_cast == false' "$DATASET/manifest.json"
 test "$(jq -r '.binding.checkpoint_uri' "$GATE")" = "$PARENT"
 test "$(jq -r '.binding.checkpoint_sha256' "$GATE")" = "013f6c62d00d8c101a82d6ecc983f9ddadd5bca8b91664bd4bcf47bc8ddc25c3"
 
@@ -45,10 +45,10 @@ uv run --project="$REPO" -- srun python "$REPO/scripts/train_vlm_sft.py" \
   --grain_read_threads=4 --grain_read_buffer_size=2 --grain_workers=2 --grain_worker_buffer_size=2 \
   --wandb_entity=pdoom --wandb_project=omegalax \
   --wandb_group=relative_mouse_rft_pilot_v1 --wandb_name="relative_mouse_rft_pilot_${LABCTL_RUN_ID}" \
-  --wandb_tags berlin rft pure_rejection relative_mouse bounded_pilot
+  --wandb_tags=berlin,rft,pure_rejection,relative_mouse,bounded_pilot
 
 CKPT="$(find "$SAVE" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -n | tail -1)"
-test "$CKPT" = "100"
+test "$CKPT" = "000100"
 STOCK="$(find /fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface/hub/models--Qwen--Qwen3-VL-8B-Instruct/snapshots -mindepth 1 -maxdepth 1 -type d | head -1)"
 JAX_PLATFORMS=cpu srun uv run --project="$REPO" -- python "$REPO/scripts/export_to_hf.py" \
   --model_id=Qwen/Qwen3-VL-8B-Instruct --checkpoint_path="$SAVE/$CKPT" --out_dir="$OUT" \
@@ -76,7 +76,8 @@ payload = {"schema_version": "stage5.relative_mouse_pilot_model.v1", "status": "
            "parent_checkpoint": sys.argv[2], "validation_records": int(sys.argv[3]),
            "validation_steps_per_eval": int(sys.argv[4]),
            "validation_step_cap": 32,
-           "contains_official_heldout": False, "contains_crowd_cast": False}
+           "contains_official_heldout": False, "contains_real_vm_eval": False,
+           "contains_crowd_cast": False}
 (out / "pilot_manifest.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
 ''']

@@ -7,7 +7,9 @@ REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
 SRC="$(jq -er '.inputs[] | select(.role == "records") | .resolved_path' "$LABCTL_CONTEXT")"
 OUT="$(jq -er '.outputs.dataset.path' "$LABCTL_CONTEXT")"
 jq -e '.method == "pure_rejection_sft" and .synthetic_actions_added == 0
-  and .synthetic_terminate_added == false and .no_op_actions_dropped == 0' "$SRC/manifest.json"
+  and .synthetic_terminate_added == false and .no_op_actions_dropped == 0
+  and .contains_official_heldout == false and .contains_real_vm_eval == false
+  and .contains_crowd_cast == false' "$SRC/manifest.json"
 mkdir -p "$OUT"
 for split in train val; do
   uv run --project="$REPO" -- python "$REPO/scripts/build_sft_records_from_chat.py" \

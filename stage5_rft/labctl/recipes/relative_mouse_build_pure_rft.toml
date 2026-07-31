@@ -1,5 +1,5 @@
 name = "stage5_relative_mouse_build_pure_rft_v1"
-repo = "juergen_relative_onpolicy_launch"
+repo = "juergen_relative_onpolicy_postcollection"
 
 command = ["bash", "-c", '''
 set -euo pipefail
@@ -17,7 +17,8 @@ uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli build-relative-m
 jq -e '.status == "complete" and .method == "pure_rejection_sft"
   and .synthetic_actions_added == 0 and .synthetic_terminate_added == false
   and .no_op_actions_dropped == 0 and .trajectories_kept > 0
-  and .contains_official_heldout == false and .contains_crowd_cast == false' "$OUT/manifest.json"
+  and .contains_official_heldout == false and .contains_real_vm_eval == false
+  and .contains_crowd_cast == false' "$OUT/manifest.json"
 ''']
 
 [resources]

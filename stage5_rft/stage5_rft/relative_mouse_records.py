@@ -347,6 +347,7 @@ def build_pure_relative_mouse_records(
         "source_files": source_files,
         "approved_background_root": str(approved.resolve()),
         "contains_official_heldout": False,
+        "contains_real_vm_eval": False,
         "contains_crowd_cast": False,
         "synthetic_actions_added": 0,
         "synthetic_terminate_added": False,

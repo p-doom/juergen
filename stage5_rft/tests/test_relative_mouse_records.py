@@ -66,6 +66,9 @@ def test_pure_relative_mouse_builder_replays_and_preserves_actions(tmp_path):
     assert manifest["method"] == "pure_rejection_sft"
     assert manifest["synthetic_actions_added"] == 0
     assert manifest["synthetic_terminate_added"] is False
+    assert manifest["contains_official_heldout"] is False
+    assert manifest["contains_real_vm_eval"] is False
+    assert manifest["contains_crowd_cast"] is False
     train = read_jsonl(output / "_normalized/train/chat.jsonl")
     val = read_jsonl(output / "_normalized/val/chat.jsonl")
     assert {row["task_id"] for row in train}.isdisjoint({row["task_id"] for row in val})
