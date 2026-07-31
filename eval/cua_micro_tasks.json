@@ -52,7 +52,7 @@
       "target": {"kind": "fixed_norm", "bbox": [50, 100, 950, 900], "label": "Desktop"},
       "cursor": {"kind": "target_center"},
       "expected": {"kind": "key", "keys": ["CTRL", "ALT", "T"]},
-      "verifier": {"kind": "guest_command_regex", "command": "pgrep -a -f 'gnome-terminal-server'", "pattern": "gnome-terminal-server"}
+      "verifier": {"kind": "guest_command_regex", "command": "pgrep -a -f '^/usr/libexec/gnome-terminal-server'", "pattern": "gnome-terminal-server"}
     },
     {
       "id": "type.terminal.native_exact",
@@ -82,7 +82,7 @@
       "target": {"kind": "fixed_norm", "bbox": [100, 100, 900, 900], "label": "LibreOffice Writer window"},
       "cursor": {"kind": "target_center"},
       "expected": {"kind": "key", "keys": ["CTRL", "SHIFT", "S"]},
-      "verifier": {"kind": "active_title_regex", "pattern": "Save As"}
+      "verifier": {"kind": "active_title_regex", "pattern": "user-virtual-machine Save(?:\\n|$)"}
     },
     {
       "id": "key.calc.open_save_as",
@@ -92,7 +92,7 @@
       "target": {"kind": "fixed_norm", "bbox": [100, 100, 900, 900], "label": "LibreOffice Calc window"},
       "cursor": {"kind": "target_center"},
       "expected": {"kind": "key", "keys": ["CTRL", "SHIFT", "S"]},
-      "verifier": {"kind": "active_title_regex", "pattern": "Save As"}
+      "verifier": {"kind": "active_title_regex", "pattern": "user-virtual-machine Save(?:\\n|$)"}
     },
     {
       "id": "key.impress.open_save_as",
@@ -102,7 +102,7 @@
       "target": {"kind": "fixed_norm", "bbox": [100, 100, 900, 900], "label": "LibreOffice Impress window"},
       "cursor": {"kind": "target_center"},
       "expected": {"kind": "key", "keys": ["CTRL", "SHIFT", "S"]},
-      "verifier": {"kind": "active_title_regex", "pattern": "Save As"}
+      "verifier": {"kind": "active_title_regex", "pattern": "user-virtual-machine Save(?:\\n|$)"}
     },
     {
       "id": "click.files.open_eval_target",
