@@ -99,8 +99,12 @@ def build_trajectory(
         compact_targets = (geometry.editor, None, None, None)
         classes = ("click", "key_chord", "coalesced_type", "key_chord")
     elif fixture.template == "local_document_scroll":
-        direction = str(fixture.near_miss["direction"] if near_miss else fixture.params["direction"])
-        clicks = -7 if direction == "down" else 7
+        direction = str(fixture.params["direction"])
+        # The negative control is a correct-direction undershoot, not reset and
+        # not the old wrong-direction action.  One wheel click acknowledges the
+        # primitive while remaining below the 500-pixel oracle threshold.
+        magnitude = 1 if near_miss else 7
+        clicks = -magnitude if direction == "down" else magnitude
         if native:
             actions = (
                 {"action": "mouse_move", "coordinate": list(geometry.scroll_surface)},

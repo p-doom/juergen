@@ -74,9 +74,12 @@ def near_miss_state(fixture: Fixture) -> dict[str, Any]:
     if fixture.template == "vscode_focus_type":
         return focus_state(fixture, str(fixture.near_miss["text"]))
     if fixture.template == "local_document_scroll":
-        delta = int(fixture.expected["min_delta"]) + 100
+        # A useful negative exercises the requested primitive without reaching
+        # the success threshold.  Wrong-direction scrolling confounds action
+        # semantics with the oracle boundary, while reset exercises no action.
+        delta = max(1, int(fixture.expected["min_delta"]) // 2)
         y = int(fixture.params["initial_y"]) + (
-            -delta if fixture.params["direction"] == "down" else delta
+            delta if fixture.params["direction"] == "down" else -delta
         )
         return scroll_state(fixture, max(0, y))
     return drag_state(fixture, "decoy")

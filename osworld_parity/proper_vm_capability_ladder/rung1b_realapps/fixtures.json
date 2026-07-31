@@ -12,11 +12,13 @@
       "split": "development",
       "parameter_seed": 3101,
       "horizon": 4,
-      "instruction": "In the open VS Code document, focus the editor, replace all text with “Grüße aus Köln — Δοκιμή 🧭”, and save the file.",
+      "instruction": "In the open VS Code document, focus the editor, replace all text with “Phase B coalesced typing seed 3101”, and save the file.",
       "params": {"file_name": "memo-3101.txt", "initial_text": "replace this development note\n"},
-      "expected": {"text": "Grüße aus Köln — Δοκιμή 🧭"},
-      "near_miss": {"text": "Grusse aus Koln - Dokimi"},
-      "fixture_sha256": "1276296ada20619aea9404371e057c0bd0a37f36f0e304c7ea309b71265bcf9b"
+      "expected": {"text": "Phase B coalesced typing seed 3101"},
+      "near_miss": {"text": "Phase B coalesced typing seed 310I"},
+      "gate_role": "primary_gate",
+      "coverage_label": "phaseb_ascii_coalesced_typing",
+      "fixture_sha256": "783272b2c4b81f3ef782292f65ec2e3408ed0db434714881d6b9ee5ca9b33343"
     },
     {
       "id": "r1b-vscode-type-dev-3102",
@@ -28,7 +30,9 @@
       "params": {"file_name": "memo-3102.txt", "initial_text": "development seed 3102\n"},
       "expected": {"text": "naïve café • 東京 • 🚲"},
       "near_miss": {"text": "naive cafe - Tokyo"},
-      "fixture_sha256": "059d428c297eba47532c847a9004c23aaa0629dc56f3da7bd833aa7ce1afbbe7"
+      "gate_role": "capability_probe",
+      "coverage_label": "unicode_coalesced_typing_probe",
+      "fixture_sha256": "4ff38b6e407f072625d16d98f0e6ae91031f25ba41321dca4156071a9137fe02"
     },
     {
       "id": "r1b-scroll-dev-3201",
@@ -39,8 +43,10 @@
       "instruction": "Scroll down in the open local development document by at least one screen.",
       "params": {"direction": "down", "initial_y": 0, "port": 18321, "document_lines": 180},
       "expected": {"min_delta": 500},
-      "near_miss": {"direction": "up"},
-      "fixture_sha256": "7306e8edb0434eff756323ee0af0ddbef49634422aa9b8e913dccc34ea948888"
+      "near_miss": {"kind": "correct_direction_undershoot", "direction": "down"},
+      "gate_role": "capability_probe",
+      "coverage_label": "thin_coverage_scroll_probe",
+      "fixture_sha256": "fe0b7adc6394e5a0e82ad12a50d1a397906d1a909c9d256601caa57aad12d668"
     },
     {
       "id": "r1b-scroll-dev-3202",
@@ -51,8 +57,10 @@
       "instruction": "Scroll up in the open local development document by at least one screen.",
       "params": {"direction": "up", "initial_y": 2800, "port": 18322, "document_lines": 180},
       "expected": {"min_delta": 500},
-      "near_miss": {"direction": "down"},
-      "fixture_sha256": "9d00e066acadb5565003d2f3deda6d97a7fd1ede48bc56a7568e922d548288d3"
+      "near_miss": {"kind": "correct_direction_undershoot", "direction": "up"},
+      "gate_role": "capability_probe",
+      "coverage_label": "thin_coverage_scroll_probe",
+      "fixture_sha256": "9ae94709b32b62ddb9c1fcb1949eb5371538d4dbec39d34b8ff69bd225652056"
     },
     {
       "id": "r1b-files-drag-dev-3301",
@@ -64,7 +72,9 @@
       "params": {"source_name": "parcel-3301.txt", "destination_name": "Delivered-3301", "decoy_name": "Archive-3301", "content": "development parcel 3301\n"},
       "expected": {"destination": "Delivered-3301"},
       "near_miss": {"destination": "Archive-3301"},
-      "fixture_sha256": "a540f337eb323e434772ac62909d8b9a85f688016c93b33b349fbf98c8d1093c"
+      "gate_role": "capability_probe",
+      "coverage_label": "thin_coverage_drag_probe",
+      "fixture_sha256": "e9d0c7ad22623edc62fa26d4a09f2a9389dff1463c9695c465ea22b435d8a4ea"
     },
     {
       "id": "r1b-files-drag-dev-3302",
@@ -76,8 +86,10 @@
       "params": {"source_name": "parcel-3302.txt", "destination_name": "Delivered-3302", "decoy_name": "Archive-3302", "content": "development parcel 3302\n"},
       "expected": {"destination": "Delivered-3302"},
       "near_miss": {"destination": "Archive-3302"},
-      "fixture_sha256": "6dbca109d747c7be78805f64a7d87e8ee105aa95aa6ffdb7dce59869876aa9a0"
+      "gate_role": "capability_probe",
+      "coverage_label": "thin_coverage_drag_probe",
+      "fixture_sha256": "517babb9371f5c9fe0c6bc4a60b6a28d42aa517dc31b781922a044307e423104"
     }
   ],
-  "manifest_payload_sha256": "cf0151296c950fad08be52e2bf09b582b96379bd30b33698e73e61d269516bd7"
+  "manifest_payload_sha256": "58c2bfa0a3ad7e294ee7cd94c88cb5f8ea03b44386537bd4f5b25e773c0e7e6a"
 }

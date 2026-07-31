@@ -39,7 +39,7 @@ def test_hash_and_application_provenance_fail_closed():
 
 
 def test_exact_unicode_not_normalized_or_transliterated():
-    fixture = load_manifest().by_id("r1b-vscode-type-dev-3101")
+    fixture = load_manifest().by_id("r1b-vscode-type-dev-3102")
     assert evaluate_state(fixture, near_miss_state(fixture)).MOUSE_SOLVED is False
 
 
@@ -48,4 +48,3 @@ def test_files_near_miss_in_decoy_is_rejected():
     state = near_miss_state(fixture)
     assert state["decoy_sha256"] is not None
     assert evaluate_state(fixture, state).MOUSE_SOLVED is False
-

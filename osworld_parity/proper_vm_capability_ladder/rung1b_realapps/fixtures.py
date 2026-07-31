@@ -38,6 +38,8 @@ class Fixture:
     params: dict[str, Any]
     expected: dict[str, Any]
     near_miss: dict[str, Any]
+    gate_role: str
+    coverage_label: str
     fixture_sha256: str
 
     @classmethod
@@ -55,6 +57,8 @@ class Fixture:
             "params": self.params,
             "expected": self.expected,
             "near_miss": self.near_miss,
+            "gate_role": self.gate_role,
+            "coverage_label": self.coverage_label,
         }
 
     def verify_hash(self) -> None:
@@ -126,6 +130,25 @@ def _validate(fixtures: tuple[Fixture, ...]) -> None:
             raise FixtureManifestError(f"non-development/unknown fixture: {fixture.id}")
         if fixture.horizon != HORIZONS[fixture.template]:
             raise FixtureManifestError(f"horizon drift: {fixture.id}")
+        if fixture.gate_role not in {"primary_gate", "capability_probe"}:
+            raise FixtureManifestError(f"unlabelled gate role: {fixture.id}")
+        if fixture.gate_role == "capability_probe" and not fixture.coverage_label.endswith(
+            "_probe"
+        ):
+            raise FixtureManifestError(f"capability probe is not explicit: {fixture.id}")
+        if fixture.template == "local_document_scroll":
+            if fixture.coverage_label != "thin_coverage_scroll_probe":
+                raise FixtureManifestError(f"scroll coverage label drift: {fixture.id}")
+            if fixture.near_miss != {
+                "kind": "correct_direction_undershoot",
+                "direction": fixture.params["direction"],
+            }:
+                raise FixtureManifestError(f"scroll near miss semantics drift: {fixture.id}")
+        if (
+            fixture.template == "files_drag"
+            and fixture.coverage_label != "thin_coverage_drag_probe"
+        ):
+            raise FixtureManifestError(f"drag coverage label drift: {fixture.id}")
         if forbidden.search(json.dumps(fixture.unsigned_payload(), ensure_ascii=False)):
             raise FixtureManifestError(f"forbidden benchmark reference: {fixture.id}")
     counts = {template: sum(item.template == template for item in fixtures) for template in TEMPLATES}
@@ -140,3 +163,28 @@ def _validate(fixtures: tuple[Fixture, ...]) -> None:
         raise FixtureManifestError("scroll fixtures must cover both signs")
     if any("slider" in json.dumps(item.unsigned_payload()).lower() for item in fixtures):
         raise FixtureManifestError("browser-slider drag fallback is forbidden")
+    primary = [item for item in fixtures if item.gate_role == "primary_gate"]
+    if len(primary) != 1 or primary[0].coverage_label != "phaseb_ascii_coalesced_typing":
+        raise FixtureManifestError("primary gate must be the Phase-B ASCII coalesced-type fixture")
+    primary_text = str(primary[0].expected.get("text", ""))
+    if not primary_text.isascii():
+        raise FixtureManifestError("primary Phase-B typing fixture must be ASCII")
+    unicode_probes = [
+        item
+        for item in fixtures
+        if item.coverage_label == "unicode_coalesced_typing_probe"
+    ]
+    if len(unicode_probes) != 1 or unicode_probes[0].template != "vscode_focus_type":
+        raise FixtureManifestError("Unicode coalesced-type probe coverage drift")
+    if str(unicode_probes[0].expected.get("text", "")).isascii():
+        raise FixtureManifestError("Unicode capability probe silently became ASCII")
+    expected_probes = {
+        "unicode_coalesced_typing_probe",
+        "thin_coverage_scroll_probe",
+        "thin_coverage_drag_probe",
+    }
+    observed_probes = {
+        item.coverage_label for item in fixtures if item.gate_role == "capability_probe"
+    }
+    if observed_probes != expected_probes:
+        raise FixtureManifestError(f"capability probe coverage drift: {observed_probes}")

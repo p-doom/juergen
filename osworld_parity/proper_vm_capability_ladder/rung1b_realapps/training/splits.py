@@ -93,6 +93,7 @@ def _make_fixture(cell: SeedCell, split: str) -> Fixture:
             f"In the open VS Code document, focus the editor, replace all text with "
             f"“{expected}”, and save the file."
         )
+        coverage_label = "unicode_coalesced_typing_probe"
     elif cell.template == "local_document_scroll":
         direction = "down" if seed % 2 else "up"
         initial_y = 0 if direction == "down" else 2600 + 100 * rng.randrange(4)
@@ -103,9 +104,10 @@ def _make_fixture(cell: SeedCell, split: str) -> Fixture:
             "document_lines": 160 + 10 * rng.randrange(5),
         }
         expected_value = {"min_delta": 500}
-        near = {"direction": "up" if direction == "down" else "down"}
+        near = {"kind": "correct_direction_undershoot", "direction": direction}
         horizon = 2
         instruction = f"Scroll {direction} in the open local training document by at least one screen."
+        coverage_label = "thin_coverage_scroll_probe"
     else:
         params = {
             "source_name": f"training-parcel-{seed}.txt",
@@ -120,6 +122,7 @@ def _make_fixture(cell: SeedCell, split: str) -> Fixture:
             f"In Files, drag “{params['source_name']}” into the folder "
             f"“{params['destination_name']}”."
         )
+        coverage_label = "thin_coverage_drag_probe"
     unsigned = {
         "id": f"r1b-{split}-{cell.template}-{seed}",
         "template": cell.template,
@@ -130,6 +133,8 @@ def _make_fixture(cell: SeedCell, split: str) -> Fixture:
         "params": params,
         "expected": expected_value,
         "near_miss": near,
+        "gate_role": "capability_probe",
+        "coverage_label": coverage_label,
     }
     return Fixture(**unsigned, fixture_sha256=sha256_value(unsigned))
 

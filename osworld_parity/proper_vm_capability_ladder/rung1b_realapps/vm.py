@@ -4,7 +4,7 @@ import base64
 import json
 import shlex
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -24,6 +24,35 @@ from .trajectory import UiGeometry
 
 GUEST_ROOT_NAME = ".r1b_realapps_development"
 JSON_MARKER = "RUNG1B_JSON="
+READINESS_STABLE_PROBES = 3
+SETTLE_STABLE_PROBES = 3
+
+
+class AppReadinessError(TransportError):
+    """A phase-specific setup failure with guest evidence attached."""
+
+    def __init__(self, *, fixture_id: str, failed_phase: str, evidence: dict[str, Any]):
+        self.fixture_id = fixture_id
+        self.failed_phase = failed_phase
+        self.evidence = evidence
+        super().__init__(
+            f"{fixture_id}: readiness failed at {failed_phase}; "
+            f"last_error={evidence.get('last_error')!r}"
+        )
+
+
+class AppSettleTimeout(TransportError):
+    """An action was not acknowledged and observed stable before its deadline."""
+
+    def __init__(self, *, fixture_id: str, phase: str, evidence: dict[str, Any]):
+        self.fixture_id = fixture_id
+        self.phase = phase
+        self.evidence = evidence
+        super().__init__(
+            f"{fixture_id}: action settle timed out at {phase}; "
+            f"acknowledged={evidence.get('acknowledged')!r}; "
+            f"last_error={evidence.get('last_error')!r}"
+        )
 
 # This program runs as the VM agent user.  The pinned image used to expose
 # /home/oai/share, but that is not part of the agent contract: some snapshots
@@ -66,6 +95,15 @@ else:
 class GuestFixture:
     state: dict[str, Any]
     geometry: UiGeometry
+    readiness: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SettledFixture:
+    state: dict[str, Any]
+    acknowledgement: dict[str, Any]
+    polls: tuple[dict[str, Any], ...]
+    stable_probe_count: int
 
 
 def _b64(text: str) -> str:
@@ -227,26 +265,228 @@ wmctrl -r :ACTIVE: -b add,maximized 2>/dev/null || true
 """.strip()
 
 
-def setup_fixture(transport: HttpVmTransport, fixture: Fixture) -> GuestFixture:
-    root = _guest_dir(transport, fixture)
+def setup_fixture(
+    transport: HttpVmTransport,
+    fixture: Fixture,
+    *,
+    timeout_s: float = 60.0,
+    poll_interval_s: float = 0.5,
+) -> GuestFixture:
+    started = time.monotonic()
+    evidence: dict[str, Any] = {
+        "schema_version": 1,
+        "fixture_id": fixture.id,
+        "guest_controller": "setup_command_pending",
+        "required_identical_geometry_probes": READINESS_STABLE_PROBES,
+        "phases": [],
+        "polls": [],
+        "last_error": None,
+    }
+    try:
+        root = _guest_dir(transport, fixture)
+    except (OSError, ValueError, TransportError, json.JSONDecodeError) as exc:
+        evidence["last_error"] = f"{type(exc).__name__}: {exc}"
+        raise AppReadinessError(
+            fixture_id=fixture.id,
+            failed_phase="guest_root_resolution",
+            evidence=evidence,
+        ) from exc
+    evidence["phases"].append(
+        {
+            "phase": "guest_root_resolution",
+            "status": "ok",
+            "elapsed_s": round(time.monotonic() - started, 3),
+            "root": str(root),
+        }
+    )
     if fixture.template == "vscode_focus_type":
         script = _focus_setup_script(fixture, root)
     elif fixture.template == "local_document_scroll":
         script = _scroll_setup_script(fixture, root)
     else:
         script = _drag_setup_script(fixture, root)
-    transport.execute_argv(["bash", "-lc", script])
-    deadline = time.monotonic() + 60.0
-    last_error: Exception | None = None
+    try:
+        transport.execute_argv(["bash", "-lc", script])
+    except TransportError as exc:
+        evidence["last_error"] = f"{type(exc).__name__}: {exc}"
+        evidence["diagnostics"] = collect_readiness_diagnostics(transport, root)
+        raise AppReadinessError(
+            fixture_id=fixture.id,
+            failed_phase="app_process_launch",
+            evidence=evidence,
+        ) from exc
+    evidence["guest_controller"] = "accepted_setup_command"
+    evidence["phases"].append(
+        {
+            "phase": "app_process_launch",
+            "status": "ok",
+            "elapsed_s": round(time.monotonic() - started, 3),
+        }
+    )
+    deadline = started + timeout_s
+    state_seen = False
+    geometry_seen = False
+    previous_geometry: UiGeometry | None = None
+    identical_geometry = 0
+    last_state: dict[str, Any] | None = None
     while time.monotonic() < deadline:
+        poll: dict[str, Any] = {
+            "index": len(evidence["polls"]) + 1,
+            "elapsed_s": round(time.monotonic() - started, 3),
+        }
         try:
             state = probe_fixture(transport, fixture)
+            last_state = state
+            poll["state"] = state
+            if not state_seen:
+                evidence["phases"].append(
+                    {
+                        "phase": "initial_state_probe",
+                        "status": "ok",
+                        "elapsed_s": round(time.monotonic() - started, 3),
+                    }
+                )
+            state_seen = True
             geometry = probe_geometry(transport, fixture)
-            return GuestFixture(state, geometry)
+            poll["geometry"] = asdict(geometry)
+            if not geometry_seen:
+                evidence["phases"].append(
+                    {
+                        "phase": "app_window_geometry",
+                        "status": "ok",
+                        "elapsed_s": round(time.monotonic() - started, 3),
+                    }
+                )
+            geometry_seen = True
+            if geometry == previous_geometry:
+                identical_geometry += 1
+            else:
+                previous_geometry = geometry
+                identical_geometry = 1
+            poll["identical_geometry_probe_count"] = identical_geometry
+            evidence["polls"].append(poll)
+            if identical_geometry >= READINESS_STABLE_PROBES:
+                evidence["phases"].append(
+                    {
+                        "phase": "stable_geometry",
+                        "status": "ok",
+                        "elapsed_s": round(time.monotonic() - started, 3),
+                        "identical_probe_count": identical_geometry,
+                    }
+                )
+                evidence["stable_geometry"] = asdict(geometry)
+                evidence["stable_geometry_probe_count"] = identical_geometry
+                return GuestFixture(state, geometry, evidence)
         except (OSError, KeyError, ValueError, TransportError, json.JSONDecodeError) as exc:
-            last_error = exc
-            time.sleep(0.5)
-    raise TransportError(f"real-application setup did not become ready: {last_error}")
+            evidence["last_error"] = f"{type(exc).__name__}: {exc}"
+            poll["error"] = evidence["last_error"]
+            evidence["polls"].append(poll)
+            previous_geometry = None
+            identical_geometry = 0
+        time.sleep(poll_interval_s)
+    evidence["last_state"] = last_state
+    evidence["diagnostics"] = collect_readiness_diagnostics(transport, root)
+    failed_phase = (
+        "initial_state_probe"
+        if not state_seen
+        else "app_window_geometry"
+        if not geometry_seen
+        else "stable_geometry"
+    )
+    raise AppReadinessError(
+        fixture_id=fixture.id,
+        failed_phase=failed_phase,
+        evidence=evidence,
+    )
+
+
+def wait_for_action_settle(
+    transport: HttpVmTransport,
+    fixture: Fixture,
+    initial_state: dict[str, Any],
+    *,
+    phase: str,
+    timeout_s: float = 15.0,
+    poll_interval_s: float = 0.25,
+    stable_probe_count: int = SETTLE_STABLE_PROBES,
+) -> SettledFixture:
+    """Require a causal state change, then fresh identical state probes.
+
+    The acknowledgement observation is deliberately not counted as one of the
+    stable probes.  This prevents a transient first change from being handed to
+    the hidden oracle and makes timeout fail closed instead of returning the
+    last (possibly stale) state.
+    """
+    if stable_probe_count < 3:
+        raise ValueError("action settle requires at least three identical probes")
+    started = time.monotonic()
+    deadline = started + timeout_s
+    polls: list[dict[str, Any]] = []
+    acknowledgement: dict[str, Any] | None = None
+    stable_state: dict[str, Any] | None = None
+    identical = 0
+    last_error: str | None = None
+    last_state: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        poll: dict[str, Any] = {
+            "index": len(polls) + 1,
+            "elapsed_s": round(time.monotonic() - started, 3),
+        }
+        try:
+            current = probe_fixture(transport, fixture)
+            last_state = current
+            poll["state"] = current
+            if acknowledgement is None:
+                if current != initial_state:
+                    acknowledgement = {
+                        "kind": "hidden_state_changed",
+                        "poll_index": poll["index"],
+                        "elapsed_s": poll["elapsed_s"],
+                        "state": current,
+                    }
+                    poll["action_acknowledged"] = True
+                    # Acknowledgement is never also a stability observation.
+                    stable_state = None
+                    identical = 0
+            else:
+                if current == stable_state:
+                    identical += 1
+                else:
+                    stable_state = current
+                    identical = 1
+                poll["identical_post_ack_probe_count"] = identical
+        except (OSError, KeyError, ValueError, TransportError, json.JSONDecodeError) as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            poll["error"] = last_error
+            identical = 0
+            stable_state = None
+        polls.append(poll)
+        if acknowledgement is not None and identical >= stable_probe_count:
+            if stable_state is None:  # defensive: impossible by construction
+                raise AssertionError("settle stability count has no state")
+            return SettledFixture(
+                state=stable_state,
+                acknowledgement=acknowledgement,
+                polls=tuple(polls),
+                stable_probe_count=identical,
+            )
+        time.sleep(poll_interval_s)
+    raise AppSettleTimeout(
+        fixture_id=fixture.id,
+        phase=phase,
+        evidence={
+            "schema_version": 1,
+            "phase": phase,
+            "acknowledged": acknowledgement is not None,
+            "acknowledgement": acknowledgement,
+            "required_identical_post_ack_probes": stable_probe_count,
+            "last_identical_post_ack_probe_count": identical,
+            "initial_state": initial_state,
+            "last_state": last_state,
+            "last_error": last_error,
+            "polls": polls,
+        },
+    )
 
 
 def probe_fixture(transport: HttpVmTransport, fixture: Fixture) -> dict[str, Any]:
@@ -324,6 +564,36 @@ print({JSON_MARKER!r}+json.dumps({{'points':found}},sort_keys=True))
     )
 
 
+def collect_readiness_diagnostics(
+    transport: HttpVmTransport, root: PurePosixPath
+) -> dict[str, Any]:
+    """Collect bounded guest logs/window/process evidence without masking failure."""
+    code = f"""
+import json,pathlib,subprocess
+r=pathlib.Path({str(root)!r}); logs={{}}
+for p in r.glob('*.log'):
+ try: logs[p.name]=p.read_text(errors='replace')[-12000:]
+ except OSError as exc: logs[p.name]={{'read_error':str(exc)}}
+def run(cmd):
+ try:
+  x=subprocess.run(cmd,capture_output=True,text=True,timeout=5)
+  return {{'rc':x.returncode,'stdout':x.stdout[-12000:],'stderr':x.stderr[-4000:]}}
+ except Exception as exc: return {{'error':type(exc).__name__+': '+str(exc)}}
+v={{'logs':logs,'processes':run(['ps','-eo','pid,stat,comm,args']),'windows':run(['wmctrl','-lGx']),'active_window':run(['xprop','-root','_NET_ACTIVE_WINDOW'])}}
+print({JSON_MARKER!r}+json.dumps(v,sort_keys=True))
+""".strip()
+    try:
+        return _run_json(transport, ["python3", "-c", code])
+    except Exception as exc:  # diagnostics preserve the primary failure
+        return {"diagnostic_error": f"{type(exc).__name__}: {exc}"}
+
+
+def collect_fixture_diagnostics(
+    transport: HttpVmTransport, fixture: Fixture
+) -> dict[str, Any]:
+    return collect_readiness_diagnostics(transport, _guest_dir(transport, fixture))
+
+
 __all__ = [
     "DEFAULT_PROVIDER",
     "DEFAULT_QCOW",
@@ -332,10 +602,18 @@ __all__ = [
     "KvmFixtureSession",
     "sha256_file",
     "GuestFixture",
+    "SettledFixture",
+    "AppReadinessError",
+    "AppSettleTimeout",
+    "READINESS_STABLE_PROBES",
+    "SETTLE_STABLE_PROBES",
     "GUEST_ROOT_NAME",
     "GUEST_ROOT_RESOLVER",
     "resolve_guest_root",
     "setup_fixture",
     "probe_fixture",
     "probe_geometry",
+    "wait_for_action_settle",
+    "collect_readiness_diagnostics",
+    "collect_fixture_diagnostics",
 ]
