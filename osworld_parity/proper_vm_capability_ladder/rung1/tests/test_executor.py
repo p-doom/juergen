@@ -167,10 +167,53 @@ class SingleProcessHttpTransport(HttpVmTransport):
                     "duration_ns": 1,
                 },
             ],
+            "x_sync_attempt_evidence": [
+                {
+                    "sequence": sequence,
+                    "phase": phase,
+                    "attempted": True,
+                    "success": True,
+                    "error": None,
+                    "started_guest_monotonic_ns": sequence,
+                    "completed_guest_monotonic_ns": sequence + 1,
+                    "duration_ns": 1,
+                }
+                for sequence, phase in enumerate(
+                    [
+                        "initial_readback",
+                        "canonical_move",
+                        "click_premove",
+                        "press",
+                        "press",
+                        "press_sync",
+                        "release",
+                        "release",
+                        "release_sync",
+                        "verification_readback",
+                        "final_readback",
+                    ],
+                    1,
+                )
+            ],
             "click_backend": PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
             "x_injection_evidence": [
                 {
                     "sequence": 1,
+                    "phase": "canonical_move",
+                    "event": "motion_notify",
+                    "event_type": 6,
+                    "detail": 0,
+                    "x": 300,
+                    "y": 400,
+                    "attempted": True,
+                    "success": True,
+                    "error": None,
+                    "started_guest_monotonic_ns": 0,
+                    "completed_guest_monotonic_ns": 0,
+                    "duration_ns": 0,
+                },
+                {
+                    "sequence": 2,
                     "phase": "click_premove",
                     "event": "motion_notify",
                     "event_type": 6,
@@ -185,7 +228,7 @@ class SingleProcessHttpTransport(HttpVmTransport):
                     "duration_ns": 0,
                 },
                 {
-                    "sequence": 2,
+                    "sequence": 3,
                     "phase": "press",
                     "event": "motion_notify",
                     "event_type": 6,
@@ -200,7 +243,7 @@ class SingleProcessHttpTransport(HttpVmTransport):
                     "duration_ns": 0,
                 },
                 {
-                    "sequence": 3,
+                    "sequence": 4,
                     "phase": "press",
                     "event": "button_press",
                     "event_type": 4,
@@ -215,7 +258,7 @@ class SingleProcessHttpTransport(HttpVmTransport):
                     "duration_ns": 0,
                 },
                 {
-                    "sequence": 4,
+                    "sequence": 5,
                     "phase": "release",
                     "event": "motion_notify",
                     "event_type": 6,
@@ -230,7 +273,7 @@ class SingleProcessHttpTransport(HttpVmTransport):
                     "duration_ns": 0,
                 },
                 {
-                    "sequence": 5,
+                    "sequence": 6,
                     "phase": "release",
                     "event": "button_release",
                     "event_type": 5,
@@ -258,8 +301,8 @@ class SingleProcessHttpTransport(HttpVmTransport):
                     "dwell_error": None,
                     "release_call_success": True,
                     "release_call_error": None,
-                    "x_injection_start_sequence": 0,
-                    "x_injection_end_sequence": 5,
+                    "x_injection_start_sequence": 1,
+                    "x_injection_end_sequence": 6,
                     "click_started_guest_monotonic_ns": 1,
                     "press_call_before_guest_monotonic_ns": 2,
                     "press_call_after_guest_monotonic_ns": 3,
@@ -286,6 +329,7 @@ class SingleProcessHttpTransport(HttpVmTransport):
                 "cursor": [300, 400],
                 "pointer_button_mask": 0,
             },
+            "attempt_hook_restore_errors": [],
             "passive_x_observer": {
                 "installed": False,
                 "observer_process_count": 0,
@@ -315,6 +359,7 @@ def _execute_compiled_click(
         "mask": 0,
         "fake_input_count": 0,
         "after_flush": False,
+        "sync_attempt_count": 0,
         "query_pointer_count": 0,
     }
 
@@ -328,8 +373,14 @@ def _execute_compiled_click(
             state["after_flush"] = True
 
         def sync(self) -> None:
+            state["sync_attempt_count"] += 1
             after_flush = state["after_flush"]
             state["after_flush"] = False
+            if (
+                failure_stage == "premove_sync"
+                and state["sync_attempt_count"] == 3
+            ):
+                raise RuntimeError("injected premove sync failure")
             if failure_stage == "sync" and after_flush:
                 raise RuntimeError("injected sync failure")
 
@@ -422,7 +473,17 @@ def _execute_compiled_click(
         backend._click(state["x"], state["y"], button)
 
     pyautogui.click = top_level_click
-    pyautogui.keyUp = lambda _key: None
+
+    def key_down(_key: str) -> None:
+        backend.fake_input(backend._display, 2, 38)
+        backend._display.sync()
+
+    def key_up(_key: str) -> None:
+        backend.fake_input(backend._display, 3, 38)
+        backend._display.sync()
+
+    pyautogui.keyDown = key_down
+    pyautogui.keyUp = key_up
     pyautogui.mouseUp = lambda *, button: mouse_up(
         state["x"], state["y"], button
     )
@@ -454,6 +515,36 @@ def _execute_compiled_click(
     ]
     assert len(markers) == 1
     return json.loads(markers[0][len(ATOMIC_RESULT_PREFIX) :])
+
+
+def test_lifecycle_attempt_hooks_capture_keyboard_xtest_without_click(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    payload = _execute_compiled_click(
+        (
+            Operation("key_down", ("a",)),
+            Operation("key_up", ("a",)),
+        ),
+        PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
+        monkeypatch,
+        capsys,
+    )
+
+    assert [
+        (item["phase"], item["event"], item["event_type"], item["detail"])
+        for item in payload["x_injection_evidence"]
+    ] == [
+        ("outside_action", "key_press", 2, 38),
+        ("outside_action", "key_release", 3, 38),
+    ]
+    assert [item["phase"] for item in payload["x_sync_attempt_evidence"]] == [
+        "initial_readback",
+        "outside_action",
+        "outside_action",
+        "verification_readback",
+        "final_readback",
+    ]
 
 
 def test_click_adapters_match_cursor_and_button_transitions() -> None:
@@ -675,6 +766,29 @@ def test_click_backends_differ_only_by_release_side_motion_notify(
         "mouse_down",
         "mouse_up",
     ]
+    expected_sync_phases = [
+        "initial_readback",
+        "canonical_move",
+        "click_premove",
+        "press",
+        "press",
+        "press_sync",
+        "release",
+        "release",
+        "release_sync",
+        "verification_readback",
+        "final_readback",
+    ]
+    for payload in (current, direct):
+        assert [
+            item["phase"] for item in payload["x_sync_attempt_evidence"]
+        ] == expected_sync_phases
+        assert all(
+            item["attempted"] is True
+            and item["success"] is True
+            and item["error"] is None
+            for item in payload["x_sync_attempt_evidence"]
+        )
 
     timestamp_fields = (
         "click_started_guest_monotonic_ns",
@@ -707,7 +821,15 @@ def test_click_backends_differ_only_by_release_side_motion_notify(
 
 @pytest.mark.parametrize(
     "failure_stage",
-    ["premove", "press", "sync", "dwell", "release", "final_readback"],
+    [
+        "premove",
+        "premove_sync",
+        "press",
+        "sync",
+        "dwell",
+        "release",
+        "final_readback",
+    ],
 )
 def test_guest_click_failure_stages_always_emit_durable_attempt_evidence(
     failure_stage: str,
@@ -730,11 +852,14 @@ def test_guest_click_failure_stages_always_emit_durable_attempt_evidence(
     assert f"injected {failure_stage.replace('_', ' ')} failure" in payload["error"]
     assert len(payload["x_injection_timestamps"]) == 1
     timing = payload["x_injection_timestamps"][0]
-    assert timing["x_injection_end_sequence"] == len(
-        payload["x_injection_evidence"]
-    )
+    assert timing["x_injection_end_sequence"] <= len(payload["x_injection_evidence"])
     if failure_stage in {"premove", "press", "release"}:
-        failed_attempt = payload["x_injection_evidence"][-1]
+        failed_attempts = [
+            item for item in payload["x_injection_evidence"]
+            if item["success"] is False
+        ]
+        assert failed_attempts
+        failed_attempt = failed_attempts[0]
         assert failed_attempt["attempted"] is True
         assert failed_attempt["success"] is False
         assert "injected" in failed_attempt["error"]
@@ -743,6 +868,16 @@ def test_guest_click_failure_stages_always_emit_durable_attempt_evidence(
         assert failed_sync["sync_attempted"] is True
         assert failed_sync["success"] is False
         assert "injected sync failure" in failed_sync["error"]
+    if failure_stage == "premove_sync":
+        failed_sync_attempts = [
+            item for item in payload["x_sync_attempt_evidence"]
+            if item["success"] is False
+        ]
+        assert len(failed_sync_attempts) == 1
+        assert failed_sync_attempts[0]["phase"] == "click_premove"
+        assert "injected premove sync failure" in failed_sync_attempts[0]["error"]
+        assert len(payload["x_injection_evidence"]) == 8
+        assert len(payload["x_sync_attempt_evidence"]) == 10
     if failure_stage == "dwell":
         assert timing["dwell_success"] is False
         assert "injected dwell failure" in timing["dwell_error"]
@@ -785,7 +920,7 @@ def test_http_transport_rejects_corrupt_release_motion_identity(
         def execute_argv(self, argv: list[str], *, check: bool = True) -> dict:
             result = super().execute_argv(argv, check=check)
             payload = json.loads(result["output"][len(ATOMIC_RESULT_PREFIX) :])
-            release_motion = payload["x_injection_evidence"][3]
+            release_motion = payload["x_injection_evidence"][4]
             if mutation == "coordinates":
                 release_motion["x"], release_motion["y"] = value
             else:
@@ -804,7 +939,7 @@ def test_http_transport_rejects_corrupt_release_motion_identity(
     assert caught.value.evidence["schema_version"] == "rung1_atomic_output_failure_v2"
     assert caught.value.evidence["expected"] is not None
     assert caught.value.evidence["observed"] is not None
-    assert len(caught.value.evidence["raw_x_injection_evidence"]) == 5
+    assert len(caught.value.evidence["raw_x_injection_evidence"]) == 6
     assert caught.value.evidence["raw_backend_primitives"]
     assert caught.value.evidence["raw_x_event_sync_evidence"]
     assert caught.value.evidence["raw_x_injection_timestamps"]
@@ -822,12 +957,12 @@ def test_http_transport_seals_click_premove_and_preserves_abort_evidence(
             result = super().execute_argv(argv, check=check)
             payload = json.loads(result["output"][len(ATOMIC_RESULT_PREFIX) :])
             records = payload["x_injection_evidence"]
-            premove = records[0]
+            premove = records[1]
             if mutation == "omission":
-                records.pop(0)
+                records.pop(1)
                 for sequence, record in enumerate(records, 1):
                     record["sequence"] = sequence
-                payload["x_injection_timestamps"][0]["x_injection_end_sequence"] = 4
+                payload["x_injection_timestamps"][0]["x_injection_end_sequence"] = 5
             elif mutation == "phase":
                 premove["phase"] = "press"
             elif mutation == "coordinates":
@@ -835,7 +970,7 @@ def test_http_transport_seals_click_premove_and_preserves_abort_evidence(
             elif mutation == "event_type":
                 premove["event_type"] = 5
             else:
-                premove["sequence"], records[1]["sequence"] = 2, 1
+                premove["sequence"], records[2]["sequence"] = 3, 2
             result["output"] = ATOMIC_RESULT_PREFIX + json.dumps(payload)
             return result
 
@@ -886,6 +1021,7 @@ def test_http_transport_preserves_payload_when_final_pointer_readback_fails() ->
     assert evidence["schema_version"] == "rung1_atomic_output_failure_v2"
     assert evidence["raw_payload"] is not None
     assert evidence["raw_x_event_sync_evidence"]
+    assert evidence["raw_x_sync_attempt_evidence"]
     assert evidence["raw_x_injection_evidence"]
     assert evidence["final_pointer_readback"]["success"] is False
     assert evidence["pointer_masks"]["final"] == -1
@@ -933,6 +1069,7 @@ def test_all_post_output_parser_failures_use_central_raw_evidence(
     assert evidence["guest_error"] is None
     assert evidence["pointer_masks"]["final"] == 0
     assert "raw_x_event_sync_evidence" in evidence
+    assert "raw_x_sync_attempt_evidence" in evidence
     assert "raw_x_injection_evidence" in evidence
 
 
@@ -995,6 +1132,7 @@ def test_http_atomic_failure_preserves_nonzero_marker_evidence() -> None:
                 ],
                 "backend_primitives": [],
                 "x_event_sync_evidence": [],
+                "x_sync_attempt_evidence": [],
                 "click_backend": PYAUTOGUI_RELEASE_MOTION_CLICK_BACKEND,
                 "x_injection_evidence": [],
                 "x_injection_timestamps": [],
@@ -1005,6 +1143,7 @@ def test_http_atomic_failure_preserves_nonzero_marker_evidence() -> None:
                     "cursor": [10, 20],
                     "pointer_button_mask": 0,
                 },
+                "attempt_hook_restore_errors": [],
                 "passive_x_observer": {
                     "installed": False,
                     "observer_process_count": 0,

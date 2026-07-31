@@ -272,8 +272,8 @@ def _atomic(arm: str) -> dict:
         "dwell_error": None,
         "release_call_success": True,
         "release_call_error": None,
-        "x_injection_start_sequence": 0,
-        "x_injection_end_sequence": 5 if arm == "A" else 4,
+        "x_injection_start_sequence": 1,
+        "x_injection_end_sequence": 6 if arm == "A" else 5,
         "click_started_guest_monotonic_ns": 90,
         "press_call_before_guest_monotonic_ns": 100,
         "press_call_after_guest_monotonic_ns": 130,
@@ -321,11 +321,12 @@ def _atomic(arm: str) -> dict:
         }
 
     evidence = [
-        x_event(1, "click_premove", "motion_notify", 6, 0, 95, x=365, y=345),
-        x_event(2, "press", "motion_notify", 6, 0, 110, x=365, y=345),
-        x_event(3, "press", "button_press", 4, 1, 120),
+        x_event(1, "canonical_move", "motion_notify", 6, 0, 50, x=365, y=345),
+        x_event(2, "click_premove", "motion_notify", 6, 0, 95, x=365, y=345),
+        x_event(3, "press", "motion_notify", 6, 0, 110, x=365, y=345),
+        x_event(4, "press", "button_press", 4, 1, 120),
         x_event(
-            4 if arm == "B" else 5,
+            5 if arm == "B" else 6,
             "release",
             "button_release",
             5,
@@ -335,9 +336,9 @@ def _atomic(arm: str) -> dict:
     ]
     if arm == "A":
         evidence.insert(
-            3,
+            4,
             x_event(
-                4,
+                5,
                 "release",
                 "motion_notify",
                 6,
@@ -426,6 +427,34 @@ def _atomic(arm: str) -> dict:
                 "duration_ns": 10,
             },
         ],
+        "x_sync_attempt_evidence": [
+            {
+                "sequence": sequence,
+                "phase": phase,
+                "attempted": True,
+                "success": True,
+                "error": None,
+                "started_guest_monotonic_ns": sequence,
+                "completed_guest_monotonic_ns": sequence + 1,
+                "duration_ns": 1,
+            }
+            for sequence, phase in enumerate(
+                [
+                    "initial_readback",
+                    "canonical_move",
+                    "click_premove",
+                    "press",
+                    "press",
+                    "press_sync",
+                    "release",
+                    "release",
+                    "release_sync",
+                    "verification_readback",
+                    "final_readback",
+                ],
+                1,
+            )
+        ],
         "final_pointer_readback": {
             "attempted": True,
             "success": True,
@@ -455,6 +484,20 @@ def test_backend_contract_varies_only_preregistered_release_motion() -> None:
     assert a["click_primitive"]["dwell_ms"] == b["click_primitive"]["dwell_ms"] == 50
     assert a["click_primitive"]["release_side_motion_notify"] is True
     assert b["click_primitive"]["release_side_motion_notify"] is False
+    identity_fields = ("phase", "event", "event_type", "detail", "x", "y")
+    a_without_release_motion = [
+        tuple(item[field] for field in identity_fields)
+        for item in a["x_injection_evidence"]
+        if not (item["phase"] == "release" and item["event"] == "motion_notify")
+    ]
+    b_identities = [
+        tuple(item[field] for field in identity_fields)
+        for item in b["x_injection_evidence"]
+    ]
+    assert a_without_release_motion == b_identities
+    assert [
+        item["phase"] for item in a["x_sync_attempt_evidence"]
+    ] == [item["phase"] for item in b["x_sync_attempt_evidence"]]
 
 
 def test_existing_default_compiles_identically_to_explicit_a_backend() -> None:
@@ -505,7 +548,7 @@ def test_backend_contract_rejects_integrity_drift(arm: str, field: str, value) -
 )
 def test_a_release_motion_identity_corruption_aborts(mutation: str, value) -> None:
     atomic = _atomic("A")
-    release_motion = atomic["x_injection_evidence"][3]
+    release_motion = atomic["x_injection_evidence"][4]
     if mutation == "coordinates":
         release_motion["x"], release_motion["y"] = value
     else:
@@ -523,12 +566,12 @@ def test_a_release_motion_identity_corruption_aborts(mutation: str, value) -> No
 def test_click_premove_identity_corruption_aborts(mutation: str) -> None:
     atomic = _atomic("A")
     records = atomic["x_injection_evidence"]
-    premove = records[0]
+    premove = records[1]
     if mutation == "omission":
-        records.pop(0)
+        records.pop(1)
         for sequence, record in enumerate(records, 1):
             record["sequence"] = sequence
-        atomic["x_injection_timestamps"][0]["x_injection_end_sequence"] = 4
+        atomic["x_injection_timestamps"][0]["x_injection_end_sequence"] = 5
     elif mutation == "phase":
         premove["phase"] = "press"
     elif mutation == "coordinates":
@@ -536,7 +579,7 @@ def test_click_premove_identity_corruption_aborts(mutation: str) -> None:
     elif mutation == "event_type":
         premove["event_type"] = 5
     else:
-        premove["sequence"], records[1]["sequence"] = 2, 1
+        premove["sequence"], records[2]["sequence"] = 3, 2
     with pytest.raises(InjectionAbIntegrityError):
         validate_atomic_contract(
             atomic, arm="A", expected_endpoint=(365, 345)
@@ -638,6 +681,7 @@ def test_vm_transport_identity_abort_persists_full_raw_x_evidence(
         "raw_payload": {"error": "injected identity failure"},
         "raw_backend_primitives": [{"kind": "click"}],
         "raw_x_event_sync_evidence": [{"event": "mouse_down"}],
+        "raw_x_sync_attempt_evidence": [{"sequence": 1}],
         "raw_x_injection_timestamps": [{"x_injection_start_sequence": 0}],
         "raw_x_injection_evidence": [
             {"sequence": 1, "phase": "click_premove", "event": "motion_notify"}
@@ -646,6 +690,7 @@ def test_vm_transport_identity_abort_persists_full_raw_x_evidence(
         "guest_failure_kind": "infrastructure",
         "pointer_masks": {"final": 0, "observed": -1, "expected": 0},
         "final_pointer_readback": {"attempted": True, "success": True},
+        "attempt_hook_restore_errors": [],
     }
 
     def fail(**_kwargs):

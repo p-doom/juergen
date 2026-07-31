@@ -72,12 +72,63 @@
   },
   "failure_evidence_contract": {
     "schema_version": "rung1_atomic_output_failure_v2",
+    "lifecycle_global_attempt_hooks": true,
     "x_test_attempt_fields": [
+      "sequence",
+      "phase",
+      "event",
+      "event_type",
+      "detail",
+      "x",
+      "y",
       "attempted",
       "success",
-      "error"
+      "error",
+      "started_guest_monotonic_ns",
+      "completed_guest_monotonic_ns",
+      "duration_ns"
     ],
-    "sync_attempt_fields": [
+    "successful_x_test_phase_event_order_by_arm": {
+      "A": [
+        ["canonical_move", "motion_notify"],
+        ["click_premove", "motion_notify"],
+        ["press", "motion_notify"],
+        ["press", "button_press"],
+        ["release", "motion_notify"],
+        ["release", "button_release"]
+      ],
+      "B": [
+        ["canonical_move", "motion_notify"],
+        ["click_premove", "motion_notify"],
+        ["press", "motion_notify"],
+        ["press", "button_press"],
+        ["release", "button_release"]
+      ]
+    },
+    "global_sync_attempt_fields": [
+      "sequence",
+      "phase",
+      "attempted",
+      "success",
+      "error",
+      "started_guest_monotonic_ns",
+      "completed_guest_monotonic_ns",
+      "duration_ns"
+    ],
+    "successful_sync_attempt_phase_order_both_arms": [
+      "initial_readback",
+      "canonical_move",
+      "click_premove",
+      "press",
+      "press",
+      "press_sync",
+      "release",
+      "release",
+      "release_sync",
+      "verification_readback",
+      "final_readback"
+    ],
+    "causal_sync_attempt_fields": [
       "supported",
       "flush_attempted",
       "flush",
@@ -103,12 +154,14 @@
       "raw_payload",
       "raw_backend_primitives",
       "raw_x_event_sync_evidence",
+      "raw_x_sync_attempt_evidence",
       "raw_x_injection_timestamps",
       "raw_x_injection_evidence",
       "guest_error",
       "guest_failure_kind",
       "pointer_masks",
-      "final_pointer_readback"
+      "final_pointer_readback",
+      "attempt_hook_restore_errors"
     ],
     "checkpoint_immediately_after_dispatch": true
   },
@@ -121,6 +174,7 @@
         "x_sync",
         "dwell_50ms",
         "pyautogui_release_side_same_coordinate_motion",
+        "x_sync",
         "pyautogui_release",
         "x_sync"
       ],
@@ -133,6 +187,7 @@
         "xtest_press",
         "x_sync",
         "dwell_50ms",
+        "arm_neutral_release_pre_button_x_sync",
         "xtest_release",
         "x_sync"
       ],

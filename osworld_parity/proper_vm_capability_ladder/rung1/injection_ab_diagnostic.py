@@ -36,7 +36,7 @@ from .vm import (
 
 
 SPEC_PATH = Path(__file__).with_name("injection_ab_spec.json")
-EXPECTED_SPEC_SHA256 = "3a6bc7de1b569da635fca856a5abb92967ad94a9cb5834a411d149a213b53bf8"
+EXPECTED_SPEC_SHA256 = "7a8bea3b23442e30b4b25de7262972b7a4019832f842ce26c4bf3e37b7c2d615"
 ORDER_BLOCK = ("A", "B", "B", "A", "B", "A", "A", "B")
 TRIAL_ORDER = ORDER_BLOCK * 6
 BACKEND_BY_ARM = {
@@ -222,6 +222,7 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
                 "x_sync",
                 "dwell_50ms",
                 "pyautogui_release_side_same_coordinate_motion",
+                "x_sync",
                 "pyautogui_release",
                 "x_sync",
             ],
@@ -234,6 +235,7 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
                 "xtest_press",
                 "x_sync",
                 "dwell_50ms",
+                "arm_neutral_release_pre_button_x_sync",
                 "xtest_release",
                 "x_sync",
             ],
@@ -255,8 +257,63 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         raise InjectionAbIntegrityError("common click premove contract drifted")
     if spec.get("failure_evidence_contract") != {
         "schema_version": "rung1_atomic_output_failure_v2",
-        "x_test_attempt_fields": ["attempted", "success", "error"],
-        "sync_attempt_fields": [
+        "lifecycle_global_attempt_hooks": True,
+        "x_test_attempt_fields": [
+            "sequence",
+            "phase",
+            "event",
+            "event_type",
+            "detail",
+            "x",
+            "y",
+            "attempted",
+            "success",
+            "error",
+            "started_guest_monotonic_ns",
+            "completed_guest_monotonic_ns",
+            "duration_ns",
+        ],
+        "successful_x_test_phase_event_order_by_arm": {
+            "A": [
+                ["canonical_move", "motion_notify"],
+                ["click_premove", "motion_notify"],
+                ["press", "motion_notify"],
+                ["press", "button_press"],
+                ["release", "motion_notify"],
+                ["release", "button_release"],
+            ],
+            "B": [
+                ["canonical_move", "motion_notify"],
+                ["click_premove", "motion_notify"],
+                ["press", "motion_notify"],
+                ["press", "button_press"],
+                ["release", "button_release"],
+            ],
+        },
+        "global_sync_attempt_fields": [
+            "sequence",
+            "phase",
+            "attempted",
+            "success",
+            "error",
+            "started_guest_monotonic_ns",
+            "completed_guest_monotonic_ns",
+            "duration_ns",
+        ],
+        "successful_sync_attempt_phase_order_both_arms": [
+            "initial_readback",
+            "canonical_move",
+            "click_premove",
+            "press",
+            "press",
+            "press_sync",
+            "release",
+            "release",
+            "release_sync",
+            "verification_readback",
+            "final_readback",
+        ],
+        "causal_sync_attempt_fields": [
             "supported",
             "flush_attempted",
             "flush",
@@ -282,12 +339,14 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
             "raw_payload",
             "raw_backend_primitives",
             "raw_x_event_sync_evidence",
+            "raw_x_sync_attempt_evidence",
             "raw_x_injection_timestamps",
             "raw_x_injection_evidence",
             "guest_error",
             "guest_failure_kind",
             "pointer_masks",
             "final_pointer_readback",
+            "attempt_hook_restore_errors",
         ],
         "checkpoint_immediately_after_dispatch": True,
     }:
@@ -769,7 +828,8 @@ def validate_atomic_contract(
         raise InjectionAbIntegrityError("X injection global sequence drifted")
     for item in evidence:
         if (
-            item.get("phase") not in {"click_premove", "press", "release"}
+            item.get("phase")
+            not in {"canonical_move", "click_premove", "press", "release"}
             or not isinstance(item.get("event_type"), int)
             or isinstance(item.get("event_type"), bool)
             or not isinstance(item.get("detail"), int)
@@ -812,6 +872,45 @@ def validate_atomic_contract(
             - item["started_guest_monotonic_ns"]
         ):
             raise InjectionAbIntegrityError("X sync attempt evidence drifted")
+    global_sync_attempts = atomic.get("x_sync_attempt_evidence")
+    expected_sync_phases = [
+        "initial_readback",
+        "canonical_move",
+        "click_premove",
+        "press",
+        "press",
+        "press_sync",
+        "release",
+        "release",
+        "release_sync",
+        "verification_readback",
+        "final_readback",
+    ]
+    if (
+        not isinstance(global_sync_attempts, list)
+        or not all(isinstance(item, dict) for item in global_sync_attempts)
+        or [item.get("sequence") for item in global_sync_attempts]
+        != list(range(1, len(expected_sync_phases) + 1))
+        or [item.get("phase") for item in global_sync_attempts]
+        != expected_sync_phases
+    ):
+        raise InjectionAbIntegrityError("global X sync attempt sequence drifted")
+    for item in global_sync_attempts:
+        if (
+            item.get("attempted") is not True
+            or item.get("success") is not True
+            or item.get("error") is not None
+            or not isinstance(item.get("started_guest_monotonic_ns"), int)
+            or isinstance(item.get("started_guest_monotonic_ns"), bool)
+            or not isinstance(item.get("completed_guest_monotonic_ns"), int)
+            or isinstance(item.get("completed_guest_monotonic_ns"), bool)
+            or item["completed_guest_monotonic_ns"]
+            < item["started_guest_monotonic_ns"]
+            or item.get("duration_ns")
+            != item["completed_guest_monotonic_ns"]
+            - item["started_guest_monotonic_ns"]
+        ):
+            raise InjectionAbIntegrityError("global X sync attempt evidence drifted")
     controlled = [
         item for item in evidence if item.get("phase") in {"press", "release"}
     ]
@@ -851,7 +950,7 @@ def validate_atomic_contract(
     if (
         not isinstance(start_sequence, int)
         or isinstance(start_sequence, bool)
-        or start_sequence != 0
+        or start_sequence != 1
         or not isinstance(end_sequence, int)
         or isinstance(end_sequence, bool)
         or end_sequence != start_sequence + len(expected_click_window)
@@ -901,6 +1000,17 @@ def validate_atomic_contract(
         raise InjectionAbIntegrityError(
             "click premove MotionNotify was not at the same cursor coordinates"
         )
+    canonical_move = evidence[0]
+    if (
+        canonical_move.get("sequence") != 1
+        or canonical_move.get("phase") != "canonical_move"
+        or canonical_move.get("event") != "motion_notify"
+        or canonical_move.get("event_type") != X_MOTION_NOTIFY
+        or canonical_move.get("detail") != 0
+        or (canonical_move.get("x"), canonical_move.get("y"))
+        != press_coordinates
+    ):
+        raise InjectionAbIntegrityError("canonical move XTest evidence drifted")
     cursor_after = atomic.get("cursor_after")
     if (
         not isinstance(cursor_after, list)
@@ -974,6 +1084,7 @@ def validate_atomic_contract(
         "x_injection_timestamps": timestamps,
         "x_injection_evidence": evidence,
         "x_event_sync_evidence": sync_evidence,
+        "x_sync_attempt_evidence": global_sync_attempts,
         "final_pointer_readback": atomic.get("final_pointer_readback"),
         "passive_x_observer": atomic.get("passive_x_observer"),
     }
