@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "suite": "proper_vm_rung2_same_application_v1",
+  "split": "train",
+  "sealed": false,
+  "official_osworld_reuse": false,
+  "observation_contract": "instruction_and_screenshot_only",
+  "fixtures": [
+    {
+      "id": "r2-writer-train-4101",
+      "app": "writer",
+      "split": "train",
+      "parameter_seed": 4101,
+      "semantic_steps": 3,
+      "horizon": 4,
+      "instruction": "In the open Writer document, replace the note with exactly ‘Quarterly orbit note 41’, make it bold, and save it.",
+      "params": {"file_name": "writer-4101.odt", "initial_text": "replace this training note", "style": "bold"},
+      "expected": {"text": "Quarterly orbit note 41", "bold": true, "saved": true},
+      "near_miss": {"text": "Quarterly orbit note 14", "bold": false},
+      "fixture_sha256": "45ae0c137a68090f82b912693672e277870e344dca111fb1742b3df911f34c48"
+    },
+    {
+      "id": "r2-calc-train-4201",
+      "app": "calc",
+      "split": "train",
+      "parameter_seed": 4201,
+      "semantic_steps": 4,
+      "horizon": 6,
+      "instruction": "In the open Calc sheet, enter the formula =17+25 in cell C5, confirm it, and save the sheet.",
+      "params": {"file_name": "calc-4201.ods", "cell": "C5", "initial_value": "seed-4201"},
+      "expected": {"formula": "of:=17+25", "display_value": "42", "saved": true},
+      "near_miss": {"formula": "of:=17+24", "display_value": "41"},
+      "fixture_sha256": "8c011eae96f388018970ddbe18a07741578f24aff541c7079a0b79466ed78d3a"
+    },
+    {
+      "id": "r2-files-train-4301",
+      "app": "files",
+      "split": "train",
+      "parameter_seed": 4301,
+      "semantic_steps": 3,
+      "horizon": 8,
+      "instruction": "In Files, move parcel-4301.txt into Delivered-4301 and rename it receipt-4301.txt.",
+      "params": {"source_name": "parcel-4301.txt", "destination_name": "Delivered-4301", "decoy_name": "Archive-4301", "final_name": "receipt-4301.txt", "content": "training parcel 4301\n"},
+      "expected": {"destination": "Delivered-4301", "final_name": "receipt-4301.txt"},
+      "near_miss": {"destination": "Archive-4301", "final_name": "receipt-4301.tmp"},
+      "fixture_sha256": "45e4011a7a806e4c88ea544eb1293e8bef2f5387b60d292d57c5ff8df1bb3c0f"
+    },
+    {
+      "id": "r2-chrome-train-4401",
+      "app": "chrome",
+      "split": "train",
+      "parameter_seed": 4401,
+      "semantic_steps": 3,
+      "horizon": 6,
+      "instruction": "In the open Chrome settings fixture, open Privacy controls, scroll down, and enable Sync previews.",
+      "params": {"port": 18441, "section": "privacy", "setting": "Sync previews", "initial_scroll_y": 0, "minimum_scroll_y": 300},
+      "expected": {"section": "privacy", "setting_enabled": true},
+      "near_miss": {"section": "appearance", "setting_enabled": false},
+      "fixture_sha256": "c97d9f60b59423ca0d9f49c0e7f2daad02db76e04cac962f52855f14c201e5e4"
+    }
+  ],
+  "manifest_payload_sha256": "bb8dcf61faaeb88b57225080320a421f1f56d70b4accf42762d2e15f7f70a8f8"
+}

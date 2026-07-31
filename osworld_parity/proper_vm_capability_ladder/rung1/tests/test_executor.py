@@ -135,6 +135,7 @@ def test_compact_click_is_one_guest_process_with_compiled_order() -> None:
         "RUNG1A_ATOMIC_STEP_1:click"
     )
     assert "pyautogui.click(clicks=1,interval=0.05,button=_button)" in program
+    assert "_r1a_time.sleep(0.05)" in program
     assert "_r1a_sync_after_x_event('mouse_down')" in program
     assert "_r1a_sync_after_x_event('mouse_up')" in program
     assert "'x_event_sync_evidence':_r1a_x_event_sync" in program
@@ -311,7 +312,9 @@ def test_unicode_coalesced_type_is_one_shared_operation() -> None:
     assert native_transport.audit.typed_texts == raw_transport.audit.typed_texts == [text]
     assert _kinds(native_transport) == _kinds(raw_transport) == ["coalesced_type"]
     compiled = compile_unicode_coalesced_type(text)
-    assert "pyperclip.copy" in compiled
+    assert "tkinter" in compiled
+    assert "clipboard_append" in compiled
+    assert "pyperclip" not in compiled
     assert "pyautogui.hotkey('ctrl', 'v')" in compiled
     assert "pyautogui.write" not in compiled
     atomic_program, _ = compile_atomic_guest_program(

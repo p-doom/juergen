@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "classification": "development_only_infrastructure_failure",
+  "job_id": "135883",
+  "run_id": "run_019fb8127a657b73af1d09eaaf72c273",
+  "source_git_head": "b573ec0d5e0fe1c5e0a8484af5fb7ca32f46cd8e",
+  "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "source_worktree": "/fast/home/franz.srambical/.tmp_suite/juergen-proper-vm-ladder-rung1",
+  "artifact_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/proper_vm_rung1a_vm_selfcheck_run_019fb8127a657b73af1d09eaaf72c273",
+  "artifact_sha256": {
+    "progress.json": "26fa93554cae88e21657b395abaffd116f5d52d46997ec3cf4d02a92f9a95dce",
+    "failure.json": "bb94feeae7c59c0d6cafb6b951df1b315972433643f0bedcfb5a184b5d297aa8",
+    "vm_logs/qemu_38789.log": "e46b3f139ec8eaf145ff0e5810e4d9415030630cf460193ce31a7bbfd3bed5e1",
+    "labctl_context.json": "0355be4ffde807efd3c53c471534828ea1f7252c99726a65ebc323e2d05dbae8",
+    "labctl_submit.sh": "6e8828a6b164629e809131e6057b720a1eabb34018219c5400e21e002633aa2f",
+    "slurm_log": "ddd98afd8f1a4737812e323336ac71880190a7bb86ee73925d8c0ba85e5e01ce"
+  },
+  "passed_cells": [
+    {"fixture_id": "r1a-click-dev-1101", "arm": "native_absolute_control", "journal_stage": "cell_passed"},
+    {"fixture_id": "r1a-click-dev-1101", "arm": "compact_raw_phaseb", "journal_stage": "cell_passed"},
+    {"fixture_id": "r1a-click-dev-1102", "arm": "native_absolute_control", "journal_stage": "cell_passed"},
+    {"fixture_id": "r1a-click-dev-1102", "arm": "compact_raw_phaseb", "journal_stage": "cell_passed"}
+  ],
+  "failed_cell": {
+    "fixture_id": "r1a-focus_type-dev-1201",
+    "fixture_sha256": "57383e42b2f88a3abb9faf57a65e76daa2d538d5f106fede497ccd2423ba321c",
+    "arm": "native_absolute_control",
+    "journal_stage": "cell_started",
+    "failure": "fixture did not report ready in 60.0s"
+  },
+  "causal_exclusions": {
+    "model_or_gpu": "No model or GPU was involved.",
+    "action_dispatch": "The failed cell stopped in launch_fixture before either action adapter dispatched an action.",
+    "qemu_process": "The QEMU serial log contains a normal hard-disk boot and termination by SIGTERM from harness cleanup, not a QEMU crash.",
+    "guest_controller": "HttpVmTransport.execute_argv returned success for the Chrome launch command; a controller failure would have raised TransportError before wait_ready.",
+    "snapshot_reset_general": "Four complete cells, including exact reset-A/reset-B comparisons and both arms, passed before the failure.",
+    "host_fixture_renderer": "A postmortem GET rendered the pinned focus/type fixture as HTTP 200 (5105 bytes).",
+    "host_ready_state_machine": "A postmortem synthetic sequence of three stable geometry observations plus ready was accepted for the same fixture generation."
+  },
+  "causal_localization": {
+    "last_proven_phase": "guest controller accepted browser launch command after loadvm",
+    "first_unproven_phase": "Chrome loaded the requested fixture document and its JavaScript reported stable geometry to the host",
+    "localized_boundary": "guest Chrome launch/navigation/document-event path after reset, not QEMU, host fixture rendering, host ready-state validation, action transport, oracle, model, or GPU",
+    "not_claimed": "The destroyed VM's /tmp/rung1a_chrome.log and the host store snapshot were not persisted, so this historical run cannot distinguish Chrome process reuse/profile failure from navigation/network/JavaScript failure.",
+    "timeout_policy": "Do not raise the 60-second timeout. Persist process, window, document, state-probe, and browser-log evidence at the failing phase."
+  },
+  "development_followup_probes": [
+    {
+      "job_id": "135914",
+      "clock_sync_after_loadvm": true,
+      "probe_sha256": "df1cb90d35317e6b8ce105f3d3f42f9881fb0026ea6a72fbc8c2a4b7510d7868",
+      "progress_sha256": "83adb35c071fcce1ad24308a001987fa6825a852b3de25d50f2723b0285fef5f",
+      "result": "crossed the historical Chrome readiness boundary, then failed because pyperclip had no guest copy/paste mechanism"
+    },
+    {
+      "job_id": "135918",
+      "clock_sync_after_loadvm": false,
+      "probe_sha256": "df1cb90d35317e6b8ce105f3d3f42f9881fb0026ea6a72fbc8c2a4b7510d7868",
+      "progress_sha256": "52ddfeab151f5b6b5d045df76689e8b2e6562fbc0e8463bc3358bffeed1cda85",
+      "result": "crossed the same readiness boundary, then reached the identical pyperclip failure"
+    },
+    {
+      "job_id": "135921",
+      "clock_sync_after_loadvm": false,
+      "probe_sha256": "a742be99a47f5df123f8616abf56c607f2400b69606e1437cbfefed13224f04a",
+      "progress_sha256": "1671fdc217617fdbc2a6a675b9abb579555d8ad4c64db443ffb3d58a518d0984",
+      "result": "with the Tk/X11 clipboard fix, the native focus/type cell passed; compact reached dispatch but Chromium logged pointerdown/pointermove without pointerup or text"
+    }
+  ],
+  "followup_conclusions": {
+    "clock_sync": "Readiness succeeded with clock synchronization both enabled and disabled, so clock rewind is not the cause of job 135883.",
+    "clipboard": "The pinned guest imports pyperclip but has no xclip, xsel, wl-copy, or other backend; Unicode typing now owns the X11 clipboard through Tk until Ctrl-V is consumed.",
+    "click_delivery": "pyautogui.click interval does not separate press from release. A fixed 50 ms dwell after the X-synchronized press prevents Chromium from intermittently observing pointerdown without pointerup while retaining the fixed click primitive.",
+    "historical_limit": "These probes exclude a systematic QEMU, server, reset, clock, or renderer failure. They cannot recover whether the destroyed job-135883 guest missed Chrome process launch, navigation, network load, or the document ready event."
+  },
+  "rung2_remediation": {
+    "exception": "AppReadinessError",
+    "phases": ["guest_controller", "app_process_launch", "state_probe", "app_window_geometry", "browser_document_ready", "initial_oracle"],
+    "persisted_diagnostics": ["process table", "wmctrl windows", "application logs", "Chrome debug endpoint", "last probe error", "readiness screenshot and SHA-256"],
+    "clock_reset": "The CPU KVM recipe enables OSWORLD_FAST_SNAPSHOT_CLOCK=1 after every loadvm."
+  }
+}

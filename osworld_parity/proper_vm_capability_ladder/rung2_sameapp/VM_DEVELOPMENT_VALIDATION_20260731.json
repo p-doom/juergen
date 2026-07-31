@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "classification": "development_only_cpu_kvm_validation",
+  "split": "development",
+  "sealed_eval_executed": false,
+  "model_used": false,
+  "gpu_used": false,
+  "result": "passed",
+  "contract": "Each app passed native_absolute_control and compact_raw_phaseb; each arm rejected the scripted near miss, accepted the scripted gold in a fresh oracle process, and reproduced its reset signature across reset A/reset B.",
+  "apps": {
+    "writer": {
+      "job_id": "135936",
+      "output_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/rung2_sameapp_writer_vm_smoke5_20260731",
+      "cell_count": 2,
+      "reset_signature": "00264b138944af91dd318957d6298cc371b971e34650fdf15ac151b9ee291318",
+      "replay_sha256": "953199261979f84e676d1266264b5e0046ee0788f03c7e1f35689ee3b546ecf1",
+      "progress_sha256": "9a356d78c950ad20024277dd21b4ef3bf81d5092ef19f968d4062a227e5cae94"
+    },
+    "calc": {
+      "job_id": "135952",
+      "output_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/rung2_sameapp_calc_vm_smoke3_20260731",
+      "cell_count": 2,
+      "reset_signature": "3c50fc0eefd6af8acffc79ae742c3309d9a448280197079131a1a5cda6e9fd07",
+      "replay_sha256": "f52f95f3b2b7e004238bac9ba82cd49041af557d12bf01fa0a337d7af4fb9ecf",
+      "progress_sha256": "a622a16a96f518b14b4b6d54dfa249f83e534500aeb33708a2b79b4deb7426cb"
+    },
+    "files": {
+      "job_id": "135960",
+      "output_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/rung2_sameapp_files_vm_smoke5_20260731",
+      "cell_count": 2,
+      "reset_signature": "5b98cfbad4c355e3716dc3464078ec977c41e9485a2dc4a1c8cdbd6c4a25c7fc",
+      "replay_sha256": "3a47459c063e7e4366ce92ead509307722f0ef30235b82124e7e43ed1fd1e5f4",
+      "progress_sha256": "51bb854daabf6c291478c0fe4957c6e26b705b8a2e48f2944128d918d177ed7d"
+    },
+    "chrome": {
+      "job_id": "135939",
+      "output_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/rung2_sameapp_chrome_vm_smoke_20260731",
+      "cell_count": 2,
+      "reset_signature": "a9de742fd1ba407c62e6dd2d89abeb68deb83068676ccc5766c56f3e0473f83c",
+      "replay_sha256": "e1413f9f36bbc86149bf8276f40f75fb0dc81886902d1a1a4f82af24b735fdf2",
+      "progress_sha256": "0bd00d76128078f36e3d45885096247591fe2d07b5e049f62d8e5c3bd0c424a7"
+    }
+  },
+  "readiness_diagnostics": {
+    "calc": {
+      "job_id": "135942",
+      "cause": "The recursive AT-SPI walk entered Calc's virtual spreadsheet tree and timed out while soffice remained running.",
+      "remediation": "Normalize and verify the Calc window, then use the visible Name Box instead of traversing virtual cells.",
+      "evidence_sha256": "52404cbb6dfccb4ff9a849ad53b504847b096444223870e1e10374a95dd64395",
+      "screenshot_sha256": "6fa46706d17e7be2a87e9ff35d18933dc824029f1d2828e74cc7af578170885c"
+    },
+    "files": {
+      "job_id": "135943",
+      "cause": "The pinned Nautilus accessibility tree did not publish the requested list item names although the window and all rows were visibly ready.",
+      "remediation": "Wait for the exact fixture-titled window and use its normalized deterministic list-row geometry.",
+      "evidence_sha256": "f6d147155228c103a6681afdb253fe76471672c7a23bcac3ce5279efe36e9835",
+      "screenshot_sha256": "72b72c9082652e5cf8d8e5c9bba4a63e320a577a119a567adc7f77d1cddbdd47"
+    }
+  }
+}

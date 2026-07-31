@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "native_absolute_sequence_v1": {
+    "type": "object",
+    "required": ["schema", "semantic_step", "operations"],
+    "schema_const": "native_absolute_sequence_v1",
+    "operation_actions": ["click", "mouse_down", "mouse_move", "mouse_up", "scroll", "key_chord", "type"],
+    "coordinate_space": "absolute_guest_pixels",
+    "execution_order": "operations_array_order"
+  },
+  "compact_raw_phaseb_v1": {
+    "type": "string",
+    "grammar": "DX SP DY SP SCROLL [SP? ';' SP? EVENT *(SP EVENT)]",
+    "events": ["+LMB", "-LMB", "+RMB", "-RMB", "+KEY", "-KEY", "type(JSON_STRING)"],
+    "coordinate_space": "relative_guest_pixels",
+    "execution_order": "move_then_scroll_then_events"
+  }
+}

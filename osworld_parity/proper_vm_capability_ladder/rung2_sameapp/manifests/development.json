@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "suite": "proper_vm_rung2_same_application_v1",
+  "split": "development",
+  "sealed": false,
+  "official_osworld_reuse": false,
+  "observation_contract": "instruction_and_screenshot_only",
+  "fixtures": [
+    {
+      "id": "r2-writer-dev-5101",
+      "app": "writer",
+      "split": "development",
+      "parameter_seed": 5101,
+      "semantic_steps": 3,
+      "horizon": 4,
+      "instruction": "In the open Writer document, replace the note with exactly ‘München review Δ-51’, make it bold, and save it.",
+      "params": {"file_name": "writer-5101.odt", "initial_text": "replace this development note", "style": "bold"},
+      "expected": {"text": "München review Δ-51", "bold": true, "saved": true},
+      "near_miss": {"text": "Munchen review D-51", "bold": false},
+      "fixture_sha256": "8ac3fab009834fa19ed3114ac4525764b48f7d162b5744066e574d15e0e2fcce"
+    },
+    {
+      "id": "r2-calc-dev-5201",
+      "app": "calc",
+      "split": "development",
+      "parameter_seed": 5201,
+      "semantic_steps": 4,
+      "horizon": 6,
+      "instruction": "In the open Calc sheet, enter the formula =31*3 in cell D7, confirm it, and save the sheet.",
+      "params": {"file_name": "calc-5201.ods", "cell": "D7", "initial_value": "seed-5201"},
+      "expected": {"formula": "of:=31*3", "display_value": "93", "saved": true},
+      "near_miss": {"formula": "of:=31*2", "display_value": "62"},
+      "fixture_sha256": "e973b276fccdd80e50225eb4ea050770fc63f519d4c166386fb6f97203c94a2e"
+    },
+    {
+      "id": "r2-files-dev-5301",
+      "app": "files",
+      "split": "development",
+      "parameter_seed": 5301,
+      "semantic_steps": 3,
+      "horizon": 8,
+      "instruction": "In Files, move parcel-5301.txt into Delivered-5301 and rename it receipt-5301.txt.",
+      "params": {"source_name": "parcel-5301.txt", "destination_name": "Delivered-5301", "decoy_name": "Archive-5301", "final_name": "receipt-5301.txt", "content": "development parcel 5301\n"},
+      "expected": {"destination": "Delivered-5301", "final_name": "receipt-5301.txt"},
+      "near_miss": {"destination": "Archive-5301", "final_name": "receipt-5301.tmp"},
+      "fixture_sha256": "0f7c5b37dfd76823958d3d99c7740c70f4f25995aa2906d41b55c93c4f0ab9f3"
+    },
+    {
+      "id": "r2-chrome-dev-5401",
+      "app": "chrome",
+      "split": "development",
+      "parameter_seed": 5401,
+      "semantic_steps": 3,
+      "horizon": 6,
+      "instruction": "In the open Chrome settings fixture, open Accessibility, scroll down, and enable Large cursor hints.",
+      "params": {"port": 18541, "section": "accessibility", "setting": "Large cursor hints", "initial_scroll_y": 0, "minimum_scroll_y": 300},
+      "expected": {"section": "accessibility", "setting_enabled": true},
+      "near_miss": {"section": "appearance", "setting_enabled": false},
+      "fixture_sha256": "20f4cbafab8d3144cdd749fc86388854c36f1a67654c082b21df4db4c39fb0c2"
+    }
+  ],
+  "manifest_payload_sha256": "aa87e6fc11d61383881603c7fb7fdc08da84d6f262932d3f08f3ed83e81c0ccb"
+}

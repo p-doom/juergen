@@ -76,10 +76,18 @@ def compile_unicode_coalesced_type(text: str) -> str:
     if not isinstance(text, str):
         raise TypeError("coalesced type text must be a string")
     encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    # The pinned guest has Tk/X11 but no xclip, xsel, or wl-copy.  Pyperclip
+    # therefore raises at runtime despite importing successfully.  Keep the
+    # X11 clipboard owner alive in this same guest process until the target has
+    # consumed Ctrl-V; this remains one Unicode-safe coalesced operation.
     return (
-        "import base64, pyperclip; "
+        "import base64, tkinter as _r1a_tk, time as _r1a_time; "
         f"_r1a_text=base64.b64decode({encoded!r}).decode('utf-8'); "
-        "pyperclip.copy(_r1a_text); pyautogui.hotkey('ctrl', 'v')"
+        "_r1a_clip=_r1a_tk.Tk(); _r1a_clip.withdraw(); "
+        "_r1a_clip.clipboard_clear(); _r1a_clip.clipboard_append(_r1a_text); "
+        "_r1a_clip.update(); pyautogui.hotkey('ctrl', 'v'); "
+        "[(_r1a_clip.update(),_r1a_time.sleep(0.05)) for _ in range(20)]; "
+        "_r1a_clip.destroy()"
     )
 
 
@@ -196,7 +204,7 @@ def compile_atomic_guest_program(
     expected_mask = pointer_mask_for_buttons(final_buttons)
     guest_operations = lower_guest_operations(operations)
     lines = [
-        "import json, traceback, pyautogui",
+        "import json, traceback, time as _r1a_time, pyautogui",
         "pyautogui.FAILSAFE=False",
         "pyautogui.PAUSE=0",
         "_r1a_trace=[]",
@@ -233,6 +241,12 @@ def compile_atomic_guest_program(
         "    def _r1a_down(*_args,**_kwargs):",
         "        _result=_down(*_args,**_kwargs)",
         "        _r1a_sync_after_x_event('mouse_down')",
+        # pyautogui.click's interval is between repeated clicks, not between
+        # press and release.  Chromium intermittently observed only pointerdown
+        # when the two XTest events were adjacent even though X11 reported a
+        # released final mask.  A bounded dwell after the synced press keeps
+        # the fixed click primitive while making browser receipt causal.
+        "        _r1a_time.sleep(0.05)",
         "        _r1a_trace.append({'kind':'mouse_down','args':[_button]})",
         "        return _result",
         "    def _r1a_up(*_args,**_kwargs):",

@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "suite": "proper_vm_rung2_same_application_v1",
+  "split": "sealed_eval",
+  "sealed": true,
+  "official_osworld_reuse": false,
+  "observation_contract": "instruction_and_screenshot_only",
+  "fixtures": [
+    {
+      "id": "r2-writer-eval-6101",
+      "app": "writer",
+      "split": "sealed_eval",
+      "parameter_seed": 6101,
+      "semantic_steps": 3,
+      "horizon": 4,
+      "instruction": "In the open Writer document, replace the note with exactly ‘Harbor schedule 61’, make it bold, and save it.",
+      "params": {"file_name": "writer-6101.odt", "initial_text": "replace this harbor note", "style": "bold"},
+      "expected": {"text": "Harbor schedule 61", "bold": true, "saved": true},
+      "near_miss": {"text": "Harbor schedule 16", "bold": false},
+      "fixture_sha256": "7d113aab3245e8835eb096b03a087c27930aaf8788807e8a4a6e6508bac6fdbc"
+    },
+    {
+      "id": "r2-calc-eval-6201",
+      "app": "calc",
+      "split": "sealed_eval",
+      "parameter_seed": 6201,
+      "semantic_steps": 4,
+      "horizon": 6,
+      "instruction": "In the open Calc sheet, enter the formula =47+16 in cell E6, confirm it, and save the sheet.",
+      "params": {"file_name": "calc-6201.ods", "cell": "E6", "initial_value": "draft-6201"},
+      "expected": {"formula": "of:=47+16", "display_value": "63", "saved": true},
+      "near_miss": {"formula": "of:=47+15", "display_value": "62"},
+      "fixture_sha256": "9295b279bf922b7dd55200f7a80646bf7eb11fa6f9efcb023f351ed845a0c4a7"
+    },
+    {
+      "id": "r2-files-eval-6301",
+      "app": "files",
+      "split": "sealed_eval",
+      "parameter_seed": 6301,
+      "semantic_steps": 3,
+      "horizon": 8,
+      "instruction": "In Files, move parcel-6301.txt into Delivered-6301 and rename it receipt-6301.txt.",
+      "params": {"source_name": "parcel-6301.txt", "destination_name": "Delivered-6301", "decoy_name": "Archive-6301", "final_name": "receipt-6301.txt", "content": "harbor parcel 6301\n"},
+      "expected": {"destination": "Delivered-6301", "final_name": "receipt-6301.txt"},
+      "near_miss": {"destination": "Archive-6301", "final_name": "receipt-6301.tmp"},
+      "fixture_sha256": "ecb42bdeef1e922048e82bd1f20d123cdd98e674abbe01578c1912b637e1b1b9"
+    },
+    {
+      "id": "r2-chrome-eval-6401",
+      "app": "chrome",
+      "split": "sealed_eval",
+      "parameter_seed": 6401,
+      "semantic_steps": 3,
+      "horizon": 6,
+      "instruction": "In the open Chrome settings fixture, open Downloads, scroll down, and enable Confirm locations.",
+      "params": {"port": 18641, "section": "downloads", "setting": "Confirm locations", "initial_scroll_y": 0, "minimum_scroll_y": 300},
+      "expected": {"section": "downloads", "setting_enabled": true},
+      "near_miss": {"section": "appearance", "setting_enabled": false},
+      "fixture_sha256": "5c0cc1e82ae304a1aa76413549ca8bab93dfac3e9291fa22c61129a474bbf775"
+    }
+  ],
+  "manifest_payload_sha256": "089603e21cd2f2783fdf197e7d8e3efb7fa159e12f4a5221c7ebf7bd7765f0f6"
+}
