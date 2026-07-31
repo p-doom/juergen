@@ -1,0 +1,200 @@
+{"gold": "482 -373 0 ; +LMB -LMB", "pred": "-210 -157 0 ; +LMB -LMB"}
+{"gold": "482 -373 0 ; +LMB -LMB", "pred": "-210 -157 0 ; +LMB -LMB"}
+{"gold": "-590 724 0 ; +LMB -LMB", "pred": "-482 373 0 ; +LMB -LMB"}
+{"gold": "482 -373 0 ; +LMB -LMB", "pred": "-210 -157 0 ; +LMB -LMB"}
+{"gold": "-590 724 0 ; +LMB -LMB", "pred": "-482 373 0 ; +LMB -LMB"}
+{"gold": "129 -222 0 ; +LMB -LMB", "pred": "-113 -175 0 ; +LMB -LMB"}
+{"gold": "482 -373 0 ; +LMB -LMB", "pred": "-210 -157 0 ; +LMB -LMB"}
+{"gold": "-590 724 0 ; +LMB -LMB", "pred": "-482 373 0 ; +LMB -LMB"}
+{"gold": "129 -222 0 ; +LMB -LMB", "pred": "-113 -175 0 ; +LMB -LMB"}
+{"gold": "-159 -75 0 ; +LMB -LMB", "pred": "-151 -11 0 ; +LMB -LMB"}
+{"gold": "482 -373 0 ; +LMB -LMB", "pred": "-210 -157 0 ; +LMB -LMB"}
+{"gold": "-590 724 0 ; +LMB -LMB", "pred": "-482 373 0 ; +LMB -LMB"}
+{"gold": "129 -222 0 ; +LMB -LMB", "pred": "-113 -175 0 ; +LMB -LMB"}
+{"gold": "-159 -75 0 ; +LMB -LMB", "pred": "-152 -11 0 ; +LMB -LMB"}
+{"gold": "209 131 0 ; +LMB -LMB", "pred": "214 151 0 ; +LMB -LMB"}
+{"gold": "-590 724 0 ; +LMB -LMB", "pred": "-311 315 0 ; +LMB -LMB"}
+{"gold": "129 -222 0 ; +LMB -LMB", "pred": "103 -190 0 ; +LMB -LMB"}
+{"gold": "-159 -75 0 ; +LMB -LMB", "pred": "-151 -11 0 ; +LMB -LMB"}
+{"gold": "209 131 0 ; +LMB -LMB", "pred": "218 151 0 ; +LMB -LMB"}
+{"gold": "-150 -143 0 ; +LMB -LMB", "pred": "-159 -131 0 ; +LMB -LMB"}
+{"gold": "129 -222 0 ; +LMB -LMB", "pred": "311 -11 0 ; +LMB -LMB"}
+{"gold": "-159 -75 0 ; +LMB -LMB", "pred": "-142 11 0 ; +LMB -LMB"}
+{"gold": "209 131 0 ; +LMB -LMB", "pred": "218 151 0 ; +LMB -LMB"}
+{"gold": "-150 -143 0 ; +LMB -LMB", "pred": "-129 -131 0 ; +LMB -LMB"}
+{"gold": "-170 -275 0 ; +LMB -LMB", "pred": "-150 -231 0 ; +LMB -LMB"}
+{"gold": "-159 -75 0 ; +LMB -LMB", "pred": "-103 -11 0 ; +LMB -LMB"}
+{"gold": "209 131 0 ; +LMB -LMB", "pred": "159 111 0 ; +LMB -LMB"}
+{"gold": "-150 -143 0 ; +LMB -LMB", "pred": "-113 -131 0 ; +LMB -LMB"}
+{"gold": "-170 -275 0 ; +LMB -LMB", "pred": "-150 -254 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +ShiftLeft +KeyS -KeyS -ShiftLeft +KeyE -KeyE +KeyA -KeyA +KeyT -KeyT +KeyT -KeyT +KeyL -KeyL +KeyE -KeyE", "pred": "0 0 0 ; +ShiftLeft +KeyS -KeyS -ShiftLeft +KeyE -KeyE +KeyA -KeyA +KeyT -KeyT +KeyT -KeyT +KeyL -KeyL +KeyE -KeyE"}
+{"gold": "209 131 0 ; +LMB -LMB", "pred": "153 11 0 ; +LMB -LMB"}
+{"gold": "-150 -143 0 ; +LMB -LMB", "pred": "-113 -131 0 ; +LMB -LMB"}
+{"gold": "-170 -275 0 ; +LMB -LMB", "pred": "-150 -211 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +ShiftLeft +KeyS -KeyS -ShiftLeft +KeyE -KeyE +KeyA -KeyA +KeyT -KeyT +KeyT -KeyT +KeyL -KeyL +KeyE -KeyE", "pred": "0 0 0 ; +ShiftLeft +KeyS -KeyS -ShiftLeft +KeyE -KeyE +KeyA -KeyA +KeyT -KeyT +KeyT -KeyT +KeyL -KeyL +KeyE -KeyE"}
+{"gold": "36 224 0 ; +LMB -LMB", "pred": "108 131 0 ; +LMB -LMB"}
+{"gold": "-150 -143 0 ; +LMB -LMB", "pred": "-113 -119 0 ; +LMB -LMB"}
+{"gold": "-170 -275 0 ; +LMB -LMB", "pred": "-150 -218 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +ShiftLeft +KeyS -KeyS -ShiftLeft +KeyE -KeyE +KeyA -KeyA +KeyT -KeyT +KeyT -KeyT +KeyL -KeyL +KeyE -KeyE", "pred": "0 0 0 ; +ShiftLeft +KeyS -KeyS -ShiftLeft +KeyE -KeyE +KeyA -KeyA +KeyT -KeyT +KeyT -KeyT +KeyL -KeyL +KeyE -KeyE"}
+{"gold": "36 224 0 ; +LMB -LMB", "pred": "100 111 0 ; +LMB -LMB"}
+{"gold": "44 -224 0 ; +LMB -LMB", "pred": "105 -224 0 ; +LMB -LMB"}
+{"gold": "-170 -275 0 ; +LMB -LMB", "pred": "-153 -218 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +ShiftLeft +KeyS -KeyS -ShiftLeft +KeyE -KeyE +KeyA -KeyA +KeyT -KeyT +KeyT -KeyT +KeyL -KeyL +KeyE -KeyE", "pred": "0 0 0 ; +ShiftLeft +KeyS -KeyS -ShiftLeft +KeyE -KeyE +KeyA -KeyA +KeyT -KeyT +KeyT -KeyT +KeyL -KeyL +KeyE -KeyE"}
+{"gold": "36 224 0 ; +LMB -LMB", "pred": "100 111 0 ; +LMB -LMB"}
+{"gold": "44 -224 0 ; +LMB -LMB", "pred": "105 -224 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +ShiftLeft +KeyN -KeyN -ShiftLeft +KeyE -KeyE +KeyW -KeyW +Space -Space +ShiftLeft +KeyY -KeyY -ShiftLeft +KeyO -KeyO +KeyR -KeyR +KeyK -KeyK", "pred": "0 0 0 ; +ShiftLeft +KeyN -KeyN -ShiftLeft +KeyY -KeyY +KeyO -KeyO +KeyR -KeyR +KeyK -KeyK"}
+{"gold": "0 0 0 ; +ShiftLeft +KeyS -KeyS -ShiftLeft +KeyE -KeyE +KeyA -KeyA +KeyT -KeyT +KeyT -KeyT +KeyL -KeyL +KeyE -KeyE", "pred": "0 0 0 ; +ShiftLeft +KeyS -KeyS -ShiftLeft +KeyE -KeyE +KeyA -KeyA +KeyT -KeyT +KeyT -KeyT +KeyL -KeyL +KeyE -KeyE"}
+{"gold": "36 224 0 ; +LMB -LMB", "pred": "10 152 0 ; +LMB -LMB"}
+{"gold": "44 -224 0 ; +LMB -LMB", "pred": "103 -224 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +ShiftLeft +KeyN -KeyN -ShiftLeft +KeyE -KeyE +KeyW -KeyW +Space -Space +ShiftLeft +KeyY -KeyY -ShiftLeft +KeyO -KeyO +KeyR -KeyR +KeyK -KeyK", "pred": "0 0 0 ; +ShiftLeft +KeyN -KeyN -ShiftLeft +KeyY -KeyY +KeyK -KeyK +KeyE -KeyE +KeyW -KeyW +KeyO -KeyO +KeyR -KeyR +KeyK -KeyK"}
+{"gold": "-27 268 0 ; +LMB -LMB", "pred": "-10 211 0 ; +LMB -LMB"}
+{"gold": "36 224 0 ; +LMB -LMB", "pred": "-10 157 0 ; +LMB -LMB"}
+{"gold": "44 -224 0 ; +LMB -LMB", "pred": "107 -224 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +ShiftLeft +KeyN -KeyN -ShiftLeft +KeyE -KeyE +KeyW -KeyW +Space -Space +ShiftLeft +KeyY -KeyY -ShiftLeft +KeyO -KeyO +KeyR -KeyR +KeyK -KeyK", "pred": "0 0 0 ; +ShiftLeft +KeyN -KeyN -ShiftLeft +KeyE -KeyE +KeyW -KeyW +KeyY -KeyY +KeyO -KeyO +KeyR -KeyR +KeyK -KeyK"}
+{"gold": "-27 268 0 ; +LMB -LMB", "pred": "-10 211 0 ; +LMB -LMB"}
+{"gold": "285 -260 0 ; +LMB -LMB", "pred": "304 -268 0 ; +LMB -LMB"}
+{"gold": "44 -224 0 ; +LMB -LMB", "pred": "103 -195 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +ShiftLeft +KeyN -KeyN -ShiftLeft +KeyE -KeyE +KeyW -KeyW +Space -Space +ShiftLeft +KeyY -KeyY -ShiftLeft +KeyO -KeyO +KeyR -KeyR +KeyK -KeyK", "pred": "0 0 0 ; +ShiftLeft +KeyN -KeyN -ShiftLeft +KeyE -KeyE +KeyW -KeyW +KeyY -KeyY"}
+{"gold": "-27 268 0 ; +LMB -LMB", "pred": "-10 211 0 ; +LMB -LMB"}
+{"gold": "285 -260 0 ; +LMB -LMB", "pred": "308 -268 0 ; +LMB -LMB"}
+{"gold": "72 226 0 ; +LMB -LMB", "pred": "-108 138 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +ShiftLeft +KeyN -KeyN -ShiftLeft +KeyE -KeyE +KeyW -KeyW +Space -Space +ShiftLeft +KeyY -KeyY -ShiftLeft +KeyO -KeyO +KeyR -KeyR +KeyK -KeyK", "pred": "0 0 0 ; +ShiftLeft +KeyN -KeyN -ShiftLeft +KeyE -KeyE +KeyW -KeyW +KeyY -KeyY"}
+{"gold": "-27 268 0 ; +LMB -LMB", "pred": "-10 152 0 ; +LMB -LMB"}
+{"gold": "285 -260 0 ; +LMB -LMB", "pred": "153 -268 0 ; +LMB -LMB"}
+{"gold": "72 226 0 ; +LMB -LMB", "pred": "-108 151 0 ; +LMB -LMB"}
+{"gold": "64 188 0 ; +LMB -LMB", "pred": "-72 226 0 ; +LMB -LMB"}
+{"gold": "-96 -365 0 ; +LMB -LMB", "pred": "-210 -318 0 ; +LMB -LMB"}
+{"gold": "-96 -365 0 ; +LMB -LMB", "pred": "-210 -318 0 ; +LMB -LMB"}
+{"gold": "-153 128 0 ; +LMB -LMB", "pred": "-113 138 0 ; +LMB -LMB"}
+{"gold": "-96 -365 0 ; +LMB -LMB", "pred": "-210 -318 0 ; +LMB -LMB"}
+{"gold": "-153 128 0 ; +LMB -LMB", "pred": "-113 118 0 ; +LMB -LMB"}
+{"gold": "NO_OP", "pred": "TERMINATE"}
+{"gold": "-96 -365 0 ; +LMB -LMB", "pred": "-210 -318 0 ; +LMB -LMB"}
+{"gold": "-153 128 0 ; +LMB -LMB", "pred": "-113 118 0 ; +LMB -LMB"}
+{"gold": "NO_OP", "pred": "TERMINATE"}
+{"gold": "0 0 -800", "pred": "0 0 -5"}
+{"gold": "-96 -365 0 ; +LMB -LMB", "pred": "-210 -318 0 ; +LMB -LMB"}
+{"gold": "-153 128 0 ; +LMB -LMB", "pred": "-113 118 0 ; +LMB -LMB"}
+{"gold": "NO_OP", "pred": "TERMINATE"}
+{"gold": "0 0 -800", "pred": "0 0 -5"}
+{"gold": "0 0 800", "pred": "TERMINATE"}
+{"gold": "-153 128 0 ; +LMB -LMB", "pred": "-143 157 0 ; +LMB -LMB"}
+{"gold": "NO_OP", "pred": "TERMINATE"}
+{"gold": "0 0 -800", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 800", "pred": "TERMINATE"}
+{"gold": "0 0 -700", "pred": "0 0 -800"}
+{"gold": "NO_OP", "pred": "NO_OP"}
+{"gold": "0 0 -800", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 800", "pred": "TERMINATE"}
+{"gold": "0 0 -700", "pred": "0 0 -800"}
+{"gold": "0 0 700", "pred": "0 0 700"}
+{"gold": "0 0 -800", "pred": "-105 432 0 ; +LMB -LMB"}
+{"gold": "0 0 800", "pred": "TERMINATE"}
+{"gold": "0 0 -700", "pred": "0 0 -800"}
+{"gold": "0 0 700", "pred": "0 0 700"}
+{"gold": "0 0 -700", "pred": "0 0 -800"}
+{"gold": "0 0 800", "pred": "0 0 -800"}
+{"gold": "0 0 -700", "pred": "0 0 800"}
+{"gold": "0 0 700", "pred": "TERMINATE"}
+{"gold": "0 0 -700", "pred": "0 0 -800"}
+{"gold": "0 0 -700", "pred": "0 0 700"}
+{"gold": "0 0 -700", "pred": "-113 300 0 ; +LMB -LMB"}
+{"gold": "0 0 700", "pred": "0 0 -700"}
+{"gold": "0 0 -700", "pred": "0 0 -700"}
+{"gold": "0 0 -700", "pred": "0 0 700"}
+{"gold": "0 0 700", "pred": "0 0 700"}
+{"gold": "0 0 700", "pred": "0 0 -700"}
+{"gold": "0 0 -700", "pred": "-105 350 0 ; +LMB -LMB"}
+{"gold": "0 0 -700", "pred": "0 0 700"}
+{"gold": "0 0 700", "pred": "0 0 -700"}
+{"gold": "0 0 -700", "pred": "0 0 -700"}
+{"gold": "0 0 -700", "pred": "0 0 -700"}
+{"gold": "0 0 -700", "pred": "0 0 -700"}
+{"gold": "0 0 700", "pred": "0 0 -700"}
+{"gold": "0 0 -700", "pred": "0 0 -700"}
+{"gold": "0 0 700", "pred": "0 0 700"}
+{"gold": "0 0 -700", "pred": "0 0 -700"}
+{"gold": "0 0 700", "pred": "0 0 -700"}
+{"gold": "0 0 -700", "pred": "-10 250 0 ; +LMB -LMB"}
+{"gold": "0 0 700", "pred": "0 0 700"}
+{"gold": "0 0 -700", "pred": "0 0 -700"}
+{"gold": "0 0 700", "pred": "0 0 -700"}
+{"gold": "0 0 -700", "pred": "-105 350 0 ; +LMB -LMB"}
+{"gold": "0 0 700", "pred": "0 0 700"}
+{"gold": "0 0 -700", "pred": "0 0 -700"}
+{"gold": "0 0 700", "pred": "0 0 700"}
+{"gold": "0 0 -700", "pred": "0 0 -700"}
+{"gold": "0 0 700", "pred": "0 0 -700"}
+{"gold": "0 0 -700", "pred": "0 0 -700"}
+{"gold": "0 0 700", "pred": "0 0 700"}
+{"gold": "0 0 -700", "pred": "0 0 -700"}
+{"gold": "-482 -9 0 ; +LMB -LMB", "pred": "-482 -441 0 ; +LMB -LMB"}
+{"gold": "-482 -9 0 ; +LMB -LMB", "pred": "-482 -441 0 ; +LMB -LMB"}
+{"gold": "29 -424 0 ; +LMB -LMB", "pred": "0 0 0 ; +ControlLeft +KeyO -KeyO -ControlLeft"}
+{"gold": "-482 -9 0 ; +LMB -LMB", "pred": "-482 -441 0 ; +LMB -LMB"}
+{"gold": "29 -424 0 ; +LMB -LMB", "pred": "0 0 0 ; +ControlLeft +KeyO -KeyO -ControlLeft"}
+{"gold": "120 121 0 ; +LMB -LMB", "pred": "15 71 0 ; +LMB -LMB"}
+{"gold": "-482 -9 0 ; +LMB -LMB", "pred": "-482 -441 0 ; +LMB -LMB"}
+{"gold": "29 -424 0 ; +LMB -LMB", "pred": "0 0 0 ; +ControlLeft +KeyO -KeyO -ControlLeft"}
+{"gold": "120 121 0 ; +LMB -LMB", "pred": "15 71 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +KeyH -KeyH +KeyT -KeyT +KeyT -KeyT +KeyP -KeyP +KeyS -KeyS +ShiftLeft +SemiColon -SemiColon -ShiftLeft +Slash -Slash +Slash -Slash +KeyW -KeyW +KeyW -KeyW +KeyW -KeyW +Dot -Dot +KeyH -KeyH +KeyK -KeyK +KeyU -KeyU +Dot -Dot +KeyH -KeyH +KeyK -KeyK +Slash -Slash +KeyW -KeyW +KeyP -KeyP +Minus -Minus +KeyC -KeyC +KeyO -KeyO +KeyN -KeyN +KeyT -KeyT +KeyE -KeyE +KeyN -KeyN +KeyT -KeyT +Slash -Slash +KeyU -KeyU +KeyP -KeyP +KeyL -KeyL +KeyO -KeyO +KeyA -KeyA +KeyD -KeyD +KeyS -KeyS +Slash -Slash +Num2 -Num2 +Num0 -Num0 +Num2 -Num2 +Num2 -Num2 +Slash -Slash +Num0 -Num0 +Num3 -Num3 +Slash -Slash +ShiftLeft +KeyH -KeyH -ShiftLeft +ShiftLeft +KeyK -KeyK -ShiftLeft +ShiftLeft +KeyU -KeyU -ShiftLeft +Minus -Minus +ShiftLeft +KeyL -KeyL -ShiftLeft +KeyO -KeyO +KeyG -KeyG +KeyO -KeyO +Dot -Dot +KeyP -KeyP +KeyN -KeyN +KeyG -KeyG", "pred": "0 0 0 ; +KeyH -KeyH +KeyT -KeyT +KeyT -KeyP -KeyS -Key: //www.hku.hk/ -Key -Key/ -KeyW -KeyE -KeyB -Key/ -KeyI -KeyM -KeyG -KeyE -KeyS -KeyT -KeyE -KeyM -KeyS -Key/ -KeyU -KeyN -KeyI -KeyV"}
+{"gold": "-482 -9 0 ; +LMB -LMB", "pred": "-482 -441 0 ; +LMB -LMB"}
+{"gold": "29 -424 0 ; +LMB -LMB", "pred": "0 0 0 ; +ControlLeft +KeyO -KeyO -ControlLeft"}
+{"gold": "120 121 0 ; +LMB -LMB", "pred": "15 71 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +KeyH -KeyH +KeyT -KeyT +KeyT -KeyT +KeyP -KeyP +KeyS -KeyS +ShiftLeft +SemiColon -SemiColon -ShiftLeft +Slash -Slash +Slash -Slash +KeyW -KeyW +KeyW -KeyW +KeyW -KeyW +Dot -Dot +KeyH -KeyH +KeyK -KeyK +KeyU -KeyU +Dot -Dot +KeyH -KeyH +KeyK -KeyK +Slash -Slash +KeyW -KeyW +KeyP -KeyP +Minus -Minus +KeyC -KeyC +KeyO -KeyO +KeyN -KeyN +KeyT -KeyT +KeyE -KeyE +KeyN -KeyN +KeyT -KeyT +Slash -Slash +KeyU -KeyU +KeyP -KeyP +KeyL -KeyL +KeyO -KeyO +KeyA -KeyA +KeyD -KeyD +KeyS -KeyS +Slash -Slash +Num2 -Num2 +Num0 -Num0 +Num2 -Num2 +Num2 -Num2 +Slash -Slash +Num0 -Num0 +Num3 -Num3 +Slash -Slash +ShiftLeft +KeyH -KeyH -ShiftLeft +ShiftLeft +KeyK -KeyK -ShiftLeft +ShiftLeft +KeyU -KeyU -ShiftLeft +Minus -Minus +ShiftLeft +KeyL -KeyL -ShiftLeft +KeyO -KeyO +KeyG -KeyG +KeyO -KeyO +Dot -Dot +KeyP -KeyP +KeyN -KeyN +KeyG -KeyG", "pred": "0 0 0 ; +KeyH -KeyH +KeyT -KeyT +KeyT -KeyP -KeyS -Key: //www.hku.hk/ -Key -Key/ -KeyW -KeyE -KeyB -Key/ -KeyI -KeyM -KeyG -KeyE -KeyS -KeyT -KeyE -KeyM -KeyS -Key/ -KeyU -KeyN -KeyI -KeyV"}
+{"gold": "88 68 0 ; +LMB -LMB", "pred": "178 111 0 ; +LMB -LMB"}
+{"gold": "29 -424 0 ; +LMB -LMB", "pred": "NO_OP"}
+{"gold": "120 121 0 ; +LMB -LMB", "pred": "14 71 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +KeyH -KeyH +KeyT -KeyT +KeyT -KeyT +KeyP -KeyP +KeyS -KeyS +ShiftLeft +SemiColon -SemiColon -ShiftLeft +Slash -Slash +Slash -Slash +KeyW -KeyW +KeyW -KeyW +KeyW -KeyW +Dot -Dot +KeyH -KeyH +KeyK -KeyK +KeyU -KeyU +Dot -Dot +KeyH -KeyH +KeyK -KeyK +Slash -Slash +KeyW -KeyW +KeyP -KeyP +Minus -Minus +KeyC -KeyC +KeyO -KeyO +KeyN -KeyN +KeyT -KeyT +KeyE -KeyE +KeyN -KeyN +KeyT -KeyT +Slash -Slash +KeyU -KeyU +KeyP -KeyP +KeyL -KeyL +KeyO -KeyO +KeyA -KeyA +KeyD -KeyD +KeyS -KeyS +Slash -Slash +Num2 -Num2 +Num0 -Num0 +Num2 -Num2 +Num2 -Num2 +Slash -Slash +Num0 -Num0 +Num3 -Num3 +Slash -Slash +ShiftLeft +KeyH -KeyH -ShiftLeft +ShiftLeft +KeyK -KeyK -ShiftLeft +ShiftLeft +KeyU -KeyU -ShiftLeft +Minus -Minus +ShiftLeft +KeyL -KeyL -ShiftLeft +KeyO -KeyO +KeyG -KeyG +KeyO -KeyO +Dot -Dot +KeyP -KeyP +KeyN -KeyN +KeyG -KeyG", "pred": "0 0 0 ; +KeyH -KeyH +KeyT -KeyT +KeyT -KeyT +KeyP -KeyP +KeyS -KeyS +Key: -Key: +Slash -Slash +KeyU -KeyU +KeyN -KeyN +KeyI -KeyI +KeyV -KeyV +KeyE -KeyE +KeyR -KeyR +KeyS -KeyS +KeyI -KeyI +Key"}
+{"gold": "88 68 0 ; +LMB -LMB", "pred": "151 111 0 ; +LMB -LMB"}
+{"gold": "0 61 0 ; +LMB -LMB", "pred": "TERMINATE"}
+{"gold": "120 121 0 ; +LMB -LMB", "pred": "24 71 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +KeyH -KeyH +KeyT -KeyT +KeyT -KeyT +KeyP -KeyP +KeyS -KeyS +ShiftLeft +SemiColon -SemiColon -ShiftLeft +Slash -Slash +Slash -Slash +KeyW -KeyW +KeyW -KeyW +KeyW -KeyW +Dot -Dot +KeyH -KeyH +KeyK -KeyK +KeyU -KeyU +Dot -Dot +KeyH -KeyH +KeyK -KeyK +Slash -Slash +KeyW -KeyW +KeyP -KeyP +Minus -Minus +KeyC -KeyC +KeyO -KeyO +KeyN -KeyN +KeyT -KeyT +KeyE -KeyE +KeyN -KeyN +KeyT -KeyT +Slash -Slash +KeyU -KeyU +KeyP -KeyP +KeyL -KeyL +KeyO -KeyO +KeyA -KeyA +KeyD -KeyD +KeyS -KeyS +Slash -Slash +Num2 -Num2 +Num0 -Num0 +Num2 -Num2 +Num2 -Num2 +Slash -Slash +Num0 -Num0 +Num3 -Num3 +Slash -Slash +ShiftLeft +KeyH -KeyH -ShiftLeft +ShiftLeft +KeyK -KeyK -ShiftLeft +ShiftLeft +KeyU -KeyU -ShiftLeft +Minus -Minus +ShiftLeft +KeyL -KeyL -ShiftLeft +KeyO -KeyO +KeyG -KeyG +KeyO -KeyO +Dot -Dot +KeyP -KeyP +KeyN -KeyN +KeyG -KeyG", "pred": "0 0 0 ; +KeyH -KeyH +KeyT -KeyT +KeyT -KeyT +KeyP -KeyP +KeyS -KeyS +Key: -Key: +Slash -Slash +KeyU -KeyU +KeyN -KeyN +KeyI -KeyI +KeyV -KeyV +KeyE -KeyE +Space -Space +KeyO -KeyO +KeyF -KeyF +Space -Space"}
+{"gold": "88 68 0 ; +LMB -LMB", "pred": "184 151 0 ; +LMB -LMB"}
+{"gold": "0 61 0 ; +LMB -LMB", "pred": "-88 -68 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "TERMINATE"}
+{"gold": "0 0 0 ; +KeyH -KeyH +KeyT -KeyT +KeyT -KeyT +KeyP -KeyP +KeyS -KeyS +ShiftLeft +SemiColon -SemiColon -ShiftLeft +Slash -Slash +Slash -Slash +KeyW -KeyW +KeyW -KeyW +KeyW -KeyW +Dot -Dot +KeyH -KeyH +KeyK -KeyK +KeyU -KeyU +Dot -Dot +KeyH -KeyH +KeyK -KeyK +Slash -Slash +KeyW -KeyW +KeyP -KeyP +Minus -Minus +KeyC -KeyC +KeyO -KeyO +KeyN -KeyN +KeyT -KeyT +KeyE -KeyE +KeyN -KeyN +KeyT -KeyT +Slash -Slash +KeyU -KeyU +KeyP -KeyP +KeyL -KeyL +KeyO -KeyO +KeyA -KeyA +KeyD -KeyD +KeyS -KeyS +Slash -Slash +Num2 -Num2 +Num0 -Num0 +Num2 -Num2 +Num2 -Num2 +Slash -Slash +Num0 -Num0 +Num3 -Num3 +Slash -Slash +ShiftLeft +KeyH -KeyH -ShiftLeft +ShiftLeft +KeyK -KeyK -ShiftLeft +ShiftLeft +KeyU -KeyU -ShiftLeft +Minus -Minus +ShiftLeft +KeyL -KeyL -ShiftLeft +KeyO -KeyO +KeyG -KeyG +KeyO -KeyO +Dot -Dot +KeyP -KeyP +KeyN -KeyN +KeyG -KeyG", "pred": "0 0 0 ; +KeyH -KeyH +KeyT -KeyT +KeyT -KeyT +KeyP -KeyP +ShiftLeft +SemiColon -SemiColon -ShiftLeft +Slash -Slash +Slash -Slash +KeyU -KeyU +KeyN -KeyN +KeyI -KeyI +KeyV -KeyV +KeyE -KeyE +Space -Space +KeyO -KeyO +KeyF -"}
+{"gold": "88 68 0 ; +LMB -LMB", "pred": "163 152 0 ; +LMB -LMB"}
+{"gold": "0 61 0 ; +LMB -LMB", "pred": "TERMINATE"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "88 68 0 ; +LMB -LMB", "pred": "241 157 0 ; +LMB -LMB"}
+{"gold": "0 61 0 ; +LMB -LMB", "pred": "-88 -68 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 61 0 ; +LMB -LMB", "pred": "-11 157 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "TERMINATE"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +LMB -LMB", "pred": "0 0 0 ; +LMB -LMB"}
+{"gold": "-274 -191 0 ; +LMB -LMB", "pred": "-274 -230 0 ; +LMB -LMB"}
+{"gold": "-274 -191 0 ; +LMB -LMB", "pred": "-318 -212 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +Equal -Equal +ShiftLeft +KeyT -KeyT -ShiftLeft +ShiftLeft +KeyE -KeyE -ShiftLeft +ShiftLeft +KeyX -KeyX -ShiftLeft +ShiftLeft +KeyT -KeyT -ShiftLeft +ShiftLeft +Num9 -Num9 -ShiftLeft +ShiftLeft +KeyC -KeyC -ShiftLeft +Num2 -Num2 +Comma -Comma +ShiftLeft +Quote -Quote -ShiftLeft +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0", "pred": "0 0 0 ; +Equal -Equal +ShiftLeft +Key7 -Key7 -ShiftLeft +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num"}
+{"gold": "-274 -191 0 ; +LMB -LMB", "pred": "-318 -212 0 ; +LMB -LMB"}
+{"gold": "0 0 0 ; +Equal -Equal +ShiftLeft +KeyT -KeyT -ShiftLeft +ShiftLeft +KeyE -KeyE -ShiftLeft +ShiftLeft +KeyX -KeyX -ShiftLeft +ShiftLeft +KeyT -KeyT -ShiftLeft +ShiftLeft +Num9 -Num9 -ShiftLeft +ShiftLeft +KeyC -KeyC -ShiftLeft +Num2 -Num2 +Comma -Comma +ShiftLeft +Quote -Quote -ShiftLeft +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0", "pred": "0 0 0 ; +Equal -Equal +ShiftLeft +Key7 -Key7 -ShiftLeft +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num0 -Num0 +Num"}

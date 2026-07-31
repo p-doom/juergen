@@ -1,0 +1,13 @@
+{
+ "fmt": "moverel",
+ "n_steps": 200,
+ "format_validity_rate": 0.59,
+ "n_move_pairs": 88,
+ "cos_mean": 0.9803698690833008,
+ "cos_median": 0.9992410615025923,
+ "cos_frac_positive(right_hemisphere)": 1.0,
+ "wrong_hemisphere_rate": 0.0,
+ "cos_frac_gt0.5": 1.0,
+ "cos_frac_gt0.9": 0.9431818181818182,
+ "magratio_median": 0.9993239532760837
+}

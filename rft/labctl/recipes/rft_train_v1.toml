@@ -1,0 +1,173 @@
+# ============================================================================
+# RFT stage 4 -- TRAIN. omegalax is battle-tested and is NOT reimplemented; this
+# recipe wraps its INVOCATION correctly, which is where every defect in this stage
+# actually lived.
+#
+# Three corrections vs the fmt_sft_8b_osw_* family, each with its reason:
+#
+#   * CHECKPOINT RETENTION THAT ACTUALLY RETAINS. keep_latest=1 with
+#     keep_period=305 over num_steps=300 kept exactly ONE checkpoint (orbax keeps
+#     the last `keep_latest` saves plus steps divisible by `keep_period`; 305
+#     divides no saved step), which made val-based checkpoint selection impossible
+#     after the run. Here save_every == keep_period and keep_latest is high, so
+#     EVERY saved step survives. `rft train-command` computes the surviving set and
+#     refuses a config that leaves fewer than --min-checkpoints.
+#   * VAL OVER THE FULL VAL SPLIT. The val grain iterator does NOT restart between
+#     evaluations, so val_steps < ceil(|val| / gbs) scores a DIFFERENT subset at
+#     every eval and the losses are comparable only within matched windows (Tier-1
+#     hit exactly this: val/sup_tokens alternated between two 15-record windows).
+#     val_steps is therefore DERIVED from the dataset, not hardcoded.
+#   * VAL LOSS ON STDOUT. omegalax logs val/loss only to wandb. `rft val-curve`
+#     scrapes the training log and re-emits it, so the curve is readable from the
+#     slurm log and checkpoint selection does not depend on reading an offline
+#     wandb datastore (whose keys live at item.nested_key, not item.key -- reading
+#     .key returns empty strings and looks like "no val rows exist").
+#
+# It also re-verifies the dataset before burning GPU hours: task-level split intact
+# and no held-out leak. A dataset that passed at build time can still be the wrong
+# dataset by the time training reads it.
+#
+# Required-flag guard: origin/main's train_vlm_sft.py HARD-REQUIRES keep_period,
+# keep_latest, log_memory, resume and num_loss_tiles. `labctl validate` does not
+# catch their absence and the job crashes at start.
+# ============================================================================
+name = "rft_train_v1"
+repo = "omegalax"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+declare -A A
+for arg in "$@"; do
+    case "$arg" in --*=*) k="${arg%%=*}"; k="${k#--}"; A[$k]="${arg#*=}";; esac
+done
+
+# Pre-flight the DATA and the RETENTION/VAL plan before allocating any GPU time.
+# Exit 2 from the rft CLI means a gate failed, not that the job crashed.
+uv run --project="${A[juergen_repo]}/rft" -- python -m rft.cli train-command \
+    --omegalax-repo "$REPO" \
+    --dataset "${A[dataset]}" \
+    --heldout "${A[heldout_tasks]}" \
+    --save-dir "${A[save_dir]}" \
+    --num-steps "${A[num_steps]}" \
+    --save-every "${A[save_every]}" \
+    --global-batch-size "${A[global_batch_size]}" \
+    --min-checkpoints "${A[min_checkpoints]}" \
+    --flags "${A[flags_json]}" \
+    --emit "$LABCTL_RUN_DIR/rft_train_argv.txt"
+
+VAL_STEPS="$(uv run --project="${A[juergen_repo]}/rft" -- python -c "
+import json,sys
+from pathlib import Path
+from rft.training import count_jsonl_records, resolve_val_steps
+n = count_jsonl_records(Path(sys.argv[1]) / '_normalized' / 'val' / 'chat.jsonl')
+print(resolve_val_steps(n_val_records=n, global_batch_size=int(sys.argv[2])).val_steps)
+" "${A[dataset]}" "${A[global_batch_size]}")"
+echo "[rft] derived val_steps=$VAL_STEPS (FULL val split)"
+
+# Tee omegalax's stdout through the val-loss surfacer so the curve lands in the
+# slurm log as well as wandb.
+set +e
+uv run --project="$REPO" -- srun python scripts/train_vlm_sft.py "$@" --val_steps="$VAL_STEPS" \
+    2>&1 | tee "$LABCTL_RUN_DIR/train.log"
+rc=${PIPESTATUS[0]}
+set -e
+uv run --project="${A[juergen_repo]}/rft" -- python -m rft.cli val-curve \
+    --log "$LABCTL_RUN_DIR/train.log" \
+    --out "$LABCTL_RUN_DIR/val_curve.json" || echo "[rft] no val points yet"
+exit "$rc"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 12
+# 150G matches the proven single-GPU LoRA runs. LoRA recipes that ask for 300G (a
+# full-FT leftover) sit PENDING/Resources behind idle GPUs.
+mem  = "150GB"
+time = "08:00:00"
+qos  = "low"
+account   = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--signal=USR1@600", "--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.dataset]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/datasets/franz.srambical/rft_records_v1_REPLACE_ME"
+
+[inputs.heldout]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/juergen-rft/osworld_parity/split/osworld_eval_heldout.tasks"
+
+[outputs.checkpoint]
+type   = "checkpoint_stream"
+marker = "_CHECKPOINT_METADATA"
+alias  = "rft_train_v1_{run.id}"
+
+[args]
+# --- rft wrapper knobs (consumed by the command block, not by omegalax) -------
+juergen_repo                  = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/juergen-rft"
+dataset                       = "{inputs.dataset.path}"
+heldout_tasks                 = "{inputs.heldout.path}"
+flags_json                    = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/juergen-rft/rft/labctl/rft_train_flags_v1.json"
+global_batch_size             = "8"
+min_checkpoints               = "6"
+# --- omegalax flags ----------------------------------------------------------
+model_id                      = "Qwen/Qwen3-VL-8B-Instruct"
+processor                     = "Qwen/Qwen3-VL-8B-Instruct"
+enable_lora                   = "true"
+lora_rank                     = "32"
+lora_alpha                    = "32"
+freeze_vision_tower           = "false"
+data_path                     = "{inputs.dataset.path}/train"
+val_data_path                 = "{inputs.dataset.path}/val"
+save_dir                      = "{outputs.checkpoint.path}"
+tp_size                       = "1"
+fsdp_size                     = "1"
+dp_size                       = "1"
+batch_size                    = "1"
+# grad_accum_steps=1 OOMs HBM via an XLA buffer-scheduling pathology (it skips the
+# optax.MultiSteps wrap); >=2 is required.
+grad_accum_steps              = "8"
+learning_rate                 = "1e-4"
+lr_schedule                   = "wsd"
+lr_stable_fraction            = "0.7"
+lr_end_factor                 = "0.0"
+warmup_steps                  = "30"
+weight_decay                  = "0.01"
+max_grad_norm                 = "1.0"
+max_length                    = "16384"
+num_steps                     = "300"
+num_loss_tiles                = "16"
+# RETENTION: save_every == keep_period, keep_latest >= n_saves => every save is kept.
+save_every                    = "50"
+keep_period                   = "50"
+keep_latest                   = "8"
+val_every                     = "50"
+log_every                     = "10"
+log_memory                    = "true"
+resume                        = "if_present"
+gc_period                     = "3000"
+pad_id                        = "0"
+seed                          = "0"
+text_attn_backend             = "mosaic_gpu"
+peak_tflops                   = "h100_sxm"
+max_vision_images_per_sample  = "29"
+max_vision_patches_per_sample = "64_000"
+jax_cache_dir                 = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/jax_cache/rft_train_v1"
+grain_read_threads            = "4"
+grain_read_buffer_size        = "2"
+grain_workers                 = "2"
+grain_worker_buffer_size      = "2"
+wandb_entity                  = "pdoom"
+wandb_project                 = "omegalax"
+wandb_group                   = "rft_train_v1_{run.id}"
+wandb_name                    = "rft_train_v1_{run.id}"
+wandb_tags                    = "berlin,lora,rft,rejection_sampling,single_gpu"
+
+[env]
+HF_HUB_OFFLINE                 = "1"
+PYTHONUNBUFFERED               = "1"
+XLA_PYTHON_CLIENT_ALLOCATOR    = "cuda_async"
+XLA_PYTHON_CLIENT_MEM_FRACTION = "0.8"
+TMPDIR                         = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR                   = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

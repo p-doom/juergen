@@ -1,0 +1,13 @@
+{
+ "fmt": "diffabs",
+ "n_steps": 200,
+ "format_validity_rate": 0.95,
+ "n_move_pairs": 92,
+ "cos_mean": 0.8682143509272475,
+ "cos_median": 0.9993839394152927,
+ "cos_frac_positive(right_hemisphere)": 0.9347826086956522,
+ "wrong_hemisphere_rate": 0.06521739130434778,
+ "cos_frac_gt0.5": 0.9130434782608695,
+ "cos_frac_gt0.9": 0.8152173913043478,
+ "magratio_median": 1.0
+}

@@ -1,0 +1,131 @@
+# ============================================================================
+# RFT stage 1 -- SAMPLE: draw k completions per task from a served checkpoint.
+#
+# First-class labctl recipe with repo="juergen" (there were previously ZERO
+# repo="juergen" recipes for this pipeline -- the missing half of making it
+# labctl-native).
+#
+# What this stage guarantees, and why each guarantee exists:
+#   * a REAL chat-completion preflight, not a /v1/models ping. An export whose
+#     config.json lacks `architectures` makes vLLM resolve --runner pooling /
+#     --convert embed: /v1/models answers 200 (so the old gate printed READY)
+#     while every /v1/chat/completions answers 404 and the probe wrote 0.0.
+#     `rft preflight` validates the export AND sends a real completion.
+#   * explicit per-rollout error accounting with a failure-rate CEILING that
+#     ABORTS. A run that silently loses a third of its rollouts is broken, not
+#     smaller: prime-rl's session-hashed routing turns one 400 into whole-group
+#     loss (20-33% observed).
+#   * deterministic sharding: hash(task_id, rollout_index) % num_shards, so the
+#     assignment is independent of input order and stable across restarts.
+#   * resumability: already-written sample_ids are skipped; a line truncated by a
+#     kill is counted and redone, never silently accepted.
+#
+# The rollout backend is INJECTED (--rollout-fn module:function) so the OSWorld /
+# fast-reset collector stays where it is and this stage stays generic.
+#
+# Sharding note: shard by TASK when the k samples of a task must share one VM
+# snapshot (the fast-reset collector requires this). Set num_shards/shard_index
+# from a SLURM array via sbatch_extra = ["--array=0-N%M"].
+#
+# NO EVAL LEAK: tasks_file MUST be the 259-task train split. The 110 held-out
+# tasks are eval-only.
+# ============================================================================
+name = "rft_sample_v1"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+declare -A A
+for arg in "$@"; do
+    case "$arg" in --*=*) k="${arg%%=*}"; k="${k#--}"; A[$k]="${arg#*=}";; esac
+done
+OUT="${A[out_dir]}"
+mkdir -p "$OUT"
+
+# Compile caches on /fast/project, never /fast/home: vLLM's cache on the NFS home
+# throws `OSError [Errno 121] Remote I/O error` mid-autotune and kills the engine.
+# rft.serving.assert_caches_off_home() re-checks this in-process.
+CACHE="${A[cache_root]}/vllm_cache_${SLURM_JOB_ID:-local}"
+export VLLM_CACHE_ROOT="$CACHE" TORCHINDUCTOR_CACHE_DIR="$CACHE/inductor" TRITON_CACHE_DIR="$CACHE/triton"
+mkdir -p "$VLLM_CACHE_ROOT" "$TORCHINDUCTOR_CACHE_DIR" "$TRITON_CACHE_DIR"
+
+# Stage-1 GATE: validate the export is servable as a GENERATIVE model, then prove
+# the endpoint answers a real chat completion. Exit 2 => the instrument is broken,
+# not the model.
+uv run --project="$REPO/rft" -- python -m rft.cli preflight \
+    --base-url "${A[base_url]}" --model "${A[model]}" \
+    --export-dir "${A[model_path]}" --timeout-s "${A[preflight_timeout_s]}"
+
+uv run --project="$REPO/rft" -- python -m rft.cli sample \
+    --tasks "${A[tasks_file]}" \
+    --k "${A[k]}" \
+    --grammar "${A[grammar]}" \
+    --out "$OUT/rollouts.jsonl" \
+    --base-url "${A[base_url]}" \
+    --model "${A[model]}" \
+    --rollout-fn "${A[rollout_fn]}" \
+    --num-shards "${A[num_shards]}" \
+    --shard-index "${SLURM_ARRAY_TASK_ID:-0}" \
+    --max-failure-rate "${A[max_failure_rate]}" \
+    --salt "${A[salt]}"
+
+# Marker is written only after the sampler returned 0, so a failed/aborted run
+# never registers as a complete dataset.
+python3 - "$OUT" "${A[grammar]}" "${A[k]}" <<'PY'
+import json, sys, time
+out, grammar, k = sys.argv[1], sys.argv[2], int(sys.argv[3])
+json.dump({"stage": "rft_sample", "grammar": grammar, "k": k,
+           "built_at": int(time.time())},
+          open(f"{out}/sample_manifest.json", "w"), indent=2)
+PY
+echo "=== rft_sample DONE -> $OUT @ $(date) ==="
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 12
+mem  = "150GB"
+time = "12:00:00"
+qos  = "low"
+account   = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+# type="external" resolves by raw path at submit time with artifact_id=null and needs
+# no registration -- which is what makes this dispatchable while labctl's Postgres is
+# down. Note: {inputs.<role>.id} is NOT available for external inputs, so the output
+# alias below uses {run.id} instead.
+[inputs.tasks]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/juergen-rft/osworld_parity/split/osworld_train.tasks"
+
+[inputs.model]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/checkpoints/fmt_sft_8b_osw_diffabs_v1_hf"
+
+[outputs.rollouts]
+type   = "dataset"
+marker = "sample_manifest.json"
+alias  = "rft_sample_v1_{run.id}"
+
+[args]
+tasks_file           = "{inputs.tasks.path}"
+model_path           = "{inputs.model.path}"
+out_dir              = "{outputs.rollouts.path}"
+k                    = "8"
+grammar              = "deltatype"
+base_url             = "http://localhost:8000/v1"
+model                = "policy"
+rollout_fn           = "rft_adapters.osworld:rollout_one"
+num_shards           = "1"
+max_failure_rate     = "0.05"
+preflight_timeout_s  = "900"
+salt                 = "rft-v1"
+cache_root           = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+
+[env]
+HF_HUB_OFFLINE   = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR           = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR     = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

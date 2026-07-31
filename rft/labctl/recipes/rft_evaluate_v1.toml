@@ -1,0 +1,129 @@
+# ============================================================================
+# RFT stage 5 -- EVALUATE. The harnesses are already validated and are NOT
+# rewritten. This recipe runs the closed-loop OSWorld harness
+# (osworld_parity/split/format_eval_shard.py, or baseline_eval_shard.py for the
+# absolute/native arm) and then READS it correctly.
+#
+# Reading it correctly is the whole point:
+#
+#   * reward from scores.reward (nested, NOT top level);
+#   * NaN kept distinct from 0 AND from "never written". The harness deliberately
+#     leaves model-unreachable tasks UNWRITTEN rather than writing a fake 0, so
+#     "missing" and "zero" are different facts and the report shows both;
+#   * BUCKETED results from analysis/heldout_buckets.json, never a single
+#     aggregate. Of the 110 held-out tasks, 10 are INFEASIBLE, 6 are KEYBOARD_ONLY
+#     and 58 were never solved by any of 14 arms -- so only 36 MOUSE_SOLVED tasks
+#     can move with mouse control and the aggregate is ~85% insensitive to it. A
+#     reward-mean rise can be entirely non-mouse progress;
+#   * the three MANDATORY diagnostics on every report: count of DISTINCT predicted
+#     deltas, fraction of predictions in the {0,+-1,+-10,+-100} lattice, and
+#     median |pred|/|gold|. They exposed a magnitude-encoding collapse that
+#     aggregate accuracy hid completely, and must never again need a bespoke script;
+#   * the 3 gdrive-unscorable tasks excluded from BOTH numerator and denominator
+#     (effective denominator 107), listed in the report.
+#
+# --anchor validates the reading against a reference whose answer is known before
+# the number is trusted: the off-shelf 8B reads SUM(reward)=33.00378 over 107
+# written results (30.845% / 107, 31.136% / 106; 31 tasks >= 0.999, 1 NaN, 3
+# partial). Run that first on any new harness build.
+#
+# EVAL-LEAK RULE: held-out scores are the parity metric ONLY. Never select a
+# checkpoint on them -- rft.evaluation.assert_not_selection_input enforces it, and
+# checkpoint selection uses the TRAIN-split val curve from stage 4.
+# ============================================================================
+name = "rft_evaluate_v1"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+declare -A A
+for arg in "$@"; do
+    case "$arg" in --*=*) k="${arg%%=*}"; k="${k#--}"; A[$k]="${arg#*=}";; esac
+done
+OUT="${A[out_dir]}"
+mkdir -p "$OUT/results"
+
+export OSWORLD_ROOT="${A[osworld_root]}"
+export CUDA_HOME="${A[cuda_home]}"
+export PATH="$CUDA_HOME/bin:$PATH"
+export FLASHINFER_WORKSPACE_BASE="$LABCTL_RUN_DIR/.cache"
+export XDG_CACHE_HOME="$LABCTL_RUN_DIR/.cache"
+
+# --- the validated harness, untouched ---------------------------------------
+uv run --project="$REPO/eval" -- python "${A[harness]}" \
+    --base_output_dir "$OUT/results" \
+    --test_split_path "${A[split_json]}" \
+    --model_path "${A[model_path]}" \
+    --action_format "${A[action_format]}" \
+    --num_shards "${A[num_shards]}" \
+    --shard_index "${SLURM_ARRAY_TASK_ID:-0}" \
+    --max_steps "${A[max_steps]}" \
+    --temperature "${A[temperature]}" \
+    --top_p "${A[top_p]}" \
+    --max_tokens "${A[max_tokens]}" \
+    --history_n "${A[history_n]}" \
+    --provider_name "${A[provider_name]}"
+
+# --- read it correctly -------------------------------------------------------
+uv run --project="$REPO/rft" -- python -m rft.cli evaluate \
+    --results-dir "$OUT/results" \
+    --split "${A[split_json]}" \
+    --run-name "${A[run_name]}" \
+    --out "$OUT/result.json" \
+    --buckets "${A[buckets_json]}" \
+    --exclude "${A[exclude_file]}" \
+    --grammar "${A[grammar]}" \
+    --no-diagnostics
+echo "=== rft_evaluate DONE -> $OUT @ $(date) ==="
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 8
+mem  = "64GB"
+time = "06:00:00"
+qos  = "low"
+account   = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+# type="checkpoint" is injected by an eval policy at dispatch (see
+# labctl/policies_templates/rft_eval_per_checkpoint_v1.toml). Swap to
+# type="external" with an explicit path for a one-off manual eval.
+[inputs.checkpoint]
+type = "checkpoint"
+
+[outputs.result]
+type   = "eval_result"
+marker = "result.json"
+alias  = "rft_evaluate_v1_{inputs.checkpoint.id}_{run.id}"
+
+[args]
+model_path     = "{inputs.checkpoint.path}"
+out_dir        = "{outputs.result.path}"
+run_name       = "rft_evaluate_v1"
+harness        = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/juergen-rft/osworld_parity/split/format_eval_shard.py"
+split_json     = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/juergen-rft/osworld_parity/split/osworld_eval_heldout.json"
+buckets_json   = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/analysis/heldout_buckets.json"
+exclude_file   = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/juergen-rft/osworld_parity/split/gdrive_unscorable.txt"
+osworld_root   = "/fast/home/franz.srambical/OSWorld"
+cuda_home      = "/fast/service/apps/software/CUDA/12.6.0"
+action_format  = "deltatype_raw"
+grammar        = "deltatype"
+num_shards     = "6"
+# Greedy: the eval config must match the baseline config exactly, and
+# coordinate_type stays hardcoded `relative` inside the harness on purpose.
+max_steps      = "15"
+temperature    = "0.0"
+top_p          = "0.9"
+max_tokens     = "1024"
+history_n      = "4"
+provider_name  = "apptainer"
+
+[env]
+HF_HUB_OFFLINE      = "1"
+TRANSFORMERS_OFFLINE = "1"
+PYTHONUNBUFFERED    = "1"
+TMPDIR              = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR        = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

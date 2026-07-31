@@ -1,0 +1,104 @@
+# ============================================================================
+# RFT stage 3 -- BUILD RECORDS: accepted rollouts -> SFT chat records.
+#
+# Every gate below is MANDATORY and runs BEFORE anything is written, so a failed
+# gate cannot leave a half-written dataset for a later stage to pick up. There is
+# deliberately no --skip flag for any of them.
+#
+#   1. ACTION-SPAN ISOLATION. The conversion may rewrite ONLY the action span;
+#      every other byte passes through. This is the gate for the worst defect
+#      found so far: the absolute branch returned the teacher text verbatim while
+#      every relative branch re-rendered action-only, so a reasoning preamble was
+#      present in 2383/2383 absolute records and 0/2441 relative ones. Prose is
+#      format-INDEPENDENT, so the pipeline deleted the reasoning scratchpad from
+#      exactly the arm that had a new convention to learn -- invalidating every
+#      trained absolute-vs-relative comparison. Dropping prose is allowed only as
+#      an explicit, SYMMETRIC option recorded in the manifest.
+#   2. WITHIN-RECORD LABEL LEAK. A preamble that contains the target coordinates
+#      turns the task into text arithmetic and yields a false positive that looks
+#      exactly like success. preamble digit-leak must be 0.
+#   3. ROUND-TRIP AUDIT through the EXACT eval parser (juergen/eval/action_parser.py),
+#      on every record -- not a spot check.
+#   4. NO EVAL LEAK against the 110-task held-out list.
+#   5. TASK-LEVEL split. The k sibling rollouts of one task are correlated, so a
+#      record-level split scatters them across train and val and leaks by
+#      construction. The split is a stable hash of the task id, so adding tasks
+#      does not reshuffle the existing ones (random.shuffle(sorted(ids)) does) and
+#      val numbers stay comparable across data revisions.
+#   6. COLLISION-PROOF sample_ids: unique across (sample root, task, rollout,
+#      step). `slug = app__task_id` collided across sample roots, and every
+#      collector names its subdirs sample_0..7.
+#
+# The per-format converter is INJECTED (--convert module:function) and should be
+# written with rft.conversion.convert_action_span, which makes gate 1 unfailable
+# by construction rather than by remembering.
+# ============================================================================
+name = "rft_build_records_v1"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+declare -A A
+for arg in "$@"; do
+    case "$arg" in --*=*) k="${arg%%=*}"; k="${k#--}"; A[$k]="${arg#*=}";; esac
+done
+OUT="${A[out_dir]}"
+mkdir -p "$OUT"
+
+uv run --project="$REPO/rft" -- python -m rft.cli build-records \
+    --rollouts "${A[accepted]}/accepted.jsonl" \
+    --grammar "${A[grammar]}" \
+    --convert "${A[convert_fn]}" \
+    --out "$OUT" \
+    --heldout "${A[heldout_tasks]}" \
+    --val-fraction "${A[val_fraction]}" \
+    --salt "${A[salt]}" \
+    --source-text-key "${A[source_text_key]}"
+
+# build_manifest.json is written by the stage itself and carries the roundtrip
+# report, the leak check, the context audit and the arm context profile. The marker
+# is a separate file so a partially-written manifest can never register.
+[ -f "$OUT/build_manifest.json" ] || { echo "build failed: no build_manifest.json"; exit 1; }
+[ -f "$OUT/_normalized/train/chat.jsonl" ] || { echo "build failed: no train split"; exit 1; }
+[ -f "$OUT/_normalized/val/chat.jsonl" ]   || { echo "build failed: no val split"; exit 1; }
+cp "$OUT/build_manifest.json" "$OUT/manifest.json"
+echo "=== rft_build_records DONE -> $OUT @ $(date) ==="
+''', "--"]
+
+[resources]
+cpus = 16
+mem  = "64GB"
+time = "02:00:00"
+qos  = "low"
+account   = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.accepted]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/datasets/franz.srambical/rft_score_v1_REPLACE_ME"
+
+[inputs.heldout]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/juergen-rft/osworld_parity/split/osworld_eval_heldout.tasks"
+
+[outputs.records]
+type   = "dataset"
+marker = "manifest.json"
+alias  = "rft_records_v1_{run.id}"
+
+[args]
+accepted          = "{inputs.accepted.path}"
+heldout_tasks     = "{inputs.heldout.path}"
+out_dir           = "{outputs.records.path}"
+grammar           = "deltatype"
+convert_fn        = "rft_adapters.formats:convert_rollout"
+val_fraction      = "0.1"
+salt              = "rft-v1"
+source_text_key   = "source_response"
+
+[env]
+PYTHONUNBUFFERED = "1"
+TMPDIR           = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR     = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

@@ -1,0 +1,970 @@
+{
+ "absolute": [
+  {
+   "sample_id": "osw_chrome__06fe7178-4491-4589-810f-2e2bc9502122_step000",
+   "task_id": "06fe7178-4491-4589-810f-2e2bc9502122",
+   "step": 0,
+   "target": "Action: Press Ctrl+Shift+T to reopen the most recently closed tab in the browser.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"key\", \"keys\": [\"ctrl\", \"shift\", \"t\"]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__06fe7178-4491-4589-810f-2e2bc9502122_step001",
+   "task_id": "06fe7178-4491-4589-810f-2e2bc9502122",
+   "step": 1,
+   "target": "Action: The task is completed successfully.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step000",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 0,
+   "target": "Action: Click the Chrome menu button (three vertical dots) in the top-right corner of the browser toolbar.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [984, 81]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step001",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 1,
+   "target": "Action: Click the \u201cPasswords and autofill\u201d option in the Chrome menu (the entry with a key icon, located below \u201cPerson 1 Not signed in\u201d).\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [875, 313]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step002",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 2,
+   "target": "Action: Click the \u201cGoogle Password Manager\u201d option in the \u201cPasswords and autofill\u201d submenu to open the password management page.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [743, 313]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step003",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 3,
+   "target": "Action: Click inside the \u201cSearch passwords\u201d input field at the top of the Google Password Manager page to focus it.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [517, 130]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step004",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 4,
+   "target": "Action: Type the text exactly as: Etsy\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"type\", \"text\": \"Etsy\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step005",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 5,
+   "target": "Action: The task is completed successfully.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step000",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 0,
+   "target": "Action: Click on the 'Pick-up location' input field that currently shows the placeholder text 'Airport, city or station' to begin entering a location.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [349, 398]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step001",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 1,
+   "target": "Action: Type 'Zurich' into the 'Pick-up location' input field.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"type\", \"text\": \"Zurich\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step002",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 2,
+   "target": "Action: Click on the 'Z\u00fcrich, Canton of Zurich, Switzerland' option in the dropdown list under the 'Pick-up location' input field.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [322, 521]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step003",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 3,
+   "target": "Action: Click on the 'Pick-up date' field displaying 'Sun, 2 Aug' to open the date picker.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [532, 398]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step004",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 4,
+   "target": "Action: Click on the date 'Mon, 3 Aug' in the calendar to set it as the pick-up date.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [251, 585]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step005",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 5,
+   "target": "Action: Click on the 'Drop-off date' field displaying 'Tue, 4 Aug' to open the date picker.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [657, 398]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step006",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 6,
+   "target": "Action: Click on the date 'Fri, 7 Aug' in the calendar to set it as the drop-off date.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [462, 585]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step007",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 7,
+   "target": "Action: Click the green 'Search' button to initiate the car rental search with the selected location and dates.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [771, 398]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step008",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 8,
+   "target": "Action: Click the \"Accept\" button on the cookie consent banner at the bottom of the page.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [746, 951]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step009",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 9,
+   "target": "Action: Click the 'Accept' button on the cookie consent banner at the bottom of the page.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [746, 951]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step010",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 10,
+   "target": "Action: Click on the 'Large car' category icon to filter the search results to show only large cars.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [576, 435]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step011",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 11,
+   "target": "Action: Click on the 'Sort by: Recommended' dropdown to view sorting options.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [485, 377]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step012",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 12,
+   "target": "Action: Click on the 'Price (lowest first)' option in the sorting dropdown to sort the car listings by price.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [476, 466]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step013",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 13,
+   "target": "Action: The task is completed successfully.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step000",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 0,
+   "target": "Action: Click the \u201cMen\u201d link in the top navigation bar of the Macy\u2019s website.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [251, 224]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step001",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 1,
+   "target": "Action: Scroll down the page slightly to reveal more of the Men\u2019s navigation menu.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [251, 224]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"scroll\", \"pixels\": -3}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step002",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 2,
+   "target": "Action: Click the \u201cShirts & T-shirts\u201d link in the left column of the Men\u2019s navigation menu.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [179, 241]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step003",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 3,
+   "target": "Action: Click the \u201cShirts & T-shirts\u201d link in the left column of the Men\u2019s navigation menu.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [179, 241]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step004",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 4,
+   "target": "Action: Click the \u201cMen\u201d item in the \u201cShop by department\u201d list within the open left sidebar.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [165, 592]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step005",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 5,
+   "target": "Action: Click the \u201cClothing\u201d link in the left sidebar under the \u201cMen\u201d section.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [172, 527]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step006",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 6,
+   "target": "Action: Click the \u201cShirts & T-shirts\u201d link in the left sidebar under the Clothing section.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [182, 856]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step007",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 7,
+   "target": "Action: Click the \u201cShirts & T-shirts\u201d link in the left sidebar under the Clothing section.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [182, 856]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step008",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 8,
+   "target": "Action: Click the \u201cFilter\u201d button (with the funnel icon) located below the shirt style buttons to open the filtering options.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [165, 879]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step009",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 9,
+   "target": "Action: Click the \u201c+\u201d icon next to \u201cSize\u201d in the Filter sidebar to expand the Size filter options.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [961, 571]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step010",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 10,
+   "target": "Action: Click the \u201cL\u201d size button in the expanded \u201cSize\u201d section of the Filter sidebar.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [784, 768]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step011",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 11,
+   "target": "Action: Click the \u201c+\u201d icon next to \u201cSleeve Length\u201d in the Filter sidebar to expand that filter category.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [961, 408]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step012",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 12,
+   "target": "Action: Click the checkbox next to \u201cShort Sleeve (17097)\u201d in the Sleeve Length section of the Filter sidebar.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [768, 495]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step013",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 13,
+   "target": "Action: Click the \u201c+\u201d icon next to \u201cOffers\u201d in the Filter sidebar to expand the Offers filter options.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [961, 908]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step014",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 14,
+   "target": "Action: Click the \u201cSee more filters\u201d link at the bottom of the Filter sidebar to expand additional filtering options.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [784, 879]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2ad9387a-65d8-4e33-ad5b-7580065a27ca_step000",
+   "task_id": "2ad9387a-65d8-4e33-ad5b-7580065a27ca",
+   "step": 0,
+   "target": "Action: Click the three-dot menu button next to \u201cRelaunch to update\u201d in the top-right corner of Google Chrome.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [984, 81]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2ad9387a-65d8-4e33-ad5b-7580065a27ca_step001",
+   "task_id": "2ad9387a-65d8-4e33-ad5b-7580065a27ca",
+   "step": 1,
+   "target": "Action: Click the \u201cBookmarks and lists\u201d option in the Chrome menu to open its submenu.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [871, 395]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2ad9387a-65d8-4e33-ad5b-7580065a27ca_step002",
+   "task_id": "2ad9387a-65d8-4e33-ad5b-7580065a27ca",
+   "step": 2,
+   "target": "Action: Click the \u201cBookmark manager\u201d option in the \u201cBookmarks and lists\u201d submenu.\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [684, 527]}}\n</tool_call>"
+  }
+ ],
+ "moverel": [
+  {
+   "sample_id": "osw_chrome__06fe7178-4491-4589-810f-2e2bc9502122_step000",
+   "task_id": "06fe7178-4491-4589-810f-2e2bc9502122",
+   "step": 0,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"key\", \"keys\": [\"ctrl\", \"shift\", \"t\"]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__06fe7178-4491-4589-810f-2e2bc9502122_step001",
+   "task_id": "06fe7178-4491-4589-810f-2e2bc9502122",
+   "step": 1,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step000",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 0,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [484, -419]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step001",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 1,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-109, 232]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step002",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 2,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-132, 0]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step003",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 3,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-226, -183]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step004",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 4,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"type\", \"text\": \"Etsy\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step005",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 5,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step000",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 0,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-151, -102]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step001",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 1,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"type\", \"text\": \"Zurich\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step002",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 2,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-27, 123]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step003",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 3,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [210, -123]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step004",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 4,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-281, 187]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step005",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 5,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [406, -187]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step006",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 6,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-195, 187]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step007",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 7,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [309, -187]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step008",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 8,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-25, 553]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step009",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 9,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step010",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 10,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-170, -516]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step011",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 11,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-91, -58]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step012",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 12,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-9, 89]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step013",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 13,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step000",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 0,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-249, -276]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step001",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 1,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [0, 0]}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step002",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 2,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-72, 17]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step003",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 3,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step004",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 4,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-14, 351]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step005",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 5,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [7, -65]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step006",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 6,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [10, 329]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step007",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 7,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step008",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 8,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-17, 23]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step009",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 9,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [796, -308]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step010",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 10,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-177, 197]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step011",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 11,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [177, -360]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step012",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 12,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-193, 87]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step013",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 13,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [193, 413]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step014",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 14,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-177, -29]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2ad9387a-65d8-4e33-ad5b-7580065a27ca_step000",
+   "task_id": "2ad9387a-65d8-4e33-ad5b-7580065a27ca",
+   "step": 0,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [484, -419]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2ad9387a-65d8-4e33-ad5b-7580065a27ca_step001",
+   "task_id": "2ad9387a-65d8-4e33-ad5b-7580065a27ca",
+   "step": 1,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-113, 314]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  },
+  {
+   "sample_id": "osw_chrome__2ad9387a-65d8-4e33-ad5b-7580065a27ca_step002",
+   "task_id": "2ad9387a-65d8-4e33-ad5b-7580065a27ca",
+   "step": 2,
+   "target": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-187, 132]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>"
+  }
+ ],
+ "diffabs": [
+  {
+   "sample_id": "osw_chrome__06fe7178-4491-4589-810f-2e2bc9502122_step000",
+   "task_id": "06fe7178-4491-4589-810f-2e2bc9502122",
+   "step": 0,
+   "target": "0 0 0 ; +ControlLeft +ShiftLeft +KeyT -KeyT -ShiftLeft -ControlLeft"
+  },
+  {
+   "sample_id": "osw_chrome__06fe7178-4491-4589-810f-2e2bc9502122_step001",
+   "task_id": "06fe7178-4491-4589-810f-2e2bc9502122",
+   "step": 1,
+   "target": "TERMINATE"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step000",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 0,
+   "target": "929 -453 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step001",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 1,
+   "target": "-209 251 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step002",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 2,
+   "target": "-253 0 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step003",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 3,
+   "target": "-434 -198 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step004",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 4,
+   "target": "0 0 0 ; +ShiftLeft +KeyE -KeyE -ShiftLeft +KeyT -KeyT +KeyS -KeyS +KeyY -KeyY"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step005",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 5,
+   "target": "TERMINATE"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step000",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 0,
+   "target": "-290 -110 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step001",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 1,
+   "target": "0 0 0 ; +ShiftLeft +KeyZ -KeyZ -ShiftLeft +KeyU -KeyU +KeyR -KeyR +KeyI -KeyI +KeyC -KeyC +KeyH -KeyH"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step002",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 2,
+   "target": "-52 133 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step003",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 3,
+   "target": "403 -133 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step004",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 4,
+   "target": "-539 202 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step005",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 5,
+   "target": "779 -202 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step006",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 6,
+   "target": "-374 202 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step007",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 7,
+   "target": "593 -202 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step008",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 8,
+   "target": "-48 597 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step009",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 9,
+   "target": "0 0 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step010",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 10,
+   "target": "-326 -557 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step011",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 11,
+   "target": "-175 -63 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step012",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 12,
+   "target": "-17 96 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step013",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 13,
+   "target": "TERMINATE"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step000",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 0,
+   "target": "-478 -298 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step001",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 1,
+   "target": "NO_OP"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step002",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 2,
+   "target": "-138 18 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step003",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 3,
+   "target": "0 0 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step004",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 4,
+   "target": "-27 379 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step005",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 5,
+   "target": "13 -70 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step006",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 6,
+   "target": "19 355 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step007",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 7,
+   "target": "0 0 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step008",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 8,
+   "target": "-32 25 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step009",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 9,
+   "target": "1528 -332 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step010",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 10,
+   "target": "-340 212 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step011",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 11,
+   "target": "340 -388 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step012",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 12,
+   "target": "-370 94 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step013",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 13,
+   "target": "370 446 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step014",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 14,
+   "target": "-340 -32 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2ad9387a-65d8-4e33-ad5b-7580065a27ca_step000",
+   "task_id": "2ad9387a-65d8-4e33-ad5b-7580065a27ca",
+   "step": 0,
+   "target": "929 -453 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2ad9387a-65d8-4e33-ad5b-7580065a27ca_step001",
+   "task_id": "2ad9387a-65d8-4e33-ad5b-7580065a27ca",
+   "step": 1,
+   "target": "-217 340 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2ad9387a-65d8-4e33-ad5b-7580065a27ca_step002",
+   "task_id": "2ad9387a-65d8-4e33-ad5b-7580065a27ca",
+   "step": 2,
+   "target": "-359 142 0 ; +LMB -LMB"
+  }
+ ],
+ "deltatype_raw": [
+  {
+   "sample_id": "osw_chrome__06fe7178-4491-4589-810f-2e2bc9502122_step000",
+   "task_id": "06fe7178-4491-4589-810f-2e2bc9502122",
+   "step": 0,
+   "target": "0 0 0 ; +ControlLeft +ShiftLeft +KeyT -KeyT -ShiftLeft -ControlLeft"
+  },
+  {
+   "sample_id": "osw_chrome__06fe7178-4491-4589-810f-2e2bc9502122_step001",
+   "task_id": "06fe7178-4491-4589-810f-2e2bc9502122",
+   "step": 1,
+   "target": "TERMINATE"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step000",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 0,
+   "target": "929 -453 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step001",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 1,
+   "target": "-209 251 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step002",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 2,
+   "target": "-253 0 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step003",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 3,
+   "target": "-434 -198 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step004",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 4,
+   "target": "0 0 0 ; type(\"Etsy\")"
+  },
+  {
+   "sample_id": "osw_chrome__12086550-11c0-466b-b367-1d9e75b3910e_step005",
+   "task_id": "12086550-11c0-466b-b367-1d9e75b3910e",
+   "step": 5,
+   "target": "TERMINATE"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step000",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 0,
+   "target": "-290 -110 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step001",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 1,
+   "target": "0 0 0 ; type(\"Zurich\")"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step002",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 2,
+   "target": "-52 133 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step003",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 3,
+   "target": "403 -133 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step004",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 4,
+   "target": "-539 202 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step005",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 5,
+   "target": "779 -202 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step006",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 6,
+   "target": "-374 202 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step007",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 7,
+   "target": "593 -202 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step008",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 8,
+   "target": "-48 597 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step009",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 9,
+   "target": "0 0 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step010",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 10,
+   "target": "-326 -557 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step011",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 11,
+   "target": "-175 -63 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step012",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 12,
+   "target": "-17 96 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__1704f00f-79e6-43a7-961b-cedd3724d5fd_step013",
+   "task_id": "1704f00f-79e6-43a7-961b-cedd3724d5fd",
+   "step": 13,
+   "target": "TERMINATE"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step000",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 0,
+   "target": "-478 -298 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step001",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 1,
+   "target": "NO_OP"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step002",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 2,
+   "target": "-138 18 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step003",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 3,
+   "target": "0 0 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step004",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 4,
+   "target": "-27 379 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step005",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 5,
+   "target": "13 -70 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step006",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 6,
+   "target": "19 355 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step007",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 7,
+   "target": "0 0 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step008",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 8,
+   "target": "-32 25 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step009",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 9,
+   "target": "1528 -332 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step010",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 10,
+   "target": "-340 212 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step011",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 11,
+   "target": "340 -388 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step012",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 12,
+   "target": "-370 94 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step013",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 13,
+   "target": "370 446 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2888b4e6-5b47-4b57-8bf5-c73827890774_step014",
+   "task_id": "2888b4e6-5b47-4b57-8bf5-c73827890774",
+   "step": 14,
+   "target": "-340 -32 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2ad9387a-65d8-4e33-ad5b-7580065a27ca_step000",
+   "task_id": "2ad9387a-65d8-4e33-ad5b-7580065a27ca",
+   "step": 0,
+   "target": "929 -453 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2ad9387a-65d8-4e33-ad5b-7580065a27ca_step001",
+   "task_id": "2ad9387a-65d8-4e33-ad5b-7580065a27ca",
+   "step": 1,
+   "target": "-217 340 0 ; +LMB -LMB"
+  },
+  {
+   "sample_id": "osw_chrome__2ad9387a-65d8-4e33-ad5b-7580065a27ca_step002",
+   "task_id": "2ad9387a-65d8-4e33-ad5b-7580065a27ca",
+   "step": 2,
+   "target": "-359 142 0 ; +LMB -LMB"
+  }
+ ]
+}

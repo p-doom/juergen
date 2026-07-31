@@ -1,0 +1,86 @@
+# ============================================================================
+# RFT stage 2 -- SCORE / FILTER: the accept-reject predicate.
+#
+# CPU-only; the reward was already computed by the harness during sampling. This
+# stage is where three confidently-wrong conclusions were manufactured, so every
+# one of them is a structural property of the code rather than a convention:
+#
+#   * the reward is read at an EXPLICIT, schema-validated path (scores.reward).
+#     A top-level `reward` read RAISES instead of yielding 0.0, because
+#     payload.get("reward", 0.0) cannot tell "absent" from "zero".
+#   * NaN is UNSCORED, a third outcome distinct from accept and reject. NaN means
+#     env.evaluate() raised -- the task was never scored -- and counting it as a
+#     failure attributes an instrument fault to the model. Live bug this prevents:
+#     `if r < min_reward: continue` ACCEPTS a NaN, because `nan < 1e-6` is False,
+#     so a never-scored rollout became a training "success" and poisoned the
+#     kept-reward mean to NaN.
+#   * field coverage is REPORTED (success / scores.reward / final_reward), so a
+#     verdict phrased in terms of a field that is absent from 100% of files is
+#     visible in the report before it becomes a finding.
+#
+# `--max-unscored-fraction` aborts when the instrument, not the model, is the
+# story. Writing an empty accepted set is refused outright.
+# ============================================================================
+name = "rft_score_v1"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+declare -A A
+for arg in "$@"; do
+    case "$arg" in --*=*) k="${arg%%=*}"; k="${k#--}"; A[$k]="${arg#*=}";; esac
+done
+OUT="${A[out_dir]}"
+mkdir -p "$OUT"
+
+uv run --project="$REPO/rft" -- python -m rft.cli score \
+    --rollouts "${A[rollouts]}/rollouts.jsonl" \
+    --out "$OUT/accepted.jsonl" \
+    --min-reward "${A[min_reward]}" \
+    --reward-path "${A[reward_path]}" \
+    --max-unscored-fraction "${A[max_unscored_fraction]}" \
+    --max-malformed-fraction "${A[max_malformed_fraction]}"
+
+python3 - "$OUT" "${A[min_reward]}" "${A[reward_path]}" <<'PY'
+import json, sys, time
+out, min_reward, reward_path = sys.argv[1], sys.argv[2], sys.argv[3]
+json.dump({"stage": "rft_score", "min_reward": float(min_reward),
+           "reward_path": reward_path, "built_at": int(time.time())},
+          open(f"{out}/score_manifest.json", "w"), indent=2)
+PY
+echo "=== rft_score DONE -> $OUT @ $(date) ==="
+''', "--"]
+
+[resources]
+cpus = 8
+mem  = "32GB"
+time = "01:00:00"
+qos  = "low"
+account   = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.rollouts]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/datasets/franz.srambical/rft_sample_v1_REPLACE_ME"
+
+[outputs.accepted]
+type   = "dataset"
+marker = "score_manifest.json"
+alias  = "rft_score_v1_{run.id}"
+
+[args]
+rollouts                = "{inputs.rollouts.path}"
+out_dir                 = "{outputs.accepted.path}"
+# 1e-6 keeps only genuine successes. Unfiltered distillation trained on 67% failed
+# teacher trajectories (169/253 of a greedy n=1 teacher's rollouts scored 0).
+min_reward              = "1e-6"
+reward_path             = "scores.reward"
+max_unscored_fraction   = "0.05"
+max_malformed_fraction   = "0.0"
+
+[env]
+PYTHONUNBUFFERED = "1"
+TMPDIR           = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR     = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"
