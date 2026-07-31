@@ -66,8 +66,9 @@ TIMEOUT_CLASSIFIER_RULES = {
     ),
     "host_harness": (
         "one request-correlated required event was rejected before timeout, or the full "
-        "required predicate was committed and acknowledged with its quiet window strictly "
-        "complete before timeout but the waiter still timed out"
+        "required predicate and exact sequence/request bindings were committed and "
+        "acknowledged with the quiet window strictly complete before timeout but the "
+        "waiter still timed out"
     ),
     "inconclusive": "none of the identifying evidence rules is satisfied",
 }
@@ -1036,6 +1037,7 @@ def _classify_timeout_outcome(attempt: dict[str, Any]) -> dict[str, Any]:
                 and terminal["details"].get("kind") == event_kind
                 and terminal["details"].get("event") == event_name
                 and terminal["details"].get("buttons") == event_buttons
+                and terminal["details"].get("last_client_sequence") == sequence
             )
         )
         response_matches = (
@@ -1106,6 +1108,51 @@ def _classify_timeout_outcome(attempt: dict[str, Any]) -> dict[str, Any]:
         and int(item["terminal_host_monotonic_ns"]) < cutoff_ns
     ]
     commits_before_cutoff.sort(key=lambda item: int(item["terminal_host_monotonic_ns"]))
+    raw_commits_before_cutoff = [
+        item
+        for item in journal
+        if item.get("stage") == "store_apply_committed"
+        and cutoff_ns is not None
+        and int(item["host_monotonic_ns"]) < cutoff_ns
+        and (
+            (
+                isinstance(item["details"].get("client_sequence"), int)
+                and not isinstance(item["details"].get("client_sequence"), bool)
+                and int(item["details"]["client_sequence"]) > after_sequence
+            )
+            or (
+                isinstance(item["details"].get("last_client_sequence"), int)
+                and not isinstance(
+                    item["details"].get("last_client_sequence"), bool
+                )
+                and int(item["details"]["last_client_sequence"]) > after_sequence
+            )
+        )
+    ]
+    raw_commit_bindings = [
+        (
+            item["details"].get("client_sequence"),
+            item["details"].get("host_request_id"),
+        )
+        for item in raw_commits_before_cutoff
+    ]
+    exact_commit_bindings = [
+        (item["client_sequence"], item["host_request_id"])
+        for item in commits_before_cutoff
+    ]
+    expected_relevant_sequences = [
+        int(item["client_sequence"]) for item in commits_before_cutoff
+    ]
+    expected_relevant_host_request_ids = [
+        int(item["host_request_id"]) for item in commits_before_cutoff
+    ]
+    committed_journal_binding_exact = (
+        raw_commit_bindings == exact_commit_bindings
+        and len(expected_relevant_sequences) == len(set(expected_relevant_sequences))
+        and len(expected_relevant_host_request_ids)
+        == len(set(expected_relevant_host_request_ids))
+        and expected_relevant_sequences == sorted(expected_relevant_sequences)
+    )
     committed_labels = {label(item) for item in commits_before_cutoff}
     final_commit = commits_before_cutoff[-1] if commits_before_cutoff else None
     final_buttons = (
@@ -1116,6 +1163,7 @@ def _classify_timeout_outcome(attempt: dict[str, Any]) -> dict[str, Any]:
     full_predicate_committed = (
         waiter_scope_exact
         and cutoff_ns is not None
+        and committed_journal_binding_exact
         and required_labels <= committed_labels
         and expected_buttons is not None
         and final_buttons == expected_buttons
@@ -1195,6 +1243,67 @@ def _classify_timeout_outcome(attempt: dict[str, Any]) -> dict[str, Any]:
         if acknowledged_observation is not None
         else None
     )
+
+    def exact_int_list(details: dict[str, Any], field: str) -> list[int] | None:
+        value = details.get(field)
+        if not isinstance(value, list) or not all(
+            isinstance(item, int) and not isinstance(item, bool) for item in value
+        ):
+            return None
+        return [int(item) for item in value]
+
+    observation_relevant_sequences = (
+        exact_int_list(
+            acknowledged_observation["details"], "relevant_client_sequences"
+        )
+        if acknowledged_observation is not None
+        else None
+    )
+    observation_relevant_host_request_ids = (
+        exact_int_list(
+            acknowledged_observation["details"], "relevant_host_request_ids"
+        )
+        if acknowledged_observation is not None
+        else None
+    )
+    decision_relevant_sequences = (
+        exact_int_list(timeout_decision["details"], "relevant_client_sequences")
+        if timeout_decision is not None
+        else None
+    )
+    decision_relevant_host_request_ids = (
+        exact_int_list(timeout_decision["details"], "relevant_host_request_ids")
+        if timeout_decision is not None
+        else None
+    )
+    expected_last_sequence = (
+        expected_relevant_sequences[-1]
+        if expected_relevant_sequences
+        else after_sequence
+    )
+    observation_binding_exact = (
+        committed_journal_binding_exact
+        and isinstance(observation_sequence, int)
+        and not isinstance(observation_sequence, bool)
+        and observation_sequence == expected_last_sequence
+        and observation_relevant_sequences == expected_relevant_sequences
+        and observation_relevant_host_request_ids
+        == expected_relevant_host_request_ids
+    )
+    decision_sequence = (
+        timeout_decision["details"].get("last_client_sequence")
+        if timeout_decision is not None
+        else None
+    )
+    timeout_decision_binding_exact = (
+        committed_journal_binding_exact
+        and isinstance(decision_sequence, int)
+        and not isinstance(decision_sequence, bool)
+        and decision_sequence == expected_last_sequence
+        and decision_relevant_sequences == expected_relevant_sequences
+        and decision_relevant_host_request_ids
+        == expected_relevant_host_request_ids
+    )
     observation_predicate = (
         acknowledged_observation is not None
         and (
@@ -1249,6 +1358,8 @@ def _classify_timeout_outcome(attempt: dict[str, Any]) -> dict[str, Any]:
     waiter_miss_proven = (
         full_predicate_committed
         and observation_predicate
+        and observation_binding_exact
+        and timeout_decision_binding_exact
         and observation_after_commits
         and quiet_completed_strictly_before_timeout
         and not later_sequence_change
@@ -1312,6 +1423,11 @@ def _classify_timeout_outcome(attempt: dict[str, Any]) -> dict[str, Any]:
             "waiter_scope_exact": waiter_scope_exact,
             "required_host_labels": sorted(required_labels),
             "committed_host_labels_before_timeout": sorted(committed_labels),
+            "expected_relevant_client_sequences": expected_relevant_sequences,
+            "expected_relevant_host_request_ids": (
+                expected_relevant_host_request_ids
+            ),
+            "committed_journal_binding_exact": committed_journal_binding_exact,
             "full_required_predicate_committed": full_predicate_committed,
             "exact_rejected_sequences_before_timeout": sorted(
                 int(item["client_sequence"])
@@ -1325,6 +1441,21 @@ def _classify_timeout_outcome(attempt: dict[str, Any]) -> dict[str, Any]:
             "late_terminal_sequences": late_terminal_sequences,
             "acknowledged_observation_host_monotonic_ns": observation_ns,
             "acknowledged_observation_last_client_sequence": observation_sequence,
+            "acknowledged_observation_relevant_client_sequences": (
+                observation_relevant_sequences
+            ),
+            "acknowledged_observation_relevant_host_request_ids": (
+                observation_relevant_host_request_ids
+            ),
+            "acknowledged_observation_binding_exact": observation_binding_exact,
+            "timeout_decision_last_client_sequence": decision_sequence,
+            "timeout_decision_relevant_client_sequences": (
+                decision_relevant_sequences
+            ),
+            "timeout_decision_relevant_host_request_ids": (
+                decision_relevant_host_request_ids
+            ),
+            "timeout_decision_binding_exact": timeout_decision_binding_exact,
             "quiet_window_started_host_monotonic_ns": quiet_window_started_ns,
             "quiet_ready_host_monotonic_ns": quiet_ready_ns,
             "quiet_completed_strictly_before_timeout": (

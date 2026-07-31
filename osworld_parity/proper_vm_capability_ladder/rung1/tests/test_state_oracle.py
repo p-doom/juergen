@@ -388,6 +388,18 @@ def test_browser_quiescence_requires_causal_release_and_click_ack() -> None:
         waiter_observation["details"]["quiet_window_started_host_monotonic_ns"]
         <= waiter_observation["host_monotonic_ns"]
     )
+    assert waiter_observation["details"]["relevant_client_sequences"] == [
+        ready_sequence + 1,
+        ready_sequence + 2,
+        ready_sequence + 3,
+    ]
+    assert waiter_observation["details"]["relevant_host_request_ids"] == [5, 6, 7]
+    assert waiter_decision["details"]["relevant_client_sequences"] == [
+        ready_sequence + 1,
+        ready_sequence + 2,
+        ready_sequence + 3,
+    ]
+    assert waiter_decision["details"]["relevant_host_request_ids"] == [5, 6, 7]
 
     # Already-consumed events are stale and cannot acknowledge another action.
     with pytest.raises(TimeoutError, match="acknowledgement timeout"):
@@ -400,6 +412,15 @@ def test_browser_quiescence_requires_causal_release_and_click_ack() -> None:
             timeout_s=0.01,
             quiet_s=0,
         )
+    timeout_decision = next(
+        item
+        for item in reversed(store.snapshot(fixture.id)["diagnostic_journal"])
+        if item["stage"] == "waiter_decision"
+        and item["details"]["decision"] == "timeout"
+    )
+    assert timeout_decision["details"]["last_client_sequence"] == ready_sequence + 3
+    assert timeout_decision["details"]["relevant_client_sequences"] == []
+    assert timeout_decision["details"]["relevant_host_request_ids"] == []
 
 
 @pytest.mark.parametrize("include_pointer_up", [False, True])

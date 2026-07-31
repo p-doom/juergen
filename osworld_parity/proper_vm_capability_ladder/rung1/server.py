@@ -145,6 +145,7 @@ class FixtureStateStore:
             event: dict[str, Any] = {
                 "kind": kind,
                 "client_sequence": client_sequence,
+                "host_request_id": host_request_id,
                 "client_monotonic_ms": float(
                     payload.get("client_monotonic_ms", -1.0)
                 ),
@@ -370,6 +371,9 @@ class FixtureStateStore:
                             "relevant_client_sequences": [
                                 event.get("client_sequence") for event in relevant
                             ],
+                            "relevant_host_request_ids": [
+                                event.get("host_request_id") for event in relevant
+                            ],
                             "observed_kinds": sorted(observed_kinds),
                             "pointer_down_observed": has_down,
                             "pointer_up_observed": has_up,
@@ -396,6 +400,12 @@ class FixtureStateStore:
                             {
                                 "decision": "acknowledged",
                                 "last_client_sequence": current_sequence,
+                                "relevant_client_sequences": [
+                                    event.get("client_sequence") for event in relevant
+                                ],
+                                "relevant_host_request_ids": [
+                                    event.get("host_request_id") for event in relevant
+                                ],
                                 "pointer_buttons": state["last_pointer_buttons"],
                                 "quiet_s": quiet_s,
                                 "deadline_host_monotonic_ns": (
@@ -424,6 +434,12 @@ class FixtureStateStore:
                         {
                             "decision": "timeout",
                             "last_client_sequence": current_sequence,
+                            "relevant_client_sequences": [
+                                event.get("client_sequence") for event in relevant
+                            ],
+                            "relevant_host_request_ids": [
+                                event.get("host_request_id") for event in relevant
+                            ],
                             "observed_kinds": sorted(observed_kinds),
                             "pointer_down_observed": has_down,
                             "pointer_up_observed": has_up,

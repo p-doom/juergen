@@ -683,6 +683,7 @@ def _waiter_timeout_journal(
                 {
                     "last_client_sequence": 7,
                     "relevant_client_sequences": [5, 6, 7],
+                    "relevant_host_request_ids": [1, 2, 3],
                     "observed_kinds": ["click", "pointer"],
                     "pointer_down_observed": observation_down,
                     "pointer_up_observed": observation_up,
@@ -700,7 +701,13 @@ def _waiter_timeout_journal(
         _host_item(
             decision_ns,
             "waiter_decision",
-            {**requirements, "decision": "timeout", "last_client_sequence": 7},
+            {
+                **requirements,
+                "decision": "timeout",
+                "last_client_sequence": 7,
+                "relevant_client_sequences": [5, 6, 7],
+                "relevant_host_request_ids": [1, 2, 3],
+            },
         )
     )
     return journal
@@ -816,6 +823,114 @@ def test_waiter_miss_requires_quiet_window_strictly_before_timeout(
     assert result["observed"]["quiet_ready_host_monotonic_ns"] == (
         observation_ns + 100_000_000
     )
+    if expected == "host_harness":
+        assert result["observed"]["acknowledged_observation_binding_exact"] is True
+        assert result["observed"]["timeout_decision_binding_exact"] is True
+
+
+@pytest.mark.parametrize(
+    ("target", "field", "value"),
+    [
+        ("observation", "last_client_sequence", 99),
+        ("decision", "last_client_sequence", 99),
+        ("observation", "relevant_client_sequences", [5, 6, 7, 8]),
+        ("decision", "relevant_client_sequences", [5, 6, 7, 8]),
+        ("observation", "relevant_client_sequences", [5, 6, 6, 7]),
+        ("decision", "relevant_client_sequences", [5, 6, 6, 7]),
+        ("observation", "relevant_client_sequences", [6, 5, 7]),
+        ("decision", "relevant_client_sequences", [6, 5, 7]),
+        ("observation", "relevant_host_request_ids", [1, 2, 3, 4]),
+        ("decision", "relevant_host_request_ids", [1, 2, 3, 4]),
+        ("observation", "relevant_host_request_ids", [1, 2, 2, 3]),
+        ("decision", "relevant_host_request_ids", [1, 2, 2, 3]),
+        ("observation", "relevant_host_request_ids", [1, 99, 3]),
+        ("decision", "relevant_host_request_ids", [1, 99, 3]),
+        ("observation", "relevant_host_request_ids", [2, 1, 3]),
+        ("decision", "relevant_host_request_ids", [2, 1, 3]),
+    ],
+    ids=[
+        "observation-last",
+        "decision-last",
+        "observation-sequence-extra",
+        "decision-sequence-extra",
+        "observation-sequence-duplicate",
+        "decision-sequence-duplicate",
+        "observation-sequence-order",
+        "decision-sequence-order",
+        "observation-id-extra",
+        "decision-id-extra",
+        "observation-id-duplicate",
+        "decision-id-duplicate",
+        "observation-id-wrong",
+        "decision-id-wrong",
+        "observation-id-order",
+        "decision-id-order",
+    ],
+)
+def test_waiter_miss_requires_exact_observation_and_decision_bindings(
+    target, field, value
+) -> None:
+    journal = _complete_host_click_journal(observation_ns=2_800_000_000)
+    stage = "waiter_observation" if target == "observation" else "waiter_decision"
+    item = next(entry for entry in journal if entry["stage"] == stage)
+    item["details"][field] = value
+    result = _classify_timeout_outcome(
+        _classifier_attempt(
+            page_events=_CLICK_PAGE_EVENTS,
+            records=_RESOLVED_CLICK_RECORDS,
+            journal=journal,
+        )
+    )
+    assert result["classification"] == "inconclusive"
+    assert result["observed"]["waiter_miss_proven"] is False
+    if target == "observation":
+        binding = "acknowledged_observation_binding_exact"
+    else:
+        binding = "timeout_decision_binding_exact"
+    assert result["observed"][binding] is False
+
+
+@pytest.mark.parametrize("target", ["observation", "decision"])
+def test_waiter_miss_rejects_internally_aligned_relevant_pair_omission(
+    target,
+) -> None:
+    journal = _complete_host_click_journal(observation_ns=2_800_000_000)
+    stage = "waiter_observation" if target == "observation" else "waiter_decision"
+    item = next(entry for entry in journal if entry["stage"] == stage)
+    item["details"]["relevant_client_sequences"] = [6, 7]
+    item["details"]["relevant_host_request_ids"] = [2, 3]
+    result = _classify_timeout_outcome(
+        _classifier_attempt(
+            page_events=_CLICK_PAGE_EVENTS,
+            records=_RESOLVED_CLICK_RECORDS,
+            journal=journal,
+        )
+    )
+    assert result["classification"] == "inconclusive"
+    assert result["observed"]["waiter_miss_proven"] is False
+
+
+def test_waiter_miss_rejects_combined_sequence_and_relevant_set_forgery() -> None:
+    journal = _complete_host_click_journal(observation_ns=2_800_000_000)
+    observation = next(
+        item for item in journal if item["stage"] == "waiter_observation"
+    )
+    decision = next(item for item in journal if item["stage"] == "waiter_decision")
+    observation["details"]["last_client_sequence"] = 99
+    observation["details"]["relevant_client_sequences"] = [6, 7]
+    observation["details"]["relevant_host_request_ids"] = [2, 3]
+    decision["details"]["last_client_sequence"] = 99
+    result = _classify_timeout_outcome(
+        _classifier_attempt(
+            page_events=_CLICK_PAGE_EVENTS,
+            records=_RESOLVED_CLICK_RECORDS,
+            journal=journal,
+        )
+    )
+    assert result["classification"] == "inconclusive"
+    assert result["observed"]["acknowledged_observation_binding_exact"] is False
+    assert result["observed"]["timeout_decision_binding_exact"] is False
+    assert result["observed"]["waiter_miss_proven"] is False
 
 
 @pytest.mark.parametrize(
