@@ -22,7 +22,6 @@ import json
 import re
 from dataclasses import dataclass
 
-
 # Mouse button names → X11 button code (matches XTest convention).
 _MOUSE_BUTTON_CODES = {
     "LMB": 1,  # left
@@ -39,6 +38,7 @@ class KeyEvent:
     ``what`` is the unmodified token (e.g., ``"LMB"``, ``"KeyA"``).
     ``mouse_button`` is non-None for mouse-button events.
     """
+
     kind: str  # "press" | "release"
     what: str
     mouse_button: int | None  # 1/2/3 if a mouse button, else None
@@ -51,6 +51,7 @@ class Action:
     ``no_op`` is True iff the action was the literal ``"NO_OP"`` token. In
     that case dx, dy, scroll are all 0 and events is empty.
     """
+
     dx: int
     dy: int
     scroll: int
@@ -114,15 +115,12 @@ def parse_action(text: str) -> Action:
     mouse_tokens = mouse_part.strip().split()
     if len(mouse_tokens) != 3:
         raise ValueError(
-            f"expected 3 mouse tokens (dx dy scroll), got "
-            f"{len(mouse_tokens)}: {mouse_part!r}"
+            f"expected 3 mouse tokens (dx dy scroll), got {len(mouse_tokens)}: {mouse_part!r}"
         )
     try:
         dx, dy, scroll = (int(t) for t in mouse_tokens)
     except ValueError as e:
-        raise ValueError(
-            f"mouse tokens not int-parseable: {mouse_tokens!r}"
-        ) from e
+        raise ValueError(f"mouse tokens not int-parseable: {mouse_tokens!r}") from e
 
     # Parse the event segment.
     events: list[KeyEvent] = []
@@ -143,9 +141,7 @@ def parse_action(text: str) -> Action:
 # Used by ``parse_action_tolerant`` to locate the action line when the
 # model emits CoT prose with an explicit ``Action:`` marker (the
 # convention used by ``cot_directions_v1`` and similar prompts).
-_ACTION_MARKER_RE = re.compile(
-    r"(?im)^\s*action\s*:\s*(.+?)\s*$"
-)
+_ACTION_MARKER_RE = re.compile(r"(?im)^\s*action\s*:\s*(.+?)\s*$")
 
 
 def parse_action_tolerant(text: str) -> Action:
@@ -218,9 +214,7 @@ def parse_computer_use_tool_call(text: str) -> ComputerUseCall:
     examples before the actual action.
     """
     if not isinstance(text, str):
-        raise TypeError(
-            f"parse_computer_use_tool_call expects str, got {type(text)!r}"
-        )
+        raise TypeError(f"parse_computer_use_tool_call expects str, got {type(text)!r}")
     parsed: ComputerUseCall | None = None
     errors: list[str] = []
     for candidate in _json_candidates(text):
@@ -249,3 +243,154 @@ def parse_computer_use_tool_call(text: str) -> ComputerUseCall:
         suffix = f": {'; '.join(errors)}" if errors else ""
         raise ValueError(f"no valid computer_use tool call found{suffix}")
     return parsed
+
+
+def parse_computer_use_tool_calls(text: str) -> list[ComputerUseCall]:
+    """Parse all valid computer_use tool-call blocks in emission order."""
+    if not isinstance(text, str):
+        raise TypeError(f"parse_computer_use_tool_calls expects str, got {type(text)!r}")
+    calls: list[ComputerUseCall] = []
+    for candidate in _json_candidates(text):
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or payload.get("name") != "computer_use":
+            continue
+        arguments = payload.get("arguments")
+        if not isinstance(arguments, dict):
+            continue
+        action = arguments.get("action")
+        if isinstance(action, str) and action:
+            calls.append(ComputerUseCall(name="computer_use", arguments=arguments))
+    if not calls:
+        raise ValueError("no valid computer_use tool call found")
+    return calls
+
+
+@dataclass(frozen=True)
+class DeltaTypeAction:
+    """Compact raw-relative line with ordered transitions and coalesced type elements."""
+
+    dx: int
+    dy: int
+    scroll: int
+    elements: tuple  # ordered ("event", KeyEvent) | ("type", str)
+    no_op: bool
+    terminate: bool
+    fail: bool
+
+    @property
+    def events(self) -> tuple:
+        return tuple(element for kind, element in self.elements if kind == "event")
+
+    @property
+    def type_texts(self) -> tuple:
+        return tuple(element for kind, element in self.elements if kind == "type")
+
+
+def _scan_deltatype_elements(segment: str) -> tuple:
+    elements = []
+    index = 0
+    decoder = json.JSONDecoder()
+    while index < len(segment):
+        if segment[index].isspace():
+            index += 1
+            continue
+        if segment.startswith("type(", index):
+            start = index + len("type(")
+            while start < len(segment) and segment[start].isspace():
+                start += 1
+            try:
+                value, end = decoder.raw_decode(segment, start)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"bad type() JSON string: {exc}") from exc
+            if not isinstance(value, str):
+                raise ValueError("type() payload must be a JSON string")
+            while end < len(segment) and segment[end].isspace():
+                end += 1
+            if end >= len(segment) or segment[end] != ")":
+                raise ValueError("type(...) missing closing parenthesis")
+            elements.append(("type", value))
+            index = end + 1
+            continue
+        end = index
+        while end < len(segment) and not segment[end].isspace():
+            end += 1
+        token = segment[index:end]
+        match = _EVENT_RE.fullmatch(token)
+        if not match:
+            raise ValueError(f"malformed deltatype element: {token!r}")
+        sign, name = match.groups()
+        elements.append(
+            (
+                "event",
+                KeyEvent(
+                    kind="press" if sign == "+" else "release",
+                    what=name,
+                    mouse_button=_MOUSE_BUTTON_CODES.get(name),
+                ),
+            )
+        )
+        index = end
+    return tuple(elements)
+
+
+def parse_deltatype(text: str) -> DeltaTypeAction:
+    """Parse one canonical compact raw-relative action line."""
+    if not isinstance(text, str):
+        raise TypeError(f"parse_deltatype expects str, got {type(text)!r}")
+    text = text.strip()
+    if not text:
+        raise ValueError("empty action text")
+    controls = {
+        "NO_OP": DeltaTypeAction(0, 0, 0, (), True, False, False),
+        "TERMINATE": DeltaTypeAction(0, 0, 0, (), False, True, False),
+        "FAIL": DeltaTypeAction(0, 0, 0, (), False, False, True),
+    }
+    if text in controls:
+        return controls[text]
+    if "\n" in text:
+        raise ValueError("parse_deltatype accepts one line; use parse_deltatype_sequence")
+    mouse_part, separator, element_part = text.partition(";")
+    mouse_tokens = mouse_part.strip().split()
+    if len(mouse_tokens) != 3:
+        raise ValueError(f"expected 3 mouse tokens, got {len(mouse_tokens)}: {mouse_part!r}")
+    try:
+        dx, dy, scroll = (int(token) for token in mouse_tokens)
+    except ValueError as exc:
+        raise ValueError(f"mouse tokens not int-parseable: {mouse_tokens!r}") from exc
+    elements = _scan_deltatype_elements(element_part) if separator else ()
+    parsed = DeltaTypeAction(dx, dy, scroll, elements, False, False, False)
+    if format_deltatype(parsed) != text:
+        raise ValueError(f"non-canonical deltatype line: {text!r}")
+    return parsed
+
+
+def format_deltatype(action: DeltaTypeAction) -> str:
+    if action.no_op:
+        return "NO_OP"
+    if action.terminate:
+        return "TERMINATE"
+    if action.fail:
+        return "FAIL"
+    result = f"{action.dx} {action.dy} {action.scroll}"
+    elements = []
+    for kind, value in action.elements:
+        if kind == "event":
+            elements.append(("+" if value.kind == "press" else "-") + value.what)
+        else:
+            elements.append(f"type({json.dumps(value, ensure_ascii=False)})")
+    if elements:
+        result += " ; " + " ".join(elements)
+    return result
+
+
+def parse_deltatype_sequence(text: str) -> tuple[DeltaTypeAction, ...]:
+    """Parse a causal multi-line turn such as press -> move -> release."""
+    if not isinstance(text, str):
+        raise TypeError(f"parse_deltatype_sequence expects str, got {type(text)!r}")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("empty action sequence")
+    return tuple(parse_deltatype(line) for line in lines)

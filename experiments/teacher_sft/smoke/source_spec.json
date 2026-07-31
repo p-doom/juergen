@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "split_seed": "teacher-sft-cpu-smoke",
+  "validation_fraction": 0.0,
+  "sources": [
+    {
+      "kind": "osworld",
+      "source_split": "train",
+      "source_revision": "synthetic-cpu-smoke-v1",
+      "task_index": "osworld_train.json",
+      "task_root": "tasks"
+    }
+  ]
+}

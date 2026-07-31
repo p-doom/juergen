@@ -1,0 +1,26 @@
+name = "stage4_teacher_sft_convert_verify_cpu_v1"
+repo = "juergen_stage4_teacher_sft"
+command = ["python", "-m", "experiments.teacher_sft.cli", "convert"]
+
+[resources]
+gpus = 0
+cpus = 4
+mem = "16GB"
+time = "01:00:00"
+
+[inputs.rejection]
+type = "stage"
+stage = "reject"
+role = "rejection"
+
+[outputs.converted]
+type = "dataset"
+marker = "manifest.json"
+alias = "stage4_teacher_sft_converted_{run.id}"
+
+[args]
+rejection = "{inputs.rejection.path}"
+output = "{outputs.converted.path}"
+
+[env]
+CUDA_VISIBLE_DEVICES = ""

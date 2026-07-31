@@ -1,0 +1,40 @@
+name = "stage4_teacher_sft_export_hf_gpu_v1"
+repo = "omegalax"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+exec uv run --project="$REPO" -- srun python "$REPO/scripts/export_to_hf.py" "$@"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 8
+mem = "128GB"
+time = "03:00:00"
+qos = "low"
+partition = "standard"
+account = "hfmi_synergyunit"
+
+[inputs.model]
+type = "stage"
+stage = "train"
+role = "model"
+
+[outputs.hf_model]
+type = "checkpoint"
+marker = "config.json"
+alias = "stage4_teacher_sft_hf_{run.id}"
+
+[args]
+model_id = "Qwen/Qwen3-VL-8B-Instruct"
+checkpoint_path = "{inputs.model.path}/orbax/000300"
+out_dir = "{outputs.hf_model.path}"
+tp_size = "1"
+fsdp_size = "1"
+dp_size = "1"
+grad_accum_steps = "8"
+max_grad_norm = "1"
+
+[env]
+HF_HUB_OFFLINE = "1"
+XLA_PYTHON_CLIENT_PREALLOCATE = "false"

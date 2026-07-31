@@ -1,0 +1,63 @@
+name = "stage4_teacher_sft_collect_local_teacher_gpu_kvm_v1"
+repo = "juergen_stage4_teacher_sft"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+declare -A A
+for arg in "$@"; do k="${arg%%=*}"; A["${k#--}"]="${arg#*=}"; done
+[[ -r /dev/kvm && -w /dev/kvm ]] || { echo "FATAL /dev/kvm unavailable" >&2; exit 2; }
+model_name="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["model_id"])' "${A[teacher-spec]}")"
+uv run --project="$SOURCE/eval" -- python -m sglang.launch_server \
+  --model-path "${A[teacher-model]}" --served-model-name "$model_name" \
+  --host 127.0.0.1 --port 30000 >"$LABCTL_RUN_DIR/teacher.log" 2>&1 &
+server_pid=$!
+trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+for _ in $(seq 1 180); do curl -fsS http://127.0.0.1:30000/health >/dev/null && break; sleep 2; done
+cd "$SOURCE"
+python -m experiments.teacher_sft.cli collect --tasks="${A[tasks]}" \
+  --teacher-spec="${A[teacher-spec]}" --output="${A[output]}" \
+  --env-command="python ${A[env-adapter]}/adapter.py" --candidates-per-task=4 \
+  --max-steps=30 --workers=4 --success-reward=1.0
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 16
+mem = "128GB"
+time = "16:00:00"
+qos = "low"
+partition = "standard"
+account = "hfmi_synergyunit"
+sbatch_extra = ["--no-requeue"]
+
+[inputs.tasks]
+type = "artifact"
+artifact = "stage4_teacher_sft_tasks_v1"
+
+[inputs.teacher_spec]
+type = "artifact"
+artifact = "teacher_sft_absolute_teacher_spec_local_v1"
+
+[inputs.teacher_model]
+type = "artifact"
+artifact = "absolute_teacher_hf_v1"
+
+[inputs.env_adapter]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/teacher_sft_vm_adapter"
+
+[outputs.rollouts]
+type = "dataset"
+marker = "manifest.json"
+alias = "stage4_teacher_sft_absolute_rollouts_local_{run.id}"
+
+[args]
+tasks = "{inputs.tasks.path}"
+teacher-spec = "{inputs.teacher_spec.path}/teacher.json"
+teacher-model = "{inputs.teacher_model.path}"
+env-adapter = "{inputs.env_adapter.path}"
+output = "{outputs.rollouts.path}"
+
+[env]
+HF_HUB_OFFLINE = "1"
+TEACHER_API_KEY = "none"

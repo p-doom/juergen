@@ -1,0 +1,33 @@
+name = "stage4_native_absolute_teacher_sft_v1"
+
+# Prepared DAG only. No recipe in this pipeline has been submitted. Every task
+# source and every evaluation is train-scoped; there is no official-heldout stage.
+[stages.tasks]
+recipe = "recipes/build_tasks_cpu.toml"
+
+[stages.collect]
+recipe = "recipes/collect_teacher_remote_cpu_kvm.toml"
+
+[stages.reject]
+recipe = "recipes/reject_cpu.toml"
+
+[stages.convert]
+recipe = "recipes/convert_verify_cpu.toml"
+
+[stages.replay]
+recipe = "recipes/replay_train_validation_cpu_kvm.toml"
+
+[stages.sft]
+recipe = "recipes/build_sft_cpu.toml"
+
+[stages.tokenize]
+recipe = "recipes/tokenize_sft_cpu.toml"
+
+[stages.train]
+recipe = "recipes/train_sft_gpu.toml"
+
+[stages.export]
+recipe = "recipes/export_hf_gpu.toml"
+
+[stages.eval_train_validation]
+recipe = "recipes/eval_train_validation_gpu_kvm.toml"

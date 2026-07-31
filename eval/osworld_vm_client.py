@@ -34,13 +34,12 @@ import io
 import logging
 import re
 import time
-import urllib.parse
 from dataclasses import dataclass
 
 import requests
 from PIL import Image
 
-from action_parser import Action, KeyEvent
+from action_parser import Action, DeltaTypeAction, KeyEvent
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -153,6 +152,7 @@ def _computer_use_key_to_pyautogui(name: str) -> str:
 @dataclass
 class StepResult:
     """One step's dispatch outcome — for trajectory logging."""
+
     cursor_before: tuple[int, int]
     cursor_after: tuple[int, int]
     intended_target: tuple[int, int]  # post-clip absolute
@@ -191,9 +191,7 @@ class OSWorldClient:
                 _LOGGER.info("waiting for VM /screenshot... %.0fs", elapsed)
                 last_log = elapsed
             time.sleep(poll_s)
-        raise TimeoutError(
-            f"VM agent at {self.base_url} not ready after {timeout_s}s"
-        )
+        raise TimeoutError(f"VM agent at {self.base_url} not ready after {timeout_s}s")
 
     # ------------------------------------------------------------- query
     def screenshot(self) -> Image.Image:
@@ -332,12 +330,60 @@ class OSWorldClient:
             action_text="",  # caller fills the raw text
         )
 
+    def dispatch_deltatype(self, action: DeltaTypeAction, *, rel_coord_grid: int = 0) -> StepResult:
+        """Execute one compact relative line, including coalesced type()."""
+        cursor_before = self.cursor_position()
+        sw, sh = self.screen_size()
+        if action.no_op or action.terminate or action.fail:
+            return StepResult(
+                cursor_before=cursor_before,
+                cursor_after=cursor_before,
+                intended_target=cursor_before,
+                delta=(0, 0),
+                scroll=0,
+                events_dispatched=[],
+                parse_ok=True,
+                action_text="",
+            )
+        dx = round(action.dx * sw / rel_coord_grid) if rel_coord_grid else action.dx
+        dy = round(action.dy * sh / rel_coord_grid) if rel_coord_grid else action.dy
+        target = cursor_before[0] + dx, cursor_before[1] + dy
+        if not 0 <= target[0] < sw or not 0 <= target[1] < sh:
+            raise ValueError(f"relative action would clip at viewport edge: {target}")
+        executed = []
+        if target != cursor_before:
+            command = f"pyautogui.moveTo({target[0]}, {target[1]})"
+            self.execute(command)
+            executed.append(command)
+        if action.scroll:
+            command = f"pyautogui.scroll({action.scroll})"
+            self.execute(command)
+            executed.append(command)
+        for kind, element in action.elements:
+            command = (
+                _event_to_pyautogui(element)
+                if kind == "event"
+                else f"pyautogui.write({element!r}, interval=0)"
+            )
+            if command is not None:
+                self.execute(command)
+                executed.append(command)
+        cursor_after = self.cursor_position()
+        return StepResult(
+            cursor_before=cursor_before,
+            cursor_after=cursor_after,
+            intended_target=target,
+            delta=(dx, dy),
+            scroll=action.scroll,
+            events_dispatched=executed,
+            parse_ok=True,
+            action_text="",
+        )
+
     def dispatch_computer_use(self, arguments: dict) -> StepResult:
         """Apply one OpenAI computer-use style tool call to the VM."""
         if not isinstance(arguments, dict):
-            raise TypeError(
-                f"computer_use arguments must be dict, got {type(arguments)!r}"
-            )
+            raise TypeError(f"computer_use arguments must be dict, got {type(arguments)!r}")
 
         action = str(arguments.get("action", "")).strip().lower()
         cursor_before = self.cursor_position()
@@ -350,19 +396,15 @@ class OSWorldClient:
             raw = arguments.get("coordinate")
             if raw is None:
                 if required:
-                    raise ValueError(
-                        f"computer_use action {action!r} requires coordinate"
-                    )
+                    raise ValueError(f"computer_use action {action!r} requires coordinate")
                 return None
             if not isinstance(raw, (list, tuple)) or len(raw) != 2:
                 raise ValueError(f"coordinate must be [x, y], got {raw!r}")
             try:
-                x = int(round(float(raw[0])))
-                y = int(round(float(raw[1])))
+                x = round(float(raw[0]))
+                y = round(float(raw[1]))
             except (TypeError, ValueError) as e:
-                raise ValueError(
-                    f"coordinate values must be numeric, got {raw!r}"
-                ) from e
+                raise ValueError(f"coordinate values must be numeric, got {raw!r}") from e
             return max(0, min(sw - 1, x)), max(0, min(sh - 1, y))
 
         def move_to(pos: tuple[int, int]) -> None:
@@ -395,29 +437,21 @@ class OSWorldClient:
                 "triple_click": "left",
             }[action]
             clicks = 2 if action in {"double_click", "triple_click"} else 1
-            cmd = (
-                f"pyautogui.click(clicks={clicks}, interval=0.05, "
-                f"button={button!r})"
-            )
+            cmd = f"pyautogui.click(clicks={clicks}, interval=0.05, button={button!r})"
             self.execute(cmd)
             executed.append(cmd)
         elif action == "left_click_drag":
             pos = coord_from_args(required=True)
             assert pos is not None
             target = pos
-            cmd = (
-                f"pyautogui.dragTo({pos[0]}, {pos[1]}, duration=0.2, "
-                "button='left')"
-            )
+            cmd = f"pyautogui.dragTo({pos[0]}, {pos[1]}, duration=0.2, button='left')"
             self.execute(cmd)
             executed.append(cmd)
         elif action in {"scroll", "hscroll"}:
             try:
-                scroll = int(round(float(arguments.get("pixels", 0))))
+                scroll = round(float(arguments.get("pixels", 0)))
             except (TypeError, ValueError) as e:
-                raise ValueError(
-                    f"pixels must be numeric, got {arguments.get('pixels')!r}"
-                ) from e
+                raise ValueError(f"pixels must be numeric, got {arguments.get('pixels')!r}") from e
             if scroll:
                 cmd = f"pyautogui.scroll({scroll})"
                 self.execute(cmd)
@@ -447,9 +481,7 @@ class OSWorldClient:
             try:
                 wait_s = float(arguments.get("time", 1.0))
             except (TypeError, ValueError) as e:
-                raise ValueError(
-                    f"time must be numeric, got {arguments.get('time')!r}"
-                ) from e
+                raise ValueError(f"time must be numeric, got {arguments.get('time')!r}") from e
             wait_s = max(0.0, min(10.0, wait_s))
             time.sleep(wait_s)
             executed.append(f"time.sleep({wait_s})")

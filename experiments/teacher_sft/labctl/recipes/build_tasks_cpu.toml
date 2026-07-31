@@ -1,0 +1,39 @@
+name = "stage4_teacher_sft_build_tasks_cpu_v1"
+repo = "juergen_stage4_teacher_sft"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+cd "$SOURCE"
+python -m experiments.teacher_sft.cli build-tasks "$@"
+''', "--"]
+
+[resources]
+gpus = 0
+cpus = 2
+mem = "8GB"
+time = "00:20:00"
+qos = "low"
+partition = "standard"
+account = "hfmi_synergyunit"
+
+[inputs.source_spec]
+type = "artifact"
+artifact = "teacher_sft_train_source_spec_v1"
+
+[inputs.heldout_denylist]
+type = "artifact"
+artifact = "teacher_sft_heldout_hash_denylist_v1"
+
+[outputs.tasks]
+type = "dataset"
+marker = "manifest.json"
+alias = "stage4_teacher_sft_tasks_{run.id}"
+
+[args]
+source-spec = "{inputs.source_spec.path}/source_spec.json"
+heldout-denylist = "{inputs.heldout_denylist.path}/denylist.json"
+output = "{outputs.tasks.path}"
+
+[env]
+PYTHONUNBUFFERED = "1"
+CUDA_VISIBLE_DEVICES = ""

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "backend": "openai_chat",
+  "base_url": "http://127.0.0.1:30000",
+  "model_id": "scripted-absolute-cpu-smoke",
+  "model_revision": "synthetic-cpu-smoke-v1",
+  "action_space": "native_absolute",
+  "coordinate_space": "absolute_grid",
+  "coordinate_grid": 1000,
+  "temperature": 0,
+  "max_tokens": 256,
+  "system_prompt": "Emit only native absolute computer_use actions on a 1000 by 1000 coordinate grid."
+}

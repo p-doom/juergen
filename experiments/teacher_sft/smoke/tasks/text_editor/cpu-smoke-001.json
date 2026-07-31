@@ -1,0 +1,5 @@
+{
+  "id": "cpu-smoke-001",
+  "instruction": "Type the requested smoke text, drag the selected item, then finish.",
+  "platform": "synthetic_cpu"
+}

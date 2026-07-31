@@ -1,0 +1,49 @@
+name = "stage4_teacher_sft_tokenize_cpu_v1"
+repo = "omegalax"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+declare -A A
+for arg in "$@"; do k="${arg%%=*}"; A["${k#--}"]="${arg#*=}"; done
+mkdir -p "${A[output]}"
+for mapping in train:train train_validation:val; do
+  input_split="${mapping%%:*}"; output_split="${mapping#*:}"
+  uv run --project="$REPO" -- python "$REPO/scripts/build_sft_records_from_chat.py" \
+    --data_path "${A[sft]}/_normalized/$input_split/chat.jsonl" \
+    --out_dir "${A[output]}/$output_split" --model_id "${A[model-id]}" \
+    --tokenizer "${A[model-id]}" --processor "${A[model-id]}" \
+    --max_length 16384 --overflow_mode truncate --records_per_shard 8000 \
+    --num_workers 8 --overwrite
+done
+python - "${A[output]}/manifest.json" "${A[sft]}/manifest.json" <<'PY'
+import hashlib,json,sys
+source=open(sys.argv[2],'rb').read()
+json.dump({'schema_version':1,'artifact_type':'teacher_sft_tokenized',
+ 'source_manifest_sha256':hashlib.sha256(source).hexdigest()},open(sys.argv[1],'w'),sort_keys=True)
+PY
+''', "--"]
+
+[resources]
+gpus = 0
+cpus = 12
+mem = "64GB"
+time = "02:00:00"
+
+[inputs.sft]
+type = "stage"
+stage = "sft"
+role = "sft"
+
+[outputs.dataset]
+type = "dataset"
+marker = "manifest.json"
+alias = "stage4_teacher_sft_tokenized_{run.id}"
+
+[args]
+sft = "{inputs.sft.path}"
+output = "{outputs.dataset.path}"
+model-id = "Qwen/Qwen3-VL-8B-Instruct"
+
+[env]
+HF_HUB_OFFLINE = "1"
+CUDA_VISIBLE_DEVICES = ""

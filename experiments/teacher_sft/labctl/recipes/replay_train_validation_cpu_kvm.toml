@@ -1,0 +1,38 @@
+name = "stage4_teacher_sft_replay_train_validation_cpu_kvm_v1"
+repo = "juergen_stage4_teacher_sft"
+command = ["bash", "-c", '''
+set -euo pipefail
+[[ -r /dev/kvm && -w /dev/kvm ]] || { echo "FATAL /dev/kvm unavailable" >&2; exit 2; }
+python -m experiments.teacher_sft.cli replay "$@"
+''', "--"]
+
+[resources]
+gpus = 0
+cpus = 8
+mem = "32GB"
+time = "04:00:00"
+sbatch_extra = ["--no-requeue"]
+
+[inputs.converted]
+type = "stage"
+stage = "convert"
+role = "converted"
+
+[inputs.env_adapter]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/teacher_sft_vm_adapter"
+
+[outputs.replay]
+type = "eval_result"
+marker = "manifest.json"
+alias = "stage4_teacher_sft_replay_train_validation_{run.id}"
+
+[args]
+converted = "{inputs.converted.path}"
+env-command = "python {inputs.env_adapter.path}/adapter.py"
+output = "{outputs.replay.path}"
+split = "train_validation"
+min-reward = "1.0"
+
+[env]
+CUDA_VISIBLE_DEVICES = ""

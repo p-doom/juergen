@@ -1,0 +1,63 @@
+name = "stage4_teacher_sft_eval_train_validation_gpu_kvm_v1"
+repo = "juergen_stage4_teacher_sft"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+declare -A A
+for arg in "$@"; do k="${arg%%=*}"; A["${k#--}"]="${arg#*=}"; done
+[[ -r /dev/kvm && -w /dev/kvm ]] || { echo "FATAL /dev/kvm unavailable" >&2; exit 2; }
+uv run --project="$SOURCE/eval" -- python -m sglang.launch_server \
+  --model-path "${A[model]}" --served-model-name teacher-sft-policy \
+  --host 127.0.0.1 --port 30100 >"$LABCTL_RUN_DIR/sglang.log" 2>&1 &
+server_pid=$!
+trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+for _ in $(seq 1 180); do curl -fsS http://127.0.0.1:30100/health >/dev/null && break; sleep 2; done
+curl -fsS http://127.0.0.1:30100/health >/dev/null
+cd "$SOURCE"
+python -m experiments.teacher_sft.cli eval-policy \
+  --tasks="${A[tasks]}" --output="${A[output]}" --base-url=http://127.0.0.1:30100 \
+  --model-id=teacher-sft-policy --model-revision="${A[model-revision]}" \
+  --env-command="python ${A[env-adapter]}/adapter.py" --split=train_validation \
+  --max-steps=30 --min-reward=1.0
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 12
+mem = "96GB"
+time = "08:00:00"
+qos = "low"
+partition = "standard"
+account = "hfmi_synergyunit"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1"]
+
+[inputs.tasks]
+type = "stage"
+stage = "tasks"
+role = "tasks"
+
+[inputs.model]
+type = "stage"
+stage = "export"
+role = "hf_model"
+
+[inputs.env_adapter]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/teacher_sft_vm_adapter"
+
+[outputs.eval]
+type = "eval_result"
+marker = "manifest.json"
+alias = "stage4_teacher_sft_train_validation_eval_{run.id}"
+
+[args]
+tasks = "{inputs.tasks.path}"
+model = "{inputs.model.path}"
+model-revision = "{inputs.model.id}"
+env-adapter = "{inputs.env_adapter.path}"
+output = "{outputs.eval.path}"
+
+[env]
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+POLICY_API_KEY = "none"

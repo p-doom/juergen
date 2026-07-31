@@ -1,0 +1,38 @@
+name = "stage4_teacher_sft_build_chat_cpu_v1"
+repo = "juergen_stage4_teacher_sft"
+command = ["python", "-m", "experiments.teacher_sft.cli", "build-sft"]
+
+[resources]
+gpus = 0
+cpus = 4
+mem = "16GB"
+time = "01:00:00"
+
+[inputs.converted]
+type = "stage"
+stage = "convert"
+role = "converted"
+
+# This otherwise-unused input is intentional: live replay must pass before the
+# package stage is runnable in the labctl DAG.
+[inputs.replay_gate]
+type = "stage"
+stage = "replay"
+role = "replay"
+
+[inputs.heldout_denylist]
+type = "artifact"
+artifact = "teacher_sft_heldout_hash_denylist_v1"
+
+[outputs.sft]
+type = "dataset"
+marker = "manifest.json"
+alias = "stage4_teacher_sft_chat_{run.id}"
+
+[args]
+converted = "{inputs.converted.path}"
+heldout-denylist = "{inputs.heldout_denylist.path}/denylist.json"
+output = "{outputs.sft.path}"
+
+[env]
+CUDA_VISIBLE_DEVICES = ""
