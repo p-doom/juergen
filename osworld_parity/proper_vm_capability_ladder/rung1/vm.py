@@ -195,13 +195,13 @@ def _bounded_readiness_text(value: object) -> str:
     if len(raw) <= FIXTURE_READINESS_TEXT_LIMIT_BYTES:
         return raw.decode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()
-    suffix = (
-        f"...[truncated original_bytes={len(raw)} sha256={digest}]"
-    ).encode("ascii")
-    prefix = raw[: FIXTURE_READINESS_TEXT_LIMIT_BYTES - len(suffix)].decode(
-        "utf-8", errors="ignore"
+    marker = (
+        f"[truncated original_bytes={len(raw)} sha256={digest} prefix_base64="
     )
-    return prefix + suffix.decode("ascii")
+    prefix_budget = FIXTURE_READINESS_TEXT_LIMIT_BYTES - len(marker) - 1
+    prefix_raw_bytes = max(0, (prefix_budget // 4) * 3)
+    prefix_base64 = base64.b64encode(raw[:prefix_raw_bytes]).decode("ascii")
+    return marker + prefix_base64[:prefix_budget] + "]"
 
 
 def _bounded_readiness_optional_text(value: object | None) -> str | None:
@@ -1176,7 +1176,6 @@ nohup "$browser" --no-first-run --no-default-browser-check \
                 return True
             for nested in (
                 candidate.__cause__,
-                candidate.__context__,
                 getattr(candidate, "reason", None),
             ):
                 if isinstance(nested, BaseException):
