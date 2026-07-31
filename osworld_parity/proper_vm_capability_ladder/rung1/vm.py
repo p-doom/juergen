@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import importlib.util
+import json
 import os
+import secrets
 import time
+import uuid
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import ModuleType
 
@@ -28,6 +33,29 @@ READY_SNAPSHOT = "osworld_ready"
 
 class VmHarnessError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ProviderResetReceipt:
+    provider_session_id: str
+    reset_id: str
+    reset_sequence: int
+    prior_generation_id: str
+    new_generation_id: str
+    snapshot_id: str
+    reset_started_monotonic_ns: int
+    reset_completed_monotonic_ns: int
+    provider_state_before_sha256: str
+    provider_state_after_sha256: str
+    provider_path_sha256: str
+    attestor_mac: str
+    receipt_sha256: str
+
+
+def _canonical_json(value: object) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), default=str
+    ).encode("utf-8")
 
 
 def sha256_file(path: Path) -> str:
@@ -69,6 +97,14 @@ class KvmFixtureSession:
         self.provider = None
         self.transport: HttpVmTransport | None = None
         self._module: ModuleType | None = None
+        self._provider_session_id = uuid.uuid4().hex
+        self._provider_generation_id = uuid.uuid4().hex
+        self._provider_reset_sequence = 0
+        self._provider_attestor_secret = secrets.token_bytes(32)
+        self._consumed_provider_reset_receipts: set[str] = set()
+        self._last_consumed_provider_sequence = 0
+        self._last_consumed_provider_generation_id = self._provider_generation_id
+        self._outstanding_provider_reset_receipt_sha256: str | None = None
 
     def start(self) -> None:
         if not os.access("/dev/kvm", os.R_OK | os.W_OK):
@@ -101,13 +137,121 @@ class KvmFixtureSession:
         self._module = module
 
     def reset_to_ready(self) -> HttpVmTransport:
+        transport, receipt = self.reset_to_ready_with_receipt()
+        self.consume_provider_reset_receipt(receipt)
+        return transport
+
+    def reset_to_ready_with_receipt(
+        self,
+    ) -> tuple[HttpVmTransport, ProviderResetReceipt]:
         if self.provider is None:
             raise VmHarnessError("VM session is not started")
+        if self._outstanding_provider_reset_receipt_sha256 is not None:
+            raise VmHarnessError(
+                "previous provider reset receipt must be consumed before another reset"
+            )
+        before = self.provider.state(str(self.qcow))
+        started = time.monotonic_ns()
         self.provider.load_state(str(self.qcow), READY_SNAPSHOT)
-        port = int(self.provider.state(str(self.qcow))["ports"]["server"])
+        completed = time.monotonic_ns()
+        after = self.provider.state(str(self.qcow))
+        port = int(after["ports"]["server"])
         # Sessions and host-side input audits must never cross an episode reset.
         self.transport = HttpVmTransport(f"http://127.0.0.1:{port}")
-        return self.transport
+        self._provider_reset_sequence += 1
+        prior_generation_id = self._provider_generation_id
+        new_generation_id = uuid.uuid4().hex
+        payload = {
+            "provider_session_id": self._provider_session_id,
+            "reset_id": uuid.uuid4().hex,
+            "reset_sequence": self._provider_reset_sequence,
+            "prior_generation_id": prior_generation_id,
+            "new_generation_id": new_generation_id,
+            "snapshot_id": READY_SNAPSHOT,
+            "reset_started_monotonic_ns": started,
+            "reset_completed_monotonic_ns": completed,
+            "provider_state_before_sha256": hashlib.sha256(
+                _canonical_json(before)
+            ).hexdigest(),
+            "provider_state_after_sha256": hashlib.sha256(
+                _canonical_json(after)
+            ).hexdigest(),
+            "provider_path_sha256": hashlib.sha256(
+                str(self.provider_path).encode("utf-8")
+            ).hexdigest(),
+        }
+        attestor_mac = hmac.new(
+            self._provider_attestor_secret,
+            _canonical_json(payload),
+            hashlib.sha256,
+        ).hexdigest()
+        receipt_sha256 = hashlib.sha256(
+            _canonical_json({**payload, "attestor_mac": attestor_mac})
+        ).hexdigest()
+        receipt = ProviderResetReceipt(
+            **payload,
+            attestor_mac=attestor_mac,
+            receipt_sha256=receipt_sha256,
+        )
+        self._provider_generation_id = new_generation_id
+        self._outstanding_provider_reset_receipt_sha256 = receipt.receipt_sha256
+        return self.transport, receipt
+
+    def consume_provider_reset_receipt(self, receipt: ProviderResetReceipt) -> None:
+        if not isinstance(receipt, ProviderResetReceipt):
+            raise VmHarnessError("provider reset receipt type mismatch")
+        payload = asdict(receipt)
+        receipt_sha256 = payload.pop("receipt_sha256")
+        attestor_mac = payload.pop("attestor_mac")
+        expected_mac = hmac.new(
+            self._provider_attestor_secret,
+            _canonical_json(payload),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(attestor_mac, expected_mac):
+            raise VmHarnessError("provider reset receipt attestation mismatch")
+        observed = hashlib.sha256(
+            _canonical_json({**payload, "attestor_mac": attestor_mac})
+        ).hexdigest()
+        if observed != receipt_sha256:
+            raise VmHarnessError("provider reset receipt was mutated")
+        if receipt.provider_session_id != self._provider_session_id:
+            raise VmHarnessError("provider reset receipt belongs to another session")
+        if receipt.snapshot_id != READY_SNAPSHOT:
+            raise VmHarnessError("provider reset receipt snapshot drift")
+        if (
+            receipt.reset_started_monotonic_ns < 1
+            or receipt.reset_completed_monotonic_ns
+            <= receipt.reset_started_monotonic_ns
+            or not receipt.reset_id
+            or not receipt.prior_generation_id
+            or not receipt.new_generation_id
+            or receipt.prior_generation_id == receipt.new_generation_id
+        ):
+            raise VmHarnessError("provider reset receipt field contract drift")
+        lowercase_hex = set("0123456789abcdef")
+        for value in (
+            receipt.provider_state_before_sha256,
+            receipt.provider_state_after_sha256,
+            receipt.provider_path_sha256,
+            receipt.attestor_mac,
+            receipt.receipt_sha256,
+        ):
+            if len(value) != 64 or any(char not in lowercase_hex for char in value):
+                raise VmHarnessError("provider reset receipt hash contract drift")
+        if receipt.receipt_sha256 in self._consumed_provider_reset_receipts:
+            raise VmHarnessError("provider reset receipt replay detected")
+        if receipt.receipt_sha256 != self._outstanding_provider_reset_receipt_sha256:
+            raise VmHarnessError("provider reset receipt is not the active transition")
+        if receipt.reset_sequence != self._last_consumed_provider_sequence + 1 or (
+            receipt.prior_generation_id
+            != self._last_consumed_provider_generation_id
+        ):
+            raise VmHarnessError("provider reset transition is out of order")
+        self._consumed_provider_reset_receipts.add(receipt.receipt_sha256)
+        self._last_consumed_provider_sequence = receipt.reset_sequence
+        self._last_consumed_provider_generation_id = receipt.new_generation_id
+        self._outstanding_provider_reset_receipt_sha256 = None
 
     def launch_fixture(
         self,

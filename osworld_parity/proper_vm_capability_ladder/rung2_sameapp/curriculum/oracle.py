@@ -322,9 +322,13 @@ def verify_fixture_contract(
     return {
         "task_id": task.task_id,
         "fixture_sha256": task.fixture_sha256,
-        "reset_rejected": reset_oracle.MOUSE_SOLVED is False,
-        "near_miss_rejected": near_miss.MOUSE_SOLVED is False,
-        "gold_passed": gold.MOUSE_SOLVED is True,
+        "reset_rejected": (
+            reset_oracle.oracle_status == "ok" and reset_oracle.MOUSE_SOLVED is False
+        ),
+        "near_miss_rejected": (
+            near_miss.oracle_status == "ok" and near_miss.MOUSE_SOLVED is False
+        ),
+        "gold_passed": gold.oracle_status == "ok" and gold.MOUSE_SOLVED is True,
         "reset_reproducible": reset_one == reset_two,
         "fresh_process_final_oracle": gold.oracle_pid != os.getpid(),
         "zero_held_inputs": states["gold"].get("held_inputs") == [],

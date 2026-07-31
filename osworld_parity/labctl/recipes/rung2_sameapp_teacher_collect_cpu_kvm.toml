@@ -1,13 +1,25 @@
-name = "proper_vm_rung2_sameapp_teacher_collect_cpu_kvm_v1"
+# Replace the explicit artifact placeholder below with the registered output of
+# the independent task-setup-validation producer before submission.
+name = "proper_vm_rung2_sameapp_teacher_replay_cpu_kvm_v2"
 repo = "juergen_rung2_sameapp"
 command = ["bash", "-c", '''
 set -euo pipefail
-SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+SOURCE="$(jq -er '.provenance.repo_path // .source_path' "$LABCTL_CONTEXT")"
+SETUP_ROW="$(jq -cer '[.inputs[] | select(.role == "task_setup_validation")] | if length == 1 then .[0] else error("exactly one task_setup_validation artifact input is required") end' "$LABCTL_CONTEXT")"
+SETUP_ROOT="$(jq -er '.resolved_path' <<<"$SETUP_ROW")"
+SETUP_ID="$(jq -er '.artifact_id' <<<"$SETUP_ROW")"
+SETUP_FILE="$SETUP_ROOT/task_setup_validation.json"
+[[ "$SETUP_ID" != "PIN_REGISTERED_TASK_SETUP_VALIDATION_ARTIFACT_ID" ]] || { echo "FATAL task_setup_validation artifact is not pinned" >&2; exit 2; }
+[[ -f "$SETUP_FILE" ]] || { echo "FATAL missing $SETUP_FILE" >&2; exit 2; }
+SETUP_SHA="$(sha256sum "$SETUP_FILE" | cut -d' ' -f1)"
 cd "$SOURCE"
 [[ -r /dev/kvm && -w /dev/kvm ]] || { echo "FATAL /dev/kvm unavailable" >&2; exit 2; }
 [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]] || { echo "FATAL GPU allocation is forbidden" >&2; exit 2; }
-python3 -m osworld_parity.proper_vm_capability_ladder.rung2_sameapp.collector \
-  --mode=vm --split=train "$@"
+python3 -m osworld_parity.proper_vm_capability_ladder.rung2_sameapp.replay "$@" \
+  --mode=vm --split=development \
+  --task-setup-validation "$SETUP_FILE" \
+  --task-setup-validation-artifact-id "$SETUP_ID" \
+  --task-setup-validation-sha256 "$SETUP_SHA"
 ''', "--"]
 
 [resources]
@@ -20,9 +32,17 @@ account = "hfmi_synergyunit"
 partition = "standard"
 sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001,hai005"]
 
+[inputs.task_setup_validation]
+type = "artifact"
+artifact = "PIN_REGISTERED_TASK_SETUP_VALIDATION_ARTIFACT_ID"
+
 [inputs.vm]
 type = "external"
 path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_vm"
+
+[inputs.qemu]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu"
 
 [inputs.provider]
 type = "external"
@@ -30,13 +50,13 @@ path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_fastreset"
 
 [outputs.result]
 type = "dataset"
-marker = "collection.json"
-alias = "proper_vm_rung2_sameapp_teacher_{run.id}"
+marker = "replay.json"
+alias = "proper_vm_rung2_sameapp_teacher_replay_{run.id}"
 
 [args]
 output = "{outputs.result.path}"
 qcow = "{inputs.vm.path}/Ubuntu.qcow2"
-qemu = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin/qemu-system-x86_64-wrapped"
+qemu = "{inputs.qemu.path}/bin/qemu-system-x86_64-wrapped"
 provider = "{inputs.provider.path}/qemu_fast_reset.py"
 
 [env]

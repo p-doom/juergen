@@ -31,11 +31,18 @@ reset probes must agree on geometry, cursor, and viewport before a sealed
 `ValidatedRuntimeBinding` can compile anything. They must also be distinct,
 single-use reset generations issued by the active VM session, with ordered
 monotonic timestamps, setup/snapshot provenance, content seals, and bounded
-freshness. Cursor history stores semantic refs, and evaluated rows log each ref
+freshness. The issuing ledger consumes a one-use HMAC receipt created only
+after the KVM provider's real `load_state(osworld_ready)` call; that receipt
+attests the provider session, prior/new generation chain, before/after provider
+state hashes, and reset interval. A raw observation has a unique ID and capture
+time and cannot be re-signed. Cursor history stores semantic refs, and evaluated rows log each ref
 with its resolved live value. Chrome is re-probed after its executed scroll
 receipt; its later click compiles only from a refreshed binding that proves the
 signed scroll delta, active generation, causal timestamps, and changed binding
-revision.
+revision. The ledger independently replays the exact dispatch-cardinality,
+ordering, adapter, operation-content, cursor, atomic-result, and result-seal
+checks before recording an executed receipt; Chrome refresh accepts only that
+recorded step-2 receipt object, never a caller-provided digest string.
 
 The initial materialized matrix contains one train and one development seed for
 each family:
@@ -56,7 +63,9 @@ visible in `coverage`; they are not silently promoted into broad evidence.
 
 Every fixture must reject exact reset, reject its deterministic near miss,
 accept gold, reproduce the same reset signature, run its oracle in a new
-process, and finish with zero held inputs. `verify_fixture_contract` requires
+process, and finish with zero held inputs. Reset, near-miss, and gold checks
+each require `oracle_status == "ok"`; an oracle error cannot count as a
+successful rejection. `verify_fixture_contract` requires
 four real artifact roots and invokes the declared independent extractor; it
 does not manufacture scripted expected states. Writer/Calc/Files/Chrome delegate to
 the existing same-app state oracles; VS Code delegates to the existing UTF-8
@@ -82,6 +91,11 @@ receipt carrying the exact binding revision used. Aggregation hashes those
 ordered receipts and revisions without recompiling earlier Chrome segments
 against the post-scroll binding. The former build replay and direct teacher
 collector fail closed; neither is an alternate compiler/execution path.
+Both checked-in rung-2 CPU recipes invoke this VM-only development replay and
+declare the VM, QEMU, provider, and `task_setup_validation` inputs. The setup
+input intentionally carries a conspicuous artifact placeholder until an
+independent producer output is registered and pinned; labctl resolves its
+artifact ID and the launcher hashes the exact custody-resolved JSON.
 
 The upward Chrome fixture establishes its nonzero initial offset in page load
 with `scrollTo`, reports it through the local event endpoint, and cannot pass

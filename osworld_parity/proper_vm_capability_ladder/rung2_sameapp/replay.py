@@ -35,6 +35,7 @@ from .curriculum.runtime import (
 )
 from .curriculum.schema import SemanticTask
 from .curriculum.setup_validation import load_task_setup_validation
+from .fixtures import canonical_json
 from .vm import AppReadinessError
 
 
@@ -95,16 +96,13 @@ def _reset_probe(
     task: SemanticTask,
     ledger: RuntimeEvidenceLedger,
 ) -> tuple[Any, RuntimeProbe]:
-    reset_started = time.monotonic_ns()
-    transport = session.reset_to_ready()
+    transport, provider_reset_receipt = session.reset_to_ready_with_receipt()
     _setup_after_reset(transport, task)
     probe = probe_runtime(transport, task)
-    completed = time.monotonic_ns()
     attributed = ledger.issue_reset_probe(
         task,
         probe,
-        reset_started_monotonic_ns=reset_started,
-        probe_completed_monotonic_ns=completed,
+        provider_reset_receipt=provider_reset_receipt,
         transport_endpoint=str(transport.base_url),
     )
     return transport, attributed
@@ -183,14 +181,51 @@ print({ARTIFACT_MARKER!r}+json.dumps(payload,sort_keys=True))
 def _execute_native(transport: Any, payload: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     executor = NativeAbsoluteExecutor(transport)
     results: list[dict[str, Any]] = []
-    for operation in payload["operations"]:
+    for operation_index, operation in enumerate(payload["operations"]):
+        cursor_before = tuple(transport.cursor_position())
         action = dict(operation)
         action["action"] = {
             "click": "left_click",
             "key_chord": "key",
         }.get(action["action"], action["action"])
-        results.append(asdict(executor.execute(action)))
+        raw = asdict(executor.execute(action))
+        results.append(
+            _seal_dispatch_result(
+                raw,
+                compiled_payload=operation,
+                compiled_operation_index=operation_index,
+                cursor_before=cursor_before,
+                cursor_after=tuple(transport.cursor_position()),
+            )
+        )
     return tuple(results)
+
+
+def _seal_dispatch_result(
+    result: dict[str, Any],
+    *,
+    compiled_payload: Any,
+    compiled_operation_index: int,
+    cursor_before: tuple[int, int],
+    cursor_after: tuple[int, int],
+) -> dict[str, Any]:
+    value = dict(result)
+    value["compiled_payload_sha256"] = hashlib.sha256(
+        canonical_json(compiled_payload)
+    ).hexdigest()
+    value["compiled_operation_index"] = compiled_operation_index
+    value["cursor_before"] = list(cursor_before)
+    value["cursor_after"] = list(cursor_after)
+    atomic = value.get("atomic_state")
+    value["atomic_state_sha256"] = (
+        hashlib.sha256(canonical_json(atomic)).hexdigest()
+        if isinstance(atomic, dict)
+        else None
+    )
+    value["dispatch_result_sha256"] = hashlib.sha256(
+        canonical_json(value)
+    ).hexdigest()
+    return value
 
 
 def _dispatch_compiled_action(
@@ -202,7 +237,17 @@ def _dispatch_compiled_action(
         return _execute_native(transport, action)
     if not isinstance(action, str):
         raise TypeError("compact compiled action must be text")
-    return (asdict(CompactRawExecutor(transport).execute(action)),)
+    cursor_before = tuple(transport.cursor_position())
+    raw = asdict(CompactRawExecutor(transport).execute(action))
+    return (
+        _seal_dispatch_result(
+            raw,
+            compiled_payload=action,
+            compiled_operation_index=0,
+            cursor_before=cursor_before,
+            cursor_after=tuple(transport.cursor_position()),
+        ),
+    )
 
 
 def _screenshot(transport: Any, path: Path | None) -> dict[str, Any] | None:
@@ -228,6 +273,21 @@ def _assert_released(transport: Any, task: SemanticTask) -> None:
             f"{task.task_id}: execution left held inputs "
             f"buttons={sorted(audit.held_buttons)} keys={sorted(audit.held_keys)}"
         )
+
+
+def _require_fixture_contract(
+    task: SemanticTask, arm: str, fixture_contract: dict[str, Any]
+) -> None:
+    required = (
+        "reset_rejected",
+        "near_miss_rejected",
+        "gold_passed",
+        "reset_reproducible",
+        "fresh_process_final_oracle",
+        "zero_held_inputs",
+    )
+    if any(fixture_contract.get(key) is not True for key in required):
+        raise RuntimeError(f"{task.task_id}/{arm}: fixture contract failed")
 
 
 def _execute_bound_trajectory(
@@ -282,6 +342,14 @@ def _execute_bound_trajectory(
             execution_started_monotonic_ns=started,
             execution_completed_monotonic_ns=completed,
         )
+        ledger.record_executed_segment(
+            task,
+            binding,
+            segment,
+            tuple(dispatches),
+            receipt,
+            near_miss=near_miss,
+        )
         executed.append(receipt)
         journal.append(
             {
@@ -303,7 +371,7 @@ def _execute_bound_trajectory(
                 binding,
                 refreshed,
                 completed_step=2,
-                executed_segment_sha256=receipt.executed_receipt_sha256,
+                executed_segment=receipt,
                 action_started_monotonic_ns=started,
                 action_completed_monotonic_ns=completed,
                 probe_started_monotonic_ns=probe_started,
@@ -314,7 +382,7 @@ def _execute_bound_trajectory(
                 binding,
                 completed_step=2,
                 probe=refreshed,
-                executed_segment_sha256=receipt.executed_receipt_sha256,
+                executed_segment=receipt,
                 ledger=ledger,
             )
             journal[-1]["post_scroll_refresh"] = asdict(refreshed.refresh_evidence)
@@ -371,6 +439,7 @@ def run_vm_replay(
             setup_commit=setup["setup_commit"],
             vm_snapshot_id=setup["vm_snapshot_id"],
             reset_provider=str(provider.resolve()),
+            reset_attestor=session,
         )
         for task in tasks:
             for arm in ARMS:
@@ -426,18 +495,7 @@ def run_vm_replay(
                         "gold": gold_root,
                     },
                 )
-                if not all(
-                    fixture_contract[key]
-                    for key in (
-                        "reset_rejected",
-                        "near_miss_rejected",
-                        "gold_passed",
-                        "reset_reproducible",
-                        "fresh_process_final_oracle",
-                        "zero_held_inputs",
-                    )
-                ):
-                    raise RuntimeError(f"{task.task_id}/{arm}: fixture contract failed")
+                _require_fixture_contract(task, arm, fixture_contract)
                 rows.append(
                     {
                         "fixture_id": task.task_id,

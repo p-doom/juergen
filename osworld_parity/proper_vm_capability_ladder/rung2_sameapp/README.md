@@ -47,18 +47,16 @@ Calc/Files readiness diagnostics. No timeout was raised.
 
 ## Commands
 
-Run the bounded offline replay and tests:
+Run the local contract tests:
 
 ```bash
-python3 -m osworld_parity.proper_vm_capability_ladder.rung2_sameapp.replay \
-  --mode=build --split=development --output=/tmp/r2-replay
 python3 -m pytest -q \
+  osworld_parity/proper_vm_capability_ladder/rung2_sameapp/curriculum/tests \
   osworld_parity/proper_vm_capability_ladder/rung2_sameapp/tests
 ```
 
-CPU/KVM teacher collection is defined by
-`osworld_parity/labctl/recipes/rung2_sameapp_teacher_collect_cpu_kvm.toml`.
-It collects only scripted train rows, requests zero GPUs, and fails if a GPU is
-injected. VM-mode rows include the pre-action PNG and its SHA-256 for every gold
-turn in both action schemas; build-mode rows are contract checks and are marked
-`training_ready=false`. No sealed-eval or model run is part of this item.
+The production entry point is the VM-only development replay documented in
+`curriculum/README.md`. Both checked-in rung-2 CPU recipes use that path,
+request zero GPUs, and require a registered independent task-setup-validation
+artifact. The former build replay and train collector fail closed. No sealed
+evaluation or model run is part of this item.

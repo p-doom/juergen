@@ -2,11 +2,16 @@ from __future__ import annotations
 
 from dataclasses import replace
 import time
+import uuid
 
 import pytest
 
 from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.actions import (
     ACTION_SCHEMAS,
+)
+from osworld_parity.proper_vm_capability_ladder.rung1.transport import RecordingTransport
+from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.replay import (
+    _dispatch_compiled_action,
 )
 from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.manifests import (
     load_materialized_curriculum,
@@ -20,11 +25,14 @@ from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.program
     record_executed_segment,
 )
 from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.runtime import (
-    RuntimeEvidenceLedger,
     RuntimeProbe,
     RuntimeProbeError,
     bind_repeated_runtime_probes,
     refresh_binding_after_step,
+)
+from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.tests.evidence import (
+    attribute_new_observation,
+    make_ledger,
 )
 
 
@@ -55,17 +63,15 @@ def _probe(task, *, initial_cursor=(50, 50)) -> RuntimeProbe:
 
 def _binding(task):
     probe = _probe(task)
-    ledger = RuntimeEvidenceLedger(setup_commit="a" * 40, reset_provider="test")
+    ledger, attestor = make_ledger()
     values = []
     for index in range(2):
-        current = replace(probe, state=dict(probe.state), geometry=dict(probe.geometry))
-        started = time.monotonic_ns()
-        current = ledger.issue_reset_probe(
+        current = attribute_new_observation(
             task,
-            current,
-            reset_started_monotonic_ns=started,
-            probe_completed_monotonic_ns=time.monotonic_ns(),
-            transport_endpoint=f"test://reset/{index}",
+            ledger,
+            attestor,
+            replace(probe, state=dict(probe.state), geometry=dict(probe.geometry)),
+            endpoint=f"test://reset/{index}",
         )
         values.append(current)
     return bind_repeated_runtime_probes(task, tuple(values), ledger=ledger), ledger
@@ -85,14 +91,24 @@ def _compile_all(task, action_schema, *, near_miss=False):
         segments.append(segment)
         if task.app == "chrome" and step == 2:
             started = time.monotonic_ns()
+            transport = RecordingTransport(cursor=(40, 50), screen=(1400, 900))
+            dispatches = tuple(
+                _dispatch_compiled_action(transport, action_schema, action)
+                for action in segment.actions
+            )
             receipt = record_executed_segment(
                 segment,
-                tuple(
-                    ({"executor_dispatch_status": "ok", "atomic_state": {"ok": True}},)
-                    for _ in segment.actions
-                ),
+                dispatches,
                 execution_started_monotonic_ns=started,
                 execution_completed_monotonic_ns=time.monotonic_ns(),
+            )
+            ledger.record_executed_segment(
+                task,
+                binding,
+                segment,
+                dispatches,
+                receipt,
+                near_miss=near_miss,
             )
             state = dict(binding.initial_probe.state)
             delta = int(task.params["minimum_scroll_delta"])
@@ -106,13 +122,15 @@ def _compile_all(task, action_schema, *, near_miss=False):
                 geometry=dict(binding.initial_probe.geometry),
                 initial_cursor=binding.initial_probe.geometry["scroll_surface"],
                 reset_cycle_evidence=None,
+                observation_id=uuid.uuid4().hex,
+                observed_monotonic_ns=time.monotonic_ns(),
             )
             refreshed = ledger.issue_refresh_probe(
                 task,
                 binding,
                 refreshed,
                 completed_step=2,
-                executed_segment_sha256=receipt.executed_receipt_sha256,
+                executed_segment=receipt,
                 action_started_monotonic_ns=action_started,
                 action_completed_monotonic_ns=action_completed,
                 probe_started_monotonic_ns=probe_started,
@@ -123,7 +141,7 @@ def _compile_all(task, action_schema, *, near_miss=False):
                 binding,
                 completed_step=2,
                 probe=refreshed,
-                executed_segment_sha256=receipt.executed_receipt_sha256,
+                executed_segment=receipt,
                 ledger=ledger,
             )
     return segments
@@ -180,16 +198,15 @@ def test_compact_cursor_already_at_target_omits_move_and_resolves_lower_budget()
     moving_binding, _ = _binding(task)
     # Replace the stationary binding's live probes through a new attributed cycle.
     stationary_probe = replace(moving_probe, initial_cursor=target)
-    ledger = RuntimeEvidenceLedger(setup_commit="a" * 40, reset_provider="test")
+    ledger, attestor = make_ledger()
     stationary_values = []
     for index in range(2):
-        started = time.monotonic_ns()
-        value = ledger.issue_reset_probe(
+        value = attribute_new_observation(
             task,
+            ledger,
+            attestor,
             replace(stationary_probe, state=dict(stationary_probe.state), geometry=dict(stationary_probe.geometry)),
-            reset_started_monotonic_ns=started,
-            probe_completed_monotonic_ns=time.monotonic_ns(),
-            transport_endpoint=f"test://stationary/{index}",
+            endpoint=f"test://stationary/{index}",
         )
         stationary_values.append(value)
     stationary_binding = bind_repeated_runtime_probes(task, tuple(stationary_values), ledger=ledger)
@@ -242,20 +259,40 @@ def test_chrome_later_target_requires_and_uses_post_scroll_probe() -> None:
         semantic_step_index=2,
     )
     started = time.monotonic_ns()
+    transport = RecordingTransport(cursor=(40, 50), screen=(1400, 900))
+    dispatches = tuple(
+        _dispatch_compiled_action(
+            transport, "compact_raw_phaseb_v1", action
+        )
+        for action in scroll_segment.actions
+    )
     receipt = record_executed_segment(
         scroll_segment,
-        (({"executor_dispatch_status": "ok", "atomic_state": {"ok": True}},),),
+        dispatches,
         execution_started_monotonic_ns=started,
         execution_completed_monotonic_ns=time.monotonic_ns(),
     )
+    ledger.record_executed_segment(
+        task,
+        binding,
+        scroll_segment,
+        dispatches,
+        receipt,
+        near_miss=False,
+    )
     refreshed = replace(refreshed, reset_cycle_evidence=None)
+    refreshed = replace(
+        refreshed,
+        observation_id=uuid.uuid4().hex,
+        observed_monotonic_ns=time.monotonic_ns(),
+    )
     probe_started = time.monotonic_ns()
     refreshed = ledger.issue_refresh_probe(
         task,
         binding,
         refreshed,
         completed_step=2,
-        executed_segment_sha256=receipt.executed_receipt_sha256,
+        executed_segment=receipt,
         action_started_monotonic_ns=receipt.execution_started_monotonic_ns,
         action_completed_monotonic_ns=receipt.execution_completed_monotonic_ns,
         probe_started_monotonic_ns=probe_started,
@@ -266,7 +303,7 @@ def test_chrome_later_target_requires_and_uses_post_scroll_probe() -> None:
         binding,
         completed_step=2,
         probe=refreshed,
-        executed_segment_sha256=receipt.executed_receipt_sha256,
+        executed_segment=receipt,
         ledger=ledger,
     )
     compact = compile_semantic_step(

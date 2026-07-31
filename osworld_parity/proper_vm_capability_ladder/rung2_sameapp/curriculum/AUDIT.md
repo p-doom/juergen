@@ -44,8 +44,17 @@ expected-state echoes.
 
 The production replay no longer imports or calls the direct symbolic
 `compile_native`/`compile_compact` path. It consumes session-issued reset
-generation evidence, compiles and executes semantic segments sequentially, and
-aggregates only sealed executor receipts. The Chrome refresh transition records
-pre/post binding revisions and is tied to the actually executed step-2 receipt.
+generation evidence backed by a single-use receipt emitted after the provider's
+actual snapshot transition. Provider receipts bind before/after state hashes,
+prior/new generation IDs, reset ordering, and the target snapshot; identical
+raw observations cannot be re-attributed. Replay compiles and executes semantic
+segments sequentially, and aggregates only sealed executor receipts whose full
+dispatch journals have exact cardinality, ordering, adapter, operation, cursor,
+and atomic evidence. The Chrome refresh transition records pre/post binding
+revisions and accepts only the ledger-recorded executed step-2 receipt object.
+Fixture polarity requires successful fresh-oracle status as well as the expected
+boolean result. The two legacy-named labctl recipes now enter the same hardened
+VM replay and declare all runtime/setup inputs; their setup artifact placeholder
+must be replaced by an independently registered producer artifact before use.
 The superseded build replay and legacy collector are disabled so these checks
 cannot be bypassed through a second production entry point.

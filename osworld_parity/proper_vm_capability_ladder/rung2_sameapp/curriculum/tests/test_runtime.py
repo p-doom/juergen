@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from dataclasses import replace
 
 import pytest
@@ -16,12 +17,15 @@ from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.oracle 
 )
 from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.runtime import (
     RuntimeProbe,
-    RuntimeEvidenceLedger,
     RuntimeProbeError,
     bind_repeated_runtime_probes,
     resolved_cursor_history,
     validate_repeated_runtime_probes,
     validate_runtime_probe,
+)
+from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.tests.evidence import (
+    attribute_new_observation,
+    make_ledger,
 )
 from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.vm import _chrome_html
 
@@ -44,17 +48,16 @@ def _probe(task) -> RuntimeProbe:
 
 
 def _attributed(task, probes):
-    ledger = RuntimeEvidenceLedger(setup_commit="a" * 40, reset_provider="test")
+    ledger, attestor = make_ledger()
     values = []
     for index, probe in enumerate(probes):
-        started = time.monotonic_ns()
         values.append(
-            ledger.issue_reset_probe(
+            attribute_new_observation(
                 task,
+                ledger,
+                attestor,
                 probe,
-                reset_started_monotonic_ns=started,
-                probe_completed_monotonic_ns=time.monotonic_ns(),
-                transport_endpoint=f"test://reset/{index}",
+                endpoint=f"test://reset/{index}",
             )
         )
     return tuple(values), ledger
@@ -110,7 +113,7 @@ def test_reset_evidence_rejects_duplicate_object_content_mutation_and_replay() -
         bind_repeated_runtime_probes(task, (values[0], values[0]), ledger=ledger)
 
     copied = replace(values[1], reset_cycle_evidence=values[0].reset_cycle_evidence)
-    with pytest.raises(RuntimeProbeError, match="duplicate reset evidence content"):
+    with pytest.raises(RuntimeProbeError, match="reset probe content was mutated"):
         bind_repeated_runtime_probes(task, (values[0], copied), ledger=ledger)
 
     mutated = replace(values[1], initial_cursor=(41, 50))
@@ -138,6 +141,43 @@ def test_reset_evidence_rejects_duplicate_object_content_mutation_and_replay() -
         ).probe_for_step(task, 1)
     with pytest.raises(RuntimeProbeError, match="replay detected"):
         bind_repeated_runtime_probes(task, values, ledger=ledger)
+
+
+def test_reset_issuance_requires_external_transition_and_rejects_raw_resign() -> None:
+    task = load_manifest("development").tasks[0]
+    ledger, attestor = make_ledger()
+    receipt = attestor.issue()
+    raw = replace(
+        _probe(task),
+        observation_id=uuid.uuid4().hex,
+        observed_monotonic_ns=time.monotonic_ns(),
+    )
+    first = ledger.issue_reset_probe(
+        task,
+        raw,
+        provider_reset_receipt=receipt,
+        transport_endpoint="test://reset/one",
+    )
+    assert first.reset_cycle_evidence.provider_reset_receipt_sha256 == receipt.receipt_sha256
+    with pytest.raises(RuntimeProbeError, match="raw runtime observation re-sign"):
+        ledger.issue_reset_probe(
+            task,
+            raw,
+            provider_reset_receipt=attestor.issue(),
+            transport_endpoint="test://reset/two",
+        )
+    forged = replace(attestor.issue(), receipt_sha256="f" * 64)
+    with pytest.raises(RuntimeProbeError, match="provider reset attestation rejected"):
+        ledger.issue_reset_probe(
+            task,
+            replace(
+                _probe(task),
+                observation_id=uuid.uuid4().hex,
+                observed_monotonic_ns=time.monotonic_ns(),
+            ),
+            provider_reset_receipt=forged,
+            transport_endpoint="test://reset/forged",
+        )
 
 
 def test_runtime_resolves_cursor_refs_and_fresh_semantic_oracle() -> None:

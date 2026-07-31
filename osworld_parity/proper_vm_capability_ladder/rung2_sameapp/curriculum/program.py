@@ -373,15 +373,102 @@ def record_executed_segment(
         raise ValueError("dispatch evidence does not cover every compiled action")
     if execution_completed_monotonic_ns <= execution_started_monotonic_ns:
         raise ValueError("segment execution timestamps are not monotonic")
-    for action_results in dispatches:
+    for action, action_results in zip(segment.actions, dispatches, strict=True):
         if not action_results:
             raise ValueError("compiled action has no executor dispatch receipt")
-        for result in action_results:
-            if result.get("executor_dispatch_status") != "ok":
-                raise ValueError("executor dispatch did not complete successfully")
+        if segment.action_schema == "native_absolute_sequence_v1":
+            if not isinstance(action, dict):
+                raise ValueError("native compiled action type mismatch")
+            operations = action.get("operations")
+            if not isinstance(operations, list) or len(action_results) != len(operations):
+                raise ValueError("native dispatch cardinality does not cover compiled operations")
+            prior_cursor_after: list[int] | None = None
+            for operation_index, (compiled_operation, result) in enumerate(zip(
+                operations, action_results, strict=True
+            )):
+                _validate_dispatch_result_seal(result)
+                if result.get("compiled_operation_index") != operation_index or (
+                    result.get("compiled_payload_sha256")
+                    != hashlib.sha256(canonical_json(compiled_operation)).hexdigest()
+                ):
+                    raise ValueError("native dispatch compiled-operation seal mismatch")
+                if result.get("adapter") != "native_absolute_control":
+                    raise ValueError("native dispatch adapter mismatch")
+                cursor_before = result.get("cursor_before")
+                cursor_after = result.get("cursor_after")
+                if not (
+                    isinstance(cursor_before, list)
+                    and isinstance(cursor_after, list)
+                    and len(cursor_before) == len(cursor_after) == 2
+                    and all(
+                        isinstance(value, int)
+                        for value in (*cursor_before, *cursor_after)
+                    )
+                ):
+                    raise ValueError("native dispatch cursor evidence mismatch")
+                if prior_cursor_after is not None and cursor_before != prior_cursor_after:
+                    raise ValueError("native dispatch cursor chain mismatch")
+                coordinate = compiled_operation.get("coordinate")
+                expected_cursor_after = (
+                    [int(round(coordinate[0])), int(round(coordinate[1]))]
+                    if coordinate is not None
+                    and compiled_operation.get("action")
+                    in {"click", "mouse_down", "mouse_move", "mouse_up"}
+                    else cursor_before
+                )
+                if cursor_after != expected_cursor_after:
+                    raise ValueError("native dispatch cursor result mismatch")
+                prior_cursor_after = cursor_after
+                expected_class, expected_operations, expected_atomic = (
+                    _expected_native_dispatch(compiled_operation)
+                )
+                if result.get("action_class") != expected_class or (
+                    _normalized_operations(result.get("operations"))
+                    != expected_operations
+                ):
+                    raise ValueError("native dispatch order/content mismatch")
+                atomic = result.get("atomic_state")
+                if expected_atomic is None:
+                    if atomic is not None:
+                        raise ValueError("unexpected native atomic result")
+                elif not isinstance(atomic, dict) or atomic.get("ok") is not True or (
+                    _normalized_operations(atomic.get("operations")) != expected_atomic
+                ):
+                    raise ValueError("native atomic result does not match compiled operation")
+        else:
+            if not isinstance(action, str) or len(action_results) != 1:
+                raise ValueError("compact dispatch cardinality mismatch")
+            result = action_results[0]
+            _validate_dispatch_result_seal(result)
+            if result.get("compiled_operation_index") != 0 or (
+                result.get("compiled_payload_sha256")
+                != hashlib.sha256(canonical_json(action)).hexdigest()
+            ):
+                raise ValueError("compact dispatch compiled-action seal mismatch")
+            if result.get("adapter") != "compact_raw_phaseb":
+                raise ValueError("compact dispatch adapter mismatch")
+            cursor_before = result.get("cursor_before")
+            cursor_after = result.get("cursor_after")
+            if not (
+                isinstance(cursor_before, list)
+                and isinstance(cursor_after, list)
+                and len(cursor_before) == len(cursor_after) == 2
+            ):
+                raise ValueError("compact dispatch cursor evidence mismatch")
+            expected, expected_after, expected_class = _expected_compact_dispatch(
+                action, (int(cursor_before[0]), int(cursor_before[1]))
+            )
             atomic = result.get("atomic_state")
-            if isinstance(atomic, dict) and atomic.get("ok") is False:
-                raise ValueError("atomic executor dispatch reported failure")
+            if result.get("action_class") != expected_class or (
+                cursor_after != list(expected_after)
+            ) or (
+                _normalized_operations(result.get("operations")) != expected
+            ) or (
+                not isinstance(atomic, dict)
+                or atomic.get("ok") is not True
+                or _normalized_operations(atomic.get("operations")) != expected
+            ):
+                raise ValueError("compact dispatch order/content mismatch")
     dispatch_payload = {
         "schema_version": 1,
         "task_id": segment.task_id,
@@ -413,6 +500,125 @@ def record_executed_segment(
     )
 
 
+def _normalized_operations(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("executor result operations are missing")
+    rows: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"kind", "args"}:
+            raise ValueError("executor result operation schema mismatch")
+        args = item["args"]
+        if not isinstance(args, (list, tuple)):
+            raise ValueError("executor result operation args mismatch")
+        rows.append({"kind": item["kind"], "args": list(args)})
+    return rows
+
+
+def _validate_dispatch_result_seal(result: dict[str, Any]) -> None:
+    if not isinstance(result, dict):
+        raise ValueError("executor dispatch result must be an object")
+    payload = dict(result)
+    result_sha = payload.pop("dispatch_result_sha256", None)
+    if not isinstance(result_sha, str) or len(result_sha) != 64 or (
+        hashlib.sha256(canonical_json(payload)).hexdigest() != result_sha
+    ):
+        raise ValueError("executor dispatch result seal mismatch")
+    atomic = result.get("atomic_state")
+    atomic_sha = result.get("atomic_state_sha256")
+    expected_atomic_sha = (
+        hashlib.sha256(canonical_json(atomic)).hexdigest()
+        if isinstance(atomic, dict)
+        else None
+    )
+    if atomic_sha != expected_atomic_sha:
+        raise ValueError("executor atomic result seal mismatch")
+    if result.get("parse_status") != "ok" or (
+        result.get("executor_dispatch_status") != "ok"
+    ):
+        raise ValueError("executor dispatch did not complete successfully")
+
+
+def _expected_native_dispatch(
+    operation: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]] | None]:
+    kind = operation["action"]
+    coordinate = operation.get("coordinate")
+    rows: list[dict[str, Any]] = []
+    if coordinate is not None and kind in {"click", "mouse_down", "mouse_move", "mouse_up"}:
+        rows.append({"kind": "move_to", "args": list(coordinate)})
+    atomic: list[dict[str, Any]] | None = None
+    if kind == "click":
+        atomic = [
+            {"kind": "mouse_down", "args": ["left"]},
+            {"kind": "mouse_up", "args": ["left"]},
+        ]
+        rows.extend(atomic)
+        action_class = "click"
+    elif kind == "mouse_down":
+        rows.append({"kind": "mouse_down", "args": [operation.get("button", "left")]})
+        action_class = "button_hold"
+    elif kind == "mouse_up":
+        rows.append({"kind": "mouse_up", "args": [operation.get("button", "left")]})
+        action_class = "button_release"
+    elif kind == "mouse_move":
+        action_class = "mouse_move"
+    elif kind == "scroll":
+        rows.append({"kind": "scroll", "args": [operation["clicks"]]})
+        action_class = "scroll"
+    elif kind == "key_chord":
+        rows.append({"kind": "key_chord", "args": list(operation["keys"])})
+        action_class = "key_chord"
+    elif kind == "type":
+        rows.append({"kind": "coalesced_type", "args": [operation["text"]]})
+        action_class = "coalesced_type"
+    else:
+        raise ValueError(f"unsupported native compiled operation: {kind!r}")
+    return action_class, rows, atomic
+
+
+def _expected_compact_dispatch(
+    action: str, cursor_before: tuple[int, int]
+) -> tuple[list[dict[str, Any]], tuple[int, int], str]:
+    parsed = parse_compact_raw(action)
+    rows: list[dict[str, Any]] = []
+    classes: set[str] = set()
+    cursor_after = cursor_before
+    if parsed.dx or parsed.dy:
+        cursor_after = (
+            cursor_before[0] + parsed.dx,
+            cursor_before[1] + parsed.dy,
+        )
+        rows.append({"kind": "move_to", "args": list(cursor_after)})
+        classes.add("mouse_move")
+    if parsed.scroll:
+        rows.append({"kind": "scroll", "args": [parsed.scroll]})
+        classes.add("scroll")
+    for element in parsed.elements:
+        if element.kind == "type":
+            rows.append({"kind": "coalesced_type", "args": [element.value]})
+            classes.add("coalesced_type")
+        elif element.value in {"LMB", "RMB", "MMB"}:
+            button = {"LMB": "left", "RMB": "right", "MMB": "middle"}[
+                element.value
+            ]
+            rows.append(
+                {
+                    "kind": "mouse_down" if element.pressed else "mouse_up",
+                    "args": [button],
+                }
+            )
+            classes.add("button_hold" if element.pressed else "button_release")
+        else:
+            rows.append(
+                {
+                    "kind": "key_down" if element.pressed else "key_up",
+                    "args": [element.value],
+                }
+            )
+            classes.add("key_chord")
+    return rows, cursor_after, "+".join(sorted(classes)) if classes else "no_op"
+
+
 def aggregate_executed_segments(
     task: SemanticTask,
     action_schema: str,
@@ -442,13 +648,7 @@ def aggregate_executed_segments(
     elif len(set(revisions)) != 1 or len(set(binding_hashes)) != 1:
         raise ValueError(f"{task.task_id}: unexpected mid-trajectory binding change")
     for item in values:
-        payload = {
-            key: value
-            for key, value in asdict(item).items()
-            if key != "executed_receipt_sha256"
-        }
-        if hashlib.sha256(canonical_json(payload)).hexdigest() != item.executed_receipt_sha256:
-            raise ValueError(f"{task.task_id}: executed segment receipt seal mismatch")
+        validate_executed_segment_receipt(item)
     resolved_actions = sum(item.resolved_primitive_actions for item in values)
     resolved_events = sum(item.resolved_primitive_events for item in values)
     if resolved_actions > task.budget_contract["primitive_action_caps"][action_schema]:
@@ -483,6 +683,44 @@ def aggregate_executed_segments(
         resolved_budget_sha256=hashlib.sha256(canonical_json(payload)).hexdigest(),
         binding_sha256=binding_chain_sha256,
     )
+
+
+def validate_executed_segment_receipt(item: ExecutedSegmentReceipt) -> None:
+    if not isinstance(item, ExecutedSegmentReceipt) or item.schema_version != 1:
+        raise ValueError("executed segment receipt schema/type mismatch")
+    if (
+        not item.task_id
+        or not item.fixture_sha256
+        or item.action_schema not in ACTION_SCHEMAS
+        or item.semantic_step_index < 1
+        or item.resolved_primitive_actions < 1
+        or item.resolved_primitive_events < 1
+        or item.binding_revision < 1
+        or item.execution_started_monotonic_ns < 1
+        or item.execution_completed_monotonic_ns
+        <= item.execution_started_monotonic_ns
+    ):
+        raise ValueError("executed segment receipt field contract mismatch")
+    lowercase_hex = set("0123456789abcdef")
+    for name in (
+        "fixture_sha256",
+        "resolved_budget_sha256",
+        "binding_sha256",
+        "dispatch_receipt_sha256",
+        "executed_receipt_sha256",
+    ):
+        value = getattr(item, name)
+        if not isinstance(value, str) or len(value) != 64 or any(
+            char not in lowercase_hex for char in value
+        ):
+            raise ValueError(f"executed segment receipt {name} is not lowercase SHA-256")
+    payload = {
+        key: value
+        for key, value in asdict(item).items()
+        if key != "executed_receipt_sha256"
+    }
+    if hashlib.sha256(canonical_json(payload)).hexdigest() != item.executed_receipt_sha256:
+        raise ValueError(f"{item.task_id}: executed segment receipt seal mismatch")
 
 
 def compile_program(*args: Any, **kwargs: Any) -> None:

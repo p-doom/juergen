@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -153,6 +153,47 @@ def test_fixture_contract_propagates_extraction_failure(tmp_path: Path) -> None:
     (roots["gold"] / task.params["file_name"]).write_bytes(b"\xff")
     with pytest.raises(UnicodeDecodeError):
         verify_fixture_contract(task, artifact_roots=roots)
+
+
+@pytest.mark.parametrize(
+    ("error_call", "failed_field"),
+    ((1, "reset_rejected"), (2, "near_miss_rejected"), (3, "gold_passed")),
+)
+def test_fixture_contract_fails_closed_on_any_oracle_error(
+    tmp_path: Path, monkeypatch, error_call: int, failed_field: str
+) -> None:
+    from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum import oracle
+
+    task = next(task for task in _tasks() if task.app == "vscode")
+    roots = {
+        mode: _artifact(
+            task,
+            tmp_path / mode,
+            "reset" if mode == "reset_repeat" else mode,
+        )
+        for mode in ("reset", "reset_repeat", "near", "gold")
+    }
+    real = oracle.evaluate_in_fresh_process
+    calls = 0
+
+    def injected(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        result = real(*args, **kwargs)
+        return (
+            replace(
+                result,
+                oracle_status="error",
+                MOUSE_SOLVED=False,
+                reason="injected oracle failure",
+            )
+            if calls == error_call
+            else result
+        )
+
+    monkeypatch.setattr(oracle, "evaluate_in_fresh_process", injected)
+    contract = oracle.verify_fixture_contract(task, artifact_roots=roots)
+    assert contract[failed_field] is False
 
 
 def test_final_oracle_rejects_held_input_from_extracted_gold(tmp_path: Path) -> None:

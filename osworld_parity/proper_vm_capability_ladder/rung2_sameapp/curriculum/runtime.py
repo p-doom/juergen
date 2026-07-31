@@ -7,7 +7,7 @@ import hmac
 import secrets
 import time
 import uuid
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 from .oracle import initial_state
@@ -25,7 +25,15 @@ class ResetCycleEvidence:
     reset_id: str
     generation_id: str
     sequence: int
+    provider_reset_sequence: int
+    provider_session_id: str
+    prior_provider_generation_id: str
+    provider_reset_receipt_sha256: str
+    provider_state_before_sha256: str
+    provider_state_after_sha256: str
+    provider_path_sha256: str
     reset_started_monotonic_ns: int
+    provider_reset_completed_monotonic_ns: int
     probe_completed_monotonic_ns: int
     captured_wall_time_ns: int
     vm_snapshot_id: str
@@ -76,6 +84,8 @@ class RuntimeProbe:
     cursor_probe_version: str = "rung1_cursor_position_v1"
     reset_cycle_evidence: ResetCycleEvidence | None = None
     refresh_evidence: StepRefreshEvidence | None = None
+    observation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    observed_monotonic_ns: int = field(default_factory=time.monotonic_ns)
 
 
 def _probe_payload(probe: RuntimeProbe) -> dict[str, Any]:
@@ -87,6 +97,8 @@ def _probe_payload(probe: RuntimeProbe) -> dict[str, Any]:
         "geometry_probe_version": probe.geometry_probe_version,
         "state_probe_version": probe.state_probe_version,
         "cursor_probe_version": probe.cursor_probe_version,
+        "observation_id": probe.observation_id,
+        "observed_monotonic_ns": probe.observed_monotonic_ns,
     }
 
 
@@ -103,6 +115,7 @@ class RuntimeEvidenceLedger:
         setup_commit: str,
         vm_snapshot_id: str = "osworld_ready",
         reset_provider: str,
+        reset_attestor: Any,
         max_age_seconds: float = 120.0,
     ) -> None:
         if len(setup_commit) != 40 or any(c not in "0123456789abcdef" for c in setup_commit):
@@ -112,14 +125,19 @@ class RuntimeEvidenceLedger:
         self.setup_commit = setup_commit
         self.vm_snapshot_id = vm_snapshot_id
         self.reset_provider = reset_provider
+        if not callable(getattr(reset_attestor, "consume_provider_reset_receipt", None)):
+            raise RuntimeProbeError("external provider reset attestor is required")
+        self.reset_attestor = reset_attestor
         self.max_age_ns = int(max_age_seconds * 1_000_000_000)
         self.session_id = uuid.uuid4().hex
         self._secret = secrets.token_bytes(32)
         self._reset_sequence = 0
         self._refresh_sequence = 0
-        self._last_reset_completion_ns = 0
         self._consumed_reset_hashes: set[str] = set()
         self._consumed_refresh_hashes: set[str] = set()
+        self._issued_observation_ids: set[str] = set()
+        self._issued_probe_objects: set[int] = set()
+        self._recorded_executed_receipts: dict[str, tuple[Any, Any]] = {}
 
     def _mac(self, payload: dict[str, Any]) -> str:
         return hmac.new(self._secret, canonical_json(payload), hashlib.sha256).hexdigest()
@@ -129,27 +147,46 @@ class RuntimeEvidenceLedger:
         task: SemanticTask,
         probe: RuntimeProbe,
         *,
-        reset_started_monotonic_ns: int,
-        probe_completed_monotonic_ns: int,
+        provider_reset_receipt: Any,
         transport_endpoint: str,
     ) -> RuntimeProbe:
+        from ...rung1.vm import ProviderResetReceipt
+
         if probe.reset_cycle_evidence is not None or probe.refresh_evidence is not None:
             raise RuntimeProbeError("cannot re-issue evidence for an attributed probe")
-        if reset_started_monotonic_ns <= self._last_reset_completion_ns:
-            raise RuntimeProbeError("reset cycle overlaps or replays a prior generation")
-        if probe_completed_monotonic_ns <= reset_started_monotonic_ns:
-            raise RuntimeProbeError("reset probe did not complete after reset start")
+        if id(probe) in self._issued_probe_objects or (
+            probe.observation_id in self._issued_observation_ids
+        ):
+            raise RuntimeProbeError("raw runtime observation re-sign detected")
+        if not isinstance(provider_reset_receipt, ProviderResetReceipt):
+            raise RuntimeProbeError("provider reset receipt type mismatch")
+        try:
+            self.reset_attestor.consume_provider_reset_receipt(provider_reset_receipt)
+        except Exception as exc:
+            raise RuntimeProbeError(f"provider reset attestation rejected: {exc}") from exc
+        if provider_reset_receipt.snapshot_id != self.vm_snapshot_id:
+            raise RuntimeProbeError("provider reset snapshot mismatch")
+        if provider_reset_receipt.reset_completed_monotonic_ns >= probe.observed_monotonic_ns:
+            raise RuntimeProbeError("runtime observation predates provider reset completion")
         now = time.monotonic_ns()
-        if probe_completed_monotonic_ns > now or now - probe_completed_monotonic_ns > self.max_age_ns:
+        if probe.observed_monotonic_ns > now or now - probe.observed_monotonic_ns > self.max_age_ns:
             raise RuntimeProbeError("reset probe is stale or future-dated")
         self._reset_sequence += 1
         payload = {
             "session_id": self.session_id,
-            "reset_id": uuid.uuid4().hex,
-            "generation_id": uuid.uuid4().hex,
+            "reset_id": provider_reset_receipt.reset_id,
+            "generation_id": provider_reset_receipt.new_generation_id,
             "sequence": self._reset_sequence,
-            "reset_started_monotonic_ns": reset_started_monotonic_ns,
-            "probe_completed_monotonic_ns": probe_completed_monotonic_ns,
+            "provider_reset_sequence": provider_reset_receipt.reset_sequence,
+            "provider_session_id": provider_reset_receipt.provider_session_id,
+            "prior_provider_generation_id": provider_reset_receipt.prior_generation_id,
+            "provider_reset_receipt_sha256": provider_reset_receipt.receipt_sha256,
+            "provider_state_before_sha256": provider_reset_receipt.provider_state_before_sha256,
+            "provider_state_after_sha256": provider_reset_receipt.provider_state_after_sha256,
+            "provider_path_sha256": provider_reset_receipt.provider_path_sha256,
+            "reset_started_monotonic_ns": provider_reset_receipt.reset_started_monotonic_ns,
+            "provider_reset_completed_monotonic_ns": provider_reset_receipt.reset_completed_monotonic_ns,
+            "probe_completed_monotonic_ns": probe.observed_monotonic_ns,
             "captured_wall_time_ns": time.time_ns(),
             "vm_snapshot_id": self.vm_snapshot_id,
             "setup_commit": self.setup_commit,
@@ -165,7 +202,8 @@ class RuntimeEvidenceLedger:
         evidence_sha256 = hashlib.sha256(
             canonical_json({**payload, "issuer_mac": issuer_mac})
         ).hexdigest()
-        self._last_reset_completion_ns = probe_completed_monotonic_ns
+        self._issued_probe_objects.add(id(probe))
+        self._issued_observation_ids.add(probe.observation_id)
         return replace(
             probe,
             reset_cycle_evidence=ResetCycleEvidence(
@@ -221,7 +259,99 @@ class RuntimeEvidenceLedger:
                 raise RuntimeProbeError("reset evidence sequence is not monotonic")
             if second.reset_started_monotonic_ns <= first.probe_completed_monotonic_ns:
                 raise RuntimeProbeError("reset generations overlap or are out of order")
+            if second.provider_reset_sequence != first.provider_reset_sequence + 1 or (
+                second.prior_provider_generation_id != first.generation_id
+            ) or second.provider_session_id != first.provider_session_id or (
+                second.provider_path_sha256 != first.provider_path_sha256
+            ):
+                raise RuntimeProbeError("provider reset generation chain is discontinuous")
         self._consumed_reset_hashes.update(row.evidence_sha256 for row in evidence_rows)
+
+    def record_executed_segment(
+        self,
+        task: SemanticTask,
+        binding: "ValidatedRuntimeBinding",
+        compiled_segment: Any,
+        dispatches: Any,
+        executed_receipt: Any,
+        *,
+        near_miss: bool,
+    ) -> None:
+        from .program import (
+            CompiledSegment,
+            ExecutedSegmentReceipt,
+            compile_semantic_step,
+            record_executed_segment,
+            validate_executed_segment_receipt,
+        )
+
+        if not isinstance(compiled_segment, CompiledSegment) or not isinstance(
+            executed_receipt, ExecutedSegmentReceipt
+        ):
+            raise RuntimeProbeError("executed segment object/schema mismatch")
+        binding.validate_for_task(task)
+        expected_segment = compile_semantic_step(
+            task,
+            compiled_segment.action_schema,
+            binding=binding,
+            semantic_step_index=compiled_segment.semantic_step_index,
+            near_miss=near_miss,
+        )
+        if compiled_segment != expected_segment:
+            raise RuntimeProbeError(
+                "compiled segment does not match the declared semantic trajectory"
+            )
+        try:
+            validate_executed_segment_receipt(executed_receipt)
+            reconstructed = record_executed_segment(
+                compiled_segment,
+                dispatches,
+                execution_started_monotonic_ns=(
+                    executed_receipt.execution_started_monotonic_ns
+                ),
+                execution_completed_monotonic_ns=(
+                    executed_receipt.execution_completed_monotonic_ns
+                ),
+            )
+        except ValueError as exc:
+            raise RuntimeProbeError(str(exc)) from exc
+        if reconstructed != executed_receipt:
+            raise RuntimeProbeError(
+                "executed receipt does not match verified dispatch journal"
+            )
+        expected = (
+            compiled_segment.task_id,
+            compiled_segment.fixture_sha256,
+            compiled_segment.action_schema,
+            compiled_segment.semantic_step_index,
+            compiled_segment.resolved_primitive_actions,
+            compiled_segment.resolved_primitive_events,
+            compiled_segment.resolved_budget_sha256,
+            compiled_segment.binding_revision,
+            compiled_segment.binding_sha256,
+        )
+        observed = (
+            executed_receipt.task_id,
+            executed_receipt.fixture_sha256,
+            executed_receipt.action_schema,
+            executed_receipt.semantic_step_index,
+            executed_receipt.resolved_primitive_actions,
+            executed_receipt.resolved_primitive_events,
+            executed_receipt.resolved_budget_sha256,
+            executed_receipt.binding_revision,
+            executed_receipt.binding_sha256,
+        )
+        if observed != expected or (
+            executed_receipt.binding_sha256 != binding.binding_sha256
+            or executed_receipt.binding_revision != binding.binding_revision
+        ):
+            raise RuntimeProbeError("executed receipt does not match compiled segment/binding")
+        if executed_receipt.executed_receipt_sha256 in self._recorded_executed_receipts:
+            raise RuntimeProbeError("executed segment receipt replay detected")
+        self._recorded_executed_receipts[executed_receipt.executed_receipt_sha256] = (
+            compiled_segment,
+            reconstructed,
+        )
 
     def issue_refresh_probe(
         self,
@@ -230,7 +360,7 @@ class RuntimeEvidenceLedger:
         probe: RuntimeProbe,
         *,
         completed_step: int,
-        executed_segment_sha256: str,
+        executed_segment: Any,
         action_started_monotonic_ns: int,
         action_completed_monotonic_ns: int,
         probe_started_monotonic_ns: int,
@@ -238,6 +368,28 @@ class RuntimeEvidenceLedger:
     ) -> RuntimeProbe:
         if probe.reset_cycle_evidence is not None or probe.refresh_evidence is not None:
             raise RuntimeProbeError("cannot refresh with attributed/stale probe evidence")
+        from .program import ExecutedSegmentReceipt, validate_executed_segment_receipt
+
+        if not isinstance(executed_segment, ExecutedSegmentReceipt):
+            raise RuntimeProbeError("Chrome refresh requires ExecutedSegmentReceipt")
+        try:
+            validate_executed_segment_receipt(executed_segment)
+        except ValueError as exc:
+            raise RuntimeProbeError(str(exc)) from exc
+        recorded = self._recorded_executed_receipts.get(
+            executed_segment.executed_receipt_sha256
+        )
+        if recorded is None or recorded[1] != executed_segment:
+            raise RuntimeProbeError("Chrome refresh receipt was not ledger-recorded")
+        if (
+            completed_step != 2
+            or executed_segment.semantic_step_index != 2
+            or executed_segment.task_id != task.task_id
+            or executed_segment.fixture_sha256 != task.fixture_sha256
+            or executed_segment.binding_sha256 != binding.binding_sha256
+            or executed_segment.binding_revision != binding.binding_revision
+        ):
+            raise RuntimeProbeError("Chrome refresh receipt step/task/binding mismatch")
         active = binding.initial_probe.reset_cycle_evidence
         if active is None:
             raise RuntimeProbeError("binding has no active reset generation")
@@ -269,7 +421,7 @@ class RuntimeEvidenceLedger:
             "reset_generation_id": active.generation_id,
             "completed_step": completed_step,
             "prior_binding_sha256": binding.binding_sha256,
-            "executed_segment_sha256": executed_segment_sha256,
+            "executed_segment_sha256": executed_segment.executed_receipt_sha256,
             "action_started_monotonic_ns": action_started_monotonic_ns,
             "action_completed_monotonic_ns": action_completed_monotonic_ns,
             "probe_started_monotonic_ns": probe_started_monotonic_ns,
@@ -300,8 +452,20 @@ class RuntimeEvidenceLedger:
         probe: RuntimeProbe,
         *,
         completed_step: int,
-        executed_segment_sha256: str,
+        executed_segment: Any,
     ) -> None:
+        from .program import ExecutedSegmentReceipt, validate_executed_segment_receipt
+
+        if not isinstance(executed_segment, ExecutedSegmentReceipt):
+            raise RuntimeProbeError("Chrome refresh requires ExecutedSegmentReceipt")
+        try:
+            validate_executed_segment_receipt(executed_segment)
+        except ValueError as exc:
+            raise RuntimeProbeError(str(exc)) from exc
+        if self._recorded_executed_receipts.get(
+            executed_segment.executed_receipt_sha256
+        ) is None:
+            raise RuntimeProbeError("Chrome refresh receipt was not ledger-recorded")
         evidence = probe.refresh_evidence
         if evidence is None:
             raise RuntimeProbeError("post-step probe has no refresh evidence")
@@ -319,7 +483,7 @@ class RuntimeEvidenceLedger:
             raise RuntimeProbeError("refresh evidence uses a stale binding")
         if evidence.completed_step != completed_step or completed_step != 2:
             raise RuntimeProbeError("Chrome refresh must follow semantic step 2")
-        if evidence.executed_segment_sha256 != executed_segment_sha256:
+        if evidence.executed_segment_sha256 != executed_segment.executed_receipt_sha256:
             raise RuntimeProbeError("refresh is not tied to the executed scroll receipt")
         if evidence.probe_sha256 != _probe_sha256(probe):
             raise RuntimeProbeError("refreshed probe content was mutated")
@@ -383,7 +547,15 @@ class ValidatedRuntimeBinding:
                     "reset_id": probe.reset_cycle_evidence.reset_id,
                     "generation_id": probe.reset_cycle_evidence.generation_id,
                     "sequence": probe.reset_cycle_evidence.sequence,
+                    "provider_reset_sequence": probe.reset_cycle_evidence.provider_reset_sequence,
+                    "provider_session_id": probe.reset_cycle_evidence.provider_session_id,
+                    "prior_provider_generation_id": probe.reset_cycle_evidence.prior_provider_generation_id,
+                    "provider_reset_receipt_sha256": probe.reset_cycle_evidence.provider_reset_receipt_sha256,
+                    "provider_state_before_sha256": probe.reset_cycle_evidence.provider_state_before_sha256,
+                    "provider_state_after_sha256": probe.reset_cycle_evidence.provider_state_after_sha256,
+                    "provider_path_sha256": probe.reset_cycle_evidence.provider_path_sha256,
                     "reset_started_monotonic_ns": probe.reset_cycle_evidence.reset_started_monotonic_ns,
+                    "provider_reset_completed_monotonic_ns": probe.reset_cycle_evidence.provider_reset_completed_monotonic_ns,
                     "probe_completed_monotonic_ns": probe.reset_cycle_evidence.probe_completed_monotonic_ns,
                     "captured_wall_time_ns": probe.reset_cycle_evidence.captured_wall_time_ns,
                     "vm_snapshot_id": probe.reset_cycle_evidence.vm_snapshot_id,
@@ -441,6 +613,10 @@ class ValidatedRuntimeBinding:
         for first, second in zip(reset_rows, reset_rows[1:]):
             if second.sequence != first.sequence + 1 or (
                 second.reset_started_monotonic_ns <= first.probe_completed_monotonic_ns
+            ) or second.provider_reset_sequence != first.provider_reset_sequence + 1 or (
+                second.prior_provider_generation_id != first.generation_id
+            ) or second.provider_session_id != first.provider_session_id or (
+                second.provider_path_sha256 != first.provider_path_sha256
             ):
                 raise RuntimeProbeError(f"{task.task_id}: reset evidence ordering drift")
         for following in self.reset_probes[:-1]:
@@ -715,7 +891,7 @@ def refresh_binding_after_step(
     *,
     completed_step: int,
     probe: RuntimeProbe,
-    executed_segment_sha256: str,
+    executed_segment: Any,
     ledger: RuntimeEvidenceLedger,
 ) -> ValidatedRuntimeBinding:
     binding.probe_for_step(task, min(completed_step, 2))
@@ -725,7 +901,7 @@ def refresh_binding_after_step(
         binding,
         probe,
         completed_step=completed_step,
-        executed_segment_sha256=executed_segment_sha256,
+        executed_segment=executed_segment,
     )
     refreshed = {**binding.refreshed_after_steps, completed_step: probe}
     transition_sha = probe.refresh_evidence.evidence_sha256
