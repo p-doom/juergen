@@ -76,6 +76,70 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def load_json_array(path: Path) -> list[dict[str, Any]]:
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AuditError(f"cannot read JSON array {path}: {exc}") from exc
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise AuditError(f"expected JSON object array in {path}")
+    return value
+
+
+def canonical_sha256(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+COMPACT_JSONB_TELEMETRY_FLOATS = {
+    "age_s",
+    "created_at",
+    "oldest_starting_age_s",
+    "updated_at",
+}
+
+
+def registry_result_matches(
+    registered: Any,
+    manifest: Any,
+    *,
+    compact: bool = False,
+    key: str | None = None,
+) -> bool:
+    """Compare a PG JSONB result with its source manifest.
+
+    PostgreSQL/serde JSONB round-trips can change the final decimal place of
+    compact runtime-pool timestamps and ages.  Permit only sub-microsecond
+    changes to that closed telemetry-key allowlist; all scientific fields,
+    hashes, structure, and non-compact manifests remain exact.
+    """
+    if type(registered) is not type(manifest):
+        return False
+    if isinstance(manifest, dict):
+        return registered.keys() == manifest.keys() and all(
+            registry_result_matches(
+                registered[item],
+                value,
+                compact=compact,
+                key=item,
+            )
+            for item, value in manifest.items()
+        )
+    if isinstance(manifest, list):
+        return len(registered) == len(manifest) and all(
+            registry_result_matches(left, right, compact=compact)
+            for left, right in zip(registered, manifest, strict=True)
+        )
+    if (
+        compact
+        and key in COMPACT_JSONB_TELEMETRY_FLOATS
+        and isinstance(manifest, float)
+    ):
+        return abs(registered - manifest) <= 1e-6
+    return registered == manifest
+
+
 def require_hash(path: Path, expected: Any, label: str) -> None:
     if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise AuditError(f"{label} has no valid SHA-256 seal")
@@ -164,7 +228,11 @@ def seal_artifact(
     manifest = load_json(manifest_path)
     if manifest.get("status") != "complete" or manifest.get("valid") is False:
         raise AuditError(f"{artifact.name}: manifest is not complete and valid")
-    if metadata.get("result") != manifest:
+    if not registry_result_matches(
+        metadata.get("result"),
+        manifest,
+        compact=manifest.get("artifact_type") == "compact_scale_ablation_closed_loop_eval",
+    ):
         raise AuditError(f"{artifact.name}: registry result and manifest differ")
     recipe = metadata.get("producer_recipe")
     if not isinstance(recipe, str) or not recipe:
@@ -201,6 +269,8 @@ def seal_artifact(
         artifact_type = str(manifest.get("artifact_type", ""))
         if marker == "typing_eval_manifest.json" or "typing" in artifact_type:
             adapter = "typing"
+        elif artifact_type == "compact_scale_ablation_closed_loop_eval":
+            adapter = "compact_closed_loop"
         elif "closed_loop" in artifact_type:
             adapter = "closed_loop_mouse"
         elif "phaseb" in artifact_type:
@@ -235,6 +305,54 @@ def seal_artifact(
         rows = load_jsonl(files["rows"])
         if len(rows) != manifest.get("n_examples"):
             raise AuditError(f"{artifact.name}: n_examples does not match rows")
+    elif adapter == "compact_closed_loop":
+        if manifest.get("artifact_valid") is not True:
+            raise AuditError(f"{artifact.name}: compact artifact is not valid")
+        payload_sha256 = manifest.get("payload_sha256")
+        unsealed = dict(manifest)
+        unsealed.pop("payload_sha256", None)
+        if payload_sha256 != canonical_sha256(unsealed):
+            raise AuditError(f"{artifact.name}: compact manifest self-seal mismatch")
+        pairing_path = artifact / "pairing_contract.json"
+        require_hash(
+            pairing_path,
+            manifest.get("pairing_contract_file_sha256"),
+            "compact pairing contract",
+        )
+        rows = manifest.get("tasks")
+        if (
+            not isinstance(rows, list)
+            or any(not isinstance(row, dict) for row in rows)
+            or len(rows) != manifest.get("task_count_expected")
+            or len(rows) != manifest.get("task_count_completed")
+        ):
+            raise AuditError(f"{artifact.name}: compact task inventory mismatch")
+        actions: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            task_id = row.get("task_id")
+            if not isinstance(task_id, str) or task_id in actions:
+                raise AuditError(f"{artifact.name}: invalid compact task ID {task_id!r}")
+            for label in ("result", "actions", "trace"):
+                relative = row.get(label)
+                if not isinstance(relative, str) or Path(relative).is_absolute():
+                    raise AuditError(
+                        f"{artifact.name}: invalid compact {label} path for {task_id}"
+                    )
+                path = (artifact / relative).resolve()
+                try:
+                    path.relative_to(artifact.resolve())
+                except ValueError as exc:
+                    raise AuditError(
+                        f"{artifact.name}: compact {label} path escapes artifact"
+                    ) from exc
+                require_hash(path, row.get(f"{label}_sha256"), f"compact {label}")
+                if label == "actions":
+                    actions[task_id] = load_json_array(path)
+            if len(actions[task_id]) != row.get("steps"):
+                raise AuditError(
+                    f"{artifact.name}: compact action count mismatch for {task_id}"
+                )
+        files = {"pairing_contract": pairing_path, "actions": actions}
     else:
         files = {"rows": artifact / "rows.jsonl"}
         require_hash(files["rows"], manifest.get("rows_sha256"), "rows")
@@ -591,11 +709,84 @@ def normalize_closed_loop(sealed: dict[str, Any]) -> list[dict[str, Any]]:
     return traces
 
 
+def normalize_compact_closed_loop(sealed: dict[str, Any]) -> list[dict[str, Any]]:
+    manifest = sealed["manifest"]
+    arm = str(manifest.get("arm"))
+    training_seed = manifest.get("training_seed")
+    evaluation_seed = manifest.get("evaluation_seed")
+    actions_by_task = sealed["files"]["actions"]
+    traces: list[dict[str, Any]] = []
+    for row in sealed["rows"]:
+        task_id = str(row.get("task_id"))
+        steps = []
+        for index, action in enumerate(actions_by_task[task_id]):
+            steps.append(
+                {
+                    "index": index,
+                    "instruction": row.get("instruction"),
+                    "screenshot": None,
+                    "image_size": [1920, 1080],
+                    "raw_output": action.get("response", ""),
+                    "parsed_action": {
+                        "compact": action.get("parsed_action"),
+                        "pixels": action.get("pixel_action"),
+                        "ordered_plan": action.get("ordered_plan"),
+                    },
+                    "gold_action": None,
+                    "outcome": {
+                        "policy_valid": action.get("policy_valid"),
+                        "no_dispatch": action.get("no_dispatch"),
+                        "terminated": action.get("terminated"),
+                        "terminate_status": action.get("terminate_status"),
+                        "error_stage": action.get("error_stage"),
+                        "error": action.get("error"),
+                    },
+                    "metrics": {
+                        "parse_valid": action.get("parse_valid"),
+                        "range_valid": action.get("range_valid"),
+                        "dispatch_valid": action.get("dispatch_valid"),
+                        "policy_valid": action.get("policy_valid"),
+                        "no_dispatch": action.get("no_dispatch"),
+                    },
+                    "overlay": None,
+                }
+            )
+        trace = common_trace(sealed, f"{sealed['run_id']}:{task_id}")
+        trace.update(
+            {
+                "experiment": "compact_scale_ablation",
+                "model": f"{arm} · r256 · s300",
+                "modality": "mouse",
+                "arm": arm,
+                "checkpoint": "step-300",
+                "rank": 256,
+                "seed": f"train{training_seed}/eval{evaluation_seed}",
+                "grammar": "compact_deltatype_v2",
+                "scale": arm,
+                "prose": "optional-identical",
+                "typing_format": None,
+                "success": safe_bool(row.get("full_success")),
+                "parse_ok": row.get("parser_valid_steps") == row.get("steps"),
+                "format_ok": row.get("wrapper_text_steps") == 0,
+                "metrics": {
+                    "raw_reward": row.get("raw_reward"),
+                    "full_success": row.get("full_success"),
+                    "steps": row.get("steps"),
+                    "no_dispatch_steps": row.get("no_dispatch_steps"),
+                },
+                "steps": steps,
+            }
+        )
+        traces.append(trace)
+    return traces
+
+
 ADAPTERS = {
     "relative_mouse": normalize_relative,
     "phaseb_mouse": normalize_phaseb,
     "typing": normalize_typing,
     "closed_loop_mouse": normalize_closed_loop,
+    "compact_closed_loop": normalize_compact_closed_loop,
 }
 
 

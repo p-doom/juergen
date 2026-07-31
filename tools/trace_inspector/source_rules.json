@@ -2,6 +2,10 @@
   "schema_version": 1,
   "expected_user": "franz.srambical",
   "exclusions": [
+    {"glob": "compact_scale_ablation_normalized_train503_eval503_v1_run_019fb81ebea770b0b7e85d1fee595552", "reason": "infrastructure-invalid Chrome CDP readiness failure; no trusted manifest seal; replaced by an identical-seed retry"},
+    {"glob": "compact_scale_ablation_raw_train0_eval503_v1_run_019fb81f62c4747391af03bc370a0f37", "reason": "redundant labctl cache-follower auto-submission; authoritative sealed result is run_019fb81f3a8978e087e7139a28208fb2"},
+    {"glob": "compact_scale_ablation_raw_train503_eval101_v1_run_019fb81ffe0871619becc32404c77423", "reason": "redundant labctl cache-follower auto-submission; authoritative sealed result is run_019fb81f78c87681841cf8f9672bbf16"},
+    {"glob": "compact_scale_ablation_raw_train503_eval503_v1_run_019fb8202d1b7bf2b3c392dfd335f762", "reason": "redundant labctl cache-follower auto-submission; authoritative sealed result is run_019fb81fb6607462aae1870919c9d8f4"},
     {"glob": "relative_factorial_capacity_eval_relraw_act_r256_v1_run_019fb4fd77067512a7d4fdae7daaa507", "reason": "superseded pre-final attempt; no registered .meta seal"},
     {"glob": "relative_factorial_capacity_eval_relraw_act_r64_v1_run_019fb4ff442876f38831b6eae8c22e03", "reason": "superseded pre-final attempt; no registered .meta seal"},
     {"glob": "relative_factorial_capacity_eval_relraw_pre_r256_v1_run_019fb4fd871e7240b3b7caacc8e1ae69", "reason": "superseded pre-final attempt; no registered .meta seal"},

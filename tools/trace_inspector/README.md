@@ -40,7 +40,11 @@ python -m unittest discover -s tools/trace_inspector/tests -v
 
 `source_rules.json` pins the currently completed eval families and includes
 zero-minimum discovery rules for the compact-scale and typing-prose eval aliases.
-A refresh will include those later results once their artifacts expose one of the
-audited supported schemas; an unsupported or half-written match is a visible error.
+Compact-scale closed-loop manifests are audited through their self-seal, pairing
+contract, and per-task result/action/trace hashes. A refresh includes complete
+registered results; an unsupported or half-written match is a visible error.
+For compact results only, registry comparison tolerates sub-microsecond JSONB
+round-trip changes on an explicit runtime-pool timestamp/age key allowlist;
+scientific fields, hashes, and all other manifest values remain exact.
 Known superseded pre-final directories are listed as exact, reasoned exclusions in
 that file and surfaced in the generated index; they are never skipped implicitly.
