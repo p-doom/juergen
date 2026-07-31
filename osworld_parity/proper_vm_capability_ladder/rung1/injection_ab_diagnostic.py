@@ -723,6 +723,23 @@ def _audit_journal_record(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _json_values_exactly_equal(left: Any, right: Any) -> bool:
+    """Compare decoded JSON without Python's bool/int numeric coercion."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _json_values_exactly_equal(left[key], right[key])
+            for key in left
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _json_values_exactly_equal(left_item, right_item)
+            for left_item, right_item in zip(left, right, strict=True)
+        )
+    return left == right
+
+
 def _decode_sealed_journal(marker: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
     marker_sequence = marker.get("audit_sequence")
     journal_json = marker.get("sealed_journal_json")
@@ -821,7 +838,7 @@ def recover_sequence_sealed_audit_snapshot(
             )
         expected = journal[sequence - 1]
         observed = _audit_journal_record(events[0])
-        if observed != expected:
+        if not _json_values_exactly_equal(observed, expected):
             raise InjectionAbIntegrityError(
                 "browser audit host event disagrees with sealed journal",
                 evidence={

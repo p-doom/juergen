@@ -451,7 +451,14 @@ def test_sealed_browser_journal_recovers_one_or_multiple_dropped_beacons(
 
 @pytest.mark.parametrize(
     "mutation",
-    ["hash", "direct_event", "sequence", "reserved_field", "duplicate_key"],
+    [
+        "hash",
+        "direct_event",
+        "json_type",
+        "sequence",
+        "reserved_field",
+        "duplicate_key",
+    ],
 )
 def test_tampered_browser_journal_is_integrity_abort(mutation: str) -> None:
     snapshot, marker_sequence = _journal_recovery_case({2})
@@ -468,6 +475,14 @@ def test_tampered_browser_journal_is_integrity_abort(mutation: str) -> None:
         )
     elif mutation == "direct_event":
         journal[3]["client_x"] += 1
+        marker["sealed_journal_json"] = json.dumps(
+            journal, separators=(",", ":")
+        )
+        marker["sealed_journal_sha256"] = hashlib.sha256(
+            marker["sealed_journal_json"].encode()
+        ).hexdigest()
+    elif mutation == "json_type":
+        journal[3]["is_trusted"] = 1
         marker["sealed_journal_json"] = json.dumps(
             journal, separators=(",", ":")
         )
