@@ -11,6 +11,7 @@ from __future__ import annotations
 import glob
 import hashlib
 import json
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping
@@ -68,36 +69,58 @@ def _apply_delta(cursor: tuple[int, int], delta: tuple[int, int]) -> tuple[int, 
     )
 
 
+_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+
+
 def _parse_exact_move(raw: Any, *, allow_zero: bool = False) -> tuple[int, int]:
+    """Verify the first emitted ``move_rel`` while preserving the whole raw turn.
+
+    The rollout executor applies the first cursor-moving tool call.  A policy
+    may emit a coordinate-less click after that move in the same assistant
+    turn; the learner target must retain both calls byte-for-byte rather than
+    dropping the click or synthesizing a replacement action.
+    """
+
     if not isinstance(raw, str):
         raise ContractError("assistant output is not a string")
     stripped = raw.strip()
-    opening, closing = "<tool_call>", "</tool_call>"
-    if not stripped.startswith(opening) or not stripped.endswith(closing):
-        raise ContractError("assistant output is not one exact tool_call")
-    payload_text = stripped[len(opening) : -len(closing)].strip()
-    try:
-        payload = json.loads(payload_text)
-    except json.JSONDecodeError as exc:
-        raise ContractError(f"assistant tool_call JSON is invalid: {exc}") from exc
-    if not isinstance(payload, dict) or payload.get("name") != "computer_use":
-        raise ContractError("assistant tool_call name is not computer_use")
-    arguments = payload.get("arguments")
-    if not isinstance(arguments, dict) or arguments.get("action") != "move_rel":
-        raise ContractError("assistant action is not move_rel")
-    coordinate = arguments.get("coordinate")
-    if (
-        not isinstance(coordinate, list)
-        or len(coordinate) != 2
-        or any(isinstance(v, bool) or not isinstance(v, int) for v in coordinate)
-    ):
-        raise ContractError("move_rel coordinate must be exactly two integers")
-    delta = (coordinate[0], coordinate[1])
-    if any(value < -999 or value > 999 for value in delta):
+    matches = list(_TOOL_CALL_RE.finditer(stripped))
+    if not matches:
+        raise ContractError("assistant output contains no exact tool_call")
+    cursor = 0
+    first_move: tuple[int, int] | None = None
+    for match in matches:
+        if stripped[cursor : match.start()].strip():
+            raise ContractError("assistant output has text outside tool_call blocks")
+        cursor = match.end()
+        try:
+            payload = json.loads(match.group(1))
+        except json.JSONDecodeError as exc:
+            raise ContractError(f"assistant tool_call JSON is invalid: {exc}") from exc
+        if not isinstance(payload, dict) or payload.get("name") != "computer_use":
+            raise ContractError("assistant tool_call name is not computer_use")
+        arguments = payload.get("arguments")
+        if not isinstance(arguments, dict) or not isinstance(arguments.get("action"), str):
+            raise ContractError("assistant tool_call arguments are invalid")
+        if arguments["action"] != "move_rel" or first_move is not None:
+            continue
+        coordinate = arguments.get("coordinate")
+        if (
+            not isinstance(coordinate, list)
+            or len(coordinate) != 2
+            or any(isinstance(v, bool) or not isinstance(v, int) for v in coordinate)
+        ):
+            raise ContractError("move_rel coordinate must be exactly two integers")
+        first_move = (coordinate[0], coordinate[1])
+    if stripped[cursor:].strip():
+        raise ContractError("assistant output has text outside tool_call blocks")
+    if first_move is None:
+        raise ContractError("assistant output contains no move_rel action")
+    if any(value < -999 or value > 999 for value in first_move):
         raise ContractError("move_rel coordinate lies outside [-999,999]")
-    if delta == (0, 0) and not allow_zero:
+    if first_move == (0, 0) and not allow_zero:
         raise ContractError("zero-delta action is not learner-eligible")
-    return delta
+    return first_move
 
 
 def _normalized(cursor: tuple[int, int]) -> tuple[int, int]:

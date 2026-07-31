@@ -134,3 +134,33 @@ def test_pure_relative_mouse_builder_preserves_no_op_exactly(tmp_path):
         output / "_normalized/val/chat.jsonl"
     )
     assert [row["messages"][-1]["content"][0]["text"] for row in records].count(wait) == 2
+
+
+def test_pure_relative_mouse_builder_preserves_multi_tool_turn_exactly(tmp_path):
+    backgrounds = tmp_path / "backgrounds"
+    backgrounds.mkdir()
+    background = backgrounds / "train.png"
+    Image.new("RGB", (320, 180), "white").save(background)
+    train_id, val_id = _opposite_split_ids()
+    multi = _tool(50, 0) + "\n" + (
+        '<tool_call>\n{"name": "computer_use", "arguments": '
+        '{"action": "left_click"}}\n</tool_call>'
+    )
+    rollouts = tmp_path / "rollouts.jsonl"
+    rows = [
+        _row(train_id, str(background), assistant=multi),
+        _row(val_id, str(background), assistant=multi),
+    ]
+    rollouts.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    output = tmp_path / "dataset"
+    build_pure_relative_mouse_records(
+        rollout_glob=str(rollouts),
+        output_dir=output,
+        approved_background_root=backgrounds,
+        val_fraction=0.5,
+        split_salt="test",
+    )
+    records = read_jsonl(output / "_normalized/train/chat.jsonl") + read_jsonl(
+        output / "_normalized/val/chat.jsonl"
+    )
+    assert [row["messages"][-1]["content"][0]["text"] for row in records] == [multi, multi]
