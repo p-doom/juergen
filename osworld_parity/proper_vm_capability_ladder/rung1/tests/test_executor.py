@@ -16,6 +16,8 @@ from osworld_parity.proper_vm_capability_ladder.rung1.selfcheck import (
     _execute,
 )
 from osworld_parity.proper_vm_capability_ladder.rung1.transport import (
+    CLIPBOARD_OWNER_LIFETIME_MS,
+    CLIPBOARD_PASTE_DELAY_MS,
     ATOMIC_RESULT_PREFIX,
     HttpVmTransport,
     Operation,
@@ -312,10 +314,18 @@ def test_unicode_coalesced_type_is_one_shared_operation() -> None:
     assert native_transport.audit.typed_texts == raw_transport.audit.typed_texts == [text]
     assert _kinds(native_transport) == _kinds(raw_transport) == ["coalesced_type"]
     compiled = compile_unicode_coalesced_type(text)
-    assert "tkinter" in compiled
-    assert "clipboard_append" in compiled
+    # Newest (lineage B) GTK clipboard owner.
+    assert "gi.require_version('Gtk','3.0')" in compiled
+    assert "clipboard.set_text(value,-1)" in compiled
+    assert "clipboard.wait_for_text()!=value" in compiled
+    assert "pyautogui.hotkey('ctrl','a')" in compiled
+    assert "pyautogui.hotkey('ctrl','v')" in compiled
+    assert f"GLib.timeout_add({CLIPBOARD_PASTE_DELAY_MS},paste)" in compiled
+    assert f"GLib.timeout_add({CLIPBOARD_OWNER_LIFETIME_MS},Gtk.main_quit)" in compiled
+    # Both superseded backends must stay out of the compiled program.
     assert "pyperclip" not in compiled
-    assert "pyautogui.hotkey('ctrl', 'v')" in compiled
+    assert "tkinter" not in compiled
+    assert "clipboard_append" not in compiled
     assert "pyautogui.write" not in compiled
     atomic_program, _ = compile_atomic_guest_program(
         (Operation("coalesced_type", (text,)),),
@@ -323,6 +333,20 @@ def test_unicode_coalesced_type_is_one_shared_operation() -> None:
         initial_keys=set(),
     )
     assert compiled in atomic_program
+
+
+def test_coalesced_type_fails_loudly_when_the_clipboard_owner_expires() -> None:
+    """A clipboard owner that dies before pasting must not exit successfully.
+
+    The GTK compiler schedules the paste and the owner teardown as two
+    independent GLib timeouts.  If the paste callback never runs the guest
+    process would otherwise return rc=0 having typed nothing, which is exactly
+    the silent-success class this ladder exists to eliminate.
+    """
+    compiled = compile_unicode_coalesced_type("x")
+    assert "if not _r1a_pasted:" in compiled
+    assert "clipboard owner expired before the paste callback ran" in compiled
+    assert CLIPBOARD_PASTE_DELAY_MS < CLIPBOARD_OWNER_LIFETIME_MS
 
 
 def test_signed_scroll_state_is_preserved_by_both_adapters() -> None:

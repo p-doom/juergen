@@ -30,6 +30,13 @@ class InputAudit:
 
 BUTTON_MASKS = {"left": 1 << 8, "middle": 1 << 9, "right": 1 << 10}
 ALL_POINTER_BUTTON_MASK = sum(BUTTON_MASKS.values())
+
+# Coalesced-typing clipboard timings, named so that the CPU-contention
+# hypothesis for a lost paste is expressed in code rather than in magic
+# numbers.  The guest clipboard owner must outlive the paste by enough for the
+# target application to request the selection contents.
+CLIPBOARD_PASTE_DELAY_MS = 150
+CLIPBOARD_OWNER_LIFETIME_MS = 750
 ATOMIC_RESULT_PREFIX = "RUNG1A_ATOMIC_RESULT="
 
 
@@ -72,23 +79,48 @@ def compile_unicode_coalesced_type(text: str) -> str:
     This compiler is the sole production-semantics typing path used by both
     action adapters.  ``pyautogui.write`` is deliberately forbidden because it
     is not Unicode-safe on the pinned Ubuntu guest.
+
+    Clipboard-backend history on the pinned image, oldest to newest:
+
+    1. ``pyperclip`` imports but raises at runtime; the guest has no xclip,
+       xsel or wl-copy backend.
+    2. Tk owns the X11 selection but only while the interpreter pumps its event
+       loop, and Tk's own ``clipboard_clear`` collapsed the editor selection in
+       VS Code/LibreOffice.
+    3. GTK (this version) owns the selection from a real GLib main loop, proves
+       the round trip before pasting, and re-asserts select-all immediately
+       before its single paste because taking clipboard ownership drops the
+       target widget's selection on the pinned image.
+
+    Focus/type trajectories already emit their own Ctrl-A; the re-assertion
+    inside the clipboard owner is deliberately redundant with it so the paste
+    replaces rather than appends even when ownership stole the selection.
     """
     if not isinstance(text, str):
         raise TypeError("coalesced type text must be a string")
     encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
-    # The pinned guest has Tk/X11 but no xclip, xsel, or wl-copy.  Pyperclip
-    # therefore raises at runtime despite importing successfully.  Keep the
-    # X11 clipboard owner alive in this same guest process until the target has
-    # consumed Ctrl-V; this remains one Unicode-safe coalesced operation.
-    return (
-        "import base64, tkinter as _r1a_tk, time as _r1a_time; "
-        f"_r1a_text=base64.b64decode({encoded!r}).decode('utf-8'); "
-        "_r1a_clip=_r1a_tk.Tk(); _r1a_clip.withdraw(); "
-        "_r1a_clip.clipboard_clear(); _r1a_clip.clipboard_append(_r1a_text); "
-        "_r1a_clip.update(); pyautogui.hotkey('ctrl', 'v'); "
-        "[(_r1a_clip.update(),_r1a_time.sleep(0.05)) for _ in range(20)]; "
-        "_r1a_clip.destroy()"
-    )
+    program = f"""
+import base64,gi
+gi.require_version('Gtk','3.0')
+from gi.repository import Gtk,Gdk,GLib
+value=base64.b64decode({encoded!r}).decode('utf-8')
+clipboard=Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+clipboard.set_text(value,-1)
+if clipboard.wait_for_text()!=value:
+ raise RuntimeError('clipboard round-trip failed')
+_r1a_pasted=[]
+def paste():
+ pyautogui.hotkey('ctrl','a')
+ pyautogui.hotkey('ctrl','v')
+ _r1a_pasted.append(True)
+ return False
+GLib.timeout_add({CLIPBOARD_PASTE_DELAY_MS},paste)
+GLib.timeout_add({CLIPBOARD_OWNER_LIFETIME_MS},Gtk.main_quit)
+Gtk.main()
+if not _r1a_pasted:
+ raise RuntimeError('clipboard owner expired before the paste callback ran')
+""".strip()
+    return f"exec({program!r})"
 
 
 _KEYS = {
