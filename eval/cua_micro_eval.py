@@ -770,10 +770,19 @@ def validate_task_setup(
         [
             "bash",
             "-lc",
-            "set -e; command -v xdotool; command -v wmctrl; "
-            "python3 -c 'import tkinter; print(tkinter.TkVersion)'",
+            "printf 'xdotool=%s\\n' \"$(command -v xdotool || echo MISSING)\"; "
+            "printf 'wmctrl=%s\\n' \"$(command -v wmctrl || echo MISSING)\"; "
+            "printf 'tkinter=%s\\n' "
+            "\"$(python3 -c 'import tkinter; print(tkinter.TkVersion)' "
+            '2>/dev/null || echo MISSING)"',
         ]
     )
+    dependency_lines = str(dependencies.get("output", "")).strip().splitlines()
+    required_missing = [
+        line for line in dependency_lines if line in {"xdotool=MISSING", "tkinter=MISSING"}
+    ]
+    if required_missing:
+        raise RuntimeError(f"missing required guest dependencies: {required_missing}")
     setup_state = prepare_task(client, task)
     screen = client.screen_size()
     bbox = resolve_target_bbox(client, task, setup_state, screen)
@@ -863,7 +872,7 @@ def validate_task_setup(
         "verifier_after": after_state,
         "verifier_pass": verifier_ok,
         "movement": metrics,
-        "guest_dependencies": str(dependencies.get("output", "")).strip().splitlines(),
+        "guest_dependencies": dependency_lines,
     }
     (output_dir / "result.json").write_text(json.dumps(result, indent=2))
     return result
