@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "suite": "proper_vm_sameapp_semantic_curriculum_v1",
+  "materialization_scope": "train_and_development_only",
+  "official_osworld_reuse": false,
+  "held_inputs_present": false,
+  "primary_gate_capabilities": [
+    "click",
+    "signed_vertical_scroll",
+    "drag",
+    "coalesced_type",
+    "hotkey"
+  ],
+  "explicit_edge_cases": ["unicode", "file_drag", "ctrl_s"],
+  "explicitly_unsupported": [
+    "horizontal_scroll",
+    "timing_sensitive_double_click"
+  ],
+  "families": [
+    {
+      "family_id": "writer_replace_format_save_v1",
+      "app": "writer",
+      "semantic_step_range": [3, 3],
+      "split_commitments": {
+        "train": {"materialized": true, "task_count": 1},
+        "development": {"materialized": true, "task_count": 1},
+        "sealed_eval": {
+          "materialized": false,
+          "task_count_commitment": 8,
+          "seed_assignment": "future_external_sealer_only",
+          "inputs_present": false
+        }
+      }
+    },
+    {
+      "family_id": "calc_formula_confirm_save_v1",
+      "app": "calc",
+      "semantic_step_range": [4, 4],
+      "split_commitments": {
+        "train": {"materialized": true, "task_count": 1},
+        "development": {"materialized": true, "task_count": 1},
+        "sealed_eval": {
+          "materialized": false,
+          "task_count_commitment": 8,
+          "seed_assignment": "future_external_sealer_only",
+          "inputs_present": false
+        }
+      }
+    },
+    {
+      "family_id": "files_drag_rename_v1",
+      "app": "files",
+      "semantic_step_range": [3, 3],
+      "split_commitments": {
+        "train": {"materialized": true, "task_count": 1},
+        "development": {"materialized": true, "task_count": 1},
+        "sealed_eval": {
+          "materialized": false,
+          "task_count_commitment": 8,
+          "seed_assignment": "future_external_sealer_only",
+          "inputs_present": false
+        }
+      }
+    },
+    {
+      "family_id": "chrome_navigate_signed_scroll_toggle_v1",
+      "app": "chrome",
+      "semantic_step_range": [3, 3],
+      "split_commitments": {
+        "train": {"materialized": true, "task_count": 1},
+        "development": {"materialized": true, "task_count": 1},
+        "sealed_eval": {
+          "materialized": false,
+          "task_count_commitment": 8,
+          "seed_assignment": "future_external_sealer_only",
+          "inputs_present": false
+        }
+      }
+    },
+    {
+      "family_id": "vscode_unicode_replace_save_v1",
+      "app": "vscode",
+      "semantic_step_range": [3, 3],
+      "split_commitments": {
+        "train": {"materialized": true, "task_count": 1},
+        "development": {"materialized": true, "task_count": 1},
+        "sealed_eval": {
+          "materialized": false,
+          "task_count_commitment": 8,
+          "seed_assignment": "future_external_sealer_only",
+          "inputs_present": false
+        }
+      }
+    }
+  ],
+  "registry_payload_sha256": "948bbc3c32ba921e1b99ec993ed40d8250e6c7838ef65d77b12f5583d0c975f8"
+}

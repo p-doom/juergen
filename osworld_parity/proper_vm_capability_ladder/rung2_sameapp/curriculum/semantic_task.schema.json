@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "proper_vm_sameapp_semantic_task_v1",
+  "title": "Action-format-independent same-app semantic task",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "task_id", "family_id", "app", "split",
+    "parameter_seed", "instruction", "natural_multistep", "semantic_steps",
+    "semantic_step_count", "max_action_turns", "snapshot", "assets",
+    "params", "expected", "near_miss", "verifier", "initial_cursor",
+    "gold_cursor_history", "coverage", "exclusions",
+    "transport_requirements", "reset_contract", "fixture_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "family_id": {"type": "string", "minLength": 1},
+    "app": {"enum": ["writer", "calc", "files", "chrome", "vscode"]},
+    "split": {"enum": ["train", "development"]},
+    "parameter_seed": {"type": "integer"},
+    "instruction": {"type": "string", "minLength": 1},
+    "natural_multistep": {"const": true},
+    "semantic_steps": {
+      "type": "array", "minItems": 2, "maxItems": 4,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["step_id", "intent", "target_ref", "capabilities", "arguments"],
+        "properties": {
+          "step_id": {"type": "integer", "minimum": 1, "maximum": 4},
+          "intent": {"type": "string"},
+          "target_ref": {"type": "string"},
+          "capabilities": {
+            "type": "array",
+            "items": {"enum": ["click", "signed_vertical_scroll", "drag", "coalesced_type", "hotkey"]}
+          },
+          "arguments": {"type": "object"}
+        }
+      }
+    },
+    "semantic_step_count": {"type": "integer", "minimum": 2, "maximum": 4},
+    "max_action_turns": {"type": "integer", "minimum": 2},
+    "snapshot": {
+      "type": "object",
+      "required": ["id", "reset_strategy", "fresh_process_per_episode"],
+      "properties": {
+        "id": {"const": "osworld_ready"},
+        "reset_strategy": {"const": "restore_snapshot_then_seeded_setup"},
+        "fresh_process_per_episode": {"const": true}
+      }
+    },
+    "assets": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+    "params": {"type": "object"},
+    "expected": {"type": "object"},
+    "near_miss": {"type": "object"},
+    "verifier": {
+      "type": "object",
+      "required": ["kind", "module", "fresh_process", "policy_visible"],
+      "properties": {
+        "kind": {"type": "string"},
+        "module": {"type": "string"},
+        "fresh_process": {"const": true},
+        "policy_visible": {"const": false}
+      }
+    },
+    "initial_cursor": {"$ref": "#/$defs/point"},
+    "gold_cursor_history": {
+      "type": "array", "minItems": 2, "maxItems": 4,
+      "items": {
+        "type": "object",
+        "required": ["prefix_length", "step_id", "target_ref", "cursor_before", "cursor_after"],
+        "properties": {
+          "prefix_length": {"type": "integer", "minimum": 1, "maximum": 4},
+          "step_id": {"type": "integer", "minimum": 1, "maximum": 4},
+          "target_ref": {"type": "string"},
+          "cursor_before": {"$ref": "#/$defs/point"},
+          "cursor_after": {"$ref": "#/$defs/point"}
+        }
+      }
+    },
+    "coverage": {"type": "object"},
+    "exclusions": {
+      "const": ["horizontal_scroll", "timing_sensitive_double_click"]
+    },
+    "transport_requirements": {"type": "object"},
+    "reset_contract": {"type": "object"},
+    "fixture_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "point": {
+      "type": "array", "prefixItems": [{"type": "integer"}, {"type": "integer"}],
+      "minItems": 2, "maxItems": 2
+    }
+  }
+}

@@ -51,7 +51,13 @@ def initial_state(fixture: Fixture) -> dict[str, Any]:
             }
         )
     elif fixture.app == "chrome":
-        state.update({"section": "root", "scroll_y": 0, "setting_enabled": False})
+        state.update(
+            {
+                "section": "root",
+                "scroll_y": int(fixture.params.get("initial_scroll_y", 0)),
+                "setting_enabled": False,
+            }
+        )
     else:
         raise ValueError(f"unsupported fixture app: {fixture.app}")
     return state
@@ -90,10 +96,17 @@ def scripted_state(fixture: Fixture, *, near_miss: bool) -> dict[str, Any]:
         )
     elif fixture.app == "chrome":
         expected = fixture.near_miss if near_miss else fixture.expected
+        initial = int(fixture.params.get("initial_scroll_y", 0))
+        if fixture.params.get("scroll_direction", "down") == "up":
+            scroll_y = initial - int(fixture.params["minimum_scroll_delta"])
+        elif "minimum_scroll_delta" in fixture.params:
+            scroll_y = initial + int(fixture.params["minimum_scroll_delta"])
+        else:
+            scroll_y = int(fixture.params["minimum_scroll_y"])
         state.update(
             {
                 "section": expected["section"],
-                "scroll_y": int(fixture.params["minimum_scroll_y"]),
+                "scroll_y": scroll_y,
                 "setting_enabled": expected["setting_enabled"],
                 "saved": True,
             }
@@ -142,9 +155,20 @@ def evaluate_state(fixture: Fixture, state: dict[str, Any]) -> OracleResult:
                 and state.get("content_sha256") == content_sha256(str(fixture.params["content"]))
             )
         elif fixture.app == "chrome":
+            initial = int(fixture.params.get("initial_scroll_y", 0))
+            observed = int(state.get("scroll_y", -1))
+            if "minimum_scroll_delta" in fixture.params:
+                delta = int(fixture.params["minimum_scroll_delta"])
+                scroll_ok = (
+                    initial - observed >= delta
+                    if fixture.params.get("scroll_direction", "down") == "up"
+                    else observed - initial >= delta
+                )
+            else:
+                scroll_ok = observed >= int(fixture.params["minimum_scroll_y"])
             solved = (
                 state.get("section") == fixture.expected["section"]
-                and int(state.get("scroll_y", -1)) >= int(fixture.params["minimum_scroll_y"])
+                and scroll_ok
                 and state.get("setting_enabled") is fixture.expected["setting_enabled"]
             )
         if solved:

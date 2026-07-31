@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "suite": "proper_vm_sameapp_semantic_curriculum_v1",
+  "split": "development",
+  "official_osworld_reuse": false,
+  "held_inputs_present": false,
+  "observation_contract": "instruction_and_screenshot_only",
+  "seeds": [
+    {"family_id": "writer_replace_format_save_v1", "parameter_seed": 61001},
+    {"family_id": "calc_formula_confirm_save_v1", "parameter_seed": 62001},
+    {"family_id": "files_drag_rename_v1", "parameter_seed": 63001},
+    {"family_id": "chrome_navigate_signed_scroll_toggle_v1", "parameter_seed": 64001},
+    {"family_id": "vscode_unicode_replace_save_v1", "parameter_seed": 65001}
+  ],
+  "manifest_payload_sha256": "d07985e5e9ae6612a6ca829e7c7d9f9dfcdb1152e04fc821d159362071aa2ddc"
+}
