@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import sys
-import time
 import traceback
 from collections import Counter
 from dataclasses import asdict
@@ -112,27 +111,42 @@ def _execute(
         }
     records: list[dict[str, Any]] = []
     action_cursors: list[dict[str, Any]] = []
+    atomic_states: list[dict[str, Any]] = []
     for index, action in enumerate(trajectory.actions):
         cursor_before = transport.cursor_position()
         result = executor.execute(action)  # type: ignore[arg-type]
         cursor_after = transport.cursor_position()
-        records.append(
-            {
-                "parse_status": result.parse_status,
-                "executor_dispatch_status": result.executor_dispatch_status,
-                "action_class": result.action_class,
-                "operations": _operations(result.operations),
-            }
-        )
+        record = {
+            "parse_status": result.parse_status,
+            "executor_dispatch_status": result.executor_dispatch_status,
+            "action_class": result.action_class,
+            "operations": _operations(result.operations),
+            "atomic_state": result.atomic_state,
+        }
+        records.append(record)
+        if result.atomic_state is not None:
+            atomic_states.append(result.atomic_state)
         action_cursors.append(
             {
                 "action_index": index,
                 "cursor_before": list(cursor_before),
                 "cursor_after": list(cursor_after),
+                "guest_cursor_after": (
+                    result.atomic_state["cursor"]
+                    if result.atomic_state is not None
+                    else None
+                ),
+                "guest_pointer_button_mask": (
+                    result.atomic_state["pointer_button_mask"]
+                    if result.atomic_state is not None
+                    else None
+                ),
             }
         )
-        time.sleep(0.2)
+        if result.executor_dispatch_status != "ok":
+            break
     final_cursor = transport.cursor_position()
+    atomic_errors = [state["error"] for state in atomic_states if not state["ok"]]
     journal = {
         "dispatch_status": "dispatched",
         "planned_observed_baseline": list(trajectory.observed_cursor_baseline),
@@ -142,12 +156,27 @@ def _execute(
         "final_cursor": list(final_cursor),
         "endpoint_matches": expected is None or final_cursor == expected,
         "actions": action_cursors,
+        "planned_action_count": len(trajectory.actions),
+        "completed_action_count": len(records),
+        "atomic_guest_process_count": sum(
+            int(state["guest_process_count"]) for state in atomic_states
+        ),
+        "atomic_action_states": atomic_states,
+        "final_pointer_button_mask": (
+            atomic_states[-1]["pointer_button_mask"] if atomic_states else None
+        ),
+        "atomic_errors": atomic_errors,
     }
     return records, journal
 
 
 def _assert_dispatch_journal(
-    fixture: Fixture, arm: Arm, stage: str, journal: dict[str, Any]
+    fixture: Fixture,
+    arm: Arm,
+    stage: str,
+    journal: dict[str, Any],
+    *,
+    required_pointer_button_mask: int = 0,
 ) -> None:
     if arm == "compact_raw_phaseb" and not journal["baseline_matches"]:
         raise SelfcheckError(
@@ -155,6 +184,26 @@ def _assert_dispatch_journal(
             f"planned={journal['planned_observed_baseline']} "
             f"dispatch={journal['dispatch_cursor_before']}"
         )
+    if arm == "compact_raw_phaseb":
+        if journal["atomic_guest_process_count"] != journal["completed_action_count"]:
+            raise SelfcheckError(
+                f"{fixture.id}: {stage} compact actions were not one-process atomic"
+            )
+        if journal["atomic_errors"]:
+            raise SelfcheckError(
+                f"{fixture.id}: {stage} atomic guest action failed: "
+                f"{journal['atomic_errors']}"
+            )
+        if journal["completed_action_count"] != journal["planned_action_count"]:
+            raise SelfcheckError(
+                f"{fixture.id}: {stage} compact trajectory stopped early"
+            )
+        if journal["final_pointer_button_mask"] != required_pointer_button_mask:
+            raise SelfcheckError(
+                f"{fixture.id}: {stage} pointer button mask was "
+                f"{journal['final_pointer_button_mask']}, expected "
+                f"{required_pointer_button_mask}"
+            )
     if not journal["endpoint_matches"]:
         raise SelfcheckError(
             f"{fixture.id}: {stage} cursor missed expected endpoint: "
@@ -183,6 +232,27 @@ def _held_button_action(arm: Arm) -> dict[str, Any] | str:
     if arm == "native_absolute_control":
         return {"action": "mouse_down", "button": "left"}
     return "0 0 0 ; +LMB"
+
+
+def _wait_for_trajectory_ack(
+    server: FixtureHttpServer,
+    fixture: Fixture,
+    *,
+    after_sequence: int,
+) -> dict[str, Any]:
+    state_kind = {
+        "click": "click",
+        "focus_type": "text",
+        "scroll": "scroll",
+        "drag": "drag",
+    }[fixture.template]
+    return server.store.wait_for_browser_quiescence(
+        fixture.id,
+        after_sequence=after_sequence,
+        required_kinds=(state_kind,),
+        require_pointer_up=fixture.template != "scroll",
+        expected_pointer_buttons=0,
+    )
 
 
 def _card_size(fixture: Fixture) -> tuple[int, int] | None:
@@ -412,6 +482,9 @@ def run_vm_selfcheck(
                     cursor=near_baseline,
                     near_miss=True,
                 )
+                near_after_sequence = int(
+                    server.store.snapshot(fixture.id)["last_client_sequence"]
+                )
                 (
                     cell["near_miss_dispatch"],
                     cell["near_miss_cursor_journal"],
@@ -420,7 +493,10 @@ def run_vm_selfcheck(
                 _assert_dispatch_journal(
                     fixture, arm, "near miss", cell["near_miss_cursor_journal"]
                 )
-                time.sleep(0.5)
+                cell["near_miss_browser_ack"] = _wait_for_trajectory_ack(
+                    server, fixture, after_sequence=near_after_sequence
+                )
+                checkpoint(cell, "near_miss_browser_acknowledged")
                 cell["near_miss_oracle"] = _assert_negative(
                     fixture, server.store.snapshot(fixture.id), "near miss"
                 )
@@ -435,14 +511,27 @@ def run_vm_selfcheck(
                     observed_cursor_baseline=leak_baseline,
                     expected_endpoint=leak_baseline,
                 )
+                leak_after_sequence = int(
+                    server.store.snapshot(fixture.id)["last_client_sequence"]
+                )
                 cell["leak_injection"], cell["leak_cursor_journal"] = _execute(
                     arm, transport, leak_trajectory
                 )
                 checkpoint(cell, "held_button_injected")
                 _assert_dispatch_journal(
-                    fixture, arm, "held-button injection", cell["leak_cursor_journal"]
+                    fixture,
+                    arm,
+                    "held-button injection",
+                    cell["leak_cursor_journal"],
+                    required_pointer_button_mask=1 << 8,
                 )
-                time.sleep(0.3)
+                cell["leak_browser_ack"] = server.store.wait_for_browser_quiescence(
+                    fixture.id,
+                    after_sequence=leak_after_sequence,
+                    require_pointer_down=True,
+                    expected_pointer_buttons=1,
+                )
+                checkpoint(cell, "held_button_browser_acknowledged")
                 if server.store.snapshot(fixture.id)["last_pointer_buttons"] != 1:
                     raise SelfcheckError(f"{fixture.id}: held-button injection was not observed")
 
@@ -484,6 +573,9 @@ def run_vm_selfcheck(
                     arm=arm,
                     cursor=gold_baseline,
                 )
+                gold_after_sequence = int(
+                    server.store.snapshot(fixture.id)["last_client_sequence"]
+                )
                 cell["gold_dispatch"], cell["gold_cursor_journal"] = _execute(
                     arm, transport, gold
                 )
@@ -491,7 +583,10 @@ def run_vm_selfcheck(
                 _assert_dispatch_journal(
                     fixture, arm, "gold", cell["gold_cursor_journal"]
                 )
-                time.sleep(0.8)
+                cell["gold_browser_ack"] = _wait_for_trajectory_ack(
+                    server, fixture, after_sequence=gold_after_sequence
+                )
+                checkpoint(cell, "gold_browser_acknowledged")
                 final_state = server.store.snapshot(fixture.id)
                 cell["gold_state_before_oracle"] = final_state
                 checkpoint(cell, "gold_state_recorded_before_oracle")

@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .transport import InputAudit, Operation, TransportError
+from .transport import AtomicExecutionResult, InputAudit, Operation
 
 
 class GuiTransport(Protocol):
@@ -19,6 +19,9 @@ class GuiTransport(Protocol):
     def key_chord(self, keys: list[str]) -> None: ...
     def coalesced_type(self, text: str) -> None: ...
     def wait(self, seconds: float) -> None: ...
+    def execute_compact_atomic(
+        self, operations: tuple[Operation, ...]
+    ) -> AtomicExecutionResult: ...
 
 
 @dataclass(frozen=True)
@@ -28,11 +31,7 @@ class DispatchResult:
     executor_dispatch_status: str
     action_class: str
     operations: tuple[Operation, ...]
-
-
-def _move_relative(transport: GuiTransport, dx: int, dy: int) -> None:
-    x, y = transport.cursor_position()
-    transport.move_to(x + int(dx), y + int(dy))
+    atomic_state: dict[str, Any] | None = None
 
 
 class NativeAbsoluteExecutor:
@@ -182,11 +181,11 @@ class CompactRawExecutor:
 
     def execute(self, text: str) -> DispatchResult:
         action = parse_compact_raw(text)
-        before = len(self.transport.audit.operations)
+        operations: list[Operation] = []
         if action.dx or action.dy:
-            _move_relative(self.transport, action.dx, action.dy)
+            operations.append(Operation("move_relative", (action.dx, action.dy)))
         if action.scroll:
-            self.transport.scroll(action.scroll)
+            operations.append(Operation("scroll", (action.scroll,)))
         classes: set[str] = set()
         if action.dx or action.dy:
             classes.add("mouse_move")
@@ -194,45 +193,29 @@ class CompactRawExecutor:
             classes.add("scroll")
         for element in action.elements:
             if element.kind == "type":
-                self.transport.coalesced_type(element.value)
+                operations.append(Operation("coalesced_type", (element.value,)))
                 classes.add("coalesced_type")
             elif element.value in {"LMB", "RMB", "MMB"}:
                 button = {"LMB": "left", "RMB": "right", "MMB": "middle"}[
                     element.value
                 ]
                 if element.pressed:
-                    self.transport.mouse_down(button)
+                    operations.append(Operation("mouse_down", (button,)))
                     classes.add("button_hold")
                 else:
-                    self.transport.mouse_up(button)
+                    operations.append(Operation("mouse_up", (button,)))
                     classes.add("button_release")
             else:
-                # A matched key chord is emitted as ordered presses followed by
-                # releases. Buffering the full chord keeps it one atomic guest call.
-                if not element.pressed:
-                    continue
-                releases = {
-                    item.value
-                    for item in action.elements
-                    if item.kind == "event" and item.pressed is False
-                }
-                if element.value not in releases:
-                    raise TransportError(f"raw key press lacks release: {element.value}")
-        key_presses = [
-            item.value
-            for item in action.elements
-            if item.kind == "event"
-            and item.pressed
-            and item.value not in {"LMB", "RMB", "MMB"}
-        ]
-        if key_presses:
-            self.transport.key_chord(key_presses)
-            classes.add("key_chord")
+                kind = "key_down" if element.pressed else "key_up"
+                operations.append(Operation(kind, (element.value,)))
+                classes.add("key_chord")
+        result = self.transport.execute_compact_atomic(tuple(operations))
         action_class = "+".join(sorted(classes)) if classes else "no_op"
         return DispatchResult(
             adapter=self.name,
             parse_status="ok",
-            executor_dispatch_status="ok",
+            executor_dispatch_status="ok" if result.ok else "error",
             action_class=action_class,
-            operations=tuple(self.transport.audit.operations[before:]),
+            operations=result.operations,
+            atomic_state=result.as_dict(),
         )

@@ -141,6 +141,90 @@ class FixtureStateStore:
                 self._condition.wait(timeout=min(0.2, deadline - time.monotonic()))
         raise TimeoutError(f"fixture {fixture_id} did not report ready in {timeout_s}s")
 
+    def wait_for_browser_quiescence(
+        self,
+        fixture_id: str,
+        *,
+        after_sequence: int,
+        required_kinds: tuple[str, ...] = (),
+        require_pointer_up: bool = False,
+        require_pointer_down: bool = False,
+        expected_pointer_buttons: int,
+        timeout_s: float = 3.0,
+        quiet_s: float = 0.1,
+    ) -> dict[str, Any]:
+        """Wait for causal acknowledgements and a stable client sequence."""
+        deadline = time.monotonic() + timeout_s
+        quiet_sequence: int | None = None
+        quiet_since: float | None = None
+        with self._condition:
+            generation = self._states[fixture_id]["generation"]
+            while True:
+                now = time.monotonic()
+                state = self._states[fixture_id]
+                if state["generation"] != generation:
+                    raise FixtureServerError(
+                        f"{fixture_id}: fixture reset while awaiting browser acknowledgement"
+                    )
+                relevant = [
+                    event
+                    for event in state["events"]
+                    if int(event.get("client_sequence", -1)) > after_sequence
+                ]
+                observed_kinds = {str(event.get("kind")) for event in relevant}
+                has_up = any(
+                    event.get("kind") == "pointer"
+                    and event.get("event") == "pointerup"
+                    and int(event.get("buttons", -1)) == 0
+                    for event in relevant
+                )
+                has_down = any(
+                    event.get("kind") == "pointer"
+                    and event.get("event") == "pointerdown"
+                    and int(event.get("buttons", -1)) != 0
+                    for event in relevant
+                )
+                acknowledged = (
+                    bool(relevant)
+                    and set(required_kinds).issubset(observed_kinds)
+                    and (not require_pointer_up or has_up)
+                    and (not require_pointer_down or has_down)
+                    and state["last_pointer_buttons"] == expected_pointer_buttons
+                )
+                current_sequence = int(state["last_client_sequence"])
+                if acknowledged:
+                    if quiet_sequence != current_sequence:
+                        quiet_sequence = current_sequence
+                        quiet_since = now
+                    elif quiet_since is not None and now - quiet_since >= quiet_s:
+                        return {
+                            "after_sequence": after_sequence,
+                            "last_sequence": current_sequence,
+                            "event_count": len(relevant),
+                            "observed_kinds": sorted(observed_kinds),
+                            "pointer_up_acknowledged": has_up,
+                            "pointer_down_acknowledged": has_down,
+                            "pointer_buttons": state["last_pointer_buttons"],
+                            "quiet_s": quiet_s,
+                            "events": copy.deepcopy(relevant),
+                        }
+                else:
+                    quiet_sequence = None
+                    quiet_since = None
+                if now >= deadline:
+                    raise TimeoutError(
+                        f"{fixture_id}: browser acknowledgement timeout after sequence "
+                        f"{after_sequence}; required_kinds={required_kinds}, "
+                        f"require_pointer_up={require_pointer_up}, "
+                        f"require_pointer_down={require_pointer_down}, "
+                        f"expected_pointer_buttons={expected_pointer_buttons}, "
+                        f"last_sequence={current_sequence}, events={relevant}"
+                    )
+                wait_for = min(0.05, deadline - now)
+                if acknowledged and quiet_since is not None:
+                    wait_for = min(wait_for, max(0.0, quiet_s - (now - quiet_since)))
+                self._condition.wait(timeout=max(0.001, wait_for))
+
 
 class FixtureHttpServer:
     def __init__(self, manifest: FixtureManifest, *, host: str = "0.0.0.0") -> None:

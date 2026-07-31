@@ -151,6 +151,122 @@ def test_pointer_diagnostics_are_ordered_and_record_exact_hit_coordinates() -> N
     assert "screen_x:" in html and "screen_y:" in html
 
 
+def test_browser_quiescence_requires_causal_release_and_click_ack() -> None:
+    manifest = load_manifest()
+    fixture = next(
+        item
+        for item in manifest.select(split="development")
+        if item.template == "click"
+    )
+    store = FixtureStateStore(manifest)
+    generation = store.reset(fixture)
+    store.apply_event(fixture, _ready_event(fixture, generation))
+    store.apply_event(
+        fixture,
+        {
+            "kind": "pointer",
+            "generation": generation,
+            "client_sequence": 1,
+            "event": "pointerdown",
+            "button": 0,
+            "buttons": 1,
+        },
+    )
+    store.apply_event(
+        fixture,
+        {
+            "kind": "pointer",
+            "generation": generation,
+            "client_sequence": 2,
+            "event": "pointerup",
+            "button": 0,
+            "buttons": 0,
+        },
+    )
+    store.apply_event(
+        fixture,
+        {
+            "kind": "click",
+            "generation": generation,
+            "client_sequence": 3,
+            "checked": True,
+            "decoy_checked": False,
+        },
+    )
+    ack = store.wait_for_browser_quiescence(
+        fixture.id,
+        after_sequence=0,
+        required_kinds=("click",),
+        require_pointer_up=True,
+        expected_pointer_buttons=0,
+        timeout_s=0.05,
+        quiet_s=0,
+    )
+    assert ack["last_sequence"] == 3
+    assert ack["pointer_up_acknowledged"] is True
+    assert ack["pointer_buttons"] == 0
+
+    # Already-consumed events are stale and cannot acknowledge another action.
+    with pytest.raises(TimeoutError, match="acknowledgement timeout"):
+        store.wait_for_browser_quiescence(
+            fixture.id,
+            after_sequence=3,
+            required_kinds=("click",),
+            require_pointer_up=True,
+            expected_pointer_buttons=0,
+            timeout_s=0.01,
+            quiet_s=0,
+        )
+
+
+@pytest.mark.parametrize("include_pointer_up", [False, True])
+def test_browser_quiescence_rejects_held_or_unacknowledged_click(
+    include_pointer_up: bool,
+) -> None:
+    manifest = load_manifest()
+    fixture = next(
+        item
+        for item in manifest.select(split="development")
+        if item.template == "click"
+    )
+    store = FixtureStateStore(manifest)
+    generation = store.reset(fixture)
+    store.apply_event(fixture, _ready_event(fixture, generation))
+    store.apply_event(
+        fixture,
+        {
+            "kind": "pointer",
+            "generation": generation,
+            "client_sequence": 1,
+            "event": "pointerdown",
+            "button": 0,
+            "buttons": 1,
+        },
+    )
+    if include_pointer_up:
+        store.apply_event(
+            fixture,
+            {
+                "kind": "pointer",
+                "generation": generation,
+                "client_sequence": 2,
+                "event": "pointerup",
+                "button": 0,
+                "buttons": 0,
+            },
+        )
+    with pytest.raises(TimeoutError, match="acknowledgement timeout"):
+        store.wait_for_browser_quiescence(
+            fixture.id,
+            after_sequence=0,
+            required_kinds=("click",),
+            require_pointer_up=True,
+            expected_pointer_buttons=0,
+            timeout_s=0.01,
+            quiet_s=0,
+        )
+
+
 def test_http_surface_exposes_fixture_but_no_oracle_state() -> None:
     manifest = load_manifest()
     fixture = manifest.select(split="development")[0]
