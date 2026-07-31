@@ -1,4 +1,4 @@
-"""Deterministic, instrumented desktop fixtures for one-turn CUA evals.
+"""Deterministic, instrumented desktop fixtures for CUA micro-evals.
 
 This script is copied into the OSWorld guest and launched there.  It uses only
 the Python standard library, renders a real desktop window, and atomically
@@ -64,9 +64,18 @@ class Fixture:
         frame = self._base("Text Editor", "Type the requested text into the focused document.")
         text = tk.Text(frame, font=("Monospace", 20), padx=20, pady=20, wrap="word")
         text.pack(fill="both", expand=True, pady=(20, 0))
-        text.bind("<KeyRelease>", lambda _event: self._set("text", text.get("1.0", "end-1c")))
+
+        def snapshot(_event: object | None = None) -> None:
+            ranges = text.tag_ranges("sel")
+            selected = text.get(ranges[0], ranges[1]) if ranges else ""
+            self.values.update({"text": text.get("1.0", "end-1c"), "selection": selected})
+            self.write_state()
+
+        text.bind("<KeyRelease>", snapshot)
+        text.bind("<ButtonRelease>", snapshot)
         self.widgets["editor"] = text
         self.values["text"] = ""
+        self.values["selection"] = ""
         self.root.after(350, text.focus_force)
 
     def build_terminal(self) -> None:
@@ -100,8 +109,16 @@ class Fixture:
         )
         entry.pack(side="left", fill="x", expand=True)
         value.trace_add("write", lambda *_: self._set("command", value.get()))
+
+        def submit(_event: object) -> str:
+            self.values["submitted"] = value.get()
+            self.write_state()
+            return "break"
+
+        entry.bind("<Return>", submit)
         self.widgets["terminal_input"] = entry
         self.values["command"] = ""
+        self.values["submitted"] = ""
         self.root.after(350, entry.focus_force)
 
     def build_calculator(self) -> None:
@@ -125,9 +142,36 @@ class Fixture:
             ("0", ".", "=", "/"),
         )
 
+        expression = ""
+
+        def update(value: str, *, submitted: bool = False) -> None:
+            nonlocal expression
+            expression = value
+            display.set(value or "0")
+            self.values.update({"display": display.get(), "expression": expression})
+            if submitted:
+                self.values["submitted"] = display.get()
+            self.write_state()
+
         def press(label: str) -> None:
-            display.set(label)
-            self._set("display", label)
+            if label.isdigit():
+                update(expression + label)
+            elif label == "+":
+                update(expression + "+")
+            elif label == "=" and expression == "73+19":
+                update("92", submitted=True)
+
+        def keypress(event: tk.Event) -> str | None:
+            if event.char.isdigit():
+                press(event.char)
+                return "break"
+            if event.char == "+":
+                press("+")
+                return "break"
+            if event.keysym in {"Return", "KP_Enter"}:
+                press("=")
+                return "break"
+            return None
 
         for row, values in enumerate(labels):
             grid.rowconfigure(row, weight=1)
@@ -150,7 +194,9 @@ class Fixture:
                     ".": "decimal",
                 }.get(label, f"digit_{label}")
                 self.widgets[key] = button
-        self.values["display"] = "0"
+        self.values.update({"display": "0", "expression": "", "submitted": ""})
+        self.root.bind_all("<KeyPress>", keypress)
+        self.root.after(350, self.root.focus_force)
 
     def build_files(self) -> None:
         frame = self._base("Files", "Select the requested folder from the current directory.")

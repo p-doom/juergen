@@ -124,6 +124,36 @@ uv run python osworld_score.py --base_output_dir=... \
     --test_split_path=$OSWORLD_ROOT/evaluation_examples/test_all.json
 ```
 
+### CUA micro-evals
+
+`cua_micro_eval.py` runs the default `cua_micro_tasks.json` suite from a fresh
+snapshot VM for every attempt. The suite mixes atomic tasks with short stateful
+trajectories in Files, Text Editor, Terminal, Calculator, LibreOffice, and
+Chrome. A trajectory keeps the evolving screenshot/action conversation in one
+VM, accepts exactly one strict action per model turn, verifies every intermediate
+application state, and stops at the first failed step.
+
+```bash
+# Exercise setup and every verifier with known-correct synthetic actions; no GPU.
+uv run --project . python cua_micro_eval.py --validate_setups_only \
+    --output_dir=/tmp/cua_micro_validate
+
+# Native Qwen3-VL baseline, four independent attempts per task.
+uv run --project . python cua_micro_eval.py \
+    --model_path=/path/to/Qwen3-VL-8B-Instruct --attempts=4 \
+    --system_prompt_id=qwen3vl_native_cua_v1 \
+    --action_format=qwen3vl_native_cua_v1 \
+    --sampling_mode=instruct --output_dir=/tmp/cua_micro_qwen
+```
+
+Task success is exact end-to-end success. `pass_at_4` means at least one of the
+first four attempts succeeded; `all_4_success` separately detects tasks that an
+off-the-shelf model solved four times out of four. Multi-turn partial credit is
+the verified prefix fraction, with scheduled-turn parse, expected-action,
+completion, and verifier rates reported alongside task-level metrics. Each turn
+persists its prompt, response, before/after frames, overlay, parsed action, and
+semantic verifier states.
+
 ## Output contract
 
 Every runner writes `result.json` to its output dir on success. Schema (consumed by pmanager):

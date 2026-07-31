@@ -1,13 +1,13 @@
-"""One-turn, state-verifiable CUA micro-evaluation suite.
+"""State-verifiable atomic and short-horizon CUA micro-evaluation suite.
 
-Each attempt starts from a fresh OSWorld VM snapshot, receives exactly one
-goal-conditioned screenshot, emits one strict action, and is scored
-automatically. The primary contract is ``computer_use_rel_step_v1``; an
-explicit native Qwen3-VL computer-use mode supports off-the-shelf baselines.
-Move tasks expose continuous distance progress and legal-step optimality;
-click/type/scroll tasks require both the correct parsed primitive and a
-semantic post-action state change. Four sampled attempts per task produce
-empirical pass@1 and pass@4 curves.
+Each attempt starts from a fresh OSWorld VM snapshot. Atomic tasks receive one
+goal-conditioned screenshot and emit one strict action. Multi-turn tasks keep
+the evolving visual conversation in one VM, require one strict action per
+turn, and semantically gate every step. The primary contract is
+``computer_use_rel_step_v1``; an explicit native Qwen3-VL computer-use mode
+supports off-the-shelf baselines. Four sampled attempts per task produce
+empirical pass@1 and pass@4 curves; multi-turn partial credit is the verified
+prefix fraction.
 """
 
 from __future__ import annotations
@@ -78,6 +78,15 @@ _PROMPT_FORMATS = {
 
 
 @dataclass(frozen=True)
+class Turn:
+    turn_id: str
+    target: dict[str, Any]
+    cursor: dict[str, Any]
+    expected: dict[str, Any]
+    verifier: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class Task:
     task_id: str
     category: str
@@ -87,6 +96,21 @@ class Task:
     cursor: dict[str, Any]
     expected: dict[str, Any]
     verifier: dict[str, Any]
+    turns: tuple[Turn, ...] = ()
+
+
+def task_turns(task: Task) -> tuple[Turn, ...]:
+    if task.turns:
+        return task.turns
+    return (
+        Turn(
+            turn_id="action",
+            target=task.target,
+            cursor=task.cursor,
+            expected=task.expected,
+            verifier=task.verifier,
+        ),
+    )
 
 
 def load_suite(path: Path) -> tuple[dict[str, Any], list[Task]]:
@@ -98,34 +122,57 @@ def load_suite(path: Path) -> tuple[dict[str, Any], list[Task]]:
     tasks: list[Task] = []
     seen: set[str] = set()
     for index, item in enumerate(raw.get("tasks", [])):
-        required = {
-            "id",
-            "category",
-            "instruction",
-            "setup",
-            "target",
-            "cursor",
-            "expected",
-            "verifier",
-        }
+        common = {"id", "category", "instruction", "setup"}
+        atomic = {"target", "cursor", "expected", "verifier"}
+        is_multiturn = "turns" in item
+        required = common | ({"turns"} if is_multiturn else atomic)
+        allowed = required
         missing = required - set(item)
-        extra = set(item) - required
+        extra = set(item) - allowed
         if missing or extra:
             raise ValueError(f"task {index}: missing={sorted(missing)} extra={sorted(extra)}")
         task_id = item["id"]
         if not isinstance(task_id, str) or not task_id or task_id in seen:
             raise ValueError(f"task {index}: invalid/duplicate id {task_id!r}")
         seen.add(task_id)
+        turns: list[Turn] = []
+        if is_multiturn:
+            raw_turns = item["turns"]
+            if not isinstance(raw_turns, list) or len(raw_turns) < 2:
+                raise ValueError(f"task {index}: multi-turn task needs at least two turns")
+            turn_ids: set[str] = set()
+            for turn_index, raw_turn in enumerate(raw_turns):
+                turn_required = {"id", "target", "cursor", "expected", "verifier"}
+                if not isinstance(raw_turn, dict) or set(raw_turn) != turn_required:
+                    raise ValueError(
+                        f"task {index} turn {turn_index}: fields must be {sorted(turn_required)}"
+                    )
+                turn_id = raw_turn["id"]
+                if not isinstance(turn_id, str) or not turn_id or turn_id in turn_ids:
+                    raise ValueError(
+                        f"task {index} turn {turn_index}: invalid/duplicate id {turn_id!r}"
+                    )
+                turn_ids.add(turn_id)
+                turns.append(
+                    Turn(
+                        turn_id=turn_id,
+                        target=dict(raw_turn["target"]),
+                        cursor=dict(raw_turn["cursor"]),
+                        expected=dict(raw_turn["expected"]),
+                        verifier=dict(raw_turn["verifier"]),
+                    )
+                )
         tasks.append(
             Task(
                 task_id=task_id,
                 category=str(item["category"]),
                 instruction=str(item["instruction"]),
                 setup=dict(item["setup"]),
-                target=dict(item["target"]),
-                cursor=dict(item["cursor"]),
-                expected=dict(item["expected"]),
-                verifier=dict(item["verifier"]),
+                target=dict(item.get("target", {})),
+                cursor=dict(item.get("cursor", {})),
+                expected=dict(item.get("expected", {})),
+                verifier=dict(item.get("verifier", {})),
+                turns=tuple(turns),
             )
         )
     if not tasks:
@@ -628,6 +675,64 @@ time.sleep(30)
     return state
 
 
+def _launch_native_terminal_sequence(client: OSWorldClient, task: Task) -> dict[str, Any]:
+    chunks: list[str] = []
+    for turn in task_turns(task):
+        expected = turn.expected
+        if expected.get("kind") == "type":
+            chunks.append(str(expected["text"]))
+        elif expected.get("kind") == "key" and [
+            str(key).upper() for key in expected.get("keys", [])
+        ] in (["ENTER"], ["RETURN"]):
+            chunks.append("\n")
+        else:
+            raise ValueError("native terminal sequence supports exact type and Enter turns only")
+    total_bytes = len("".join(chunks).encode("utf-8"))
+    script_path = "/tmp/cua_native_terminal_sequence.py"
+    script = f"""import json, os, sys, termios, time
+from pathlib import Path
+state = Path({_NATIVE_TERMINAL_STATE_PATH!r})
+state.write_text(json.dumps({{'ready': True, 'value': ''}}))
+fd = sys.stdin.fileno()
+old = termios.tcgetattr(fd)
+new = termios.tcgetattr(fd)
+new[3] &= ~termios.ICANON
+new[6][termios.VMIN] = 1
+new[6][termios.VTIME] = 0
+data = bytearray()
+try:
+    termios.tcsetattr(fd, termios.TCSANOW, new)
+    while len(data) < {total_bytes}:
+        byte = os.read(fd, 1)
+        data.extend(byte)
+        value = data.decode('utf-8', errors='replace')
+        state.write_text(json.dumps({{'ready': True, 'value': value}}))
+        if byte == b'\\n':
+            print('next> ', end='', flush=True)
+finally:
+    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+time.sleep(30)
+"""
+    _upload_bytes(client, script_path, script.encode())
+    command = (
+        f"rm -f {_NATIVE_TERMINAL_STATE_PATH}; "
+        "nohup env DISPLAY=:0 gnome-terminal --title='CUA Terminal Sequence' -- "
+        f"python3 {script_path} >/tmp/cua_native_terminal_sequence.log 2>&1 &"
+    )
+    client.run_command(command, shell=True)
+    _wait_until(lambda: "CUA Terminal Sequence" in _active_title(client), timeout_s=20)
+    state = _wait_until(
+        lambda: (
+            value
+            if (value := _guest_json(client, _NATIVE_TERMINAL_STATE_PATH)).get("ready")
+            else None
+        ),
+        timeout_s=10,
+    )
+    time.sleep(0.5)
+    return state
+
+
 def prepare_task(client: OSWorldClient, task: Task) -> dict[str, Any]:
     kind = task.setup.get("kind")
     if kind == "desktop":
@@ -652,6 +757,8 @@ def prepare_task(client: OSWorldClient, task: Task) -> dict[str, Any]:
         return _launch_native_app(client, str(task.setup["app"]))
     if kind == "native_terminal_capture":
         return _launch_native_terminal_capture(client, str(task.expected["text"]))
+    if kind == "native_terminal_sequence":
+        return _launch_native_terminal_sequence(client, task)
     raise ValueError(f"unknown setup kind {kind!r}")
 
 
@@ -722,6 +829,13 @@ def read_verifier_state(  # noqa: PLR0911
             "print(r.clipboard_get()); r.destroy()"
         )
         return str(client.run_command(["python3", "-c", code]).get("output", "")).strip()
+    if kind == "clipboard_equals":
+        client.execute("pyautogui.hotkey('ctrl', 'c')")
+        code = (
+            "import tkinter as tk; r=tk.Tk(); r.withdraw(); r.update(); "
+            "\ntry: print(r.clipboard_get())\nexcept tk.TclError: print('')\nfinally: r.destroy()"
+        )
+        return str(client.run_command(["python3", "-c", code]).get("output", "")).rstrip("\n")
     if kind == "guest_command_regex":
         try:
             return str(client.run_command(str(verifier["command"]), shell=True).get("output", ""))
@@ -741,7 +855,12 @@ def verifier_passed(client: OSWorldClient, verifier: dict[str, Any]) -> tuple[bo
             return state if re.search(str(verifier["pattern"]), str(state), re.IGNORECASE) else None
         if kind == "fixture_equals":
             return {"matched": True, "value": state} if state == verifier.get("value") else None
-        if kind in {"guest_json_equals", "saved_file_equals", "calculator_clipboard_equals"}:
+        if kind in {
+            "guest_json_equals",
+            "saved_file_equals",
+            "calculator_clipboard_equals",
+            "clipboard_equals",
+        }:
             return {"matched": True, "value": state} if state == verifier.get("value") else None
         if kind == "guest_command_regex":
             return state if re.search(str(verifier["pattern"]), str(state), re.IGNORECASE) else None
@@ -784,6 +903,224 @@ def _draw_overlay(
     return overlay
 
 
+def run_multiturn_attempt(
+    *,
+    client: OSWorldClient,
+    task: Task,
+    output_dir: Path,
+    sglang_url: str,
+    api_key: str,
+    model: str,
+    system_prompt: str,
+    action_format: str,
+    sampling: SamplingParams,
+    seed: int,
+    model_resolution: tuple[int, int] | None,
+    save_frames: bool,
+    settle_s: float,
+) -> dict[str, Any]:
+    """Run one stateful trajectory, stopping at the first unverified turn."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    setup_state = prepare_task(client, task)
+    screen = client.screen_size()
+    turns = task_turns(task)
+    recent_frames: list[Image.Image] = []
+    recent_actions: list[str] = []
+    turn_results: list[dict[str, Any]] = []
+    conversation_turns: list[dict[str, Any]] = []
+    started = time.time()
+    instruction = (
+        f"GOAL: {task.instruction}" if action_format == _REL_STEP_FORMAT else task.instruction
+    )
+
+    for turn_index, turn in enumerate(turns):
+        turn_task = replace(
+            task,
+            target=turn.target,
+            cursor=turn.cursor,
+            expected=turn.expected,
+            verifier=turn.verifier,
+            turns=(),
+        )
+        bbox = resolve_target_bbox(client, turn_task, setup_state, screen)
+        start = resolve_cursor_start(turn.cursor, bbox, screen)
+        client.execute(f"pyautogui.moveTo({start[0]}, {start[1]})")
+        actual_start = client.cursor_position()
+        before_state = read_verifier_state(client, turn.verifier)
+        before = client.screenshot_settled(min_delay_s=0.2, stability_timeout_s=1.0)
+        frame_name = f"step_{turn_index:03d}.png"
+        if save_frames:
+            before.save(output_dir / frame_name)
+        model_frame = before
+        if model_resolution and model_resolution != before.size:
+            model_frame = before.resize(model_resolution, Image.Resampling.LANCZOS)
+        recent_frames.append(model_frame)
+
+        frame_labels = [f"step_{index:03d}.png" for index in range(len(recent_frames))]
+        messages = build_loggable_messages(
+            system_prompt=system_prompt,
+            instruction=instruction,
+            recent_actions=recent_actions,
+            frame_labels=frame_labels,
+            fresh_visual_context=False,
+        )
+        (output_dir / f"prompt_{turn_index + 1:03d}.json").write_text(
+            json.dumps(messages, indent=2)
+        )
+        turn_seed = seed + turn_index * 100_000
+        t0 = time.time()
+        response, finish_reason = _call_model(
+            sglang_url=sglang_url,
+            api_key=api_key,
+            model=model,
+            system_prompt=system_prompt,
+            instruction=instruction,
+            recent_frames=recent_frames,
+            recent_actions=recent_actions,
+            fresh_visual_context=False,
+            sampling=sampling,
+            seed=turn_seed,
+        )
+        parse_error: str | None = None
+        dispatch_error: str | None = None
+        parsed: OrderedAction | None = None
+        dispatched = False
+        if finish_reason == "length":
+            parse_error = "response truncated at max_tokens; nothing dispatched"
+        else:
+            try:
+                if action_format == _REL_STEP_FORMAT:
+                    parsed = parse_computer_use_rel_step_action(response)
+                elif action_format == _QWEN3VL_NATIVE_FORMAT:
+                    calls = parse_qwen3vl_computer_use_action(response)
+                    parsed = qwen3vl_native_to_ordered(calls, screen, actual_start)
+                else:
+                    raise ValueError(f"unknown action format {action_format!r}")
+            except (TypeError, ValueError) as error:
+                parse_error = str(error)
+
+        if parsed is not None:
+            try:
+                if any(primitive.kind == "terminate" for primitive in parsed.primitives):
+                    raise ValueError("terminate is not valid before a trajectory is complete")
+                dispatch_action = (
+                    denormalize_action(parsed, screen)
+                    if action_format == _REL_STEP_FORMAT
+                    else parsed
+                )
+                client.dispatch_ordered_action(dispatch_action)
+                dispatched = True
+            except (TypeError, ValueError, RuntimeError) as error:
+                dispatch_error = str(error)
+                client.release_all_inputs()
+
+        after = client.screenshot_settled(
+            min_delay_s=settle_s,
+            stability_timeout_s=1.5,
+            poll_s=0.15,
+        )
+        end = client.cursor_position()
+        verifier_ok, after_state = verifier_passed(client, turn.verifier)
+        expected_ok = action_matches_expected(parsed, turn.expected)
+        metrics = movement_metrics(actual_start, end, bbox, screen)
+        click_in_bbox = in_bbox(actual_start, bbox)
+        if turn.expected.get("kind") == "move":
+            success = bool(expected_ok and metrics["bbox_hit"])
+        else:
+            location_ok = click_in_bbox if turn.expected.get("kind") == "click" else True
+            success = bool(expected_ok and verifier_ok and location_ok)
+
+        if save_frames:
+            after.save(output_dir / f"turn_{turn_index + 1:03d}_after.png")
+            _draw_overlay(
+                before,
+                bbox,
+                actual_start,
+                end,
+                str(turn.target.get("label", turn.turn_id)),
+            ).save(output_dir / f"overlay_{turn_index + 1:03d}.png")
+        turn_result = {
+            "turn": turn_index + 1,
+            "turn_id": turn.turn_id,
+            "seed": turn_seed,
+            "target": {**turn.target, "bbox_px": list(bbox)},
+            "cursor_start": list(actual_start),
+            "cursor_end": list(end),
+            "response": response,
+            "finish_reason": finish_reason,
+            "parse_valid": parse_error is None,
+            "parse_error": parse_error,
+            "dispatch_error": dispatch_error,
+            "parsed_primitives": serialize_action(parsed),
+            "dispatched": dispatched,
+            "expected": turn.expected,
+            "expected_action_ok": expected_ok,
+            "click_in_bbox": click_in_bbox,
+            "verifier": turn.verifier,
+            "verifier_before": before_state,
+            "verifier_after": after_state,
+            "verifier_pass": verifier_ok,
+            "movement": metrics,
+            "success": success,
+            "elapsed_s": time.time() - t0,
+        }
+        turn_results.append(turn_result)
+        conversation_turns.append(
+            {
+                "turn": turn_index + 1,
+                "turn_id": turn.turn_id,
+                "messages": messages,
+                "response": response,
+                "finish_reason": finish_reason,
+                "seed": turn_seed,
+            }
+        )
+        recent_actions.append(response)
+        if not success:
+            break
+
+    verified_prefix = 0
+    for row in turn_results:
+        if not row["success"]:
+            break
+        verified_prefix += 1
+    completed = len(turn_results) == len(turns)
+    success = completed and verified_prefix == len(turns)
+    result = {
+        "schema_version": 1,
+        "task_id": task.task_id,
+        "category": task.category,
+        "instruction": task.instruction,
+        "seed": seed,
+        "screen_size": list(screen),
+        "model_resolution": list(model_resolution) if model_resolution else None,
+        "action_format": action_format,
+        "multi_turn": True,
+        "turns_total": len(turns),
+        "turns_attempted": len(turn_results),
+        "verified_prefix": verified_prefix,
+        "turn_completion_rate": len(turn_results) / len(turns),
+        "turn_parse_valid_rate": sum(bool(row["parse_valid"]) for row in turn_results) / len(turns),
+        "turn_expected_action_rate": sum(bool(row["expected_action_ok"]) for row in turn_results)
+        / len(turns),
+        "turn_verifier_rate": sum(bool(row["verifier_pass"]) for row in turn_results) / len(turns),
+        "turns": turn_results,
+        "parse_valid": completed and all(bool(row["parse_valid"]) for row in turn_results),
+        "expected_action_ok": completed
+        and all(bool(row["expected_action_ok"]) for row in turn_results),
+        "verifier_pass": completed and all(bool(row["verifier_pass"]) for row in turn_results),
+        "progress": verified_prefix / len(turns),
+        "success": success,
+        "stop_reason": None if success else f"trajectory stopped after turn {len(turn_results)}",
+        "elapsed_s": time.time() - started,
+    }
+    (output_dir / "conversation.json").write_text(
+        json.dumps({"instruction": instruction, "turns": conversation_turns}, indent=2)
+    )
+    (output_dir / "result.json").write_text(json.dumps(result, indent=2))
+    return result
+
+
 def run_attempt(
     *,
     client: OSWorldClient,
@@ -800,6 +1137,22 @@ def run_attempt(
     save_frames: bool,
     settle_s: float,
 ) -> dict[str, Any]:
+    if task.turns:
+        return run_multiturn_attempt(
+            client=client,
+            task=task,
+            output_dir=output_dir,
+            sglang_url=sglang_url,
+            api_key=api_key,
+            model=model,
+            system_prompt=system_prompt,
+            action_format=action_format,
+            sampling=sampling,
+            seed=seed,
+            model_resolution=model_resolution,
+            save_frames=save_frames,
+            settle_s=settle_s,
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
     setup_state = prepare_task(client, task)
     screen = client.screen_size()
@@ -939,6 +1292,145 @@ def run_attempt(
     return result
 
 
+def _synthetic_action(
+    expected: dict[str, Any],
+    *,
+    bbox: tuple[int, int, int, int],
+    start: tuple[int, int],
+) -> OrderedAction:
+    kind = expected["kind"]
+    if kind == "move":
+        center = _bbox_center(bbox)
+        primitive = OrderedPrimitive(
+            kind="move",
+            dx=center[0] - start[0],
+            dy=center[1] - start[1],
+        )
+    elif kind == "click":
+        primitive = OrderedPrimitive(
+            kind="click",
+            name=str(expected.get("button", "left")),
+            count=int(expected.get("count", 1)),
+        )
+    elif kind == "type":
+        primitive = OrderedPrimitive(kind="type", text=str(expected["text"]))
+    elif kind == "scroll":
+        primitive = OrderedPrimitive(
+            kind="scroll",
+            dx=0,
+            dy=-5 if expected.get("sign") == "down" else 5,
+        )
+    elif kind == "key":
+        primitive = OrderedPrimitive(
+            kind="key_combo",
+            keys=tuple(str(key) for key in expected.get("keys", [])),
+        )
+    else:
+        raise ValueError(f"unsupported synthetic expected action {expected!r}")
+    return OrderedAction(primitives=(primitive,), no_op=False)
+
+
+def validate_multiturn_task_setup(
+    *,
+    client: OSWorldClient,
+    task: Task,
+    output_dir: Path,
+    save_frames: bool,
+    settle_s: float,
+    dependency_lines: list[str],
+) -> dict[str, Any]:
+    """Exercise every turn with a known-correct action in one fresh VM."""
+    setup_state = prepare_task(client, task)
+    screen = client.screen_size()
+    results: list[dict[str, Any]] = []
+    for turn_index, turn in enumerate(task_turns(task)):
+        turn_task = replace(
+            task,
+            target=turn.target,
+            cursor=turn.cursor,
+            expected=turn.expected,
+            verifier=turn.verifier,
+            turns=(),
+        )
+        bbox = resolve_target_bbox(client, turn_task, setup_state, screen)
+        start = resolve_cursor_start(turn.cursor, bbox, screen)
+        client.execute(f"pyautogui.moveTo({start[0]}, {start[1]})")
+        actual_start = client.cursor_position()
+        before_state = read_verifier_state(client, turn.verifier)
+        before = client.screenshot_settled(min_delay_s=0.2, stability_timeout_s=1.0)
+        synthetic = _synthetic_action(turn.expected, bbox=bbox, start=actual_start)
+        client.dispatch_ordered_action(synthetic)
+        after = client.screenshot_settled(
+            min_delay_s=settle_s,
+            stability_timeout_s=1.5,
+            poll_s=0.15,
+        )
+        end = client.cursor_position()
+        verifier_ok, after_state = verifier_passed(client, turn.verifier)
+        metrics = movement_metrics(actual_start, end, bbox, screen)
+        location_ok = in_bbox(actual_start, bbox) if turn.expected["kind"] == "click" else True
+        movement_ok = (
+            bool(metrics["bbox_hit"] and metrics["legal_step_optimality"] == 1.0)
+            if turn.expected["kind"] == "move"
+            else True
+        )
+        success = bool(
+            action_matches_expected(synthetic, turn.expected)
+            and verifier_ok
+            and location_ok
+            and movement_ok
+        )
+        if save_frames:
+            before.save(output_dir / f"step_{turn_index:03d}.png")
+            after.save(output_dir / f"turn_{turn_index + 1:03d}_after.png")
+            _draw_overlay(
+                before,
+                bbox,
+                actual_start,
+                end,
+                str(turn.target.get("label", turn.turn_id)),
+            ).save(output_dir / f"overlay_{turn_index + 1:03d}.png")
+        results.append(
+            {
+                "turn": turn_index + 1,
+                "turn_id": turn.turn_id,
+                "success": success,
+                "target": {**turn.target, "bbox_px": list(bbox)},
+                "cursor_start": list(actual_start),
+                "cursor_end": list(end),
+                "synthetic_primitives": serialize_action(synthetic),
+                "expected_action_ok": action_matches_expected(synthetic, turn.expected),
+                "verifier_before": before_state,
+                "verifier_after": after_state,
+                "verifier_pass": verifier_ok,
+                "movement": metrics,
+            }
+        )
+        if not success:
+            break
+
+    turns_total = len(task_turns(task))
+    verified_prefix = sum(bool(row["success"]) for row in results)
+    success = len(results) == turns_total and verified_prefix == turns_total
+    result = {
+        "schema_version": 1,
+        "mode": "validate_setups_only",
+        "task_id": task.task_id,
+        "category": task.category,
+        "multi_turn": True,
+        "success": success,
+        "screen_size": list(screen),
+        "turns_total": turns_total,
+        "turns_attempted": len(results),
+        "verified_prefix": verified_prefix,
+        "progress": verified_prefix / turns_total,
+        "turns": results,
+        "guest_dependencies": dependency_lines,
+    }
+    (output_dir / "result.json").write_text(json.dumps(result, indent=2))
+    return result
+
+
 def validate_task_setup(
     *,
     client: OSWorldClient,
@@ -965,6 +1457,15 @@ def validate_task_setup(
     required_missing = [line for line in dependency_lines if line == "tkinter=MISSING"]
     if required_missing:
         raise RuntimeError(f"missing required guest dependencies: {required_missing}")
+    if task.turns:
+        return validate_multiturn_task_setup(
+            client=client,
+            task=task,
+            output_dir=output_dir,
+            save_frames=save_frames,
+            settle_s=settle_s,
+            dependency_lines=dependency_lines,
+        )
     setup_state = prepare_task(client, task)
     screen = client.screen_size()
     bbox = resolve_target_bbox(client, task, setup_state, screen)
@@ -1087,12 +1588,36 @@ def aggregate_results(tasks: list[Task], attempts: list[dict[str, Any]]) -> dict
         successes = [bool(row.get("success")) for row in rows]
         progress = [float(row.get("progress", 0.0)) for row in rows]
         first_four = successes[:4]
+        scheduled_turns = sum(int(row.get("turns_total", 1)) for row in rows)
+        attempted_turns = sum(int(row.get("turns_attempted", 1)) for row in rows)
+        valid_turns = sum(
+            sum(bool(turn.get("parse_valid")) for turn in row.get("turns", []))
+            if row.get("multi_turn")
+            else bool(row.get("parse_valid"))
+            for row in rows
+        )
+        expected_turns = sum(
+            sum(bool(turn.get("expected_action_ok")) for turn in row.get("turns", []))
+            if row.get("multi_turn")
+            else bool(row.get("expected_action_ok"))
+            for row in rows
+        )
+        verifier_turns = sum(
+            sum(bool(turn.get("verifier_pass")) for turn in row.get("turns", []))
+            if row.get("multi_turn")
+            else bool(row.get("verifier_pass"))
+            for row in rows
+        )
+        verified_turns = sum(
+            int(row.get("verified_prefix", bool(row.get("success")))) for row in rows
+        )
         per_task[task.task_id] = {
             "category": task.category,
             "n": len(rows),
             "successes": sum(successes),
             "pass_at_1": sum(successes) / len(successes) if successes else 0.0,
             "pass_at_4": bool(first_four) and any(first_four),
+            "all_4_success": len(first_four) == 4 and all(first_four),
             "mean_progress": sum(progress) / len(progress) if progress else 0.0,
             "best_of_4_progress": max(progress[:4], default=0.0),
             "parse_valid_rate": (
@@ -1103,6 +1628,13 @@ def aggregate_results(tasks: list[Task], attempts: list[dict[str, Any]]) -> dict
                 if rows
                 else 0.0
             ),
+            "turn_completion_rate": attempted_turns / scheduled_turns if scheduled_turns else 0.0,
+            "turn_parse_valid_rate": valid_turns / scheduled_turns if scheduled_turns else 0.0,
+            "turn_expected_action_rate": (
+                expected_turns / scheduled_turns if scheduled_turns else 0.0
+            ),
+            "turn_verifier_rate": verifier_turns / scheduled_turns if scheduled_turns else 0.0,
+            "verified_turn_rate": verified_turns / scheduled_turns if scheduled_turns else 0.0,
         }
 
     def summarize(task_ids: list[str]) -> dict[str, float]:
@@ -1111,18 +1643,30 @@ def aggregate_results(tasks: list[Task], attempts: list[dict[str, Any]]) -> dict
             return {
                 "pass_at_1": 0.0,
                 "pass_at_4": 0.0,
+                "all_4_success": 0.0,
                 "mean_progress": 0.0,
                 "best_of_4_progress": 0.0,
                 "parse_valid_rate": 0.0,
                 "expected_action_rate": 0.0,
+                "turn_completion_rate": 0.0,
+                "turn_parse_valid_rate": 0.0,
+                "turn_expected_action_rate": 0.0,
+                "turn_verifier_rate": 0.0,
+                "verified_turn_rate": 0.0,
             }
         keys = (
             "pass_at_1",
             "pass_at_4",
+            "all_4_success",
             "mean_progress",
             "best_of_4_progress",
             "parse_valid_rate",
             "expected_action_rate",
+            "turn_completion_rate",
+            "turn_parse_valid_rate",
+            "turn_expected_action_rate",
+            "turn_verifier_rate",
+            "verified_turn_rate",
         )
         return {key: sum(float(row[key]) for row in rows) / len(rows) for key in keys}
 

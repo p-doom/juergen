@@ -63,12 +63,16 @@ class SuiteContractTests(unittest.TestCase):
                 f"missing task family {fragment}",
             )
 
-    def test_all_tasks_expect_one_atomic_primitive(self) -> None:
+    def test_all_turns_expect_one_atomic_primitive(self) -> None:
         for task in self.tasks:
-            self.assertIn(task.expected["kind"], {"move", "click", "type", "scroll", "key"})
+            for turn in micro.task_turns(task):
+                self.assertIn(
+                    turn.expected["kind"],
+                    {"move", "click", "type", "scroll", "key"},
+                )
 
     def test_typing_checks_exact_action_and_exact_app_state(self) -> None:
-        typing = [task for task in self.tasks if task.expected["kind"] == "type"]
+        typing = [task for task in self.tasks if not task.turns and task.expected["kind"] == "type"]
         self.assertGreaterEqual(len(typing), 2)
         for task in typing:
             self.assertIn(task.verifier["kind"], {"guest_json_equals", "saved_file_equals"})
@@ -77,6 +81,17 @@ class SuiteContractTests(unittest.TestCase):
                 _tool({"action": "type", "text": task.expected["text"]})
             )
             self.assertTrue(micro.action_matches_expected(parsed, task.expected))
+
+    def test_multiturn_tasks_have_semantically_verified_steps(self) -> None:
+        tasks = [task for task in self.tasks if task.turns]
+        self.assertEqual(len(tasks), 4)
+        self.assertEqual(sum(len(task.turns) for task in tasks), 15)
+        for task in tasks:
+            self.assertGreaterEqual(len(task.turns), 3)
+            self.assertEqual(task.category, "multi_turn")
+            for turn in task.turns:
+                self.assertTrue(turn.turn_id)
+                self.assertIn("kind", turn.verifier)
 
     def test_native_suite_is_balanced_across_real_apps(self) -> None:
         raw, tasks = micro.load_suite(_SUITE)
@@ -239,6 +254,61 @@ class ActionAndAggregationTests(unittest.TestCase):
         self.assertTrue(row["pass_at_4"])
         self.assertEqual(row["best_of_4_progress"], 1.0)
         self.assertEqual(row["parse_valid_rate"], 0.75)
+
+    def test_multiturn_aggregation_scores_prefix_and_all_four(self) -> None:
+        turns = tuple(
+            micro.Turn(
+                turn_id=f"turn_{index}",
+                target={},
+                cursor={},
+                expected={},
+                verifier={},
+            )
+            for index in range(3)
+        )
+        task = micro.Task(
+            task_id="multi.test",
+            category="multi_turn",
+            instruction="test",
+            setup={},
+            target={},
+            cursor={},
+            expected={},
+            verifier={},
+            turns=turns,
+        )
+        attempts = [
+            {
+                "task_id": task.task_id,
+                "multi_turn": True,
+                "turns_total": 3,
+                "turns_attempted": attempted,
+                "verified_prefix": prefix,
+                "turns": [
+                    {
+                        "parse_valid": True,
+                        "expected_action_ok": True,
+                    }
+                    for _ in range(attempted)
+                ],
+                "success": success,
+                "progress": prefix / 3,
+                "parse_valid": success,
+                "expected_action_ok": success,
+            }
+            for attempted, prefix, success in (
+                (2, 1, False),
+                (3, 3, True),
+                (1, 0, False),
+                (3, 2, False),
+            )
+        ]
+        row = micro.aggregate_results([task], attempts)["per_task"][task.task_id]
+        self.assertTrue(row["pass_at_4"])
+        self.assertFalse(row["all_4_success"])
+        self.assertEqual(row["best_of_4_progress"], 1.0)
+        self.assertEqual(row["verified_turn_rate"], 0.5)
+        self.assertEqual(row["turn_completion_rate"], 0.75)
 
     @mock.patch("osworld_runtime.requests.post")
     def test_model_seed_is_forwarded_to_sglang(self, post: mock.Mock) -> None:

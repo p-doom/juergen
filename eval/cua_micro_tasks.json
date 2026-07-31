@@ -2,7 +2,7 @@
   "schema_version": 1,
   "suite": "cua_micro_tasks",
   "coordinate_grid": 1000,
-  "description": "Balanced one-turn native-app CUA micro-evals with semantic state verifiers.",
+  "description": "Balanced atomic and short-horizon CUA micro-evals with per-turn semantic state verifiers.",
   "tasks": [
     {
       "id": "click.desktop.files",
@@ -163,6 +163,143 @@
       "cursor": {"kind": "target_center"},
       "expected": {"kind": "scroll", "sign": "down"},
       "verifier": {"kind": "active_title_regex", "pattern": "PASS_SCROLL.*Chrome"}
+    },
+    {
+      "id": "multi.text_editor.replace_exact",
+      "category": "multi_turn",
+      "instruction": "In Text Editor, type exactly `draft: vector=17/29; tag=A_B`, then select all with Ctrl+A, then replace the selection by typing exactly `final: checksum=731; status=ready`. Perform exactly one of those actions per turn.",
+      "setup": {"kind": "native_app", "app": "text_editor"},
+      "turns": [
+        {
+          "id": "type_draft",
+          "target": {"kind": "fixed_norm", "bbox": [150, 150, 850, 850], "label": "Text Editor document"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "type", "text": "draft: vector=17/29; tag=A_B"},
+          "verifier": {"kind": "saved_file_equals", "path": "/tmp/cua_native_editor.txt", "value": "draft: vector=17/29; tag=A_B"}
+        },
+        {
+          "id": "select_all",
+          "target": {"kind": "fixed_norm", "bbox": [150, 150, 850, 850], "label": "Text Editor document"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "key", "keys": ["CTRL", "A"]},
+          "verifier": {"kind": "clipboard_equals", "value": "draft: vector=17/29; tag=A_B"}
+        },
+        {
+          "id": "type_replacement",
+          "target": {"kind": "fixed_norm", "bbox": [150, 150, 850, 850], "label": "selected Text Editor document"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "type", "text": "final: checksum=731; status=ready"},
+          "verifier": {"kind": "saved_file_equals", "path": "/tmp/cua_native_editor.txt", "value": "final: checksum=731; status=ready"}
+        }
+      ]
+    },
+    {
+      "id": "multi.terminal.compose_submit",
+      "category": "multi_turn",
+      "instruction": "In Terminal, type exactly `printf 'stage=%s' 731`, press Enter, then type exactly `echo $((17*23))`. Perform exactly one action per turn.",
+      "setup": {"kind": "native_terminal_sequence"},
+      "turns": [
+        {
+          "id": "type_first_command",
+          "target": {"kind": "fixed_norm", "bbox": [100, 150, 900, 850], "label": "Terminal input"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "type", "text": "printf 'stage=%s' 731"},
+          "verifier": {"kind": "guest_json_equals", "path": "/tmp/cua_native_terminal_state.json", "field": "value", "value": "printf 'stage=%s' 731"}
+        },
+        {
+          "id": "press_enter",
+          "target": {"kind": "fixed_norm", "bbox": [100, 150, 900, 850], "label": "Terminal input"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "key", "keys": ["ENTER"]},
+          "verifier": {"kind": "guest_json_equals", "path": "/tmp/cua_native_terminal_state.json", "field": "value", "value": "printf 'stage=%s' 731\n"}
+        },
+        {
+          "id": "type_second_command",
+          "target": {"kind": "fixed_norm", "bbox": [100, 150, 900, 850], "label": "Terminal input"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "type", "text": "echo $((17*23))"},
+          "verifier": {"kind": "guest_json_equals", "path": "/tmp/cua_native_terminal_state.json", "field": "value", "value": "printf 'stage=%s' 731\necho $((17*23))"}
+        }
+      ]
+    },
+    {
+      "id": "multi.calculator.73_plus_19",
+      "category": "multi_turn",
+      "instruction": "In Calculator, enter 73+19 using exactly one keyboard action per turn: 7, then 3, then Shift+= for plus, then 1, then 9, then Enter.",
+      "setup": {"kind": "fixture", "mode": "calculator"},
+      "turns": [
+        {
+          "id": "digit_7",
+          "target": {"kind": "fixed_norm", "bbox": [200, 150, 800, 850], "label": "Calculator"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "key", "keys": ["7"]},
+          "verifier": {"kind": "fixture_equals", "field": "expression", "value": "7"}
+        },
+        {
+          "id": "digit_3",
+          "target": {"kind": "fixed_norm", "bbox": [200, 150, 800, 850], "label": "Calculator"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "key", "keys": ["3"]},
+          "verifier": {"kind": "fixture_equals", "field": "expression", "value": "73"}
+        },
+        {
+          "id": "plus",
+          "target": {"kind": "fixed_norm", "bbox": [200, 150, 800, 850], "label": "Calculator"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "key", "keys": ["SHIFT", "="]},
+          "verifier": {"kind": "fixture_equals", "field": "expression", "value": "73+"}
+        },
+        {
+          "id": "digit_1",
+          "target": {"kind": "fixed_norm", "bbox": [200, 150, 800, 850], "label": "Calculator"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "key", "keys": ["1"]},
+          "verifier": {"kind": "fixture_equals", "field": "expression", "value": "73+1"}
+        },
+        {
+          "id": "digit_9",
+          "target": {"kind": "fixed_norm", "bbox": [200, 150, 800, 850], "label": "Calculator"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "key", "keys": ["9"]},
+          "verifier": {"kind": "fixture_equals", "field": "expression", "value": "73+19"}
+        },
+        {
+          "id": "submit",
+          "target": {"kind": "fixed_norm", "bbox": [200, 150, 800, 850], "label": "Calculator"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "key", "keys": ["ENTER"]},
+          "verifier": {"kind": "fixture_equals", "field": "submitted", "value": "92"}
+        }
+      ]
+    },
+    {
+      "id": "multi.files.reenter_eval_target",
+      "category": "multi_turn",
+      "instruction": "In Files, double-click the EvalTarget folder, return to its parent with Alt+Up, then double-click EvalTarget again. Perform exactly one action per turn.",
+      "setup": {"kind": "native_app", "app": "files"},
+      "turns": [
+        {
+          "id": "open_first_time",
+          "target": {"kind": "fixed_norm", "bbox": [110, 297, 368, 326], "label": "EvalTarget folder row"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "click", "button": "left", "count": 2},
+          "verifier": {"kind": "active_title_regex", "pattern": "EvalTarget"}
+        },
+        {
+          "id": "return_to_parent",
+          "target": {"kind": "fixed_norm", "bbox": [100, 100, 900, 900], "label": "Files window"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "key", "keys": ["ALT", "UP"]},
+          "verifier": {"kind": "active_title_regex", "pattern": "cua_native_files"}
+        },
+        {
+          "id": "open_second_time",
+          "target": {"kind": "fixed_norm", "bbox": [110, 297, 368, 326], "label": "EvalTarget folder row"},
+          "cursor": {"kind": "target_center"},
+          "expected": {"kind": "click", "button": "left", "count": 2},
+          "verifier": {"kind": "active_title_regex", "pattern": "EvalTarget"}
+        }
+      ]
     }
   ]
 }
