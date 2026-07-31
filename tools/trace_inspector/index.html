@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Relative action trace inspector</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">Sealed evaluation evidence</p>
+      <h1>Relative action trace inspector</h1>
+      <p class="subtitle">Mouse movement, typing, and closed-loop behavior—one trace at a time.</p>
+    </div>
+    <div id="status" class="status">Loading index…</div>
+  </header>
+
+  <main>
+    <section id="error-panel" class="error-panel hidden" aria-live="assertive"></section>
+
+    <section id="cards" class="cards" aria-label="Overview statistics"></section>
+
+    <section class="panel filters-panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Slice the evidence</p>
+          <h2>Filters</h2>
+        </div>
+        <button id="reset-filters" class="quiet-button" type="button">Reset</button>
+      </div>
+      <div id="filters" class="filters">
+        <label>Experiment<select data-filter="experiment"><option value="">All</option></select></label>
+        <label>Model<select data-filter="model"><option value="">All</option></select></label>
+        <label>Mouse / typing<select data-filter="modality"><option value="">All</option></select></label>
+        <label>Grammar<select data-filter="grammar"><option value="">All</option></select></label>
+        <label>Scale<select data-filter="scale"><option value="">All</option></select></label>
+        <label>Prose<select data-filter="prose"><option value="">All</option></select></label>
+        <label>Coalesced / per-key<select data-filter="typing_format"><option value="">All</option></select></label>
+        <label>Rank<select data-filter="rank"><option value="">All</option></select></label>
+        <label>Seed<select data-filter="seed"><option value="">All</option></select></label>
+        <label>Outcome<select data-filter="outcome"><option value="">All</option><option value="success">Success</option><option value="failure">Failure</option></select></label>
+      </div>
+    </section>
+
+    <section class="panel overview-panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Run-level evidence</p>
+          <h2>Experiment overview</h2>
+        </div>
+        <p id="overview-count" class="muted"></p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Experiment / arm</th><th>Checkpoint</th><th>Rank</th><th>Seed</th><th>n</th>
+              <th>Task success</th><th>In-box / exact typing</th><th>Parse</th><th>Format</th>
+              <th>Endpoint error / span</th>
+            </tr>
+          </thead>
+          <tbody id="overview-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="inspector-grid">
+      <aside class="panel trace-browser">
+        <div class="section-heading compact">
+          <div><p class="eyebrow">Row-level evidence</p><h2>Traces</h2></div>
+          <p id="trace-count" class="muted"></p>
+        </div>
+        <div id="trace-list" class="trace-list"></div>
+      </aside>
+
+      <article id="trace-detail" class="panel trace-detail">
+        <div class="empty-state">Choose a trace to inspect the model’s action and outcome.</div>
+      </article>
+    </section>
+  </main>
+
+  <footer>
+    <span>No network dependencies. Every indexed row is checked against its sealed manifest.</span>
+    <span id="generated-at"></span>
+  </footer>
+  <script src="app.js" defer></script>
+</body>
+</html>
