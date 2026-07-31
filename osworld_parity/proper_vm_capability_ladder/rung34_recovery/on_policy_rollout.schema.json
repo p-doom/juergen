@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:juergen:roadmap-3.4:on-policy-recovery-rollout:v1",
+  "title": "Controlled perturbation recovery rollout",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "source", "task_id", "task_sha256", "split", "arm",
+    "perturbation", "base_horizon", "recovery_horizon", "events",
+    "trainer_only_values_exported"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "source": {"enum": ["scripted_controlled_perturbation_recovery", "on_policy_controlled_perturbation_rollout"]},
+    "task_id": {"type": "string", "pattern": "^r34-(train|development)-"},
+    "task_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "split": {"enum": ["train", "development"]},
+    "arm": {"enum": ["native_absolute_control", "compact_raw_phaseb"]},
+    "perturbation": {"enum": ["wrong_focus", "opposite_scroll", "wrong_file_drag", "benign_wrong_click"]},
+    "base_horizon": {"type": "integer", "minimum": 1},
+    "recovery_horizon": {"type": "integer", "minimum": 3},
+    "trainer_only_values_exported": {"const": false},
+    "events": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sequence_index", "policy_step", "origin", "action", "executor_dispatch_status", "outcome_label", "screenshot_sha256"],
+        "properties": {
+          "sequence_index": {"type": "integer", "minimum": 0},
+          "policy_step": {"type": ["integer", "null"], "minimum": 1},
+          "origin": {"enum": ["controller_injection", "on_policy", "scripted_teacher"]},
+          "action": {"oneOf": [{"type": "object"}, {"type": "string"}]},
+          "executor_dispatch_status": {"enum": ["ok", "error"]},
+          "outcome_label": {"enum": ["injected_perturbation", "natural_ineffective_action", "executor_failure", "effective_recovery_action", "scripted_recovery_action"]},
+          "screenshot_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  }
+}

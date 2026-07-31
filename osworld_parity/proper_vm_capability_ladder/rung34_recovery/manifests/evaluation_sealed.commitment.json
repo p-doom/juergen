@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "suite": "roadmap_3_4_controlled_recovery",
+  "split": "evaluation_sealed",
+  "namespace": "r34-sealed-",
+  "content_policy": "opaque_commitment_only_no_task_rows",
+  "task_count": 12,
+  "content_sha256": "8b96cf679d9b0c4991749ab54ebad9bd50d7cad857b92f31c354c9570baccf97",
+  "content_location": "external_sealed_artifact_not_present_in_repository",
+  "manifest_payload_sha256": "2a1f7a51f1a6ced3d4639fb0c937b88d30fdea3c001d56853b04d849eeddd864"
+}

@@ -1,0 +1,50 @@
+name = "proper_vm_rung34_recovery_vm_replay_cpu_kvm_v1"
+repo = "juergen_rung34_recovery"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+cd "$SOURCE"
+[[ -r /dev/kvm && -w /dev/kvm ]] || { echo "FATAL /dev/kvm unavailable" >&2; exit 2; }
+[[ -z "${CUDA_VISIBLE_DEVICES:-}" ]] || { echo "FATAL GPU allocation is forbidden" >&2; exit 2; }
+python3 -m osworld_parity.proper_vm_capability_ladder.rung34_recovery.vm_replay "$@"
+''', "--"]
+
+[resources]
+gpus = 0
+cpus = 4
+mem = "24GB"
+time = "04:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001,hai005"]
+
+[inputs.vm]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_vm"
+
+[inputs.provider]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_fastreset"
+
+[inputs.earlier_gates]
+type = "external"
+path = "/REPLACE/WITH/PROMOTED/ROADMAP_3_1_TO_3_3_GATE_ARTIFACT"
+
+[outputs.result]
+type = "dataset"
+marker = "result.json"
+alias = "proper_vm_rung34_recovery_vm_replay_{run.id}"
+
+[args]
+output = "{outputs.result.path}"
+gate_evidence = "{inputs.earlier_gates.path}/result.json"
+qcow = "{inputs.vm.path}/Ubuntu.qcow2"
+qemu = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin/qemu-system-x86_64-wrapped"
+provider = "{inputs.provider.path}/qemu_fast_reset.py"
+
+[env]
+PYTHONUNBUFFERED = "1"
+CUDA_VISIBLE_DEVICES = ""
+OSWORLD_VM_SMP = "4"
+OSWORLD_VM_MEM = "8G"

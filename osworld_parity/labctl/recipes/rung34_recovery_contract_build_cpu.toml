@@ -1,0 +1,32 @@
+name = "proper_vm_rung34_recovery_contract_build_cpu_v1"
+repo = "juergen_rung34_recovery"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+cd "$SOURCE"
+[[ -z "${CUDA_VISIBLE_DEVICES:-}" ]] || { echo "FATAL GPU allocation is forbidden" >&2; exit 2; }
+python3 -m pytest -q osworld_parity/proper_vm_capability_ladder/rung34_recovery/tests
+python3 -m osworld_parity.proper_vm_capability_ladder.rung34_recovery.build "$@"
+''', "--"]
+
+[resources]
+gpus = 0
+cpus = 2
+mem = "8GB"
+time = "00:20:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1"]
+
+[outputs.result]
+type = "dataset"
+marker = "result.json"
+alias = "proper_vm_rung34_recovery_contract_{run.id}"
+
+[args]
+output = "{outputs.result.path}"
+
+[env]
+PYTHONUNBUFFERED = "1"
+CUDA_VISIBLE_DEVICES = ""

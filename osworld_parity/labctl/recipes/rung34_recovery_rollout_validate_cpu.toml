@@ -1,0 +1,36 @@
+name = "proper_vm_rung34_recovery_rollout_validate_cpu_v1"
+repo = "juergen_rung34_recovery"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+cd "$SOURCE"
+[[ -z "${CUDA_VISIBLE_DEVICES:-}" ]] || { echo "FATAL GPU allocation is forbidden" >&2; exit 2; }
+python3 -m osworld_parity.proper_vm_capability_ladder.rung34_recovery.validate_dataset "$@"
+''', "--"]
+
+[resources]
+gpus = 0
+cpus = 2
+mem = "8GB"
+time = "00:20:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1"]
+
+[inputs.rollouts]
+type = "external"
+path = "/REPLACE/WITH/RECOVERY_ROLLOUT_DATASET"
+
+[outputs.result]
+type = "report"
+marker = "result.json"
+alias = "proper_vm_rung34_recovery_rollout_validation_{run.id}"
+
+[args]
+input = "{inputs.rollouts.path}/rollouts.jsonl"
+output = "{outputs.result.path}"
+
+[env]
+PYTHONUNBUFFERED = "1"
+CUDA_VISIBLE_DEVICES = ""

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "suite": "roadmap_3_4_controlled_recovery",
+  "split": "train",
+  "namespace": "r34-train-",
+  "base_commit": "48a54e8585eb9d6abff31e2ba6ea857c946a7d3d",
+  "recovery_slack": 2,
+  "official_osworld_reuse": false,
+  "policy_observation_contract": "instruction_and_screenshot_only",
+  "oracle_visibility": "trainer_only",
+  "tasks": [
+    {"id": "r34-train-focus-4101", "template": "vscode_focus_type", "parameter_seed": 4101, "perturbation": "wrong_focus"},
+    {"id": "r34-train-focus-4102", "template": "vscode_focus_type", "parameter_seed": 4102, "perturbation": "wrong_focus"},
+    {"id": "r34-train-focus-4103", "template": "vscode_focus_type", "parameter_seed": 4103, "perturbation": "wrong_focus"},
+    {"id": "r34-train-focus-4104", "template": "vscode_focus_type", "parameter_seed": 4104, "perturbation": "wrong_focus"},
+    {"id": "r34-train-focus-4105", "template": "vscode_focus_type", "parameter_seed": 4105, "perturbation": "wrong_focus"},
+    {"id": "r34-train-focus-4106", "template": "vscode_focus_type", "parameter_seed": 4106, "perturbation": "wrong_focus"},
+    {"id": "r34-train-scroll-4201", "template": "local_document_scroll", "parameter_seed": 4201, "perturbation": "opposite_scroll"},
+    {"id": "r34-train-scroll-4202", "template": "local_document_scroll", "parameter_seed": 4202, "perturbation": "opposite_scroll"},
+    {"id": "r34-train-scroll-4203", "template": "local_document_scroll", "parameter_seed": 4203, "perturbation": "opposite_scroll"},
+    {"id": "r34-train-scroll-4204", "template": "local_document_scroll", "parameter_seed": 4204, "perturbation": "opposite_scroll"},
+    {"id": "r34-train-scroll-4205", "template": "local_document_scroll", "parameter_seed": 4205, "perturbation": "opposite_scroll"},
+    {"id": "r34-train-scroll-4206", "template": "local_document_scroll", "parameter_seed": 4206, "perturbation": "opposite_scroll"},
+    {"id": "r34-train-wrong-file-4301", "template": "files_drag", "parameter_seed": 4301, "perturbation": "wrong_file_drag"},
+    {"id": "r34-train-wrong-file-4302", "template": "files_drag", "parameter_seed": 4302, "perturbation": "wrong_file_drag"},
+    {"id": "r34-train-wrong-file-4303", "template": "files_drag", "parameter_seed": 4303, "perturbation": "wrong_file_drag"},
+    {"id": "r34-train-wrong-file-4304", "template": "files_drag", "parameter_seed": 4304, "perturbation": "wrong_file_drag"},
+    {"id": "r34-train-wrong-file-4305", "template": "files_drag", "parameter_seed": 4305, "perturbation": "wrong_file_drag"},
+    {"id": "r34-train-wrong-file-4306", "template": "files_drag", "parameter_seed": 4306, "perturbation": "wrong_file_drag"}
+  ],
+  "manifest_payload_sha256": "7fd496ef1884962a53f7fd7287765de77c3ffc50ace5fe84e9b31daade1ebb87"
+}
