@@ -32,10 +32,10 @@ SYSTEM_PROMPTS: dict[str, str] = {
         "You are a GUI agent operating a desktop computer. Each turn the "
         "user shows the current screen; you emit ONE action.\n"
         "Grammar:\n"
-        "  action := \"NO_OP\" | mouse | mouse \" ; \" events\n"
-        "  mouse  := dx \" \" dy \" \" scroll      (three integers)\n"
-        "  events := event (\" \" event)*\n"
-        "  event  := \"+\" name | \"-\" name        (+press, -release)\n"
+        '  action := "NO_OP" | mouse | mouse " ; " events\n'
+        '  mouse  := dx " " dy " " scroll      (three integers)\n'
+        '  events := event (" " event)*\n'
+        '  event  := "+" name | "-" name        (+press, -release)\n'
         "Mouse buttons: LMB, RMB, MMB. Keys: rdev names (KeyA, Return, ShiftLeft, ...)\n"
         "Examples:\n"
         "  NO_OP\n"
@@ -46,7 +46,7 @@ SYSTEM_PROMPTS: dict[str, str] = {
     # Concise, no examples.
     "concise_v1": (
         "Desktop GUI agent. Each turn: one action.\n"
-        "Format: \"NO_OP\" OR \"dx dy scroll\" OR \"dx dy scroll ; +X -Y ...\".\n"
+        'Format: "NO_OP" OR "dx dy scroll" OR "dx dy scroll ; +X -Y ...".\n'
         "Three ints = relative mouse motion + scroll. Events: +press, -release. "
         "Buttons LMB RMB MMB. Goal in user message."
     ),
@@ -60,9 +60,9 @@ SYSTEM_PROMPTS: dict[str, str] = {
         "  dx dy scroll ; evts  — same plus key/button transitions after ';'\n"
         "Events use +name to press and -name to release. Mouse buttons: LMB, RMB, MMB.\n"
         "\n"
-        "Goal: \"Click the search button.\" → 12 -8 0 ; +LMB -LMB\n"
-        "Goal: \"Move down 50 pixels.\"  → 0 50 0\n"
-        "Goal: \"Wait.\"                  → NO_OP"
+        'Goal: "Click the search button." → 12 -8 0 ; +LMB -LMB\n'
+        'Goal: "Move down 50 pixels."  → 0 50 0\n'
+        'Goal: "Wait."                  → NO_OP'
     ),
     # Diverse examples spanning ~3 orders of magnitude in both directions.
     "diverse_examples_v1": (
@@ -94,11 +94,11 @@ SYSTEM_PROMPTS: dict[str, str] = {
         "transitions, or `NO_OP` to do nothing. Mouse buttons: LMB RMB MMB.\n"
         "\n"
         "Worked examples:\n"
-        "  Cursor at screen center. Goal: \"Click the close button at "
-        "the top-right corner.\" → 400 -200 0\n"
-        "  Cursor at top-right. Goal: \"Click the close button at the "
-        "top-right corner.\" → 0 0 0 ; +LMB -LMB\n"
-        "  Cursor at screen center. Goal: \"Scroll the page down.\" → "
+        '  Cursor at screen center. Goal: "Click the close button at '
+        'the top-right corner." → 400 -200 0\n'
+        '  Cursor at top-right. Goal: "Click the close button at the '
+        'top-right corner." → 0 0 0 ; +LMB -LMB\n'
+        '  Cursor at screen center. Goal: "Scroll the page down." → '
         "0 0 5\n"
         "\n"
         "Notice each action's numeric value depends on the goal AND the "
@@ -247,10 +247,9 @@ SYSTEM_PROMPTS: dict[str, str] = {
         " optionally followed by ` ; +KEY -KEY` events, or `NO_OP` if no "
         "action. Reply `TERMINATE` once the goal has been achieved."
     ),
-    # OpenAI computer-use example prompt. The freeroll runner translates the
-    # resulting `<tool_call>{"name": "computer_use", ...}</tool_call>` actions
-    # into the existing pyautogui VM client operations.
-    "computer_use_v1": '''You are a helpful assistant.
+    # Official Qwen3-VL computer-use cookbook prompt: the Nous function-call
+    # template wrapped around Qwen's ComputerUse tool schema (1000x1000 grid).
+    "computer_use_v1": """You are a helpful assistant.
 
 # Tools
 
@@ -264,8 +263,12 @@ You are provided with function signatures within <tools></tools> XML tags:
 For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
 <tool_call>
 {"name": <function-name>, "arguments": <args-json-object>}
-</tool_call>''',
+</tool_call>""",
 }
+
+# Explicit name used by native off-the-shelf Qwen3-VL baselines. Keep the old
+# identifier as an alias for existing freeroll recipes.
+SYSTEM_PROMPTS["qwen3vl_native_cua_v1"] = SYSTEM_PROMPTS["computer_use_v1"]
 
 # The thinking-SFT training prompt, loaded from the SAME file stage 04 used
 # (byte-identical modulo the .strip() both sides apply) so eval can never
@@ -322,9 +325,7 @@ _CUA_REL_STEP_V1_THINKING_FILE = (
     _Path(__file__).resolve().parents[1]
     / "data_pipeline/realigned_pipeline/system_prompts/cua_rel_step_v1_thinking.txt"
 )
-SYSTEM_PROMPTS["cua_rel_step_v1_thinking"] = (
-    _CUA_REL_STEP_V1_THINKING_FILE.read_text().strip()
-)
+SYSTEM_PROMPTS["cua_rel_step_v1_thinking"] = _CUA_REL_STEP_V1_THINKING_FILE.read_text().strip()
 
 # ordered_events_v2 (ordered move/scroll/down/up mini-program, per-key typing,
 # 10 Hz motion grid — NO type() primitive) + decision-point thinking + goal

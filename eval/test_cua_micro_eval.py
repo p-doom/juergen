@@ -11,17 +11,23 @@ from unittest import mock
 from PIL import Image
 
 import cua_micro_eval as micro
-from action_parser import parse_computer_use_rel_step_action
+from action_parser import (
+    parse_computer_use_rel_step_action,
+    parse_qwen3vl_computer_use_action,
+)
 from osworld_runtime import _call_model
+from osworld_system_prompts import SYSTEM_PROMPTS
 from sampling import qwen_sampling
 
 _SUITE = Path(__file__).with_name("cua_micro_tasks_v1.json")
 
 
 def _tool(arguments: dict) -> str:
-    return "<tool_call>" + json.dumps(
-        {"name": "computer_use", "arguments": arguments}, separators=(",", ":")
-    ) + "</tool_call>"
+    return (
+        "<tool_call>"
+        + json.dumps({"name": "computer_use", "arguments": arguments}, separators=(",", ":"))
+        + "</tool_call>"
+    )
 
 
 class SuiteContractTests(unittest.TestCase):
@@ -124,26 +130,50 @@ class GeometryTests(unittest.TestCase):
 
 
 class ActionAndAggregationTests(unittest.TestCase):
+    def test_official_qwen3vl_native_prompt_contract_is_available(self) -> None:
+        prompt = SYSTEM_PROMPTS["qwen3vl_native_cua_v1"]
+        self.assertIn("You are a helpful assistant.", prompt)
+        self.assertIn('"name": "computer_use"', prompt)
+        self.assertIn("The screen's resolution is 1000x1000.", prompt)
+        self.assertIn("<tool_call>", prompt)
+
+    def test_qwen3vl_native_parser_accepts_thinking_and_absolute_move(self) -> None:
+        response = "<think>locate target</think>\n" + _tool(
+            {"action": "mouse_move", "coordinate": [750, 250]}
+        )
+        calls = parse_qwen3vl_computer_use_action(response)
+        parsed = micro.qwen3vl_native_to_ordered(calls, (1920, 1080), (960, 540))
+        primitive = parsed.primitives[0]
+        self.assertEqual(primitive.kind, "move")
+        self.assertEqual((primitive.dx, primitive.dy), (480, -270))
+
+    def test_qwen3vl_native_parser_rejects_prose_and_bad_coordinates(self) -> None:
+        with self.assertRaisesRegex(ValueError, "outside <tool_call>"):
+            parse_qwen3vl_computer_use_action("Action: move\n" + _tool({"action": "left_click"}))
+        with self.assertRaisesRegex(ValueError, "0..1000"):
+            parse_qwen3vl_computer_use_action(
+                _tool({"action": "mouse_move", "coordinate": [1001, 0]})
+            )
+
+    def test_qwen3vl_native_multiple_calls_are_parse_valid_but_not_atomic(self) -> None:
+        calls = parse_qwen3vl_computer_use_action(
+            _tool({"action": "mouse_move", "coordinate": [500, 500]})
+            + _tool({"action": "left_click"})
+        )
+        parsed = micro.qwen3vl_native_to_ordered(calls, (1000, 1000), (0, 0))
+        self.assertEqual(len(parsed.primitives), 2)
+        self.assertFalse(micro.action_matches_expected(parsed, {"kind": "click", "button": "left"}))
+
     def test_expected_action_is_strict_about_payload(self) -> None:
         click = parse_computer_use_rel_step_action(_tool({"action": "left_click"}))
         double = parse_computer_use_rel_step_action(_tool({"action": "double_click"}))
-        typed = parse_computer_use_rel_step_action(
-            _tool({"action": "type", "text": "rollout-ok"})
-        )
+        typed = parse_computer_use_rel_step_action(_tool({"action": "type", "text": "rollout-ok"}))
+        self.assertTrue(micro.action_matches_expected(click, {"kind": "click", "button": "left"}))
+        self.assertFalse(micro.action_matches_expected(double, {"kind": "click", "button": "left"}))
         self.assertTrue(
-            micro.action_matches_expected(click, {"kind": "click", "button": "left"})
+            micro.action_matches_expected(typed, {"kind": "type", "text": "rollout-ok"})
         )
-        self.assertFalse(
-            micro.action_matches_expected(double, {"kind": "click", "button": "left"})
-        )
-        self.assertTrue(
-            micro.action_matches_expected(
-                typed, {"kind": "type", "text": "rollout-ok"}
-            )
-        )
-        self.assertFalse(
-            micro.action_matches_expected(typed, {"kind": "type", "text": "other"})
-        )
+        self.assertFalse(micro.action_matches_expected(typed, {"kind": "type", "text": "other"}))
 
     def test_pass_at_four_and_best_progress(self) -> None:
         task = micro.Task(

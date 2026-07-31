@@ -34,7 +34,6 @@ import io
 import logging
 import re
 import time
-import urllib.parse
 from dataclasses import dataclass
 
 import requests
@@ -175,6 +174,7 @@ def _computer_use_key_to_pyautogui(name: str) -> str:
 @dataclass
 class StepResult:
     """One step's dispatch outcome — for trajectory logging."""
+
     cursor_before: tuple[int, int]
     cursor_after: tuple[int, int]
     intended_target: tuple[int, int]  # post-clip absolute
@@ -213,9 +213,7 @@ class OSWorldClient:
                 _LOGGER.info("waiting for VM /screenshot... %.0fs", elapsed)
                 last_log = elapsed
             time.sleep(poll_s)
-        raise TimeoutError(
-            f"VM agent at {self.base_url} not ready after {timeout_s}s"
-        )
+        raise TimeoutError(f"VM agent at {self.base_url} not ready after {timeout_s}s")
 
     # ------------------------------------------------------------- query
     def screenshot(self) -> Image.Image:
@@ -280,9 +278,7 @@ class OSWorldClient:
         "import pyautogui; import time; pyautogui.FAILSAFE = False; pyautogui.PAUSE = 0; "
     )
 
-    def run_command(
-        self, command: list[str] | str, *, shell: bool = False
-    ) -> dict:
+    def run_command(self, command: list[str] | str, *, shell: bool = False) -> dict:
         """Run a command in the VM and return the agent's structured result.
 
         Unlike :meth:`execute`, this is not limited to pyautogui expressions.
@@ -486,10 +482,7 @@ class OSWorldClient:
                     self.execute(cmd)
                     executed.append(cmd)
             elif p.kind == "click":
-                cmd = (
-                    f"pyautogui.click(clicks={p.count}, interval=0.05, "
-                    f"button={p.name!r})"
-                )
+                cmd = f"pyautogui.click(clicks={p.count}, interval=0.05, button={p.name!r})"
                 self.execute(cmd)
                 executed.append(cmd)
             elif p.kind in ("button_down", "button_up"):
@@ -517,9 +510,7 @@ class OSWorldClient:
                 # already waits for the screen before the next screenshot.
                 pass
             elif p.kind == "terminate":
-                raise ValueError(
-                    "terminate is a rollout stop condition, never dispatched"
-                )
+                raise ValueError("terminate is a rollout stop condition, never dispatched")
             else:
                 raise ValueError(f"unknown ordered primitive kind: {p.kind!r}")
 
@@ -538,9 +529,7 @@ class OSWorldClient:
     def dispatch_computer_use(self, arguments: dict) -> StepResult:
         """Apply one OpenAI computer-use style tool call to the VM."""
         if not isinstance(arguments, dict):
-            raise TypeError(
-                f"computer_use arguments must be dict, got {type(arguments)!r}"
-            )
+            raise TypeError(f"computer_use arguments must be dict, got {type(arguments)!r}")
 
         action = str(arguments.get("action", "")).strip().lower()
         cursor_before = self.cursor_position()
@@ -553,19 +542,15 @@ class OSWorldClient:
             raw = arguments.get("coordinate")
             if raw is None:
                 if required:
-                    raise ValueError(
-                        f"computer_use action {action!r} requires coordinate"
-                    )
+                    raise ValueError(f"computer_use action {action!r} requires coordinate")
                 return None
             if not isinstance(raw, (list, tuple)) or len(raw) != 2:
                 raise ValueError(f"coordinate must be [x, y], got {raw!r}")
             try:
-                x = int(round(float(raw[0])))
-                y = int(round(float(raw[1])))
+                x = round(float(raw[0]))
+                y = round(float(raw[1]))
             except (TypeError, ValueError) as e:
-                raise ValueError(
-                    f"coordinate values must be numeric, got {raw!r}"
-                ) from e
+                raise ValueError(f"coordinate values must be numeric, got {raw!r}") from e
             return max(0, min(sw - 1, x)), max(0, min(sh - 1, y))
 
         def move_to(pos: tuple[int, int]) -> None:
@@ -598,29 +583,21 @@ class OSWorldClient:
                 "triple_click": "left",
             }[action]
             clicks = 2 if action in {"double_click", "triple_click"} else 1
-            cmd = (
-                f"pyautogui.click(clicks={clicks}, interval=0.05, "
-                f"button={button!r})"
-            )
+            cmd = f"pyautogui.click(clicks={clicks}, interval=0.05, button={button!r})"
             self.execute(cmd)
             executed.append(cmd)
         elif action == "left_click_drag":
             pos = coord_from_args(required=True)
             assert pos is not None
             target = pos
-            cmd = (
-                f"pyautogui.dragTo({pos[0]}, {pos[1]}, duration=0.2, "
-                "button='left')"
-            )
+            cmd = f"pyautogui.dragTo({pos[0]}, {pos[1]}, duration=0.2, button='left')"
             self.execute(cmd)
             executed.append(cmd)
         elif action in {"scroll", "hscroll"}:
             try:
-                scroll = int(round(float(arguments.get("pixels", 0))))
+                scroll = round(float(arguments.get("pixels", 0)))
             except (TypeError, ValueError) as e:
-                raise ValueError(
-                    f"pixels must be numeric, got {arguments.get('pixels')!r}"
-                ) from e
+                raise ValueError(f"pixels must be numeric, got {arguments.get('pixels')!r}") from e
             if scroll:
                 cmd = f"pyautogui.scroll({scroll})"
                 self.execute(cmd)
@@ -650,9 +627,7 @@ class OSWorldClient:
             try:
                 wait_s = float(arguments.get("time", 1.0))
             except (TypeError, ValueError) as e:
-                raise ValueError(
-                    f"time must be numeric, got {arguments.get('time')!r}"
-                ) from e
+                raise ValueError(f"time must be numeric, got {arguments.get('time')!r}") from e
             wait_s = max(0.0, min(10.0, wait_s))
             time.sleep(wait_s)
             executed.append(f"time.sleep({wait_s})")

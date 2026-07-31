@@ -243,7 +243,9 @@ class Fixture:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("editor", "terminal", "calculator", "files", "settings"), required=True)
+    parser.add_argument(
+        "--mode", choices=("editor", "terminal", "calculator", "files", "settings"), required=True
+    )
     parser.add_argument("--state", type=Path, required=True)
     args = parser.parse_args()
     Fixture(args.mode, args.state).run()

@@ -27,7 +27,9 @@ _LOGGER = logging.getLogger(__name__)
 # cluster-specific (hai-* OSWorld VM image + qemu wrapper) and intentionally
 # left as overridable by --qcow2 / --qemu_bin flags in each runner.
 _DEFAULT_QCOW2 = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_vm/Ubuntu.qcow2"
-_DEFAULT_QEMU_BIN = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin/qemu-system-x86_64-wrapped"
+_DEFAULT_QEMU_BIN = (
+    "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin/qemu-system-x86_64-wrapped"
+)
 # uv project root for the inner sglang.launch_server call. The outer
 # `uv run` (in the labctl recipe command) uses the same path; keeping it
 # as a module constant survives the sys.path-shim removal in juergen 39d6d5f.
@@ -71,7 +73,9 @@ def append_turn(
         keep = max(1, n_history_frames // 2)
         recent_frames[:] = recent_frames[-keep:]
         # Actions align to every frame but the latest.
-        recent_actions[:] = recent_actions[-(len(recent_frames) - 1):] if len(recent_frames) > 1 else []
+        recent_actions[:] = (
+            recent_actions[-(len(recent_frames) - 1) :] if len(recent_frames) > 1 else []
+        )
 
 
 def _interleave_messages(
@@ -206,8 +210,7 @@ def _call_model(
     key held and trigger OS key-repeat).
     """
     image_parts = [
-        {"type": "image_url", "image_url": {"url": _pil_to_data_url(f)}}
-        for f in recent_frames
+        {"type": "image_url", "image_url": {"url": _pil_to_data_url(f)}} for f in recent_frames
     ]
     messages = (
         _fresh_visual_messages(system_prompt, instruction, image_parts)

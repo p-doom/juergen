@@ -47,7 +47,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-
 # Mouse button names → X11 button code (matches XTest convention).
 _MOUSE_BUTTON_CODES = {
     "LMB": 1,  # left
@@ -64,6 +63,7 @@ class KeyEvent:
     ``what`` is the unmodified token (e.g., ``"LMB"``, ``"KeyA"``).
     ``mouse_button`` is non-None for mouse-button events.
     """
+
     kind: str  # "press" | "release"
     what: str
     mouse_button: int | None  # 1/2/3 if a mouse button, else None
@@ -76,6 +76,7 @@ class Action:
     ``no_op`` is True iff the action was the literal ``"NO_OP"`` token. In
     that case dx, dy, scroll are all 0 and events is empty.
     """
+
     dx: int
     dy: int
     scroll: int
@@ -139,15 +140,12 @@ def parse_action(text: str) -> Action:
     mouse_tokens = mouse_part.strip().split()
     if len(mouse_tokens) != 3:
         raise ValueError(
-            f"expected 3 mouse tokens (dx dy scroll), got "
-            f"{len(mouse_tokens)}: {mouse_part!r}"
+            f"expected 3 mouse tokens (dx dy scroll), got {len(mouse_tokens)}: {mouse_part!r}"
         )
     try:
         dx, dy, scroll = (int(t) for t in mouse_tokens)
     except ValueError as e:
-        raise ValueError(
-            f"mouse tokens not int-parseable: {mouse_tokens!r}"
-        ) from e
+        raise ValueError(f"mouse tokens not int-parseable: {mouse_tokens!r}") from e
 
     # Parse the event segment.
     events: list[KeyEvent] = []
@@ -168,9 +166,7 @@ def parse_action(text: str) -> Action:
 # Used by ``parse_action_tolerant`` to locate the action line when the
 # model emits CoT prose with an explicit ``Action:`` marker (the
 # convention used by ``cot_directions_v1`` and similar prompts).
-_ACTION_MARKER_RE = re.compile(
-    r"(?im)^\s*action\s*:\s*(.+?)\s*$"
-)
+_ACTION_MARKER_RE = re.compile(r"(?im)^\s*action\s*:\s*(.+?)\s*$")
 
 
 def parse_action_tolerant(text: str) -> Action:
@@ -236,6 +232,7 @@ class OrderedPrimitive:
     - ``"terminate"``    ``status`` in success/failure; NEVER dispatched
                          (the rollout loop's stop condition)
     """
+
     kind: str
     dx: int | None = None
     dy: int | None = None
@@ -250,6 +247,7 @@ class OrderedPrimitive:
 @dataclass(frozen=True)
 class OrderedAction:
     """Parsed ordered action: primitives in emission order (empty for NO_OP)."""
+
     primitives: tuple[OrderedPrimitive, ...]
     no_op: bool
 
@@ -288,9 +286,7 @@ def _split_ordered_primitives(line: str) -> list[str]:
         if in_string:
             if c == "\\":
                 if i + 1 >= n:
-                    raise ValueError(
-                        f"dangling escape at end of type() string: {line!r}"
-                    )
+                    raise ValueError(f"dangling escape at end of type() string: {line!r}")
                 buf.append(c)
                 buf.append(line[i + 1])
                 i += 2
@@ -324,7 +320,7 @@ def _parse_type_primitive(prim: str) -> str:
     Only ``\\\\`` and ``\\"`` are legal escapes (ORDERED_EVENTS_V3_GRAMMAR);
     anything else — including a truncated trailing backslash — is malformed.
     """
-    body = prim[len("type("):]
+    body = prim[len("type(") :]
     if not body.startswith('"'):
         raise ValueError(f"type() payload must be double-quoted: {prim!r}")
     chars: list[str] = []
@@ -336,7 +332,7 @@ def _parse_type_primitive(prim: str) -> str:
             nxt = body[i + 1] if i + 1 < len(body) else None
             if nxt not in ("\\", '"'):
                 raise ValueError(
-                    f"invalid escape in type() (only \\\\ and \\\" are legal): {prim!r}"
+                    f'invalid escape in type() (only \\\\ and \\" are legal): {prim!r}'
                 )
             chars.append(nxt)
             i += 2
@@ -348,7 +344,7 @@ def _parse_type_primitive(prim: str) -> str:
         i += 1
     if closed_at is None:
         raise ValueError(f"unterminated type() string: {prim!r}")
-    if body[closed_at + 1:] != ")":
+    if body[closed_at + 1 :] != ")":
         raise ValueError(f"trailing characters after type() close quote: {prim!r}")
     if not chars:
         raise ValueError(f"empty type() payload (grammar requires >=1 char): {prim!r}")
@@ -414,9 +410,7 @@ def parse_ordered_action_tolerant(text: str) -> OrderedAction:
     parser — malformed primitives are never partially accepted.
     """
     if not isinstance(text, str):
-        raise TypeError(
-            f"parse_ordered_action_tolerant expects str, got {type(text)!r}"
-        )
+        raise TypeError(f"parse_ordered_action_tolerant expects str, got {type(text)!r}")
     try:
         return parse_ordered_action(text)
     except ValueError:
@@ -458,9 +452,7 @@ def parse_computer_use_tool_call(text: str) -> ComputerUseCall:
     examples before the actual action.
     """
     if not isinstance(text, str):
-        raise TypeError(
-            f"parse_computer_use_tool_call expects str, got {type(text)!r}"
-        )
+        raise TypeError(f"parse_computer_use_tool_call expects str, got {type(text)!r}")
     parsed: ComputerUseCall | None = None
     errors: list[str] = []
     for candidate in _json_candidates(text):
@@ -497,9 +489,7 @@ def parse_computer_use_tool_call(text: str) -> ComputerUseCall:
 # per-action argument schema + emission format).
 # --------------------------------------------------------------------------
 
-_CUA_V4_TOOL_CALL_RE = re.compile(
-    r"<tool_call>(.*?)</tool_call>", re.IGNORECASE | re.DOTALL
-)
+_CUA_V4_TOOL_CALL_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.IGNORECASE | re.DOTALL)
 
 _CUA_V4_BUTTONS = ("left", "right", "middle")
 _CUA_V4_STATUSES = ("success", "failure")
@@ -546,11 +536,129 @@ def _strip_leading_think(text: str) -> str:
         end = s.find("</think>")
         if end == -1:
             return ""
-        return s[end + len("</think>"):]
+        return s[end + len("</think>") :]
     end = s.find("</think>")
     if end != -1 and "<think>" not in s[:end]:
-        return s[end + len("</think>"):]
+        return s[end + len("</think>") :]
     return text
+
+
+# --------------------------------------------------------------------------
+# Official Qwen3-VL computer-use cookbook tool calls.
+# --------------------------------------------------------------------------
+
+_QWEN3VL_CUA_ACTIONS = frozenset(
+    {
+        "key",
+        "type",
+        "mouse_move",
+        "left_click",
+        "left_click_drag",
+        "right_click",
+        "middle_click",
+        "double_click",
+        "triple_click",
+        "scroll",
+        "hscroll",
+        "wait",
+        "terminate",
+        "answer",
+    }
+)
+_QWEN3VL_CUA_ARGUMENTS = frozenset(
+    {"action", "keys", "text", "coordinate", "pixels", "time", "status"}
+)
+
+
+def _validate_qwen3vl_cua_arguments(arguments: dict, *, where: str) -> None:
+    """Validate the executable portion of Qwen3-VL's cookbook schema."""
+    unknown = set(arguments) - _QWEN3VL_CUA_ARGUMENTS
+    if unknown:
+        raise ValueError(f"{where}: unknown argument(s) {sorted(unknown)}")
+    action = arguments.get("action")
+    if action not in _QWEN3VL_CUA_ACTIONS:
+        raise ValueError(f"{where}: unknown or missing action {action!r}")
+
+    if action == "key":
+        keys = arguments.get("keys")
+        if (
+            not isinstance(keys, list)
+            or not keys
+            or any(not isinstance(key, str) or not key.strip() for key in keys)
+        ):
+            raise ValueError(f"{where}: keys must be a non-empty string array")
+    if action in {"type", "answer"} and not isinstance(arguments.get("text"), str):
+        raise ValueError(f"{where}: text must be a string for action {action!r}")
+    if action in {"mouse_move", "left_click_drag"}:
+        coordinate = arguments.get("coordinate")
+        if (
+            not isinstance(coordinate, list)
+            or len(coordinate) != 2
+            or any(
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                for value in coordinate
+            )
+            or any(not 0 <= float(value) <= 1000 for value in coordinate)
+        ):
+            raise ValueError(f"{where}: coordinate must be two numbers on the 0..1000 grid")
+    if action in {"scroll", "hscroll"}:
+        pixels = arguments.get("pixels")
+        if isinstance(pixels, bool) or not isinstance(pixels, (int, float)):
+            raise ValueError(f"{where}: pixels must be a number for action {action!r}")
+    if action == "wait":
+        wait_s = arguments.get("time")
+        if isinstance(wait_s, bool) or not isinstance(wait_s, (int, float)):
+            raise ValueError(f"{where}: time must be a number for action 'wait'")
+    if action == "terminate" and arguments.get("status") not in _CUA_V4_STATUSES:
+        raise ValueError(
+            f"{where}: status must be one of {_CUA_V4_STATUSES}, got {arguments.get('status')!r}"
+        )
+
+
+def parse_qwen3vl_computer_use_action(text: str) -> tuple[ComputerUseCall, ...]:
+    """Strictly parse official Qwen3-VL native ``computer_use`` calls.
+
+    The official cookbook uses the Nous function-call prompt: an optional
+    leading Thinking block followed only by one or more ``<tool_call>`` JSON
+    blocks. Prose outside those blocks, malformed JSON, and non-computer tools
+    are rejected transactionally.
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"parse_qwen3vl_computer_use_action expects str, got {type(text)!r}")
+    stripped = _strip_leading_think(text)
+    matches = list(_CUA_V4_TOOL_CALL_RE.finditer(stripped))
+    if not matches:
+        raise ValueError(f"no <tool_call> blocks found in {stripped.strip()!r}")
+    previous_end = 0
+    for match in matches:
+        fragment = stripped[previous_end : match.start()].strip()
+        if fragment:
+            raise ValueError(f"unexpected content outside <tool_call> blocks: {fragment!r}")
+        previous_end = match.end()
+    tail = stripped[previous_end:].strip()
+    if tail:
+        raise ValueError(f"unexpected content outside <tool_call> blocks: {tail!r}")
+
+    calls: list[ComputerUseCall] = []
+    for index, match in enumerate(matches, start=1):
+        where = f"tool call {index}"
+        try:
+            payload = json.loads(match.group(1))
+        except json.JSONDecodeError as error:
+            raise ValueError(f"{where}: invalid JSON: {error}") from error
+        if not isinstance(payload, dict):
+            raise ValueError(f"{where}: payload must be a JSON object")
+        unknown_top = set(payload) - {"name", "arguments"}
+        if unknown_top:
+            raise ValueError(f"{where}: unknown top-level key(s) {sorted(unknown_top)}")
+        if payload.get("name") != "computer_use":
+            raise ValueError(f"{where}: name must be 'computer_use', got {payload.get('name')!r}")
+        arguments = payload.get("arguments")
+        if not isinstance(arguments, dict):
+            raise ValueError(f"{where}: arguments must be a JSON object")
+        _validate_qwen3vl_cua_arguments(arguments, where=where)
+        calls.append(ComputerUseCall(name="computer_use", arguments=arguments))
+    return tuple(calls)
 
 
 def _cua_v4_number(arguments: dict, key: str, *, where: str) -> float:
@@ -560,7 +668,9 @@ def _cua_v4_number(arguments: dict, key: str, *, where: str) -> float:
     return float(v)
 
 
-def _cua_v4_primitive(arguments: dict, *, where: str) -> OrderedPrimitive:
+def _cua_v4_primitive(  # noqa: PLR0911
+    arguments: dict, *, where: str
+) -> OrderedPrimitive:
     """Validate one computer_use arguments object against the cua_v4 schema
     and convert it to an ``OrderedPrimitive``."""
     action = arguments.get("action")
@@ -569,19 +679,15 @@ def _cua_v4_primitive(arguments: dict, *, where: str) -> OrderedPrimitive:
     required = _CUA_V4_REQUIRED_ARGS.get(action)
     if required is None:
         raise ValueError(
-            f"{where}: unknown action {action!r} "
-            f"(known: {sorted(_CUA_V4_REQUIRED_ARGS)})"
+            f"{where}: unknown action {action!r} (known: {sorted(_CUA_V4_REQUIRED_ARGS)})"
         )
     extra = set(arguments) - {"action"} - set(required)
     if extra:
-        raise ValueError(
-            f"{where}: unknown argument(s) {sorted(extra)} for action {action!r}"
-        )
+        raise ValueError(f"{where}: unknown argument(s) {sorted(extra)} for action {action!r}")
     missing = set(required) - set(arguments)
     if missing:
         raise ValueError(
-            f"{where}: missing required argument(s) {sorted(missing)} "
-            f"for action {action!r}"
+            f"{where}: missing required argument(s) {sorted(missing)} for action {action!r}"
         )
 
     if action == "mouse_move_rel":
@@ -590,23 +696,15 @@ def _cua_v4_primitive(arguments: dict, *, where: str) -> OrderedPrimitive:
             raise ValueError(f"{where}: delta must be [dx, dy], got {delta!r}")
         for v in delta:
             if isinstance(v, bool) or not isinstance(v, (int, float)):
-                raise ValueError(
-                    f"{where}: delta values must be numbers, got {delta!r}"
-                )
-        return OrderedPrimitive(
-            kind="move", dx=round(delta[0]), dy=round(delta[1])
-        )
+                raise ValueError(f"{where}: delta values must be numbers, got {delta!r}")
+        return OrderedPrimitive(kind="move", dx=round(delta[0]), dy=round(delta[1]))
     if action == "key":
         keys = arguments["keys"]
         if not isinstance(keys, list) or not keys:
-            raise ValueError(
-                f"{where}: keys must be a non-empty array of strings, got {keys!r}"
-            )
+            raise ValueError(f"{where}: keys must be a non-empty array of strings, got {keys!r}")
         for k in keys:
             if not isinstance(k, str) or not k.strip():
-                raise ValueError(
-                    f"{where}: keys entries must be non-empty strings, got {k!r}"
-                )
+                raise ValueError(f"{where}: keys entries must be non-empty strings, got {k!r}")
         return OrderedPrimitive(kind="key_combo", keys=tuple(keys))
     if action == "type":
         text = arguments["text"]
@@ -619,16 +717,12 @@ def _cua_v4_primitive(arguments: dict, *, where: str) -> OrderedPrimitive:
     if action in ("button_down", "button_up"):
         button = arguments["button"]
         if button not in _CUA_V4_BUTTONS:
-            raise ValueError(
-                f"{where}: button must be one of {_CUA_V4_BUTTONS}, got {button!r}"
-            )
+            raise ValueError(f"{where}: button must be one of {_CUA_V4_BUTTONS}, got {button!r}")
         return OrderedPrimitive(kind=action, name=button)
     if action in ("key_down", "key_up"):
         key = arguments["key"]
         if not isinstance(key, str) or not key.strip():
-            raise ValueError(
-                f"{where}: key must be a non-empty string, got {key!r}"
-            )
+            raise ValueError(f"{where}: key must be a non-empty string, got {key!r}")
         return OrderedPrimitive(kind=action, name=key)
     if action == "scroll":
         pixels = _cua_v4_number(arguments, "pixels", where=where)
@@ -642,9 +736,7 @@ def _cua_v4_primitive(arguments: dict, *, where: str) -> OrderedPrimitive:
     if action == "terminate":
         status = arguments["status"]
         if status not in _CUA_V4_STATUSES:
-            raise ValueError(
-                f"{where}: status must be one of {_CUA_V4_STATUSES}, got {status!r}"
-            )
+            raise ValueError(f"{where}: status must be one of {_CUA_V4_STATUSES}, got {status!r}")
         return OrderedPrimitive(kind="terminate", status=status)
     raise AssertionError(f"unhandled cua_v4 action {action!r}")  # pragma: no cover
 
@@ -692,11 +784,9 @@ def parse_computer_use_action(text: str) -> OrderedAction:
         raise ValueError(f"no <tool_call> blocks found in {s.strip()!r}")
     prev_end = 0
     for m in matches:
-        fragment = s[prev_end:m.start()].strip()
+        fragment = s[prev_end : m.start()].strip()
         if fragment:
-            raise ValueError(
-                f"unexpected content outside <tool_call> blocks: {fragment!r}"
-            )
+            raise ValueError(f"unexpected content outside <tool_call> blocks: {fragment!r}")
         prev_end = m.end()
     tail = s[prev_end:].strip()
     if tail:
@@ -717,9 +807,7 @@ def parse_computer_use_action_tolerant(text: str) -> OrderedAction:
     (never partially dispatched), and zero blocks is a hard error.
     """
     if not isinstance(text, str):
-        raise TypeError(
-            f"parse_computer_use_action_tolerant expects str, got {type(text)!r}"
-        )
+        raise TypeError(f"parse_computer_use_action_tolerant expects str, got {type(text)!r}")
     try:
         return parse_computer_use_action(text)
     except ValueError:
@@ -727,9 +815,7 @@ def parse_computer_use_action_tolerant(text: str) -> OrderedAction:
     s = _strip_leading_think(text)
     matches = list(_CUA_V4_TOOL_CALL_RE.finditer(s))
     if not matches:
-        raise ValueError(
-            f"no <tool_call> blocks in tolerant parse of {s.strip()!r}"
-        )
+        raise ValueError(f"no <tool_call> blocks in tolerant parse of {s.strip()!r}")
     return OrderedAction(
         primitives=tuple(_parse_cua_v4_block(m.group(1)) for m in matches),
         no_op=False,
@@ -776,7 +862,9 @@ _REL_STEP_REQUIRED_ARGS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _rel_step_primitive(arguments: dict, *, where: str) -> OrderedPrimitive:
+def _rel_step_primitive(  # noqa: PLR0911
+    arguments: dict, *, where: str
+) -> OrderedPrimitive:
     """Validate one rel-step arguments object without coercion or repair."""
     action = arguments.get("action")
     if not isinstance(action, str) or action not in _REL_STEP_REQUIRED_ARGS:
@@ -797,9 +885,7 @@ def _rel_step_primitive(arguments: dict, *, where: str) -> OrderedPrimitive:
             or any(isinstance(v, bool) or not isinstance(v, int) for v in delta)
             or tuple(delta) not in _REL_STEP_VALID_DELTAS
         ):
-            raise ValueError(
-                f"{where}: delta must be an exact fixed relative step, got {delta!r}"
-            )
+            raise ValueError(f"{where}: delta must be an exact fixed relative step, got {delta!r}")
         return OrderedPrimitive(kind="move", dx=delta[0], dy=delta[1])
     if action == "key":
         keys = arguments["keys"]
@@ -813,9 +899,7 @@ def _rel_step_primitive(arguments: dict, *, where: str) -> OrderedPrimitive:
     if action == "type":
         value = arguments["text"]
         if not isinstance(value, str) or not value or len(value) > _REL_STEP_MAX_TYPE_CHARS:
-            raise ValueError(
-                f"{where}: text must contain 1..{_REL_STEP_MAX_TYPE_CHARS} characters"
-            )
+            raise ValueError(f"{where}: text must contain 1..{_REL_STEP_MAX_TYPE_CHARS} characters")
         return OrderedPrimitive(kind="type", text=value)
     if action in _CUA_V4_CLICKS:
         button, count = _CUA_V4_CLICKS[action]
@@ -827,7 +911,11 @@ def _rel_step_primitive(arguments: dict, *, where: str) -> OrderedPrimitive:
         return OrderedPrimitive(kind=action, name=button)
     if action in ("scroll", "hscroll"):
         steps = arguments["steps"]
-        if isinstance(steps, bool) or not isinstance(steps, int) or steps not in _REL_STEP_SCROLL_STEPS:
+        if (
+            isinstance(steps, bool)
+            or not isinstance(steps, int)
+            or steps not in _REL_STEP_SCROLL_STEPS
+        ):
             raise ValueError(
                 f"{where}: steps must be one of {sorted(_REL_STEP_SCROLL_STEPS)}, got {steps!r}"
             )
@@ -866,9 +954,7 @@ def _parse_rel_step_block(body: str) -> OrderedPrimitive:
 def _validate_rel_step_program(primitives: tuple[OrderedPrimitive, ...]) -> None:
     """Enforce response-level atomicity before any primitive is dispatched."""
     if len(primitives) > _REL_STEP_MAX_CALLS:
-        raise ValueError(
-            f"too many tool calls: {len(primitives)} > {_REL_STEP_MAX_CALLS}"
-        )
+        raise ValueError(f"too many tool calls: {len(primitives)} > {_REL_STEP_MAX_CALLS}")
     terminations = [i for i, p in enumerate(primitives) if p.kind == "terminate"]
     if terminations:
         if len(primitives) != 1:
@@ -912,16 +998,14 @@ def parse_computer_use_rel_step_action(text: str) -> OrderedAction:
     parser for this safety-critical format.
     """
     if not isinstance(text, str):
-        raise TypeError(
-            f"parse_computer_use_rel_step_action expects str, got {type(text)!r}"
-        )
+        raise TypeError(f"parse_computer_use_rel_step_action expects str, got {type(text)!r}")
     s = _strip_leading_think(text)
     matches = list(_CUA_V4_TOOL_CALL_RE.finditer(s))
     if not matches:
         raise ValueError(f"no <tool_call> blocks found in {s.strip()!r}")
     prev_end = 0
     for match in matches:
-        fragment = s[prev_end:match.start()].strip()
+        fragment = s[prev_end : match.start()].strip()
         if fragment:
             raise ValueError(f"unexpected content outside tool calls: {fragment!r}")
         prev_end = match.end()

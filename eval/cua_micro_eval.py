@@ -1,11 +1,13 @@
 """One-turn, state-verifiable CUA micro-evaluation suite.
 
 Each attempt starts from a fresh OSWorld VM snapshot, receives exactly one
-goal-conditioned screenshot, emits one strict ``computer_use_rel_step_v1``
-reply, and is scored automatically.  Move tasks expose continuous distance
-progress and legal-step optimality; click/type/scroll tasks require both the
-correct parsed primitive and a semantic post-action state change.  Four sampled
-attempts per task produce empirical pass@1 and pass@4 curves.
+goal-conditioned screenshot, emits one strict action, and is scored
+automatically. The primary contract is ``computer_use_rel_step_v1``; an
+explicit native Qwen3-VL computer-use mode supports off-the-shelf baselines.
+Move tasks expose continuous distance progress and legal-step optimality;
+click/type/scroll tasks require both the correct parsed primitive and a
+semantic post-action state change. Four sampled attempts per task produce
+empirical pass@1 and pass@4 curves.
 """
 
 from __future__ import annotations
@@ -30,7 +32,13 @@ from typing import Any
 from PIL import Image, ImageDraw
 
 import sampling as sampling_mod
-from action_parser import OrderedAction, parse_computer_use_rel_step_action
+from action_parser import (
+    ComputerUseCall,
+    OrderedAction,
+    OrderedPrimitive,
+    parse_computer_use_rel_step_action,
+    parse_qwen3vl_computer_use_action,
+)
 from osworld_runtime import (
     _DEFAULT_QCOW2,
     _DEFAULT_QEMU_BIN,
@@ -59,6 +67,12 @@ _DIRECTIONS = (
 _FIXTURE_GUEST_PATH = "/tmp/cua_micro_fixture.py"
 _FIXTURE_STATE_PATH = "/tmp/cua_micro_fixture_state.json"
 _DEFAULT_SUITE = Path(__file__).with_name("cua_micro_tasks_v1.json")
+_REL_STEP_FORMAT = "computer_use_rel_step_v1"
+_QWEN3VL_NATIVE_FORMAT = "qwen3vl_native_cua_v1"
+_PROMPT_FORMATS = {
+    "cua_rel_step_v1_thinking": _REL_STEP_FORMAT,
+    "qwen3vl_native_cua_v1": _QWEN3VL_NATIVE_FORMAT,
+}
 
 
 @dataclass(frozen=True)
@@ -95,9 +109,7 @@ def load_suite(path: Path) -> tuple[dict[str, Any], list[Task]]:
         missing = required - set(item)
         extra = set(item) - required
         if missing or extra:
-            raise ValueError(
-                f"task {index}: missing={sorted(missing)} extra={sorted(extra)}"
-            )
+            raise ValueError(f"task {index}: missing={sorted(missing)} extra={sorted(extra)}")
         task_id = item["id"]
         if not isinstance(task_id, str) or not task_id or task_id in seen:
             raise ValueError(f"task {index}: invalid/duplicate id {task_id!r}")
@@ -213,13 +225,11 @@ def movement_metrics(
             best_distance = min(best_distance, distance_to_bbox(candidate, bbox))
     available_gain = start_distance - best_distance
     actual_gain = start_distance - end_distance
-    legal_optimality = (
-        1.0 if available_gain <= 0 and end_distance <= start_distance else 0.0
-    )
+    legal_optimality = 1.0 if available_gain <= 0 and end_distance <= start_distance else 0.0
     if available_gain > 0:
         legal_optimality = max(0.0, min(1.0, actual_gain / available_gain))
-    distance_gain = 1.0 if start_distance == 0 else max(
-        -1.0, min(1.0, actual_gain / start_distance)
+    distance_gain = (
+        1.0 if start_distance == 0 else max(-1.0, min(1.0, actual_gain / start_distance))
     )
     return {
         "start_distance_px": start_distance,
@@ -249,6 +259,66 @@ def denormalize_action(action: OrderedAction, screen: tuple[int, int]) -> Ordere
     )
 
 
+def qwen3vl_native_to_ordered(
+    calls: tuple[ComputerUseCall, ...],
+    screen: tuple[int, int],
+    cursor_start: tuple[int, int],
+) -> OrderedAction:
+    """Adapt official absolute-grid Qwen3-VL calls to VM primitives."""
+    primitives: list[OrderedPrimitive] = []
+    cursor = cursor_start
+    click_map = {
+        "left_click": ("left", 1),
+        "right_click": ("right", 1),
+        "middle_click": ("middle", 1),
+        "double_click": ("left", 2),
+        "triple_click": ("left", 3),
+    }
+    for call in calls:
+        arguments = call.arguments
+        action = str(arguments["action"])
+        if action == "mouse_move":
+            coordinate = arguments["coordinate"]
+            target = (
+                max(0, min(screen[0] - 1, round(float(coordinate[0]) * screen[0] / _GRID))),
+                max(0, min(screen[1] - 1, round(float(coordinate[1]) * screen[1] / _GRID))),
+            )
+            primitives.append(
+                OrderedPrimitive(kind="move", dx=target[0] - cursor[0], dy=target[1] - cursor[1])
+            )
+            cursor = target
+        elif action in click_map:
+            button, count = click_map[action]
+            primitives.append(OrderedPrimitive(kind="click", name=button, count=count))
+        elif action == "type":
+            primitives.append(OrderedPrimitive(kind="type", text=arguments["text"]))
+        elif action == "key":
+            primitives.append(OrderedPrimitive(kind="key_combo", keys=tuple(arguments["keys"])))
+        elif action == "scroll":
+            primitives.append(OrderedPrimitive(kind="scroll", dy=round(float(arguments["pixels"]))))
+        elif action == "hscroll":
+            primitives.append(OrderedPrimitive(kind="scroll", dx=round(float(arguments["pixels"]))))
+        elif action == "wait":
+            primitives.append(OrderedPrimitive(kind="wait"))
+        elif action == "terminate":
+            primitives.append(OrderedPrimitive(kind="terminate", status=arguments["status"]))
+        elif action == "left_click_drag":
+            coordinate = arguments["coordinate"]
+            target = (
+                max(0, min(screen[0] - 1, round(float(coordinate[0]) * screen[0] / _GRID))),
+                max(0, min(screen[1] - 1, round(float(coordinate[1]) * screen[1] / _GRID))),
+            )
+            primitives.append(
+                OrderedPrimitive(kind="drag", dx=target[0] - cursor[0], dy=target[1] - cursor[1])
+            )
+            cursor = target
+        elif action == "answer":
+            primitives.append(OrderedPrimitive(kind="answer", text=arguments["text"]))
+        else:  # guarded by the strict native parser
+            raise AssertionError(f"unhandled Qwen3-VL action {action!r}")
+    return OrderedAction(primitives=tuple(primitives), no_op=False)
+
+
 def serialize_action(action: OrderedAction | None) -> list[dict[str, Any]]:
     if action is None:
         return []
@@ -275,9 +345,7 @@ def action_matches_expected(action: OrderedAction | None, expected: dict[str, An
         primitive.kind == "scroll" and primitive.dx == 0 and primitive.dy != 0
     ):
         sign = expected.get("sign")
-        matches = (sign == "down" and primitive.dy < 0) or (
-            sign == "up" and primitive.dy > 0
-        )
+        matches = (sign == "down" and primitive.dy < 0) or (sign == "up" and primitive.dy > 0)
     return matches
 
 
@@ -299,9 +367,9 @@ def _upload_bytes(client: OSWorldClient, path: str, payload: bytes) -> None:
 def _active_title(client: OSWorldClient) -> str:
     try:
         return str(
-            client.run_command(
-                ["bash", "-lc", "xdotool getactivewindow getwindowname"]
-            ).get("output", "")
+            client.run_command(["bash", "-lc", "xdotool getactivewindow getwindowname"]).get(
+                "output", ""
+            )
         ).strip()
     except RuntimeError:
         return ""
@@ -385,8 +453,8 @@ def _launch_chrome(client: OSWorldClient, variant: str) -> None:
     quoted_urls = " ".join(f"'{url}'" for url in urls)
     command = (
         "CHROME=$(command -v google-chrome || command -v chromium || command -v chromium-browser); "
-        "test -n \"$CHROME\"; "
-        "nohup env DISPLAY=:0 \"$CHROME\" --user-data-dir=/tmp/cua-micro-chrome "
+        'test -n "$CHROME"; '
+        'nohup env DISPLAY=:0 "$CHROME" --user-data-dir=/tmp/cua-micro-chrome '
         "--no-first-run --no-default-browser-check --disable-session-crashed-bubble "
         "--start-maximized --remote-debugging-port=9222 "
         f"{quoted_urls} >/tmp/cua_micro_chrome.log 2>&1 &"
@@ -425,9 +493,7 @@ def _launch_fixture(client: OSWorldClient, mode: str) -> dict[str, Any]:
 def prepare_task(client: OSWorldClient, task: Task) -> dict[str, Any]:
     kind = task.setup.get("kind")
     if kind == "desktop":
-        client.run_command(
-            ["bash", "-lc", "wmctrl -k on || xdotool key super+d"]
-        )
+        client.run_command(["bash", "-lc", "wmctrl -k on || xdotool key super+d"])
         time.sleep(0.8)
         return {}
     if kind == "chrome":
@@ -481,9 +547,7 @@ def read_verifier_state(client: OSWorldClient, verifier: dict[str, Any]) -> Any:
     if kind == "active_title_regex":
         return _active_title(client)
     if kind == "fixture_equals":
-        return _guest_json(client, _FIXTURE_STATE_PATH).get("values", {}).get(
-            verifier.get("field")
-        )
+        return _guest_json(client, _FIXTURE_STATE_PATH).get("values", {}).get(verifier.get("field"))
     raise ValueError(f"unknown verifier kind {kind!r}")
 
 
@@ -546,6 +610,7 @@ def run_attempt(
     api_key: str,
     model: str,
     system_prompt: str,
+    action_format: str,
     sampling: SamplingParams,
     seed: int,
     model_resolution: tuple[int, int] | None,
@@ -567,7 +632,9 @@ def run_attempt(
     model_frame = before
     if model_resolution and model_resolution != before.size:
         model_frame = before.resize(model_resolution, Image.Resampling.LANCZOS)
-    instruction = f"GOAL: {task.instruction}"
+    instruction = (
+        f"GOAL: {task.instruction}" if action_format == _REL_STEP_FORMAT else task.instruction
+    )
     messages = build_loggable_messages(
         system_prompt=system_prompt,
         instruction=instruction,
@@ -591,19 +658,34 @@ def run_attempt(
         seed=seed,
     )
     parse_error: str | None = None
+    dispatch_error: str | None = None
     parsed: OrderedAction | None = None
     dispatched = False
     if finish_reason == "length":
         parse_error = "response truncated at max_tokens; nothing dispatched"
     else:
         try:
-            parsed = parse_computer_use_rel_step_action(response)
+            if action_format == _REL_STEP_FORMAT:
+                parsed = parse_computer_use_rel_step_action(response)
+            elif action_format == _QWEN3VL_NATIVE_FORMAT:
+                calls = parse_qwen3vl_computer_use_action(response)
+                parsed = qwen3vl_native_to_ordered(calls, screen, actual_start)
+            else:
+                raise ValueError(f"unknown action format {action_format!r}")
+        except (TypeError, ValueError) as error:
+            parse_error = str(error)
+
+    if parsed is not None:
+        try:
             if any(primitive.kind == "terminate" for primitive in parsed.primitives):
-                raise ValueError("terminate is not a valid response for an atomic micro-task")
-            client.dispatch_ordered_action(denormalize_action(parsed, screen))
+                raise ValueError("terminate is not valid for an atomic micro-task")
+            dispatch_action = (
+                denormalize_action(parsed, screen) if action_format == _REL_STEP_FORMAT else parsed
+            )
+            client.dispatch_ordered_action(dispatch_action)
             dispatched = True
         except (TypeError, ValueError, RuntimeError) as error:
-            parse_error = str(error)
+            dispatch_error = str(error)
             client.release_all_inputs()
 
     after = client.screenshot_settled(
@@ -653,8 +735,10 @@ def run_attempt(
         "cursor_end": list(end),
         "response": response,
         "finish_reason": finish_reason,
+        "action_format": action_format,
         "parse_valid": parse_error is None,
         "parse_error": parse_error,
+        "dispatch_error": dispatch_error,
         "parsed_primitives": serialize_action(parsed),
         "dispatched": dispatched,
         "expected_action_ok": expected_ok,
@@ -667,6 +751,119 @@ def run_attempt(
         "progress": progress,
         "success": success,
         "elapsed_s": time.time() - t0,
+    }
+    (output_dir / "result.json").write_text(json.dumps(result, indent=2))
+    return result
+
+
+def validate_task_setup(
+    *,
+    client: OSWorldClient,
+    task: Task,
+    output_dir: Path,
+    save_frames: bool,
+    settle_s: float,
+) -> dict[str, Any]:
+    """Apply a known-correct synthetic primitive and assert task semantics."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    dependencies = client.run_command(
+        [
+            "bash",
+            "-lc",
+            "set -e; command -v xdotool; command -v wmctrl; "
+            "python3 -c 'import tkinter; print(tkinter.TkVersion)'",
+        ]
+    )
+    setup_state = prepare_task(client, task)
+    screen = client.screen_size()
+    bbox = resolve_target_bbox(client, task, setup_state, screen)
+    start = resolve_cursor_start(task.cursor, bbox, screen)
+    client.execute(f"pyautogui.moveTo({start[0]}, {start[1]})")
+    actual_start = client.cursor_position()
+    before_state = read_verifier_state(client, task.verifier)
+    before = client.screenshot_settled(min_delay_s=0.2, stability_timeout_s=1.0)
+
+    expected_kind = task.expected["kind"]
+    if expected_kind == "move":
+        center = _bbox_center(bbox)
+        synthetic = OrderedAction(
+            primitives=(
+                OrderedPrimitive(
+                    kind="move",
+                    dx=center[0] - actual_start[0],
+                    dy=center[1] - actual_start[1],
+                ),
+            ),
+            no_op=False,
+        )
+    elif expected_kind == "click":
+        synthetic = OrderedAction(
+            primitives=(OrderedPrimitive(kind="click", name="left", count=1),),
+            no_op=False,
+        )
+    elif expected_kind == "type":
+        synthetic = OrderedAction(
+            primitives=(OrderedPrimitive(kind="type", text=str(task.expected["text"])),),
+            no_op=False,
+        )
+    elif expected_kind == "scroll":
+        direction = -5 if task.expected.get("sign") == "down" else 5
+        synthetic = OrderedAction(
+            primitives=(OrderedPrimitive(kind="scroll", dx=0, dy=direction),),
+            no_op=False,
+        )
+    else:
+        raise ValueError(f"unsupported synthetic expected action {task.expected!r}")
+
+    client.dispatch_ordered_action(synthetic)
+    after = client.screenshot_settled(
+        min_delay_s=settle_s,
+        stability_timeout_s=1.5,
+        poll_s=0.15,
+    )
+    end = client.cursor_position()
+    verifier_ok, after_state = verifier_passed(client, task.verifier)
+    metrics = movement_metrics(actual_start, end, bbox, screen)
+    location_ok = in_bbox(actual_start, bbox) if expected_kind == "click" else True
+    movement_ok = (
+        bool(metrics["bbox_hit"] and metrics["legal_step_optimality"] == 1.0)
+        if expected_kind == "move"
+        else True
+    )
+    success = bool(
+        action_matches_expected(synthetic, task.expected)
+        and verifier_ok
+        and location_ok
+        and movement_ok
+    )
+
+    if save_frames:
+        before.save(output_dir / "step_000.png")
+        after.save(output_dir / "step_001.png")
+        _draw_overlay(
+            before,
+            bbox,
+            actual_start,
+            end,
+            str(task.target.get("label", task.task_id)),
+        ).save(output_dir / "overlay.png")
+    result = {
+        "schema_version": 1,
+        "mode": "validate_setups_only",
+        "task_id": task.task_id,
+        "category": task.category,
+        "success": success,
+        "screen_size": list(screen),
+        "target": {**task.target, "bbox_px": list(bbox)},
+        "cursor_start": list(actual_start),
+        "cursor_end": list(end),
+        "synthetic_primitives": serialize_action(synthetic),
+        "expected_action_ok": action_matches_expected(synthetic, task.expected),
+        "verifier_before": before_state,
+        "verifier_after": after_state,
+        "verifier_pass": verifier_ok,
+        "movement": metrics,
+        "guest_dependencies": str(dependencies.get("output", "")).strip().splitlines(),
     }
     (output_dir / "result.json").write_text(json.dumps(result, indent=2))
     return result
@@ -787,13 +984,19 @@ def _task_slug(task_id: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", required=True)
+    parser.add_argument("--model_path")
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--suite", type=Path, default=_DEFAULT_SUITE)
     parser.add_argument("--attempts", type=int, default=4)
     parser.add_argument("--task_ids", nargs="+", default=None)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--system_prompt_id", default="cua_rel_step_v1_thinking")
+    parser.add_argument(
+        "--action_format",
+        choices=(_REL_STEP_FORMAT, _QWEN3VL_NATIVE_FORMAT),
+        default=None,
+    )
+    parser.add_argument("--validate_setups_only", action="store_true")
     parser.add_argument("--model_resolution", default="1280x720")
     parser.add_argument("--seed_base", type=int, default=41000)
     parser.add_argument("--no_frames", action="store_true")
@@ -808,8 +1011,20 @@ def main() -> int:
 
     if args.attempts < 1:
         parser.error("--attempts must be >= 1")
-    if args.system_prompt_id != "cua_rel_step_v1_thinking":
-        parser.error("micro-eval v1 requires --system_prompt_id cua_rel_step_v1_thinking")
+    if not args.validate_setups_only and not args.model_path:
+        parser.error("--model_path is required unless --validate_setups_only is set")
+    if args.system_prompt_id not in _PROMPT_FORMATS:
+        parser.error(
+            f"unsupported --system_prompt_id {args.system_prompt_id!r}; "
+            f"choose one of {sorted(_PROMPT_FORMATS)}"
+        )
+    inferred_format = _PROMPT_FORMATS[args.system_prompt_id]
+    action_format = args.action_format or inferred_format
+    if action_format != inferred_format:
+        parser.error(
+            f"--system_prompt_id {args.system_prompt_id!r} requires "
+            f"--action_format {inferred_format!r}"
+        )
     width_text, separator, height_text = args.model_resolution.lower().partition("x")
     if not separator:
         parser.error("--model_resolution must be WIDTHxHEIGHT")
@@ -830,6 +1045,68 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger().addHandler(logging.FileHandler(output_dir / "cua_micro_eval.log"))
 
+    job_mod = (int(os.environ.get("SLURM_JOB_ID", "0")) % 200) * 10
+    if args.validate_setups_only:
+        validations: list[dict[str, Any]] = []
+        started = time.time()
+        for task_index, task in enumerate(tasks):
+            attempt_dir = output_dir / "tasks" / _task_slug(task.task_id) / "validation"
+            attempt_dir.mkdir(parents=True, exist_ok=True)
+            vm_port = 5000 + job_mod
+            vnc_port = 5900 + job_mod
+            _LOGGER.info(
+                "[%d/%d] validating setup task=%s",
+                task_index + 1,
+                len(tasks),
+                task.task_id,
+            )
+            vm_proc = _launch_vm(
+                qemu_bin=args.qemu_bin,
+                qcow2=args.qcow2,
+                vm_port=vm_port,
+                vnc_port=vnc_port,
+                log_path=attempt_dir / "qemu.log",
+            )
+            try:
+                client = OSWorldClient(f"http://localhost:{vm_port}")
+                client.wait_ready(timeout_s=300)
+                result = validate_task_setup(
+                    client=client,
+                    task=task,
+                    output_dir=attempt_dir,
+                    save_frames=not args.no_frames,
+                    settle_s=args.settle_s,
+                )
+            except Exception as error:
+                _LOGGER.exception("setup validation failed: task=%s", task.task_id)
+                result = {
+                    "schema_version": 1,
+                    "mode": "validate_setups_only",
+                    "task_id": task.task_id,
+                    "category": task.category,
+                    "success": False,
+                    "stop_reason": f"exception: {type(error).__name__}: {error}",
+                }
+                (attempt_dir / "result.json").write_text(json.dumps(result, indent=2))
+            finally:
+                _terminate(vm_proc, label=f"validation VM {task.task_id}")
+            validations.append(result)
+            summary = {
+                "schema_version": 1,
+                "mode": "validate_setups_only",
+                "task": suite_raw["suite"],
+                "n_tasks": len(tasks),
+                "n_completed": len(validations),
+                "n_passed": sum(bool(row.get("success")) for row in validations),
+                "completed": len(validations) == len(tasks),
+                "success": len(validations) == len(tasks)
+                and all(bool(row.get("success")) for row in validations),
+                "elapsed_s": time.time() - started,
+                "per_task": {str(row["task_id"]): row for row in validations},
+            }
+            (output_dir / "result.json").write_text(json.dumps(summary, indent=2))
+        return 0 if summary["success"] else 1
+
     system_prompt = SYSTEM_PROMPTS[args.system_prompt_id]
     sampling = sampling_mod.from_cli(
         args,
@@ -837,15 +1114,15 @@ def main() -> int:
         system_prompt=system_prompt,
     )
     _LOGGER.info(
-        "suite=%s tasks=%d attempts=%d model=%s sampling=%s",
+        "suite=%s tasks=%d attempts=%d model=%s action_format=%s sampling=%s",
         suite_raw["suite"],
         len(tasks),
         args.attempts,
         args.model_path,
+        action_format,
         sampling.to_dict(),
     )
 
-    job_mod = (int(os.environ.get("SLURM_JOB_ID", "0")) % 200) * 10
     sglang_port = args.sglang_port if args.sglang_port != 30000 else 30000 + job_mod
     sglang_log = (output_dir / "sglang.log").open("w")
     sglang_proc = subprocess.Popen(
@@ -895,10 +1172,7 @@ def main() -> int:
             ordinal = task_index * args.attempts + attempt_index + 1
             seed = args.seed_base + task_index * 100 + attempt_index
             attempt_dir = (
-                output_dir
-                / "tasks"
-                / _task_slug(task.task_id)
-                / f"attempt_{attempt_index + 1:02d}"
+                output_dir / "tasks" / _task_slug(task.task_id) / f"attempt_{attempt_index + 1:02d}"
             )
             attempt_dir.mkdir(parents=True, exist_ok=True)
             _LOGGER.info(
@@ -929,6 +1203,7 @@ def main() -> int:
                     api_key=args.sglang_api_key,
                     model=args.model_path,
                     system_prompt=system_prompt,
+                    action_format=action_format,
                     sampling=sampling,
                     seed=seed,
                     model_resolution=model_resolution,
@@ -963,7 +1238,7 @@ def main() -> int:
                     "attempts": args.attempts,
                     "sampling": sampling.to_dict(),
                     "system_prompt_id": args.system_prompt_id,
-                    "action_format": "computer_use_rel_step_v1",
+                    "action_format": action_format,
                     "model_resolution": list(model_resolution),
                 },
                 "n_samples": len(attempts),
