@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from .contracts import ARMS, sha256_json
+from .contracts import ARMS, resolved_segment_budget_payload, sha256_json
 from .manifest import EvaluationManifest
 from .planning import TrialSpec
 
@@ -118,7 +118,7 @@ def aggregate_results(
             "mcnemar_descriptive": mcnemar,
         },
         "by_mode_horizon": strata,
-        "pass_at_k_feasibility": _pass_at_k(manifest, included),
+        "pass_at_k_feasibility": _pass_at_k(manifest, included, trials.values()),
     }
 
 
@@ -152,6 +152,24 @@ def _validate_row(
         raise ValueError(f"{trial.pair_id}: readiness artifact mismatch")
     if readiness.get("certification_schema") != manifest.expected_executor_certification_schema:
         raise ValueError(f"{trial.pair_id}: readiness schema mismatch")
+    setup = row.get("task_setup_validation")
+    expected_setup = {
+        "artifact_sha256": manifest.expected_task_setup_validation_sha256,
+        "artifact_id": manifest.expected_task_setup_validation_artifact_id,
+        "schema_id": manifest.expected_task_setup_validation_schema,
+        "task_manifest_payload_sha256": manifest.task_manifest_payload_sha256,
+        "vm_snapshot_id": trial.snapshot_id,
+        "setup_commit": setup.get("setup_commit") if isinstance(setup, dict) else None,
+    }
+    setup_commit = expected_setup["setup_commit"]
+    if (
+        setup != expected_setup
+        or not isinstance(setup_commit, str)
+        or len(setup_commit) != 40
+        or setup_commit.lower() != setup_commit
+        or any(character not in "0123456789abcdef" for character in setup_commit)
+    ):
+        raise ValueError(f"{trial.pair_id}: task setup-validation provenance mismatch")
     pairing = row.get("pairing")
     expected_pairing = {
         "snapshot_id": trial.snapshot_id,
@@ -177,6 +195,40 @@ def _validate_row(
         raise ValueError(f"{trial.pair_id}: paired reset signatures differ")
     start_refs = [value.get("start_cursor_ref") for value in arms]
     start_cursors = [value.get("start_cursor") for value in arms]
+    start_sources = [value.get("start_cursor_source") for value in arms]
+    start_precentered = [value.get("start_cursor_precentered") for value in arms]
+    for value, source, precentered in zip(
+        arms, start_sources, start_precentered, strict=True
+    ):
+        prestart_infra = (
+            value.get("infra_failure_class") is not None
+            and value.get("reset_signature") is None
+        )
+        if prestart_infra:
+            if source is not None or precentered is not None:
+                raise ValueError(f"{trial.pair_id}: partial pre-start cursor evidence")
+            continue
+        if source != "live_probe_before_policy":
+            raise ValueError(f"{trial.pair_id}: cursor was not live-probed before policy")
+        if precentered is not False:
+            raise ValueError(f"{trial.pair_id}: target pre-centering is forbidden")
+        if not _is_sha256(value.get("start_binding_sha256")):
+            raise ValueError(f"{trial.pair_id}: live binding evidence missing")
+    start_bindings = [value.get("start_binding_sha256") for value in arms]
+    present_bindings = [value for value in start_bindings if value is not None]
+    if present_bindings and (not all(
+        _is_sha256(value) for value in present_bindings
+    ) or len(set(present_bindings)) != 1):
+        raise ValueError(f"{trial.pair_id}: paired initial live bindings differ")
+    if any(
+        value.get("reset_probe_count") is not None
+        and (
+            not isinstance(value.get("reset_probe_count"), int)
+            or value["reset_probe_count"] < 2
+        )
+        for value in arms
+    ):
+        raise ValueError(f"{trial.pair_id}: repeated reset probe evidence missing")
     if all(value is not None for value in start_refs + start_cursors):
         if start_refs != [trial.initial_cursor_ref, trial.initial_cursor_ref]:
             raise ValueError(f"{trial.pair_id}: paired cursor refs differ")
@@ -223,6 +275,12 @@ def _validate_row(
         "runtime_id": manifest.runtime.runtime_id,
         "executor_commit": row["readiness"].get("executor_commit"),
         "interfaces": {arm.name: arm.action_interface for arm in manifest.arms},
+        "cursor_initialization": "live_unmodified_snapshot",
+        "native_coordinate_dispatch": "requested_to_lowered_to_post_cursor",
+        "between_turn_interventions": "forbidden",
+        "active_window_check": "true_active_window_only",
+        "live_binding": "provisional_contract_test_only_reject_all",
+        "resolved_budget_receipts": "provisional_contract_test_only_reject_all",
     }
     if row.get("runtime") != expected_runtime:
         raise ValueError(f"{trial.pair_id}: runtime contract drift")
@@ -232,6 +290,8 @@ def _validate_and_recompute_arm(task: Any, trial: TrialSpec, arm: dict[str, Any]
     turns = arm.get("turns")
     if not isinstance(turns, list):
         raise ValueError(f"{trial.pair_id}: arm trace is not a list")
+    if turns:
+        _validate_turn_trace_evidence(task, trial, arm, turns)
     infra = arm.get("infra_failure_class")
     if infra is not None:
         expected_success: bool | None = None
@@ -247,23 +307,6 @@ def _validate_and_recompute_arm(task: Any, trial: TrialSpec, arm: dict[str, Any]
             if arm.get("success") is not expected_success:
                 raise ValueError(f"{trial.pair_id}: stored success disagrees with trace")
             return expected_success
-        for turn in turns:
-            unsigned_turn = dict(turn)
-            turn_seal = unsigned_turn.pop("turn_payload_sha256", None)
-            if turn_seal != sha256_json(unsigned_turn):
-                raise ValueError(f"{trial.pair_id}: turn payload hash mismatch")
-            verifier = turn.get("verifier_state")
-            if not isinstance(verifier, dict):
-                raise ValueError(f"{trial.pair_id}: verifier evidence missing")
-            state = verifier.get("semantic_state")
-            if not isinstance(state, dict) or sha256_json(state) != verifier.get(
-                "semantic_state_sha256"
-            ):
-                raise ValueError(f"{trial.pair_id}: verifier state hash mismatch")
-            if verifier.get("verifier_module") != task.verifier_module:
-                raise ValueError(f"{trial.pair_id}: verifier module mismatch")
-            if not isinstance(verifier.get("oracle_pid"), int) or verifier["oracle_pid"] <= 0:
-                raise ValueError(f"{trial.pair_id}: fresh verifier PID missing")
         final = turns[-1]["verifier_state"]
         budget_failure = _recompute_budget_failure(trial, arm, turns)
         execution_ok = budget_failure is None and all(
@@ -295,6 +338,280 @@ def _validate_and_recompute_arm(task: Any, trial: TrialSpec, arm: dict[str, Any]
     if arm.get("success") is not expected_success:
         raise ValueError(f"{trial.pair_id}: stored success disagrees with trace")
     return expected_success
+
+
+def _validate_turn_trace_evidence(
+    task: Any,
+    trial: TrialSpec,
+    arm: dict[str, Any],
+    turns: list[dict[str, Any]],
+) -> None:
+    current_binding = arm.get("start_binding_sha256")
+    refreshed = arm.get("binding_refreshed_after_steps")
+    expected_initial_refreshes = (
+        [2] if task.app == "chrome" and trial.gold_prefix_length >= 2 else []
+    )
+    if refreshed != expected_initial_refreshes:
+        raise ValueError(f"{trial.pair_id}: live binding refresh/prefix mismatch")
+    refreshed_steps = set(refreshed)
+    logical_progress = 0
+    for turn in turns:
+        unsigned_turn = dict(turn)
+        turn_seal = unsigned_turn.pop("turn_payload_sha256", None)
+        if turn_seal != sha256_json(unsigned_turn):
+            raise ValueError(f"{trial.pair_id}: turn payload hash mismatch")
+        verifier = turn.get("verifier_state")
+        if not isinstance(verifier, dict):
+            raise ValueError(f"{trial.pair_id}: verifier evidence missing")
+        state = verifier.get("semantic_state")
+        if not isinstance(state, dict) or sha256_json(state) != verifier.get(
+            "semantic_state_sha256"
+        ):
+            raise ValueError(f"{trial.pair_id}: verifier state hash mismatch")
+        if verifier.get("verifier_module") != task.verifier_module:
+            raise ValueError(f"{trial.pair_id}: verifier module mismatch")
+        if not isinstance(verifier.get("oracle_pid"), int) or verifier["oracle_pid"] <= 0:
+            raise ValueError(f"{trial.pair_id}: fresh verifier PID missing")
+        _validate_executor_evidence(task, trial, arm, turn)
+        _validate_state_probe_evidence(task, trial, turn)
+        expected_step = min(
+            trial.gold_prefix_length + logical_progress + 1,
+            task.semantic_step_count,
+        )
+        current_binding = _validate_resolved_budget_receipt(
+            task,
+            trial,
+            arm,
+            turn,
+            current_binding,
+            refreshed_steps,
+            expected_step,
+        )
+        verifier_index = verifier.get("semantic_step_index")
+        if isinstance(verifier_index, int):
+            logical_progress = max(
+                logical_progress,
+                verifier_index - trial.gold_prefix_length,
+            )
+    _validate_resolved_budget_aggregate(task, trial, arm, turns)
+
+
+def _validate_executor_evidence(
+    task: Any,
+    trial: TrialSpec,
+    arm: dict[str, Any],
+    turn: dict[str, Any],
+) -> None:
+    if turn.get("dispatch_status") == "budget_rejected":
+        return
+    evidence = turn.get("executor_evidence")
+    if not isinstance(evidence, dict):
+        raise ValueError(f"{trial.pair_id}: executor evidence missing")
+    if evidence.get("cursor_readback_verified") is not True:
+        raise ValueError(f"{trial.pair_id}: post-dispatch cursor readback missing")
+    if evidence.get("interventions_between_policy_turns") != []:
+        raise ValueError(f"{trial.pair_id}: hidden between-turn intervention detected")
+    active = evidence.get("active_window")
+    if (
+        not isinstance(active, dict)
+        or active.get("method") not in {"x11_getactivewindow", "wayland_foreground_surface"}
+        or not isinstance(active.get("window_id"), str)
+        or not active["window_id"]
+        or active.get("expected_application") != task.app
+        or active.get("observed_application") != task.app
+    ):
+        raise ValueError(f"{trial.pair_id}: true active-window evidence missing")
+    if arm.get("arm") != ARMS[0] or "click" not in turn.get("action_classes", []):
+        return
+    requested = turn.get("requested_action")
+    operations = requested.get("operations") if isinstance(requested, dict) else None
+    if not isinstance(operations, list):
+        raise ValueError(f"{trial.pair_id}: native click request schema mismatch")
+    click_coordinates = [
+        operation.get("coordinate")
+        for operation in operations
+        if isinstance(operation, dict) and operation.get("action") == "click"
+    ]
+    if any(
+        not isinstance(coordinate, list)
+        or len(coordinate) != 2
+        or not all(isinstance(value, int) and not isinstance(value, bool) for value in coordinate)
+        for coordinate in click_coordinates
+    ):
+        raise ValueError(f"{trial.pair_id}: invalid native click coordinate")
+    requested_clicks = [
+        (index, operation.get("coordinate"))
+        for index, operation in enumerate(operations)
+        if isinstance(operation, dict) and operation.get("action") == "click"
+    ]
+    lowered_clicks = [
+        (index, operation)
+        for index, operation in enumerate(turn.get("lowered_operations", []))
+        if isinstance(operation, dict) and operation.get("action") == "click"
+    ]
+    expected: list[dict[str, Any]] = []
+    if len(lowered_clicks) == len(requested_clicks):
+        for (requested_index, coordinate), (lowered_index, lowered) in zip(
+            requested_clicks, lowered_clicks, strict=True
+        ):
+            if (
+                lowered.get("source_operation_index") != requested_index
+                or lowered.get("coordinate") != coordinate
+            ):
+                break
+            expected.append(
+                {
+                    "requested_operation_index": requested_index,
+                    "lowered_operation_index": lowered_index,
+                    "requested_coordinate": coordinate,
+                    "dispatched_coordinate": coordinate,
+                    "post_click_cursor": coordinate,
+                }
+            )
+    if (
+        len(expected) != len(requested_clicks)
+        or not expected
+        or evidence.get("native_click_dispatches") != expected
+    ):
+        raise ValueError(f"{trial.pair_id}: native click dispatch evidence mismatch")
+    if (
+        evidence.get("post_action_cursor_verified") is not True
+        or evidence.get("post_action_cursor") != turn.get("cursor_after")
+    ):
+        raise ValueError(f"{trial.pair_id}: native post-action cursor evidence mismatch")
+
+
+def _validate_state_probe_evidence(
+    task: Any,
+    trial: TrialSpec,
+    turn: dict[str, Any],
+) -> None:
+    evidence = turn.get("state_probe_evidence")
+    if (
+        not isinstance(evidence, dict)
+        or evidence.get("read_only") is not True
+        or evidence.get("input_events") != []
+        or evidence.get("application") != task.app
+        or evidence.get("method")
+        not in {
+            "uno_readonly_state_probe",
+            "filesystem_readonly_state_probe",
+            "browser_dom_readonly_state_probe",
+            "editor_readonly_state_probe",
+            "test_readonly_state_probe",
+        }
+    ):
+        raise ValueError(f"{trial.pair_id}: state probe was not input-free/read-only")
+
+
+def _validate_resolved_budget_receipt(
+    task: Any,
+    trial: TrialSpec,
+    arm: dict[str, Any],
+    turn: dict[str, Any],
+    current_binding: str,
+    refreshed_steps: set[int],
+    expected_step: int,
+) -> str:
+    if turn.get("dispatch_status") == "budget_rejected":
+        if any(
+            turn.get(key) not in (0, "", [])
+            for key in (
+                "semantic_step_index",
+                "resolved_primitive_actions",
+                "resolved_primitive_events",
+                "resolved_budget_sha256",
+                "binding_sha256",
+                "resolved_actions",
+            )
+        ):
+            raise ValueError(f"{trial.pair_id}: invalid budget-rejected receipt")
+        return current_binding
+    actions = turn.get("resolved_actions")
+    resolved_actions = turn.get("resolved_primitive_actions")
+    resolved_events = turn.get("resolved_primitive_events")
+    binding = turn.get("binding_sha256")
+    if (
+        turn.get("semantic_step_index") != expected_step
+        or not isinstance(actions, list)
+        or not isinstance(resolved_actions, int)
+        or len(actions) != resolved_actions
+        or resolved_actions != turn.get("primitive_action_count")
+        or not isinstance(resolved_events, int)
+        or resolved_events != len(turn.get("operations", []))
+        or not _is_sha256(binding)
+    ):
+        raise ValueError(f"{trial.pair_id}: invalid live-resolved budget receipt")
+    if task.app == "chrome" and expected_step == 3 and 2 not in refreshed_steps:
+        expected_transition = {
+            "after_completed_step": 2,
+            "previous_binding_sha256": current_binding,
+            "refreshed_binding_sha256": binding,
+            "live_probe": True,
+        }
+        if (
+            turn.get("executor_evidence", {}).get("binding_refresh")
+            != expected_transition
+            or binding == current_binding
+        ):
+            raise ValueError(f"{trial.pair_id}: Chrome live binding refresh missing")
+        refreshed_steps.add(2)
+    elif binding != current_binding:
+        raise ValueError(f"{trial.pair_id}: unregistered live binding transition")
+    payload = resolved_segment_budget_payload(
+        task_id=task.task_id,
+        fixture_sha256=task.fixture_sha256,
+        action_schema=arm["action_interface"],
+        semantic_step_index=expected_step,
+        actions=tuple(actions),
+        resolved_primitive_actions=resolved_actions,
+        resolved_primitive_events=resolved_events,
+        binding_sha256=binding,
+    )
+    if turn.get("resolved_budget_sha256") != sha256_json(payload):
+        raise ValueError(f"{trial.pair_id}: resolved budget receipt hash mismatch")
+    return binding
+
+
+def _validate_resolved_budget_aggregate(
+    task: Any,
+    trial: TrialSpec,
+    arm: dict[str, Any],
+    turns: list[dict[str, Any]],
+) -> None:
+    resolved = [
+        turn for turn in turns if turn.get("dispatch_status") != "budget_rejected"
+    ]
+    payload = {
+        "schema_version": 1,
+        "schema_id": "proper_vm_runtime_budget_aggregate_v1",
+        "task_id": task.task_id,
+        "fixture_sha256": task.fixture_sha256,
+        "action_schema": arm["action_interface"],
+        "segment_budget_sha256": [
+            turn["resolved_budget_sha256"] for turn in resolved
+        ],
+        "binding_sha256": [turn["binding_sha256"] for turn in resolved],
+        "resolved_primitive_actions": sum(
+            turn["resolved_primitive_actions"] for turn in resolved
+        ),
+        "resolved_primitive_events": sum(
+            turn["resolved_primitive_events"] for turn in resolved
+        ),
+    }
+    expected = dict(payload)
+    expected["aggregate_sha256"] = sha256_json(payload)
+    if arm.get("resolved_budget_aggregate") != expected:
+        raise ValueError(f"{trial.pair_id}: resolved budget aggregate mismatch")
+
+
+def _is_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and value.lower() == value
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _recompute_budget_failure(
@@ -429,14 +746,20 @@ def _mcnemar_descriptive(native: list[int], compact: list[int]) -> dict[str, Any
 def _pass_at_k(
     manifest: EvaluationManifest,
     rows: list[dict[str, Any]],
+    planned_trials: Iterable[TrialSpec],
 ) -> dict[str, Any]:
     cells: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         cells[row["cell_id"]].append(row)
+    planned_cells = {trial.cell_id for trial in planned_trials}
     output: dict[str, Any] = {}
     for k in (1, 4, 8):
-        eligible = [values for values in cells.values() if len(values) >= k]
-        enough = bool(cells) and len(eligible) == len(cells)
+        eligible = [
+            cells[cell_id]
+            for cell_id in sorted(planned_cells)
+            if len(cells[cell_id]) >= k
+        ]
+        enough = bool(planned_cells) and len(eligible) == len(planned_cells)
         stochastic = {
             arm.name: _stochastic_generation(arm.generation) if k > 1 else True
             for arm in manifest.arms
@@ -458,10 +781,10 @@ def _pass_at_k(
         output[f"pass@{k}"] = {
             "feasible": feasible,
             "enough_complete_attempts_per_cell": enough,
-            "cells_total": len(cells),
+            "cells_total": len(planned_cells),
             "cells_with_at_least_k_attempts": len(eligible),
             "stochastic_generation_configured": stochastic,
-        "paired_task_reset_per_attempt": True,
+            "paired_task_reset_per_attempt": True,
             "unique_fixed_generation_seed_per_attempt": True,
             "estimate_by_arm": estimates,
         }

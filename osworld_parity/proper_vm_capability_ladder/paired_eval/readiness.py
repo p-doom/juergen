@@ -27,6 +27,7 @@ READINESS_CHECKS = {
     "sameapp_8_cells",
     "vm_isolation_and_provenance",
 }
+DEPENDENCY_ROLES = {"executor_readiness", "task_setup_validation"}
 _CONSUMPTION_TOKEN = object()
 
 
@@ -174,9 +175,22 @@ def _validate_labctl_binding(
         raise ReadinessError(f"cannot read LABCTL_CONTEXT {context_path}: {exc}") from exc
     if not isinstance(context, dict) or not isinstance(context.get("inputs"), list):
         raise ReadinessError("LABCTL_CONTEXT.inputs must be an array")
+    inputs = context["inputs"]
+    if (
+        len(inputs) != 2
+        or any(
+            not isinstance(value, dict)
+            or set(value) != {"role", "artifact_id", "resolved_path"}
+            for value in inputs
+        )
+        or {value["role"] for value in inputs} != DEPENDENCY_ROLES
+    ):
+        raise ReadinessError(
+            "LABCTL_CONTEXT inputs must be exactly executor_readiness and task_setup_validation"
+        )
     matches = [
         value
-        for value in context["inputs"]
+        for value in inputs
         if isinstance(value, dict) and value.get("role") == "executor_readiness"
     ]
     if len(matches) != 1:
@@ -184,8 +198,6 @@ def _validate_labctl_binding(
             "LABCTL_CONTEXT must contain exactly one executor_readiness input"
         )
     binding = matches[0]
-    if set(binding) != {"role", "artifact_id", "resolved_path"}:
-        raise ReadinessError("executor_readiness input field set drifted")
     artifact_id = binding.get("artifact_id")
     if artifact_id != expected_artifact_id:
         raise ReadinessError(

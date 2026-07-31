@@ -34,7 +34,13 @@ positive temperature, and a unique deterministic generation seed per attempt.
 ## Fail-closed execution gate
 
 `plan` and `validate` never import a runtime.  `run` requires an explicit
-`--executor-ready /registered/artifact/EXECUTOR_READY.json`.  The file SHA-256
+`--executor-ready /registered/artifact/EXECUTOR_READY.json` and an explicit
+`--task-setup-validation /registered/setup/task_setup_validation.json`. The
+two raw file SHA-256 values and artifact IDs must match the sealed evaluation
+manifest. The setup artifact must bind the exact development task-manifest
+payload, VM snapshot, setup commit, fixture and asset hashes, and full task
+coverage; the evaluator only consumes it and never reruns mutable setup
+validation. The readiness file SHA-256
 must match the sealed evaluation manifest, its status and all checks must pass,
 and it must bind the executor commit, capability report, both action
 interfaces, and VM snapshot.  The CLI consumes this marker before importing
@@ -42,9 +48,10 @@ the runtime factory; it never searches the repository for or creates a marker.
 The accepted certification schema is exactly `proper_vm_executor_cert_v1`,
 including its ordered four-interface list, eight frozen checks, canonical
 report self-hash, and `osworld_ready` snapshot binding.
-The registered artifact identity is independently matched through the one
-`executor_readiness` input in the JSON file named by `LABCTL_CONTEXT`; no input
-alias, path search, or marker self-ID is accepted.
+The two registered artifact identities are independently matched through the
+exact `executor_readiness` and `task_setup_validation` inputs in the JSON file
+named by `LABCTL_CONTEXT`; no input alias, path search, or marker self-ID is
+accepted.
 
 ```text
 python -m osworld_parity.proper_vm_capability_ladder.paired_eval validate \
@@ -59,6 +66,14 @@ python -m osworld_parity.proper_vm_capability_ladder.paired_eval plan \
 
 No `run` command is part of repository validation.  Scientific or held-out
 execution is rejected by manifest validation.
+The result JSONL is written only after every planned pair completes, using one
+atomic final rename; there is no partial success marker.
+
+This partial successor deliberately leaves the final curriculum runtime
+binding schema unapproved. Production `run` therefore rejects before importing
+or starting a runtime. The provisional binding/receipt shape is exercised only
+by contract tests; a later independently reviewed curriculum successor must
+pin the final schema before execution can be enabled.
 
 ## Result contract
 
@@ -68,6 +83,13 @@ traces, cursor before/after, executor evidence, verifier semantic state and
 hash, parse/dispatch status, and both raw and semantic first divergence.
 Task coordinates are live-probe references resolved independently after every
 reset. Both arms must resolve the same initial cursor and reset signature.
+The runtime must expose the reset cursor as an unmodified live probe and may
+not pre-center it on a target. It must also prove the true active window and
+that no hidden keyboard/mouse intervention occurred between policy turns.
+For native clicks, requested absolute coordinates must exactly match the
+lowered dispatch trace and per-click cursor readback; scoring uses only the
+post-action fresh semantic state, so an exact-action mismatch cannot override
+semantic success or failure.
 Model turns, logical steps, primitive action lines, emitted events, output
 tokens, and wall time are separately decremented and logged. Any overrun or
 parse/dispatch error is a scored failure.

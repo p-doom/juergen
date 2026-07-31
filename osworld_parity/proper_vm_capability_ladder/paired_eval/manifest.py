@@ -68,7 +68,7 @@ class Task:
     reset_strategy: str
     verifier_kind: str
     verifier_module: str
-    budgets: dict[str, Any]
+    budget_contract: dict[str, Any]
     geometry_contract: dict[str, Any]
     initial_cursor_contract: dict[str, Any]
     semantic_steps: tuple[SemanticStep, ...]
@@ -107,12 +107,18 @@ class Task:
         )
 
     @property
-    def pair_primitive_action_budget(self) -> int:
-        return max(int(value) for value in self.budgets["primitive_actions"].values())
+    def pair_primitive_action_cap(self) -> int:
+        return max(
+            int(value)
+            for value in self.budget_contract["primitive_action_caps"].values()
+        )
 
     @property
-    def pair_primitive_event_budget(self) -> int:
-        return max(int(value) for value in self.budgets["primitive_events"].values())
+    def pair_primitive_event_cap(self) -> int:
+        return max(
+            int(value)
+            for value in self.budget_contract["primitive_event_caps"].values()
+        )
 
 
 @dataclass(frozen=True)
@@ -149,6 +155,9 @@ class EvaluationManifest:
     expected_executor_ready_sha256: str
     expected_executor_ready_artifact_id: str
     expected_executor_certification_schema: str
+    expected_task_setup_validation_sha256: str
+    expected_task_setup_validation_artifact_id: str
+    expected_task_setup_validation_schema: str
     evaluator_commit: str
     order_seed: int
     shard_seed: int
@@ -248,6 +257,15 @@ def validate_evaluation_manifest(
     readiness_schema = evaluation.get("expected_executor_certification_schema")
     if readiness_schema != "proper_vm_executor_cert_v1":
         raise ManifestError("expected executor certification schema drift")
+    setup_sha = evaluation.get("expected_task_setup_validation_sha256")
+    if not _is_sha256(setup_sha):
+        raise ManifestError("expected_task_setup_validation_sha256 must pin an artifact")
+    setup_artifact_id = evaluation.get("expected_task_setup_validation_artifact_id")
+    if not isinstance(setup_artifact_id, str) or not setup_artifact_id:
+        raise ManifestError("expected_task_setup_validation_artifact_id is required")
+    setup_schema = evaluation.get("expected_task_setup_validation_schema")
+    if setup_schema != "multistep_sameapp_task_setup_validation_v1":
+        raise ManifestError("expected task setup-validation schema drift")
     evaluator_commit = evaluation.get("evaluator_commit")
     if not _is_git_commit(evaluator_commit):
         raise ManifestError("evaluator_commit must be a lowercase 40-hex commit")
@@ -316,6 +334,9 @@ def validate_evaluation_manifest(
         expected_executor_ready_sha256=readiness_sha,
         expected_executor_ready_artifact_id=readiness_artifact_id,
         expected_executor_certification_schema=readiness_schema,
+        expected_task_setup_validation_sha256=setup_sha,
+        expected_task_setup_validation_artifact_id=setup_artifact_id,
+        expected_task_setup_validation_schema=setup_schema,
         evaluator_commit=evaluator_commit,
         order_seed=seeds["order_seed"],
         shard_seed=seeds["shard_seed"],
@@ -491,17 +512,26 @@ def _parse_task(value: Any) -> Task:
         or not isinstance(geometry.get("required_targets"), list)
     ):
         raise ManifestError(f"{value['task_id']}: geometry contract drift")
-    budgets = value.get("budgets")
-    if not isinstance(budgets, dict) or set(budgets) != {
+    budget_contract = value.get("budget_contract")
+    if not isinstance(budget_contract, dict) or set(budget_contract) != {
+        "kind",
         "semantic_steps",
-        "primitive_actions",
-        "primitive_events",
+        "primitive_action_caps",
+        "primitive_event_caps",
+        "resolution",
+        "resolved_budget_hash_required",
     }:
-        raise ManifestError(f"{value['task_id']}: task budget field set drift")
-    if budgets["semantic_steps"] != count:
+        raise ManifestError(f"{value['task_id']}: task budget-contract field set drift")
+    if (
+        budget_contract["kind"] != "conservative_caps"
+        or budget_contract["resolution"] != "after_live_binding"
+        or budget_contract["resolved_budget_hash_required"] is not True
+    ):
+        raise ManifestError(f"{value['task_id']}: task budget contract is not live-resolved")
+    if budget_contract["semantic_steps"] != count:
         raise ManifestError(f"{value['task_id']}: semantic budget mismatch")
-    for budget_name in ("primitive_actions", "primitive_events"):
-        arm_values = budgets[budget_name]
+    for budget_name in ("primitive_action_caps", "primitive_event_caps"):
+        arm_values = budget_contract[budget_name]
         if not isinstance(arm_values, dict) or set(arm_values) != set(ACTION_INTERFACES.values()):
             raise ManifestError(f"{value['task_id']}: {budget_name} interface drift")
         if any(not isinstance(item, int) or isinstance(item, bool) or item < 1 for item in arm_values.values()):
@@ -530,7 +560,7 @@ def _parse_task(value: Any) -> Task:
         reset_strategy=snapshot["reset_strategy"],
         verifier_kind=verifier["kind"],
         verifier_module=verifier["module"],
-        budgets=dict(budgets),
+        budget_contract=dict(budget_contract),
         geometry_contract=dict(geometry),
         initial_cursor_contract=dict(initial),
         semantic_steps=tuple(steps),

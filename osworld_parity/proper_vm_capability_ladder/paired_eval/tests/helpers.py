@@ -17,6 +17,8 @@ def task_row(task_id: str = "writer-dev-1", seed: int = 101) -> dict[str, Any]:
         "app": "writer",
         "split": "development",
         "parameter_seed": seed,
+        "gate_role": "primary_gate",
+        "coverage_label": "writer_primary",
         "semantic_steps": [
             {
                 "step_id": "replace",
@@ -28,28 +30,40 @@ def task_row(task_id: str = "writer-dev-1", seed: int = 101) -> dict[str, Any]:
             {
                 "step_id": "save",
                 "intent": "save document",
-                "capabilities": ["hotkey", "ctrl_s"],
+                "capabilities": ["hotkey"],
                 "target_ref": "writer.document.saved",
             },
         ],
         "semantic_step_count": 2,
-        "budgets": {
+        "budget_contract": {
+            "kind": "conservative_caps",
             "semantic_steps": 2,
-            "primitive_actions": {
+            "primitive_action_caps": {
                 "native_absolute_sequence_v1": 3,
                 "compact_raw_phaseb_v1": 4,
             },
-            "primitive_events": {
+            "primitive_event_caps": {
                 "native_absolute_sequence_v1": 8,
                 "compact_raw_phaseb_v1": 10,
             },
+            "resolution": "after_live_binding",
+            "resolved_budget_hash_required": True,
         },
         "instruction": "Replace the text and save the Writer document.",
         "snapshot": {
             "id": "osworld_ready",
             "reset_strategy": "restore_snapshot_then_seeded_setup",
+            "fresh_process_per_episode": True,
         },
-        "assets": [],
+        "assets": [
+            {
+                "asset_id": "writer-document",
+                "kind": "document",
+                "generator": "fake_fixture_v1",
+                "seed": seed,
+                "content_sha256": "b" * 64,
+            }
+        ],
         "params": {"initial_text": "old"},
         "expected": {"text": "new", "saved": True},
         "near_miss": {"text": "new", "saved": False},
@@ -60,12 +74,16 @@ def task_row(task_id: str = "writer-dev-1", seed: int = 101) -> dict[str, Any]:
             "entrypoint": "main",
             "result_schema": "semantic_oracle_result_v2",
             "state_extractor_entrypoint": "extract_state",
+            "state_extractor_module": "osworld_parity.proper_vm_capability_ladder.paired_eval.tests.fake_verifier",
+            "policy_visible": False,
         },
         "geometry_contract": {
             "source": "live_probe",
             "probe_version": "test_geometry_probe_v1",
             "state_probe_version": "test_state_probe_v1",
             "required_targets": ["editor"],
+            "target_bindings": {"editor": "writer.editor"},
+            "runtime_validation": ["in_viewport"],
         },
         "initial_cursor": {
             "source": "live_probe",
@@ -89,8 +107,22 @@ def task_row(task_id: str = "writer-dev-1", seed: int = 101) -> dict[str, Any]:
         ],
         "coverage": {"click": True, "coalesced_type": True, "ctrl_s": True},
         "exclusions": ["horizontal_scroll", "timing_sensitive_double_click"],
-        "transport_requirements": ["unicode_safe_type", "cursor_readback"],
-        "reset_contract": {"second_reset_removes_first_episode_state": True},
+        "transport_requirements": {
+            "action_interface_ids": [
+                "native_absolute_sequence_v1",
+                "compact_raw_phaseb_v1",
+            ],
+            "unicode_safe_type": True,
+            "cursor_readback": True,
+        },
+        "reset_contract": {
+            "reset_reject": True,
+            "near_miss_reject": True,
+            "gold_pass": True,
+            "reproducible_reset": True,
+            "fresh_process_final_oracle": True,
+            "zero_held_inputs": True,
+        },
     }
     unsigned = dict(row)
     row["fixture_sha256"] = hashlib.sha256(canonical_json(unsigned)).hexdigest()
@@ -109,7 +141,12 @@ def task_manifest() -> tuple[dict[str, Any], str]:
     return value, seal
 
 
-def evaluation_manifest(task_seal: str, readiness_sha: str, attempts: int = 8) -> dict[str, Any]:
+def evaluation_manifest(
+    task_seal: str,
+    readiness_sha: str,
+    attempts: int = 8,
+    setup_validation_sha: str = "a" * 64,
+) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "suite": "paired_real_vm_development_v1",
@@ -120,6 +157,9 @@ def evaluation_manifest(task_seal: str, readiness_sha: str, attempts: int = 8) -
         "expected_executor_ready_sha256": readiness_sha,
         "expected_executor_ready_artifact_id": "artifact-executor-ready-test",
         "expected_executor_certification_schema": "proper_vm_executor_cert_v1",
+        "expected_task_setup_validation_sha256": setup_validation_sha,
+        "expected_task_setup_validation_artifact_id": "artifact-task-setup-test",
+        "expected_task_setup_validation_schema": "multistep_sameapp_task_setup_validation_v1",
         "evaluator_commit": "8" * 40,
         "arms": [
             {
@@ -205,14 +245,70 @@ def ready_marker(path: Path) -> tuple[Path, str]:
     return path, hashlib.sha256(raw).hexdigest()
 
 
-def labctl_context(path: Path, artifact_root: Path) -> Path:
+def task_setup_validation(
+    path: Path,
+    tasks: dict[str, Any],
+    task_manifest_payload_sha256: str,
+) -> tuple[Path, str]:
+    rows = sorted(tasks["tasks"], key=lambda item: item["task_id"])
+    task_ids = [row["task_id"] for row in rows]
+    artifact = {
+        "schema_version": 1,
+        "schema_id": "multistep_sameapp_task_setup_validation_v1",
+        "artifact_role": "task_setup_validation",
+        "artifact_id": "artifact-task-setup-test",
+        "status": "passed",
+        "development_only": True,
+        "heldout_inputs_present": False,
+        "sealed_eval_executed": False,
+        "task_manifest_payload_sha256": task_manifest_payload_sha256,
+        "vm_snapshot_id": "osworld_ready",
+        "setup_commit": "7" * 40,
+        "fixtures": [
+            {
+                "task_id": row["task_id"],
+                "fixture_sha256": row["fixture_sha256"],
+                "assets": sorted(
+                    [
+                        {
+                            "asset_id": asset["asset_id"],
+                            "content_sha256": asset["content_sha256"],
+                        }
+                        for asset in row["assets"]
+                    ],
+                    key=lambda item: item["asset_id"],
+                ),
+            }
+            for row in rows
+        ],
+        "coverage": {
+            "expected_task_ids": task_ids,
+            "validated_task_ids": task_ids,
+            "full_fixture_coverage": True,
+        },
+    }
+    raw = (json.dumps(artifact, sort_keys=True) + "\n").encode("utf-8")
+    path.write_bytes(raw)
+    return path, hashlib.sha256(raw).hexdigest()
+
+
+def labctl_context(
+    path: Path,
+    artifact_root: Path,
+    setup_artifact_root: Path | None = None,
+) -> Path:
     value = {
         "inputs": [
             {
                 "role": "executor_readiness",
                 "artifact_id": "artifact-executor-ready-test",
                 "resolved_path": str(artifact_root.resolve()),
-            }
+            },
+            {
+                "role": "task_setup_validation",
+                "artifact_id": "artifact-task-setup-test",
+                "resolved_path": str((setup_artifact_root or artifact_root).resolve()),
+            },
         ]
     }
     path.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")

@@ -12,6 +12,10 @@ ACTION_INTERFACES = {
     "compact_raw_phaseb": "compact_raw_phaseb_v1",
 }
 RUNTIME_CONTRACT_SCHEMA = "proper_vm_paired_runtime_v1"
+# Deliberately unset in this partial successor. Production execution remains
+# reject-all until a corrected curriculum runtime binding is independently
+# approved and pinned here by a later commit.
+APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA: str | None = None
 MODES = (
     "gold_history_one_step",
     "gold_prefix_horizon",
@@ -43,6 +47,32 @@ def canonical_json(value: Any) -> bytes:
 
 def sha256_json(value: Any) -> str:
     return hashlib.sha256(canonical_json(value)).hexdigest()
+
+
+def resolved_segment_budget_payload(
+    *,
+    task_id: str,
+    fixture_sha256: str,
+    action_schema: str,
+    semantic_step_index: int,
+    actions: tuple[Any, ...],
+    resolved_primitive_actions: int,
+    resolved_primitive_events: int,
+    binding_sha256: str,
+) -> dict[str, Any]:
+    """Provisional canonical receipt used only by independent contract tests."""
+
+    return {
+        "schema_version": 1,
+        "task_id": task_id,
+        "fixture_sha256": fixture_sha256,
+        "action_schema": action_schema,
+        "semantic_step_index": semantic_step_index,
+        "resolved_primitive_actions": resolved_primitive_actions,
+        "resolved_primitive_events": resolved_primitive_events,
+        "binding_sha256": binding_sha256,
+        "actions": actions,
+    }
 
 
 def hash_observation(payload: bytes | str | dict[str, Any] | list[Any]) -> str:
@@ -94,6 +124,12 @@ class ExecutionReceipt:
     backend_primitives: tuple[str, ...] = ()
     executor_evidence: dict[str, Any] = field(default_factory=dict)
     primitive_action_count: int = 1
+    resolved_actions: tuple[Any, ...] = ()
+    semantic_step_index: int = 0
+    resolved_primitive_actions: int = 0
+    resolved_primitive_events: int = 0
+    resolved_budget_sha256: str = ""
+    binding_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -113,6 +149,14 @@ class VerifierState:
 
 
 @dataclass(frozen=True)
+class StateProbe:
+    """Read-only state extraction performed after an executor turn."""
+
+    state: dict[str, Any]
+    evidence: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class SessionStart:
     task_id: str
     snapshot_id: str
@@ -120,6 +164,11 @@ class SessionStart:
     cursor_ref: str
     cursor: tuple[int, int]
     reset_signature: str
+    cursor_source: str
+    cursor_precentered: bool
+    reset_probe_count: int
+    binding_sha256: str
+    binding_refreshed_after_steps: tuple[int, ...]
 
 
 class ArmSession(Protocol):
@@ -140,7 +189,7 @@ class ArmSession(Protocol):
 
     def execute(self, requested: RequestedAction) -> ExecutionReceipt: ...
 
-    def probe_state(self) -> dict[str, Any]: ...
+    def probe_state(self) -> StateProbe: ...
 
     def close(self) -> None: ...
 

@@ -11,11 +11,16 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .aggregate import aggregate_results, load_jsonl
+from .contracts import APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA
 from .curriculum_adapter import load_curriculum_evaluation_manifest
 from .manifest import EvaluationManifest
 from .planning import build_plan
 from .readiness import ConsumedReadiness, consume_executor_ready
 from .runner import PairedEvaluationRunner, write_jsonl_atomic
+from .setup_validation import (
+    ConsumedTaskSetupValidation,
+    consume_task_setup_validation,
+)
 
 
 def _common(parser: argparse.ArgumentParser) -> None:
@@ -30,7 +35,9 @@ def _shard(parser: argparse.ArgumentParser) -> None:
 
 def _load_factory(
     manifest: EvaluationManifest,
-) -> Callable[[EvaluationManifest, ConsumedReadiness], Any]:
+) -> Callable[
+    [EvaluationManifest, ConsumedReadiness, ConsumedTaskSetupValidation], Any
+]:
     binding = manifest.runtime
     spec = importlib.util.find_spec(binding.module)
     source = None if spec is None else spec.origin
@@ -76,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
     _common(run)
     _shard(run)
     run.add_argument("--executor-ready", type=Path, required=True)
+    run.add_argument("--task-setup-validation", type=Path, required=True)
     run.add_argument("--output", type=Path, required=True)
 
     aggregate = commands.add_parser("aggregate")
@@ -132,9 +140,28 @@ def main(argv: list[str] | None = None) -> int:
             expected_artifact_id=manifest.expected_executor_ready_artifact_id,
             labctl_context_path=Path(context_value),
         )
+        from ..rung2_sameapp.curriculum.manifests import load_manifest
+
+        curriculum = load_manifest("development", root=args.task_manifest.parent)
+        setup_validation = consume_task_setup_validation(
+            args.task_setup_validation,
+            manifest=manifest,
+            labctl_context_path=Path(context_value),
+            curriculum_manifest=curriculum,
+        )
+        if APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA is None:
+            raise RuntimeError(
+                "production paired execution is disabled until the final curriculum "
+                "runtime binding is independently approved"
+            )
         factory = _load_factory(manifest)
-        runtime = factory(manifest, readiness)
-        rows = PairedEvaluationRunner(manifest, readiness, runtime).run(plan)
+        runtime = factory(manifest, readiness, setup_validation)
+        rows = PairedEvaluationRunner(
+            manifest,
+            readiness,
+            setup_validation,
+            runtime,
+        ).run(plan)
         write_jsonl_atomic(args.output, rows)
         return 0
     if args.command == "aggregate":

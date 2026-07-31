@@ -1,4 +1,4 @@
-"""Strict adapter for semantic curriculum schema v1 (commit 1ff594c)."""
+"""Strict adapter for the live-bound semantic curriculum v1."""
 
 from __future__ import annotations
 
@@ -27,11 +27,13 @@ CURRICULUM_TASK_FIELDS = {
     "app",
     "split",
     "parameter_seed",
+    "gate_role",
+    "coverage_label",
     "instruction",
     "natural_multistep",
     "semantic_steps",
     "semantic_step_count",
-    "budgets",
+    "budget_contract",
     "snapshot",
     "assets",
     "params",
@@ -107,8 +109,15 @@ def adapt_curriculum_manifest(
             raise ManifestError("semantic curriculum task is not natural multistep")
         if not 2 <= int(row.get("semantic_step_count", 0)) <= 4:
             raise ManifestError("semantic curriculum task is not 2-4 semantic steps")
-        if row.get("budgets", {}).get("semantic_steps") != row["semantic_step_count"]:
+        budget = row.get("budget_contract", {})
+        if budget.get("semantic_steps") != row["semantic_step_count"]:
             raise ManifestError("semantic curriculum semantic budget is invalid")
+        if (
+            budget.get("kind") != "conservative_caps"
+            or budget.get("resolution") != "after_live_binding"
+            or budget.get("resolved_budget_hash_required") is not True
+        ):
+            raise ManifestError("semantic curriculum budget is not live-resolved")
         for step in row.get("semantic_steps", []):
             if not isinstance(step, dict) or set(step) != {
                 "step_id",

@@ -80,11 +80,11 @@ def _trial(
         if mode == "gold_history_one_step"
         else task.semantic_step_count - prefix
     )
-    if task.pair_primitive_action_budget > int(
+    if task.pair_primitive_action_cap > int(
         manifest.budget["max_primitive_actions_per_trial"]
     ):
         raise ValueError(f"{task.task_id}: primitive action budget exceeds evaluation ceiling")
-    if task.pair_primitive_event_budget > int(
+    if task.pair_primitive_event_cap > int(
         manifest.budget["max_emitted_primitive_events_per_trial"]
     ):
         raise ValueError(f"{task.task_id}: primitive event budget exceeds evaluation ceiling")
@@ -97,8 +97,8 @@ def _trial(
     budget = {
         "model_turns": horizon,
         "logical_semantic_steps": logical_steps,
-        "primitive_actions": task.pair_primitive_action_budget,
-        "emitted_primitive_events": task.pair_primitive_event_budget,
+        "primitive_actions": task.pair_primitive_action_cap,
+        "emitted_primitive_events": task.pair_primitive_event_cap,
         "output_tokens_per_turn": int(manifest.budget["max_output_tokens_per_turn"]),
         "total_output_tokens": min(
             int(manifest.budget["max_total_output_tokens"]),
@@ -147,7 +147,7 @@ def build_plan(
                 (
                     "gold_history_one_step",
                     prefix,
-                    task.pair_primitive_action_budget,
+                    task.pair_primitive_action_cap,
                 )
             )
             for horizon in GOLD_PREFIX_HORIZONS:
@@ -156,7 +156,7 @@ def build_plan(
             (
                 "natural_closed_loop",
                 0,
-                task.pair_primitive_action_budget,
+                task.pair_primitive_action_cap,
             )
         )
         for mode, prefix, horizon in cells:
