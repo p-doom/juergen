@@ -1,0 +1,39 @@
+# Exact task/reset/sampling mate of collect_candidate; policy role must be
+# native_absolute_baseline. Construction-only and deliberately has no GPU request.
+name = "stage5_collect_native_absolute_v1_construction_only"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli collect \
+  --tasks "$1" --policy "$2" --blocklist "$3" --adapter "$4" \
+  --actor-id "$5" --out "$6"
+test -f "$6/collection_manifest.json"
+''', "--", "{args.tasks}", "{args.policy}", "{args.blocklist}", "{args.adapter}", "{args.actor_id}", "{outputs.rollouts.path}"]
+
+[resources]
+gpus = 0
+cpus = 8
+mem = "32GB"
+time = "04:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1"]
+
+[outputs.rollouts]
+type = "dataset"
+marker = "collection_manifest.json"
+alias = "stage5_native_absolute_{run.id}"
+
+[args]
+tasks = "/fast/project/REPLACE_ME/train_adjacent_candidate_tasks.jsonl"
+policy = "/fast/project/REPLACE_ME/native_absolute_policy.json"
+blocklist = "/fast/project/REPLACE_ME/official_eval_hash_blocklist.json"
+adapter = "REPLACE_ME.stage5_adapter:collector_factory"
+actor_id = "native-absolute-actor-{run.id}"
+
+[env]
+PYTHONUNBUFFERED = "1"
+HF_HUB_OFFLINE = "1"

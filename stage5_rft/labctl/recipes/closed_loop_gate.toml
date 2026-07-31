@@ -1,0 +1,28 @@
+name = "stage5_closed_loop_gate_v1_construction_only"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli gate \
+  --metrics "$1" --config "$REPO/stage5_rft/config/promotion_gates.json" \
+  --phase closed_loop_parity --out "$2/gate_report.json"
+jq -e '.passed == true and .launch_authorized == false' "$2/gate_report.json"
+''', "--", "{args.metrics}", "{outputs.report.path}"]
+
+[resources]
+gpus = 0
+cpus = 1
+mem = "4GB"
+time = "00:10:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+
+[outputs.report]
+type = "dataset"
+marker = "gate_report.json"
+alias = "stage5_closed_loop_gate_{run.id}"
+
+[args]
+metrics = "/fast/project/REPLACE_ME/stage5_matched_metrics/metrics.json"

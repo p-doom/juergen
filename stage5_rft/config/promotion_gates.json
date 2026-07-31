@@ -1,0 +1,31 @@
+{
+  "schema_version": "stage5.promotion_gates.v1",
+  "status": "preregistered_construction_only",
+  "phases": {
+    "construction": [
+      {"name": "complete traces", "metric": "trace.completeness_rate", "op": ">=", "threshold": 1.0},
+      {"name": "deterministic resets", "metric": "reset.deterministic_rate", "op": ">=", "threshold": 1.0},
+      {"name": "exact replay", "metric": "replay.pass_rate", "op": ">=", "threshold": 1.0},
+      {"name": "no heldout contamination", "metric": "contamination.overlap_count", "op": "<=", "threshold": 0.0},
+      {"name": "actor provenance pinned", "metric": "provenance.mismatch_count", "op": "<=", "threshold": 0.0},
+      {"name": "episode-atomic resume", "metric": "resume.atomic_rate", "op": ">=", "threshold": 1.0}
+    ],
+    "closed_loop_parity": [
+      {"name": "single-step complete pairing", "metric": "matched.single_step.pair_coverage", "op": ">=", "threshold": 1.0},
+      {"name": "multi-step complete pairing", "metric": "matched.multi_step.pair_coverage", "op": ">=", "threshold": 1.0},
+      {"name": "single-step noninferiority", "metric": "matched.single_step.success_delta_pp", "op": ">=", "threshold": -5.0},
+      {"name": "multi-step noninferiority", "metric": "matched.multi_step.success_delta_pp", "op": ">=", "threshold": -5.0},
+      {"name": "single-step parse health", "metric": "candidate.single_step.action_parse_rate", "op": ">=", "threshold": 0.99},
+      {"name": "multi-step parse health", "metric": "candidate.multi_step.action_parse_rate", "op": ">=", "threshold": 0.99},
+      {"name": "single-step infrastructure health", "metric": "candidate.single_step.infrastructure_failure_rate", "op": "<=", "threshold": 0.01},
+      {"name": "multi-step infrastructure health", "metric": "candidate.multi_step.infrastructure_failure_rate", "op": "<=", "threshold": 0.01}
+    ],
+    "rft_promotion": [
+      {"name": "rejection method only", "metric": "learner.rejection_method", "op": "==", "threshold": 1.0},
+      {"name": "training contamination clean", "metric": "learner.contamination_overlap_count", "op": "<=", "threshold": 0.0},
+      {"name": "parent-to-child single-step nonregression", "metric": "child_vs_parent.single_step.success_delta_pp", "op": ">=", "threshold": -2.0},
+      {"name": "parent-to-child multi-step improvement", "metric": "child_vs_parent.multi_step.success_delta_pp", "op": ">=", "threshold": 2.0},
+      {"name": "child native-absolute parity", "metric": "child_vs_absolute.multi_step.success_delta_pp", "op": ">=", "threshold": -5.0}
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+name = "stage5_build_rejection_rft_v1_construction_only"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli build-rft \
+  --rollouts "$1" --blocklist "$2" --mode rejection --out "$3"
+test -f "$3/manifest.json"
+jq -e '.promotion_eligible_method == true and .contamination.clean == true' "$3/manifest.json"
+''', "--", "{args.rollouts}", "{args.blocklist}", "{outputs.dataset.path}"]
+
+[resources]
+gpus = 0
+cpus = 4
+mem = "16GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+
+[outputs.dataset]
+type = "dataset"
+marker = "manifest.json"
+alias = "stage5_rejection_rft_{run.id}"
+
+[args]
+rollouts = "/fast/project/REPLACE_ME/stage5_candidate_rollouts"
+blocklist = "/fast/project/REPLACE_ME/official_eval_hash_blocklist.json"

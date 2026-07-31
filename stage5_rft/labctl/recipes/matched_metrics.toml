@@ -1,0 +1,27 @@
+name = "stage5_matched_metrics_v1_construction_only"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli metrics \
+  --candidate "$1" --native-absolute "$2" --out "$3/metrics.json"
+''', "--", "{args.candidate}", "{args.native_absolute}", "{outputs.metrics.path}"]
+
+[resources]
+gpus = 0
+cpus = 2
+mem = "8GB"
+time = "00:30:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+
+[outputs.metrics]
+type = "dataset"
+marker = "metrics.json"
+alias = "stage5_matched_metrics_{run.id}"
+
+[args]
+candidate = "/fast/project/REPLACE_ME/stage5_candidate_rollouts"
+native_absolute = "/fast/project/REPLACE_ME/stage5_native_absolute_rollouts"

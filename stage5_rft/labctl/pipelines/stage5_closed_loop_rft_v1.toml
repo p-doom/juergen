@@ -1,0 +1,25 @@
+name = "stage5_closed_loop_rft_v1_construction_only"
+
+[stages.collect_candidate]
+recipe = "../recipes/collect_candidate.toml"
+
+[stages.validate_candidate]
+recipe = "../recipes/validate_candidate.toml"
+
+[stages.collect_native_absolute]
+recipe = "../recipes/collect_native_absolute.toml"
+
+[stages.validate_native_absolute]
+recipe = "../recipes/validate_native_absolute.toml"
+
+[stages.matched_metrics]
+recipe = "../recipes/matched_metrics.toml"
+
+[stages.closed_loop_gate]
+recipe = "../recipes/closed_loop_gate.toml"
+
+[stages.build_rejection_rft]
+recipe = "../recipes/build_rejection_rft.toml"
+
+[stages.learner_plan]
+recipe = "../recipes/learner_plan.toml"

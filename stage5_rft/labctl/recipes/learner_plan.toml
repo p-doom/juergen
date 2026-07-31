@@ -1,0 +1,32 @@
+# Emits a handoff only. It never invokes a trainer and always records
+# launch_authorized=false.
+name = "stage5_learner_plan_v1_construction_only"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli learner-plan \
+  --dataset "$1" --output-checkpoint "$2" --learner-run-id "$3" \
+  --trainer-adapter "$4" --out "$5/learner_plan.json"
+jq -e '.launch_authorized == false' "$5/learner_plan.json"
+''', "--", "{args.dataset}", "{args.output_checkpoint}", "{run.id}", "{args.trainer_adapter}", "{outputs.plan.path}"]
+
+[resources]
+gpus = 0
+cpus = 1
+mem = "4GB"
+time = "00:10:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+
+[outputs.plan]
+type = "dataset"
+marker = "learner_plan.json"
+alias = "stage5_learner_plan_{run.id}"
+
+[args]
+dataset = "/fast/project/REPLACE_ME/stage5_rejection_rft"
+output_checkpoint = "/fast/project/REPLACE_ME/stage5_child_checkpoint"
+trainer_adapter = "REPLACE_ME.learner:train_rejection_sft"

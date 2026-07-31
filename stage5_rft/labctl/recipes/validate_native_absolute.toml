@@ -1,0 +1,42 @@
+name = "stage5_validate_native_absolute_v1_construction_only"
+repo = "juergen"
+
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli validate \
+  --rollouts "$1" --out "$2/offline_replay.json"
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli replay-live \
+  --rollouts "$1" --adapter "$3" --out "$2/live_replay.json"
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli reset-live \
+  --rollouts "$1" --adapter "$3" --repeats 2 --out "$2/reset_replay.json"
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli construction-report \
+  --rollouts "$1" --blocklist "$4" --live-replay "$2/live_replay.json" \
+  --deterministic-reset "$2/reset_replay.json" --out "$2/construction_metrics.json"
+uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli gate \
+  --metrics "$2/construction_metrics.json" \
+  --config "$REPO/stage5_rft/config/promotion_gates.json" --phase construction \
+  --out "$2/construction_gate.json"
+jq -e '.passed == true' "$2/offline_replay.json"
+jq -e '.passed == true' "$2/live_replay.json"
+jq -e '.passed == true and .launch_authorized == false' "$2/construction_gate.json"
+''', "--", "{args.rollouts}", "{outputs.report.path}", "{args.replay_adapter}", "{args.blocklist}"]
+
+[resources]
+gpus = 0
+cpus = 4
+mem = "16GB"
+time = "02:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+
+[outputs.report]
+type = "dataset"
+marker = "construction_gate.json"
+alias = "stage5_native_absolute_replay_{run.id}"
+
+[args]
+rollouts = "/fast/project/REPLACE_ME/stage5_native_absolute_rollouts"
+replay_adapter = "REPLACE_ME.stage5_adapter:replay_factory"
+blocklist = "/fast/project/REPLACE_ME/official_eval_hash_blocklist.json"
