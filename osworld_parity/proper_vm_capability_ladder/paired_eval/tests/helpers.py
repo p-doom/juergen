@@ -34,7 +34,10 @@ def task_row(task_id: str = "writer-dev-1", seed: int = 101) -> dict[str, Any]:
         ],
         "semantic_step_count": 2,
         "instruction": "Replace the text and save the Writer document.",
-        "snapshot": {"id": "vm-dev", "reset_strategy": "qcow_snapshot_restore"},
+        "snapshot": {
+            "id": "osworld_ready",
+            "reset_strategy": "restore_snapshot_then_seeded_setup",
+        },
         "assets": [],
         "params": {"initial_text": "old"},
         "expected": {"text": "new", "saved": True},
@@ -120,20 +123,32 @@ def evaluation_manifest(task_seal: str, readiness_sha: str, attempts: int = 8) -
 def ready_marker(path: Path) -> tuple[Path, str]:
     marker = {
         "schema_version": 1,
+        "certification_schema": "proper_vm_executor_cert_v1",
         "status": "ready",
         "development_only": True,
         "scored_execution_completed": False,
-        "validated_interfaces": ["native_absolute_v1", "compact_raw_relative_v1"],
+        "validated_interfaces": [
+            "native_absolute_control",
+            "compact_raw_phaseb",
+            "shared_atomic_gui_executor",
+            "http_vm_transport",
+        ],
         "checks": {
-            "native_primitives": True,
-            "compact_primitives": True,
-            "cursor_readback": True,
-            "semantic_verifiers": True,
+            "clean_build_at_least_109_tests": True,
+            "narrow_click_preflight_10_trials": True,
+            "forced_failure_artifact_probe_with_png": True,
+            "full_click_100_trials_per_arm": True,
+            "rung1a_16_cells": True,
+            "rung1b_12_counterbalanced_cells": True,
+            "sameapp_8_cells": True,
+            "vm_isolation_and_provenance": True,
         },
-        "capability_report_sha256": "5" * 64,
         "executor_commit": "6" * 40,
-        "vm_snapshot_id": "vm-dev",
+        "vm_snapshot_id": "osworld_ready",
     }
+    marker["capability_report_sha256"] = hashlib.sha256(
+        canonical_json(marker)
+    ).hexdigest()
     raw = (json.dumps(marker, sort_keys=True) + "\n").encode("utf-8")
     path.write_bytes(raw)
     return path, hashlib.sha256(raw).hexdigest()

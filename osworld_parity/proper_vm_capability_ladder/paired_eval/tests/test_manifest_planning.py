@@ -28,7 +28,7 @@ def test_manifest_and_deterministic_plan_keep_pairs_together(tmp_path) -> None:
     assert len({trial.pair_id for trial in plan}) == len(plan)
     assert build_plan(manifest) == plan
     assert all(trial.budget == manifest.budget for trial in plan)
-    assert all(trial.snapshot_id == "vm-dev" for trial in plan)
+    assert all(trial.snapshot_id == "osworld_ready" for trial in plan)
     assert all(trial.parameter_seed == 101 for trial in plan)
 
     assigned = task_shard(manifest, manifest.tasks[0], 7)

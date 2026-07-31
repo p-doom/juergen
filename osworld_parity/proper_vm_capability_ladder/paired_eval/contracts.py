@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
-ARMS = ("native_absolute_control", "compact_raw_relative")
+ARMS = ("native_absolute_control", "compact_raw_phaseb")
 ACTION_INTERFACES = {
     "native_absolute_control": "native_absolute_v1",
-    "compact_raw_relative": "compact_raw_relative_v1",
+    "compact_raw_phaseb": "compact_raw_relative_v1",
 }
 MODES = (
     "gold_history_one_step",

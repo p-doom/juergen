@@ -37,6 +37,9 @@ must match the sealed evaluation manifest, its status and all checks must pass,
 and it must bind the executor commit, capability report, both action
 interfaces, and VM snapshot.  The CLI consumes this marker before importing
 the runtime factory; it never searches the repository for or creates a marker.
+The accepted certification schema is exactly `proper_vm_executor_cert_v1`,
+including its ordered four-interface list, eight frozen checks, canonical
+report self-hash, and `osworld_ready` snapshot binding.
 
 ```text
 python -m osworld_parity.proper_vm_capability_ladder.paired_eval validate \

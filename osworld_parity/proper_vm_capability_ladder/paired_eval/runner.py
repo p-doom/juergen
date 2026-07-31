@@ -105,6 +105,7 @@ class PairedEvaluationRunner:
             },
             "readiness": {
                 "marker_sha256": self.readiness.marker_sha256,
+                "certification_schema": self.readiness.certification_schema,
                 "capability_report_sha256": self.readiness.capability_report_sha256,
                 "executor_commit": self.readiness.executor_commit,
             },
