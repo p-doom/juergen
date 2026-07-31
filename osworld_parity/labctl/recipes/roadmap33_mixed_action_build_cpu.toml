@@ -1,0 +1,31 @@
+name = "roadmap33_mixed_action_build_cpu_v1"
+repo = "juergen_roadmap33"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+cd "$SOURCE"
+[[ -z "${CUDA_VISIBLE_DEVICES:-}" ]] || { echo "FATAL GPU allocation is forbidden" >&2; exit 2; }
+python3 -m pytest -q osworld_parity/mixed_action_short_vm/tests
+python3 -m osworld_parity.mixed_action_short_vm.selfcheck "$@"
+''', "--"]
+
+[resources]
+gpus = 0
+cpus = 2
+mem = "8GB"
+time = "00:20:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1"]
+
+[outputs.result]
+type = "eval_result"
+marker = "selfcheck.json"
+alias = "roadmap33_mixed_action_build_{run.id}"
+
+[args]
+output = "{outputs.result.path}"
+
+[env]
+PYTHONUNBUFFERED = "1"

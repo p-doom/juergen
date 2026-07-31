@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "suite": "roadmap_3_3_mixed_action_short_vm",
+  "split": "development",
+  "access": "trainer_authorized",
+  "materialized": true,
+  "generator_version": "mixed_action_scene_v1",
+  "official_osworld_reuse": false,
+  "cells": [
+    {"task_id":"r33-dev-001","sequence_id":"focus_type","semantic_step_count":2,"common_action_horizon":2,"seed":331001,"slot_sha256":"7fe060fbab836b7b73c1613eac8152d2ff04a433387d946d495287a2afde820e"},
+    {"task_id":"r33-dev-002","sequence_id":"scroll_click","semantic_step_count":2,"common_action_horizon":2,"seed":331002,"slot_sha256":"034719058cfc38fbb229da4fc8d6ce288dddb1774c0f082db52e9c1f7afc9e93"},
+    {"task_id":"r33-dev-003","sequence_id":"drag_click","semantic_step_count":2,"common_action_horizon":4,"seed":331003,"slot_sha256":"d9a4ba4cca7185677d87a71bb6dea622322c396550908474d655d07df9f83c3d"},
+    {"task_id":"r33-dev-004","sequence_id":"focus_type_click","semantic_step_count":3,"common_action_horizon":3,"seed":331004,"slot_sha256":"eb1ffa219536acc2ddbb398434a3e0a36bfffde2cf227f1284ed0cebe1f8ec63"},
+    {"task_id":"r33-dev-005","sequence_id":"focus_type_drag","semantic_step_count":3,"common_action_horizon":5,"seed":331005,"slot_sha256":"b51bc7a9f92bc802e1bca4c43fa60f231b4b819503b8eb928d6599d064bdd641"},
+    {"task_id":"r33-dev-006","sequence_id":"focus_type_scroll_click","semantic_step_count":4,"common_action_horizon":4,"seed":331006,"slot_sha256":"74c6e0daa46f16c7d70365bf4cb17213d71cf8c7f002ea9653b94d0f2bca42c2"}
+  ],
+  "manifest_payload_sha256": "9c15abff1a51c44ee1aca85cbe3f48bcae3b63fd27fc591cd3f4b10d55c6ff8d"
+}

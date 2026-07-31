@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "suite": "roadmap_3_3_mixed_action_short_vm",
+  "split": "train",
+  "access": "trainer_authorized",
+  "materialized": true,
+  "generator_version": "mixed_action_scene_v1",
+  "official_osworld_reuse": false,
+  "cells": [
+    {"task_id":"r33-train-001","sequence_id":"focus_type","semantic_step_count":2,"common_action_horizon":2,"seed":330001,"slot_sha256":"fcc6ed1f933b53cbadeac61a1978bbb600a92ff1e33cfea1ec57bb09fd1c3137"},
+    {"task_id":"r33-train-002","sequence_id":"scroll_click","semantic_step_count":2,"common_action_horizon":2,"seed":330002,"slot_sha256":"434b6fe04f367d0197c84d4f3fa1ee4ee9bf2d217adf8db17e4b1ee9638ad45e"},
+    {"task_id":"r33-train-003","sequence_id":"drag_click","semantic_step_count":2,"common_action_horizon":4,"seed":330003,"slot_sha256":"61e3476061ddc8d769bbb1d2039ad351582aa93241bcc8ae365b7aa0753c2083"},
+    {"task_id":"r33-train-004","sequence_id":"focus_type_click","semantic_step_count":3,"common_action_horizon":3,"seed":330004,"slot_sha256":"39627571b0059b67d5d8ecbeafac606917e815f1f6ebb1779177daa61d8657f4"},
+    {"task_id":"r33-train-005","sequence_id":"focus_type_scroll","semantic_step_count":3,"common_action_horizon":3,"seed":330005,"slot_sha256":"da1381cac352d0209e0f755dda217bbf23266644976f9551089f689d40bf501a"},
+    {"task_id":"r33-train-006","sequence_id":"focus_type_drag","semantic_step_count":3,"common_action_horizon":5,"seed":330006,"slot_sha256":"a0c54c5c9db5e692e191c9d6cd4737ade584319cc92320ebd93da59a2e5b9504"},
+    {"task_id":"r33-train-007","sequence_id":"scroll_drag_click","semantic_step_count":3,"common_action_horizon":5,"seed":330007,"slot_sha256":"8e9f370b586a6a325506a8cabe786a67c3cd3d32e0122ac2989ed6db865bd9a3"},
+    {"task_id":"r33-train-008","sequence_id":"focus_type_scroll_click","semantic_step_count":4,"common_action_horizon":4,"seed":330008,"slot_sha256":"43a4007daf3dcd465c6d6ad22e637d7b5f841478bf72f36b48744fa34a294657"},
+    {"task_id":"r33-train-009","sequence_id":"focus_type","semantic_step_count":2,"common_action_horizon":2,"seed":330009,"slot_sha256":"5167a635be7d47c133e1faf0d7aef4adff448562308405ee6e97a46dafdfd9cb"},
+    {"task_id":"r33-train-010","sequence_id":"drag_click","semantic_step_count":2,"common_action_horizon":4,"seed":330010,"slot_sha256":"902f0894d79cce2c05944ce548f297f32121485dc163ab8f9968c13bbac42b08"},
+    {"task_id":"r33-train-011","sequence_id":"focus_type_click","semantic_step_count":3,"common_action_horizon":3,"seed":330011,"slot_sha256":"4a95508ad8ae3b96f7e2cbf03b5e100b96064813448c01b0bcd4526d9510075e"},
+    {"task_id":"r33-train-012","sequence_id":"focus_type_scroll_click","semantic_step_count":4,"common_action_horizon":4,"seed":330012,"slot_sha256":"5bd1cd7e3634a31c58b8cd8208f0dcc5ea6fd0b72ae3f80f72184eb63b5e500b"}
+  ],
+  "manifest_payload_sha256": "94d62f61d173068e7d354de36b2899f3a5c6cf32da220c0a95488b4286987a78"
+}

@@ -1,0 +1,35 @@
+name = "roadmap33_mixed_action_teacher_contract_cpu_v1"
+repo = "juergen_roadmap33"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+cd "$SOURCE"
+[[ -z "${CUDA_VISIBLE_DEVICES:-}" ]] || { echo "FATAL GPU allocation is forbidden" >&2; exit 2; }
+python3 -m osworld_parity.mixed_action_short_vm.dataset \
+  --split=train --output="{outputs.train.path}"
+python3 -m osworld_parity.mixed_action_short_vm.dataset \
+  --split=development --output="{outputs.development.path}"
+''']
+
+[resources]
+gpus = 0
+cpus = 2
+mem = "8GB"
+time = "00:15:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1"]
+
+[outputs.train]
+type = "dataset"
+marker = "artifact_manifest.json"
+alias = "roadmap33_teacher_train_{run.id}"
+
+[outputs.development]
+type = "dataset"
+marker = "artifact_manifest.json"
+alias = "roadmap33_teacher_development_{run.id}"
+
+[env]
+PYTHONUNBUFFERED = "1"

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "suite": "roadmap_3_3_mixed_action_short_vm",
+  "split": "sealed_evaluation",
+  "access": "sealed_commitments_only",
+  "materialized": false,
+  "generator_version": "mixed_action_scene_v1",
+  "official_osworld_reuse": false,
+  "sealing": {
+    "status": "reserved_not_materialized",
+    "payload_custody": "owner_external_vault",
+    "required_gate": "owner_approval_after_development_reset_replay",
+    "policy": "no_payload_generation_or_open_before_gate"
+  },
+  "cells": [
+    {"task_id":"r33-eval-slot-001","sequence_id":"focus_type","semantic_step_count":2,"common_action_horizon":2,"slot_sha256":"e7af5baebc6fb9c6d5b33cc4485789f6c87a6aba7054db75e48ffb7043337602"},
+    {"task_id":"r33-eval-slot-002","sequence_id":"scroll_click","semantic_step_count":2,"common_action_horizon":2,"slot_sha256":"6a9a6946c98cfa31bc57e7cbe758ac863a8bb9400c504b21489653772d0666d7"},
+    {"task_id":"r33-eval-slot-003","sequence_id":"drag_click","semantic_step_count":2,"common_action_horizon":4,"slot_sha256":"080a6575aebd9dcc2099c6ea5c6b08164eb0245dd7456dcbfcb145457a4dda7b"},
+    {"task_id":"r33-eval-slot-004","sequence_id":"focus_type_click","semantic_step_count":3,"common_action_horizon":3,"slot_sha256":"85f59bed7448445ef3d79e29ae7da5c29804f6810beb38d5048cfa925874b7d6"},
+    {"task_id":"r33-eval-slot-005","sequence_id":"focus_type_scroll","semantic_step_count":3,"common_action_horizon":3,"slot_sha256":"7d8cc1c5d4b6295c4f8c89fddc693d2426bfcc24f70421827d572f5e9a20635f"},
+    {"task_id":"r33-eval-slot-006","sequence_id":"focus_type_drag","semantic_step_count":3,"common_action_horizon":5,"slot_sha256":"e2b2dd1a64b1f7898955c9ac8a0568b899b06565a385af096baffa5bb9633aa5"},
+    {"task_id":"r33-eval-slot-007","sequence_id":"scroll_drag_click","semantic_step_count":3,"common_action_horizon":5,"slot_sha256":"e79936bb6d4802afea4aa80c06b364d2d369dc3aa15164d194600ebb9225cba7"},
+    {"task_id":"r33-eval-slot-008","sequence_id":"focus_type_scroll_click","semantic_step_count":4,"common_action_horizon":4,"slot_sha256":"bd92b286afabaa03cb40d790d4db9357deb850bdfdfa65a48d5837efbfa09132"}
+  ],
+  "manifest_payload_sha256": "bd6d99d7939d1478ed6a7bdd38cf077b33aab29ffc1c45523b7425eb9cfdc05d"
+}

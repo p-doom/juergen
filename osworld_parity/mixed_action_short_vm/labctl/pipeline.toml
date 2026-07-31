@@ -1,0 +1,13 @@
+name = "roadmap_3_3_mixed_action_pre_gate_v1"
+status = "pre_gate_no_model_no_scientific_eval"
+
+[stages.build_selfcheck]
+recipe = "../../labctl/recipes/roadmap33_mixed_action_build_cpu.toml"
+
+[stages.teacher_contract]
+recipe = "../../labctl/recipes/roadmap33_mixed_action_teacher_cpu.toml"
+
+[scientific_evaluation]
+enabled = false
+required_gate = "owner_approval_after_development_reset_replay"
+sealed_payload = "external_owner_vault"
