@@ -276,7 +276,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--qcow", type=Path, default=DEFAULT_QCOW)
     parser.add_argument("--qemu", type=Path, default=DEFAULT_QEMU)
     parser.add_argument("--provider", type=Path, default=DEFAULT_PROVIDER)
-    parser.add_argument("--expected-provider-sha256")
+    parser.add_argument(
+        "--expected-provider-sha256",
+        "--expected_provider_sha256",
+        dest="expected_provider_sha256",
+    )
     args = parser.parse_args(argv)
     args.output.mkdir(parents=True, exist_ok=True)
     marker = args.output / "selfcheck.json"
