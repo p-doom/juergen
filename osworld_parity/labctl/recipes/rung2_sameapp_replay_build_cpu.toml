@@ -19,7 +19,8 @@ python3 -m osworld_parity.proper_vm_capability_ladder.rung2_sameapp.replay "$@" 
   --mode=vm --split=development \
   --task-setup-validation "$SETUP_FILE" \
   --task-setup-validation-artifact-id "$SETUP_ID" \
-  --task-setup-validation-sha256 "$SETUP_SHA"
+  --task-setup-validation-sha256 "$SETUP_SHA" \
+  --expected-provider-sha256 76a8f44fab16c6dd38a4378a270e38758ba8d31885f244baedb95d8178f588d7
 ''', "--"]
 
 [resources]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 import uuid
 from dataclasses import replace
@@ -16,7 +17,7 @@ class FakeProviderResetAttestor:
 
     def __init__(self) -> None:
         self.session_id = uuid.uuid4().hex
-        self.generation_id = uuid.uuid4().hex
+        self.generation_id = hashlib.sha256(self.session_id.encode("utf-8")).hexdigest()
         self.sequence = 0
         self.issued: dict[str, ProviderResetReceipt] = {}
         self.consumed: set[str] = set()
@@ -26,7 +27,9 @@ class FakeProviderResetAttestor:
         completed = time.monotonic_ns()
         self.sequence += 1
         prior = self.generation_id
-        self.generation_id = uuid.uuid4().hex
+        self.generation_id = hashlib.sha256(
+            f"{self.session_id}:{self.sequence}".encode("utf-8")
+        ).hexdigest()
         receipt = ProviderResetReceipt(
             provider_session_id=self.session_id,
             reset_id=uuid.uuid4().hex,
@@ -36,9 +39,18 @@ class FakeProviderResetAttestor:
             snapshot_id="osworld_ready",
             reset_started_monotonic_ns=started,
             reset_completed_monotonic_ns=completed,
-            provider_state_before_sha256="1" * 64,
-            provider_state_after_sha256="2" * 64,
+            provider_state_before_sha256=prior,
+            provider_state_after_sha256=self.generation_id,
             provider_path_sha256="3" * 64,
+            prior_provider_transition_index=(self.sequence - 1) * 2,
+            new_provider_transition_index=self.sequence * 2,
+            provider_transition_labels=(
+                "loadvm[osworld_ready]",
+                "loadvm_guest_ready",
+            ),
+            provider_transition_records_sha256="5" * 64,
+            guest_sentinel_path_sha256="6" * 64,
+            guest_sentinel_nonce_sha256="7" * 64,
             attestor_mac="4" * 64,
             receipt_sha256=uuid.uuid4().hex + uuid.uuid4().hex,
         )

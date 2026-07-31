@@ -48,6 +48,12 @@ class ProviderResetReceipt:
     provider_state_before_sha256: str
     provider_state_after_sha256: str
     provider_path_sha256: str
+    prior_provider_transition_index: int
+    new_provider_transition_index: int
+    provider_transition_labels: tuple[str, ...]
+    provider_transition_records_sha256: str
+    guest_sentinel_path_sha256: str
+    guest_sentinel_nonce_sha256: str
     attestor_mac: str
     receipt_sha256: str
 
@@ -56,6 +62,67 @@ def _canonical_json(value: object) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), default=str
     ).encode("utf-8")
+
+
+def _provider_state_value(value: object) -> object:
+    """Copy provider state into an immutable, stable JSON value.
+
+    The production provider returns its live internal dictionary directly, so
+    retaining that object would let an in-place mutation rewrite the alleged
+    pre-reset observation.  This conversion captures only stable external
+    identity/state fields and owns every returned container.
+    """
+
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Path):
+        return {"type": "path", "value": str(value)}
+    if isinstance(value, dict):
+        return {
+            str(key): _provider_state_value(item)
+            for key, item in sorted(value.items(), key=lambda row: str(row[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_provider_state_value(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        rows = [_provider_state_value(item) for item in value]
+        return sorted(rows, key=lambda item: _canonical_json(item))
+    if callable(getattr(value, "poll", None)) and hasattr(value, "pid"):
+        return {
+            "type": f"{type(value).__module__}.{type(value).__qualname__}",
+            "pid": int(value.pid),
+            "returncode": value.poll(),
+        }
+    if isinstance(getattr(value, "path", None), str):
+        return {
+            "type": f"{type(value).__module__}.{type(value).__qualname__}",
+            "path": value.path,
+        }
+    return {"type": f"{type(value).__module__}.{type(value).__qualname__}"}
+
+
+def _provider_timings(provider: object) -> tuple[tuple[str, float], ...]:
+    raw = getattr(provider, "timings", None)
+    if not isinstance(raw, list):
+        raise VmHarnessError("provider exposes no native transition telemetry")
+    rows: list[tuple[str, float]] = []
+    for item in raw:
+        if (
+            not isinstance(item, (list, tuple))
+            or len(item) != 2
+            or not isinstance(item[0], str)
+            or not isinstance(item[1], (int, float))
+            or float(item[1]) < 0
+        ):
+            raise VmHarnessError("provider transition telemetry schema drift")
+        rows.append((item[0], float(item[1])))
+    return tuple(rows)
+
+
+def _provider_observation(provider: object, qcow: Path) -> tuple[bytes, tuple[tuple[str, float], ...]]:
+    state = _provider_state_value(provider.state(str(qcow)))
+    timings = _provider_timings(provider)
+    return _canonical_json({"state": state, "timings": timings}), timings
 
 
 def sha256_file(path: Path) -> str:
@@ -87,6 +154,7 @@ class KvmFixtureSession:
         vm_log_dir: Path = Path("/tmp/rung1a_vm_logs"),
         smp: int = 4,
         memory: str = "8G",
+        expected_provider_sha256: str | None = None,
     ) -> None:
         self.qcow = qcow.resolve()
         self.qemu = qemu.resolve()
@@ -94,16 +162,17 @@ class KvmFixtureSession:
         self.vm_log_dir = vm_log_dir.resolve()
         self.smp = smp
         self.memory = memory
+        self.expected_provider_sha256 = expected_provider_sha256
         self.provider = None
         self.transport: HttpVmTransport | None = None
         self._module: ModuleType | None = None
         self._provider_session_id = uuid.uuid4().hex
-        self._provider_generation_id = uuid.uuid4().hex
         self._provider_reset_sequence = 0
         self._provider_attestor_secret = secrets.token_bytes(32)
         self._consumed_provider_reset_receipts: set[str] = set()
         self._last_consumed_provider_sequence = 0
-        self._last_consumed_provider_generation_id = self._provider_generation_id
+        self._last_consumed_provider_generation_id: str | None = None
+        self._last_consumed_provider_transition_index: int | None = None
         self._outstanding_provider_reset_receipt_sha256: str | None = None
 
     def start(self) -> None:
@@ -114,6 +183,17 @@ class KvmFixtureSession:
                 raise VmHarnessError(f"required VM input missing: {path}")
         if not os.access(self.qemu, os.X_OK):
             raise VmHarnessError(f"qemu is not executable: {self.qemu}")
+        if self.expected_provider_sha256 is not None:
+            expected = self.expected_provider_sha256
+            if len(expected) != 64 or any(
+                char not in "0123456789abcdef" for char in expected
+            ):
+                raise VmHarnessError("expected provider SHA-256 is invalid")
+            observed = sha256_file(self.provider_path)
+            if observed != expected:
+                raise VmHarnessError(
+                    f"provider SHA-256 mismatch: {observed} != {expected}"
+                )
         self.vm_log_dir.mkdir(parents=True, exist_ok=True)
         os.environ["OSWORLD_QCOW2"] = str(self.qcow)
         os.environ["OSWORLD_QEMU_BIN"] = str(self.qemu)
@@ -150,17 +230,45 @@ class KvmFixtureSession:
             raise VmHarnessError(
                 "previous provider reset receipt must be consumed before another reset"
             )
-        before = self.provider.state(str(self.qcow))
+        reset_sequence = self._provider_reset_sequence + 1
+        sentinel_path = (
+            f"/tmp/osworld_reset_attestation_{self._provider_session_id}_"
+            f"{reset_sequence}.nonce"
+        )
+        sentinel_nonce = secrets.token_hex(32)
         started = time.monotonic_ns()
+        self._plant_reset_sentinel(sentinel_path, sentinel_nonce)
+        before_observation, before_timings = _provider_observation(
+            self.provider, self.qcow
+        )
         self.provider.load_state(str(self.qcow), READY_SNAPSHOT)
-        completed = time.monotonic_ns()
+        after_observation, after_timings = _provider_observation(
+            self.provider, self.qcow
+        )
+        if after_timings[: len(before_timings)] != before_timings:
+            raise VmHarnessError("provider transition telemetry rewrote prior history")
+        appended = after_timings[len(before_timings) :]
+        expected_labels = (f"loadvm[{READY_SNAPSHOT}]", "loadvm_guest_ready")
+        if len(appended) < len(expected_labels) or tuple(
+            row[0] for row in appended[: len(expected_labels)]
+        ) != expected_labels:
+            raise VmHarnessError(
+                "provider reset produced no native loadvm transition evidence"
+            )
+        if before_observation == after_observation:
+            raise VmHarnessError("provider reset observation did not change")
+        prior_generation_id = hashlib.sha256(before_observation).hexdigest()
+        new_generation_id = hashlib.sha256(after_observation).hexdigest()
+        if prior_generation_id == new_generation_id:
+            raise VmHarnessError("provider reset generation did not advance")
         after = self.provider.state(str(self.qcow))
         port = int(after["ports"]["server"])
         # Sessions and host-side input audits must never cross an episode reset.
         self.transport = HttpVmTransport(f"http://127.0.0.1:{port}")
-        self._provider_reset_sequence += 1
-        prior_generation_id = self._provider_generation_id
-        new_generation_id = uuid.uuid4().hex
+        self._verify_reset_sentinel_removed(sentinel_path)
+        completed = time.monotonic_ns()
+        self._provider_reset_sequence = reset_sequence
+        transition_payload = [list(row) for row in appended]
         payload = {
             "provider_session_id": self._provider_session_id,
             "reset_id": uuid.uuid4().hex,
@@ -171,13 +279,29 @@ class KvmFixtureSession:
             "reset_started_monotonic_ns": started,
             "reset_completed_monotonic_ns": completed,
             "provider_state_before_sha256": hashlib.sha256(
-                _canonical_json(before)
+                before_observation
             ).hexdigest(),
             "provider_state_after_sha256": hashlib.sha256(
-                _canonical_json(after)
+                after_observation
             ).hexdigest(),
-            "provider_path_sha256": hashlib.sha256(
-                str(self.provider_path).encode("utf-8")
+            "provider_path_sha256": (
+                sha256_file(self.provider_path)
+                if self.provider_path.is_file()
+                else hashlib.sha256(
+                    str(self.provider_path).encode("utf-8")
+                ).hexdigest()
+            ),
+            "prior_provider_transition_index": len(before_timings),
+            "new_provider_transition_index": len(after_timings),
+            "provider_transition_labels": tuple(row[0] for row in appended),
+            "provider_transition_records_sha256": hashlib.sha256(
+                _canonical_json(transition_payload)
+            ).hexdigest(),
+            "guest_sentinel_path_sha256": hashlib.sha256(
+                sentinel_path.encode("utf-8")
+            ).hexdigest(),
+            "guest_sentinel_nonce_sha256": hashlib.sha256(
+                sentinel_nonce.encode("utf-8")
             ).hexdigest(),
         }
         attestor_mac = hmac.new(
@@ -193,9 +317,33 @@ class KvmFixtureSession:
             attestor_mac=attestor_mac,
             receipt_sha256=receipt_sha256,
         )
-        self._provider_generation_id = new_generation_id
         self._outstanding_provider_reset_receipt_sha256 = receipt.receipt_sha256
         return self.transport, receipt
+
+    def _plant_reset_sentinel(self, path: str, nonce: str) -> None:
+        if self.transport is None:
+            raise VmHarnessError("VM transport is not started")
+        code = (
+            "from pathlib import Path;"
+            f"p=Path({path!r});v={nonce!r};"
+            "p.write_text(v,encoding='utf-8');"
+            "assert p.read_text(encoding='utf-8')==v"
+        )
+        try:
+            self.transport.execute_argv(["python3", "-c", code])
+        except Exception as exc:
+            raise VmHarnessError(f"could not plant pre-reset guest sentinel: {exc}") from exc
+
+    def _verify_reset_sentinel_removed(self, path: str) -> None:
+        if self.transport is None:
+            raise VmHarnessError("VM transport is not started")
+        code = f"from pathlib import Path;assert not Path({path!r}).exists()"
+        try:
+            self.transport.execute_argv(["python3", "-c", code])
+        except Exception as exc:
+            raise VmHarnessError(
+                "provider reset did not rewind the pre-reset guest sentinel"
+            ) from exc
 
     def consume_provider_reset_receipt(self, receipt: ProviderResetReceipt) -> None:
         if not isinstance(receipt, ProviderResetReceipt):
@@ -231,9 +379,14 @@ class KvmFixtureSession:
             raise VmHarnessError("provider reset receipt field contract drift")
         lowercase_hex = set("0123456789abcdef")
         for value in (
+            receipt.prior_generation_id,
+            receipt.new_generation_id,
             receipt.provider_state_before_sha256,
             receipt.provider_state_after_sha256,
             receipt.provider_path_sha256,
+            receipt.provider_transition_records_sha256,
+            receipt.guest_sentinel_path_sha256,
+            receipt.guest_sentinel_nonce_sha256,
             receipt.attestor_mac,
             receipt.receipt_sha256,
         ):
@@ -243,14 +396,56 @@ class KvmFixtureSession:
             raise VmHarnessError("provider reset receipt replay detected")
         if receipt.receipt_sha256 != self._outstanding_provider_reset_receipt_sha256:
             raise VmHarnessError("provider reset receipt is not the active transition")
-        if receipt.reset_sequence != self._last_consumed_provider_sequence + 1 or (
+        if receipt.reset_sequence != self._last_consumed_provider_sequence + 1:
+            raise VmHarnessError("provider reset transition is out of order")
+        if self._last_consumed_provider_generation_id is not None and (
             receipt.prior_generation_id
             != self._last_consumed_provider_generation_id
+            or receipt.prior_provider_transition_index
+            != self._last_consumed_provider_transition_index
         ):
-            raise VmHarnessError("provider reset transition is out of order")
+            raise VmHarnessError("provider reset generation chain is out of order")
+        if (
+            receipt.provider_state_before_sha256 != receipt.prior_generation_id
+            or receipt.provider_state_after_sha256 != receipt.new_generation_id
+            or receipt.new_provider_transition_index
+            <= receipt.prior_provider_transition_index
+            or receipt.new_provider_transition_index
+            - receipt.prior_provider_transition_index
+            != len(receipt.provider_transition_labels)
+            or tuple(receipt.provider_transition_labels[:2])
+            != (f"loadvm[{READY_SNAPSHOT}]", "loadvm_guest_ready")
+        ):
+            raise VmHarnessError("provider-native reset transition contract drift")
+        if self.provider is None:
+            raise VmHarnessError("VM session is not started")
+        current_observation, current_timings = _provider_observation(
+            self.provider, self.qcow
+        )
+        if (
+            hashlib.sha256(current_observation).hexdigest()
+            != receipt.new_generation_id
+            or len(current_timings) != receipt.new_provider_transition_index
+        ):
+            raise VmHarnessError("provider reset receipt is no longer current")
+        transition_start = receipt.prior_provider_transition_index
+        transition_end = receipt.new_provider_transition_index
+        current_transition = current_timings[transition_start:transition_end]
+        if (
+            tuple(row[0] for row in current_transition)
+            != receipt.provider_transition_labels
+            or hashlib.sha256(
+                _canonical_json([list(row) for row in current_transition])
+            ).hexdigest()
+            != receipt.provider_transition_records_sha256
+        ):
+            raise VmHarnessError("provider reset transition receipt mismatch")
         self._consumed_provider_reset_receipts.add(receipt.receipt_sha256)
         self._last_consumed_provider_sequence = receipt.reset_sequence
         self._last_consumed_provider_generation_id = receipt.new_generation_id
+        self._last_consumed_provider_transition_index = (
+            receipt.new_provider_transition_index
+        )
         self._outstanding_provider_reset_receipt_sha256 = None
 
     def launch_fixture(

@@ -30,6 +30,11 @@ def test_cpu_recipes_use_hardened_vm_replay_with_declared_inputs(
     assert "--mode=vm" in command
     assert "--split=development" in command
     assert "--task-setup-validation" in command
+    assert (
+        "--expected-provider-sha256 "
+        "76a8f44fab16c6dd38a4378a270e38758ba8d31885f244baedb95d8178f588d7"
+        in command
+    )
     assert "task_setup_validation.json" in command
     assert command.index('"$@"') < command.index("--mode=vm")
     assert "task_setup_validation" in raw["inputs"]

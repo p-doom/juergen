@@ -46,11 +46,18 @@ The production replay no longer imports or calls the direct symbolic
 `compile_native`/`compile_compact` path. It consumes session-issued reset
 generation evidence backed by a single-use receipt emitted after the provider's
 actual snapshot transition. Provider receipts bind before/after state hashes,
-prior/new generation IDs, reset ordering, and the target snapshot; identical
+prior/new generation IDs, append-only native `loadvm` telemetry indices and
+records, reset ordering, and the target snapshot. Provider state is canonicalized
+before the call so a returned live dictionary cannot alias the pre-reset value;
+generation IDs derive from the immutable observations and equal/no-op transitions
+are rejected. A pre-reset guest nonce sentinel must also disappear after
+`loadvm`, so a provider cannot satisfy the receipt with telemetry alone; the
+production CLI independently pins the provider source hash. Identical
 raw observations cannot be re-attributed. Replay compiles and executes semantic
 segments sequentially, and aggregates only sealed executor receipts whose full
 dispatch journals have exact cardinality, ordering, adapter, operation, cursor,
-and atomic evidence. The Chrome refresh transition records pre/post binding
+and atomic evidence. Cursor evidence starts at the compiled binding cursor,
+continues across action boundaries, and ends at the compiled final cursor. The Chrome refresh transition records pre/post binding
 revisions and accepts only the ledger-recorded executed step-2 receipt object.
 Fixture polarity requires successful fresh-oracle status as well as the expected
 boolean result. The two legacy-named labctl recipes now enter the same hardened

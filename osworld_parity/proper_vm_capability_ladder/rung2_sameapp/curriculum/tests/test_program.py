@@ -91,7 +91,9 @@ def _compile_all(task, action_schema, *, near_miss=False):
         segments.append(segment)
         if task.app == "chrome" and step == 2:
             started = time.monotonic_ns()
-            transport = RecordingTransport(cursor=(40, 50), screen=(1400, 900))
+            transport = RecordingTransport(
+                cursor=segment.expected_cursor_before, screen=(1400, 900)
+            )
             dispatches = tuple(
                 _dispatch_compiled_action(transport, action_schema, action)
                 for action in segment.actions
@@ -240,7 +242,7 @@ def test_chrome_later_target_requires_and_uses_post_scroll_probe() -> None:
         )
     changed_geometry = dict(initial.geometry)
     changed_geometry["toggle"] = (930, 310)
-    refreshed_cursor = (610, 580)
+    refreshed_cursor = binding.initial_probe.geometry["scroll_surface"]
     refreshed_state = dict(binding.initial_probe.state)
     delta = int(task.params["minimum_scroll_delta"])
     refreshed_state["scroll_y"] += (
@@ -259,7 +261,9 @@ def test_chrome_later_target_requires_and_uses_post_scroll_probe() -> None:
         semantic_step_index=2,
     )
     started = time.monotonic_ns()
-    transport = RecordingTransport(cursor=(40, 50), screen=(1400, 900))
+    transport = RecordingTransport(
+        cursor=scroll_segment.expected_cursor_before, screen=(1400, 900)
+    )
     dispatches = tuple(
         _dispatch_compiled_action(
             transport, "compact_raw_phaseb_v1", action
@@ -312,7 +316,11 @@ def test_chrome_later_target_requires_and_uses_post_scroll_probe() -> None:
         binding=binding,
         semantic_step_index=3,
     )
-    assert compact.actions[0].startswith("320 -270 0;")
+    dx = changed_geometry["toggle"][0] - refreshed_cursor[0]
+    dy = changed_geometry["toggle"][1] - refreshed_cursor[1]
+    assert compact.actions[0].startswith(f"{dx} {dy} 0;")
+    assert compact.expected_cursor_before == refreshed_cursor
+    assert compact.expected_cursor_after == changed_geometry["toggle"]
     native = compile_semantic_step(
         task,
         "native_absolute_sequence_v1",

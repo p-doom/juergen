@@ -30,6 +30,9 @@ from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.curriculum.tests.e
     attribute_new_observation,
     make_ledger,
 )
+from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.fixtures import (
+    canonical_json,
+)
 
 
 def _probe(task) -> RuntimeProbe:
@@ -64,6 +67,15 @@ def _binding(task):
             )
         )
     return bind_repeated_runtime_probes(task, tuple(values), ledger=ledger), ledger
+
+
+def _resign_dispatch(result: dict, **changes) -> dict:
+    value = {**result, **changes}
+    value.pop("dispatch_result_sha256", None)
+    value["dispatch_result_sha256"] = hashlib.sha256(
+        canonical_json(value)
+    ).hexdigest()
+    return value
 
 
 def test_production_replay_has_no_direct_symbolic_compiler_bypass() -> None:
@@ -151,7 +163,7 @@ def test_chrome_production_path_keeps_a_a_b_receipts_and_signed_refresh(
         binding.initial_probe,
         state=changed_state,
         geometry=changed_geometry,
-        initial_cursor=(610, 580),
+        initial_cursor=binding.initial_probe.geometry["scroll_surface"],
         reset_cycle_evidence=None,
         observation_id=uuid.uuid4().hex,
         observed_monotonic_ns=time.monotonic_ns(),
@@ -315,6 +327,61 @@ def test_native_multi_operation_action_requires_exact_dispatch_coverage() -> Non
             near_miss=False,
         )
 
+    forged_first = (_resign_dispatch(complete[0], cursor_before=[999, 999]),) + complete[1:]
+    with pytest.raises(ValueError, match="native dispatch cursor chain"):
+        record_executed_segment(
+            segment,
+            (forged_first,),
+            execution_started_monotonic_ns=started,
+            execution_completed_monotonic_ns=time.monotonic_ns(),
+        )
+
+
+@pytest.mark.parametrize(
+    "action_schema,error",
+    (
+        ("native_absolute_sequence_v1", "native dispatch cursor chain"),
+        ("compact_raw_phaseb_v1", "compact dispatch cursor chain"),
+    ),
+)
+def test_dispatch_cursor_chain_cannot_restart_between_actions(
+    action_schema: str, error: str
+) -> None:
+    task = next(task for task in load_manifest("development").tasks if task.app == "files")
+    binding, _ = _binding(task)
+    segment = compile_semantic_step(
+        task,
+        action_schema,
+        binding=binding,
+        semantic_step_index=2,
+    )
+    assert len(segment.actions) == 3
+    transport = RecordingTransport(
+        cursor=segment.expected_cursor_before, screen=(1400, 900)
+    )
+    dispatches = tuple(
+        replay._dispatch_compiled_action(transport, action_schema, action)
+        for action in segment.actions
+    )
+    started = time.monotonic_ns()
+    record_executed_segment(
+        segment,
+        dispatches,
+        execution_started_monotonic_ns=started,
+        execution_completed_monotonic_ns=time.monotonic_ns(),
+    )
+    forged = list(dispatches)
+    forged[1] = (
+        _resign_dispatch(forged[1][0], cursor_before=[999, 999]),
+    ) + forged[1][1:]
+    with pytest.raises(ValueError, match=error):
+        record_executed_segment(
+            segment,
+            tuple(forged),
+            execution_started_monotonic_ns=started,
+            execution_completed_monotonic_ns=time.monotonic_ns(),
+        )
+
 
 def test_chrome_refresh_rejects_opaque_or_unrecorded_receipt() -> None:
     task = next(task for task in load_manifest("development").tasks if task.app == "chrome")
@@ -349,7 +416,9 @@ def test_chrome_refresh_rejects_opaque_or_unrecorded_receipt() -> None:
         binding=binding,
         semantic_step_index=2,
     )
-    transport = RecordingTransport(cursor=(40, 50), screen=(1400, 900))
+    transport = RecordingTransport(
+        cursor=segment.expected_cursor_before, screen=(1400, 900)
+    )
     action_started = time.monotonic_ns()
     dispatches = tuple(
         replay._dispatch_compiled_action(

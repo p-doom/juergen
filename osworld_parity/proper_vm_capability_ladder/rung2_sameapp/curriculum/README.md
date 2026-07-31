@@ -34,14 +34,24 @@ monotonic timestamps, setup/snapshot provenance, content seals, and bounded
 freshness. The issuing ledger consumes a one-use HMAC receipt created only
 after the KVM provider's real `load_state(osworld_ready)` call; that receipt
 attests the provider session, prior/new generation chain, before/after provider
-state hashes, and reset interval. A raw observation has a unique ID and capture
+state hashes, and reset interval. Provider state is copied into immutable
+canonical observations before the call, generation IDs are those observation
+hashes rather than host-invented UUIDs, and the receipt is issued only when the
+provider's append-only telemetry adds the expected `loadvm[osworld_ready]` and
+`loadvm_guest_ready` records. Immediately before reset the session also writes
+a nonce sentinel inside the guest and requires the restored VM to prove that
+the snapshot removed it. Equal/no-op and telemetry-only transitions are
+rejected. The production CLI also pins the provider module's content SHA-256,
+and the recipes place that fixed argument after all labctl arguments. A raw observation has a unique ID and capture
 time and cannot be re-signed. Cursor history stores semantic refs, and evaluated rows log each ref
 with its resolved live value. Chrome is re-probed after its executed scroll
 receipt; its later click compiles only from a refreshed binding that proves the
 signed scroll delta, active generation, causal timestamps, and changed binding
 revision. The ledger independently replays the exact dispatch-cardinality,
 ordering, adapter, operation-content, cursor, atomic-result, and result-seal
-checks before recording an executed receipt; Chrome refresh accepts only that
+checks before recording an executed receipt. Compiled segments pin their
+binding-derived start/final cursor, and one cursor chain must span every
+operation and action in the segment. Chrome refresh accepts only that
 recorded step-2 receipt object, never a caller-provided digest string.
 
 The initial materialized matrix contains one train and one development seed for

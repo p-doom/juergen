@@ -32,6 +32,12 @@ class ResetCycleEvidence:
     provider_state_before_sha256: str
     provider_state_after_sha256: str
     provider_path_sha256: str
+    prior_provider_transition_index: int
+    new_provider_transition_index: int
+    provider_transition_labels: tuple[str, ...]
+    provider_transition_records_sha256: str
+    guest_sentinel_path_sha256: str
+    guest_sentinel_nonce_sha256: str
     reset_started_monotonic_ns: int
     provider_reset_completed_monotonic_ns: int
     probe_completed_monotonic_ns: int
@@ -136,7 +142,7 @@ class RuntimeEvidenceLedger:
         self._consumed_reset_hashes: set[str] = set()
         self._consumed_refresh_hashes: set[str] = set()
         self._issued_observation_ids: set[str] = set()
-        self._issued_probe_objects: set[int] = set()
+        self._issued_probe_objects: list[RuntimeProbe] = []
         self._recorded_executed_receipts: dict[str, tuple[Any, Any]] = {}
 
     def _mac(self, payload: dict[str, Any]) -> str:
@@ -154,7 +160,7 @@ class RuntimeEvidenceLedger:
 
         if probe.reset_cycle_evidence is not None or probe.refresh_evidence is not None:
             raise RuntimeProbeError("cannot re-issue evidence for an attributed probe")
-        if id(probe) in self._issued_probe_objects or (
+        if any(item is probe for item in self._issued_probe_objects) or (
             probe.observation_id in self._issued_observation_ids
         ):
             raise RuntimeProbeError("raw runtime observation re-sign detected")
@@ -166,6 +172,11 @@ class RuntimeEvidenceLedger:
             raise RuntimeProbeError(f"provider reset attestation rejected: {exc}") from exc
         if provider_reset_receipt.snapshot_id != self.vm_snapshot_id:
             raise RuntimeProbeError("provider reset snapshot mismatch")
+        if tuple(provider_reset_receipt.provider_transition_labels[:2]) != (
+            f"loadvm[{self.vm_snapshot_id}]",
+            "loadvm_guest_ready",
+        ):
+            raise RuntimeProbeError("provider reset native transition mismatch")
         if provider_reset_receipt.reset_completed_monotonic_ns >= probe.observed_monotonic_ns:
             raise RuntimeProbeError("runtime observation predates provider reset completion")
         now = time.monotonic_ns()
@@ -184,6 +195,12 @@ class RuntimeEvidenceLedger:
             "provider_state_before_sha256": provider_reset_receipt.provider_state_before_sha256,
             "provider_state_after_sha256": provider_reset_receipt.provider_state_after_sha256,
             "provider_path_sha256": provider_reset_receipt.provider_path_sha256,
+            "prior_provider_transition_index": provider_reset_receipt.prior_provider_transition_index,
+            "new_provider_transition_index": provider_reset_receipt.new_provider_transition_index,
+            "provider_transition_labels": provider_reset_receipt.provider_transition_labels,
+            "provider_transition_records_sha256": provider_reset_receipt.provider_transition_records_sha256,
+            "guest_sentinel_path_sha256": provider_reset_receipt.guest_sentinel_path_sha256,
+            "guest_sentinel_nonce_sha256": provider_reset_receipt.guest_sentinel_nonce_sha256,
             "reset_started_monotonic_ns": provider_reset_receipt.reset_started_monotonic_ns,
             "provider_reset_completed_monotonic_ns": provider_reset_receipt.reset_completed_monotonic_ns,
             "probe_completed_monotonic_ns": probe.observed_monotonic_ns,
@@ -202,7 +219,7 @@ class RuntimeEvidenceLedger:
         evidence_sha256 = hashlib.sha256(
             canonical_json({**payload, "issuer_mac": issuer_mac})
         ).hexdigest()
-        self._issued_probe_objects.add(id(probe))
+        self._issued_probe_objects.append(probe)
         self._issued_observation_ids.add(probe.observation_id)
         return replace(
             probe,
@@ -263,6 +280,9 @@ class RuntimeEvidenceLedger:
                 second.prior_provider_generation_id != first.generation_id
             ) or second.provider_session_id != first.provider_session_id or (
                 second.provider_path_sha256 != first.provider_path_sha256
+            ) or (
+                second.prior_provider_transition_index
+                != first.new_provider_transition_index
             ):
                 raise RuntimeProbeError("provider reset generation chain is discontinuous")
         self._consumed_reset_hashes.update(row.evidence_sha256 for row in evidence_rows)
@@ -554,6 +574,12 @@ class ValidatedRuntimeBinding:
                     "provider_state_before_sha256": probe.reset_cycle_evidence.provider_state_before_sha256,
                     "provider_state_after_sha256": probe.reset_cycle_evidence.provider_state_after_sha256,
                     "provider_path_sha256": probe.reset_cycle_evidence.provider_path_sha256,
+                    "prior_provider_transition_index": probe.reset_cycle_evidence.prior_provider_transition_index,
+                    "new_provider_transition_index": probe.reset_cycle_evidence.new_provider_transition_index,
+                    "provider_transition_labels": probe.reset_cycle_evidence.provider_transition_labels,
+                    "provider_transition_records_sha256": probe.reset_cycle_evidence.provider_transition_records_sha256,
+                    "guest_sentinel_path_sha256": probe.reset_cycle_evidence.guest_sentinel_path_sha256,
+                    "guest_sentinel_nonce_sha256": probe.reset_cycle_evidence.guest_sentinel_nonce_sha256,
                     "reset_started_monotonic_ns": probe.reset_cycle_evidence.reset_started_monotonic_ns,
                     "provider_reset_completed_monotonic_ns": probe.reset_cycle_evidence.provider_reset_completed_monotonic_ns,
                     "probe_completed_monotonic_ns": probe.reset_cycle_evidence.probe_completed_monotonic_ns,
@@ -617,6 +643,9 @@ class ValidatedRuntimeBinding:
                 second.prior_provider_generation_id != first.generation_id
             ) or second.provider_session_id != first.provider_session_id or (
                 second.provider_path_sha256 != first.provider_path_sha256
+            ) or (
+                second.prior_provider_transition_index
+                != first.new_provider_transition_index
             ):
                 raise RuntimeProbeError(f"{task.task_id}: reset evidence ordering drift")
         for following in self.reset_probes[:-1]:

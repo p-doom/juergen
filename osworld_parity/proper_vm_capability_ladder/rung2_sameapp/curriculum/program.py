@@ -38,6 +38,8 @@ class CompiledSegment:
     resolved_budget_sha256: str
     binding_revision: int
     binding_sha256: str
+    expected_cursor_before: tuple[int, int]
+    expected_cursor_after: tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -281,6 +283,38 @@ def _cursor_before(
     return cursor
 
 
+def _advance_native_cursor(
+    cursor: tuple[int, int], actions: tuple[dict[str, Any] | str, ...]
+) -> tuple[int, int]:
+    for action in actions:
+        if not isinstance(action, dict):
+            raise TypeError("native action must be an object")
+        for operation in action["operations"]:
+            coordinate = operation.get("coordinate")
+            if coordinate is not None and operation["action"] in {
+                "click",
+                "mouse_down",
+                "mouse_move",
+                "mouse_up",
+            }:
+                cursor = (int(round(coordinate[0])), int(round(coordinate[1])))
+    return cursor
+
+
+def _native_cursor_before(
+    program: ScriptedTrajectory,
+    semantic_step_index: int,
+    geometry: dict[str, tuple[int, int]],
+    initial_cursor: tuple[int, int],
+) -> tuple[int, int]:
+    cursor = initial_cursor
+    for turn in program.turns:
+        if turn.semantic_step >= semantic_step_index:
+            break
+        cursor = _advance_native_cursor(cursor, (compile_native(turn, geometry),))
+    return cursor
+
+
 def compile_semantic_step(
     task: SemanticTask,
     action_schema: str,
@@ -306,8 +340,21 @@ def compile_semantic_step(
     )
     geometry = probe.geometry
     if action_schema == "native_absolute_sequence_v1":
+        expected_cursor_before = (
+            probe.initial_cursor
+            if task.app == "chrome" and semantic_step_index > 2
+            else _native_cursor_before(
+                program,
+                semantic_step_index,
+                geometry,
+                binding.resolved_initial_cursor,
+            )
+        )
         actions: tuple[dict[str, Any] | str, ...] = tuple(
             compile_native(turn, geometry) for turn in turns
+        )
+        expected_cursor_after = _advance_native_cursor(
+            expected_cursor_before, actions
         )
     else:
         # A refreshed Chrome probe reports the actual cursor after scrolling;
@@ -323,11 +370,13 @@ def compile_semantic_step(
                 binding.resolved_initial_cursor,
             )
         )
+        expected_cursor_before = cursor
         compact: list[str] = []
         for turn in turns:
             action, cursor = compile_compact(turn, geometry, cursor)
             compact.append(action)
         actions = tuple(compact)
+        expected_cursor_after = cursor
 
     resolved_actions = len(actions)
     resolved_events = _resolved_event_count(action_schema, actions)
@@ -346,6 +395,8 @@ def compile_semantic_step(
         "resolved_primitive_events": resolved_events,
         "binding_revision": binding.binding_revision,
         "binding_sha256": binding.binding_sha256,
+        "expected_cursor_before": list(expected_cursor_before),
+        "expected_cursor_after": list(expected_cursor_after),
         "actions": actions,
     }
     return CompiledSegment(
@@ -359,6 +410,8 @@ def compile_semantic_step(
         resolved_budget_sha256=hashlib.sha256(canonical_json(receipt)).hexdigest(),
         binding_revision=binding.binding_revision,
         binding_sha256=binding.binding_sha256,
+        expected_cursor_before=expected_cursor_before,
+        expected_cursor_after=expected_cursor_after,
     )
 
 
@@ -373,6 +426,7 @@ def record_executed_segment(
         raise ValueError("dispatch evidence does not cover every compiled action")
     if execution_completed_monotonic_ns <= execution_started_monotonic_ns:
         raise ValueError("segment execution timestamps are not monotonic")
+    observed_cursor = list(segment.expected_cursor_before)
     for action, action_results in zip(segment.actions, dispatches, strict=True):
         if not action_results:
             raise ValueError("compiled action has no executor dispatch receipt")
@@ -382,7 +436,6 @@ def record_executed_segment(
             operations = action.get("operations")
             if not isinstance(operations, list) or len(action_results) != len(operations):
                 raise ValueError("native dispatch cardinality does not cover compiled operations")
-            prior_cursor_after: list[int] | None = None
             for operation_index, (compiled_operation, result) in enumerate(zip(
                 operations, action_results, strict=True
             )):
@@ -406,7 +459,7 @@ def record_executed_segment(
                     )
                 ):
                     raise ValueError("native dispatch cursor evidence mismatch")
-                if prior_cursor_after is not None and cursor_before != prior_cursor_after:
+                if cursor_before != observed_cursor:
                     raise ValueError("native dispatch cursor chain mismatch")
                 coordinate = compiled_operation.get("coordinate")
                 expected_cursor_after = (
@@ -418,7 +471,7 @@ def record_executed_segment(
                 )
                 if cursor_after != expected_cursor_after:
                     raise ValueError("native dispatch cursor result mismatch")
-                prior_cursor_after = cursor_after
+                observed_cursor = cursor_after
                 expected_class, expected_operations, expected_atomic = (
                     _expected_native_dispatch(compiled_operation)
                 )
@@ -453,8 +506,14 @@ def record_executed_segment(
                 isinstance(cursor_before, list)
                 and isinstance(cursor_after, list)
                 and len(cursor_before) == len(cursor_after) == 2
+                and all(
+                    isinstance(value, int)
+                    for value in (*cursor_before, *cursor_after)
+                )
             ):
                 raise ValueError("compact dispatch cursor evidence mismatch")
+            if cursor_before != observed_cursor:
+                raise ValueError("compact dispatch cursor chain mismatch")
             expected, expected_after, expected_class = _expected_compact_dispatch(
                 action, (int(cursor_before[0]), int(cursor_before[1]))
             )
@@ -469,6 +528,9 @@ def record_executed_segment(
                 or _normalized_operations(atomic.get("operations")) != expected
             ):
                 raise ValueError("compact dispatch order/content mismatch")
+            observed_cursor = cursor_after
+    if observed_cursor != list(segment.expected_cursor_after):
+        raise ValueError("segment final cursor does not match compiled binding")
     dispatch_payload = {
         "schema_version": 1,
         "task_id": segment.task_id,

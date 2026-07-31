@@ -412,6 +412,7 @@ def run_vm_replay(
     task_setup_validation: Path,
     task_setup_validation_artifact_id: str,
     task_setup_validation_sha256: str,
+    expected_provider_sha256: str,
     fixture_id: str | None = None,
 ) -> dict[str, Any]:
     if split != "development":
@@ -431,6 +432,7 @@ def run_vm_replay(
         vm_log_dir=output / "vm_logs",
         smp=int(os.environ.get("OSWORLD_VM_SMP", "4")),
         memory=os.environ.get("OSWORLD_VM_MEM", "8G"),
+        expected_provider_sha256=expected_provider_sha256,
     ) as session:
         tasks = manifest.tasks
         if fixture_id is not None:
@@ -552,6 +554,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--task-setup-validation", type=Path, required=True)
     parser.add_argument("--task-setup-validation-artifact-id", required=True)
     parser.add_argument("--task-setup-validation-sha256", required=True)
+    parser.add_argument("--expected-provider-sha256", required=True)
     parser.add_argument("--fixture-id")
     args = parser.parse_args(argv)
     args.output.mkdir(parents=True, exist_ok=True)
@@ -567,6 +570,7 @@ def main(argv: list[str] | None = None) -> int:
             task_setup_validation=args.task_setup_validation,
             task_setup_validation_artifact_id=args.task_setup_validation_artifact_id,
             task_setup_validation_sha256=args.task_setup_validation_sha256,
+            expected_provider_sha256=args.expected_provider_sha256,
             fixture_id=args.fixture_id,
         )
         _atomic_json(marker, payload)
