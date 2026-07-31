@@ -693,6 +693,11 @@ def run_vm_selfcheck(
         "evaluation_fixture_count": len(manifest.select(split="evaluation")),
         "selfcheck_cell_count": len(cells),
         "expected_selfcheck_cell_count": expected_cell_count,
+        "retry_count": 0,
+        "infrastructure_error_count": 0,
+        "gpu_count": 0,
+        "model_access": False,
+        "sealed_evaluation_access": False,
         "manifest_bounds": manifest_bounds,
         "provider": {
             "path": str(provider_path.resolve()),

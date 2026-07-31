@@ -1,0 +1,109 @@
+name = "proper_vm_executor_cert_aggregate_cpu_v1"
+repo = "juergen_gui_executor_integration"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+OUTPUT="$(jq -r '.outputs.result.path' "$LABCTL_CONTEXT")"
+input_path() { jq -er --arg role "$1" '.inputs[]|select(.role==$role)|.resolved_path' "$LABCTL_CONTEXT"; }
+BUILD="$(input_path build)"; PREFLIGHT="$(input_path preflight)"; FAILURE="$(input_path failure_probe)"
+CLICK0="$(input_path click_full_0)"; CLICK1="$(input_path click_full_1)"
+CLICK2="$(input_path click_full_2)"; CLICK3="$(input_path click_full_3)"
+RUNG1A="$(input_path rung1a)"; RUNG1B="$(input_path rung1b)"; SAMEAPP="$(input_path sameapp)"
+cd "$SOURCE"
+export CUDA_VISIBLE_DEVICES=""; test -z "$CUDA_VISIBLE_DEVICES"
+uv run --locked --no-dev python -m \
+  osworld_parity.proper_vm_capability_ladder.validation.aggregate \
+  --context="$LABCTL_CONTEXT" --lock-file="$SOURCE/uv.lock" --output="$OUTPUT" \
+  --build-result="$BUILD/build.json" --build-index="$BUILD/ARTIFACT_INDEX.json" \
+  --preflight-result="$PREFLIGHT/transport_diagnostic.json" --preflight-index="$PREFLIGHT/ARTIFACT_INDEX.json" \
+  --failure-probe-result="$FAILURE/failure_probe.json" --failure-probe-index="$FAILURE/ARTIFACT_INDEX.json" \
+  --click-shard-result="0=$CLICK0/transport_certification_shard_0.json" --click-shard-index="0=$CLICK0/ARTIFACT_INDEX.json" \
+  --click-shard-result="1=$CLICK1/transport_certification_shard_1.json" --click-shard-index="1=$CLICK1/ARTIFACT_INDEX.json" \
+  --click-shard-result="2=$CLICK2/transport_certification_shard_2.json" --click-shard-index="2=$CLICK2/ARTIFACT_INDEX.json" \
+  --click-shard-result="3=$CLICK3/transport_certification_shard_3.json" --click-shard-index="3=$CLICK3/ARTIFACT_INDEX.json" \
+  --rung1a-result="$RUNG1A/selfcheck.json" --rung1a-index="$RUNG1A/ARTIFACT_INDEX.json" \
+  --rung1b-result="$RUNG1B/selfcheck.json" --rung1b-index="$RUNG1B/ARTIFACT_INDEX.json" \
+  --sameapp-result="$SAMEAPP/replay.json" --sameapp-index="$SAMEAPP/ARTIFACT_INDEX.json" \
+  --rung1a-manifest="$SOURCE/osworld_parity/proper_vm_capability_ladder/rung1/fixtures.json" \
+  --rung1b-manifest="$SOURCE/osworld_parity/proper_vm_capability_ladder/rung1b_realapps/fixtures.json" \
+  --sameapp-manifest="$SOURCE/osworld_parity/proper_vm_capability_ladder/rung2_sameapp/manifests/development.json" \
+  --preregistration-evidence="$SOURCE/osworld_parity/proper_vm_capability_ladder/PREREGISTRATION_20260731.md"
+uv run --locked --no-dev python -m \
+  osworld_parity.proper_vm_capability_ladder.validation.artifact_index \
+  --kind=executor_ready --context="$LABCTL_CONTEXT" --lock-file="$SOURCE/uv.lock" \
+  --output-index="$OUTPUT/ARTIFACT_INDEX.json" --result="executor_ready=$OUTPUT/EXECUTOR_READY.json" \
+  --fixture="rung1a=$SOURCE/osworld_parity/proper_vm_capability_ladder/rung1/fixtures.json" \
+  --fixture="rung1b=$SOURCE/osworld_parity/proper_vm_capability_ladder/rung1b_realapps/fixtures.json" \
+  --fixture="sameapp=$SOURCE/osworld_parity/proper_vm_capability_ladder/rung2_sameapp/manifests/development.json" \
+  --recipe="aggregate=$SOURCE/osworld_parity/labctl/recipes/executor_cert_aggregate_cpu.toml" \
+  --command="python -m validation.aggregate" --build-result="$BUILD/build.json"
+''', "--"]
+
+[resources]
+gpus = 0
+cpus = 2
+mem = "8GB"
+time = "00:20:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1"]
+
+[inputs.build]
+type = "stage"
+stage = "build"
+role = "result"
+
+[inputs.preflight]
+type = "stage"
+stage = "preflight"
+role = "result"
+
+[inputs.failure_probe]
+type = "stage"
+stage = "failure_probe"
+role = "result"
+
+[inputs.click_full_0]
+type = "stage"
+stage = "click_full_0"
+role = "result"
+
+[inputs.click_full_1]
+type = "stage"
+stage = "click_full_1"
+role = "result"
+
+[inputs.click_full_2]
+type = "stage"
+stage = "click_full_2"
+role = "result"
+
+[inputs.click_full_3]
+type = "stage"
+stage = "click_full_3"
+role = "result"
+
+[inputs.rung1a]
+type = "stage"
+stage = "rung1a"
+role = "result"
+
+[inputs.rung1b]
+type = "stage"
+stage = "rung1b"
+role = "result"
+
+[inputs.sameapp]
+type = "stage"
+stage = "sameapp"
+role = "result"
+
+[outputs.result]
+type = "eval_result"
+marker = "EXECUTOR_READY.json"
+alias = "proper_vm_executor_ready_{run.id}"
+
+[env]
+PYTHONUNBUFFERED = "1"
+CUDA_VISIBLE_DEVICES = ""

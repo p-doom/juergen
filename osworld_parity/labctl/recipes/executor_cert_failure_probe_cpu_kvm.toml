@@ -1,0 +1,78 @@
+name = "proper_vm_executor_cert_failure_probe_cpu_kvm_v1"
+repo = "juergen_gui_executor_integration"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+OUTPUT="$(jq -r '.outputs.result.path' "$LABCTL_CONTEXT")"
+input_path() { jq -er --arg role "$1" '.inputs[]|select(.role==$role)|.resolved_path' "$LABCTL_CONTEXT"; }
+BUILD="$(input_path build)"
+VM="$(input_path vm)"
+PROVIDER="$(input_path provider)"
+QEMU="$(input_path qemu)"
+cd "$SOURCE"
+test "${SLURM_NTASKS:-1}" = 1
+export CUDA_VISIBLE_DEVICES=""; test -z "$CUDA_VISIBLE_DEVICES"
+uv run --locked --no-dev python -m \
+  osworld_parity.proper_vm_capability_ladder.validation.failure_artifact_probe \
+  --output="$OUTPUT" --qcow="$VM/Ubuntu.qcow2" \
+  --qemu="$QEMU/bin/qemu-system-x86_64-wrapped" \
+  --provider="$PROVIDER/qemu_fast_reset.py"
+uv run --locked --no-dev python -m \
+  osworld_parity.proper_vm_capability_ladder.validation.artifact_index \
+  --kind=failure_probe --context="$LABCTL_CONTEXT" --lock-file="$SOURCE/uv.lock" \
+  --output-index="$OUTPUT/ARTIFACT_INDEX.json" \
+  --result="failure_probe=$OUTPUT/failure_probe.json" \
+  --result="raw_failure=$OUTPUT/injected_failure.json" \
+  --result="failure_screenshot=$OUTPUT/injected_failure.png" \
+  --recipe="failure_probe=$SOURCE/osworld_parity/labctl/recipes/executor_cert_failure_probe_cpu_kvm.toml" \
+  --command="python -m validation.failure_artifact_probe" \
+  --provider="$PROVIDER/qemu_fast_reset.py" \
+  --qemu-component="wrapper=$QEMU/bin/qemu-system-x86_64-wrapped" \
+  --qemu-component="binary=$QEMU/bin/qemu-system-x86_64" \
+  --qemu-component="loader=$QEMU/lib/ld-linux-x86-64.so.2" \
+  --base-image="$VM/Ubuntu.qcow2" --vm-metadata="$OUTPUT/vm_metadata.json" \
+  --build-result="$BUILD/build.json"
+''', "--"]
+
+[resources]
+gpus = 0
+cpus = 4
+mem = "24GB"
+time = "00:45:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001,hai005"]
+
+[inputs.build]
+type = "stage"
+stage = "build"
+role = "result"
+
+[inputs.preflight]
+type = "stage"
+stage = "preflight"
+role = "result"
+
+[inputs.vm]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_vm"
+
+[inputs.provider]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_fastreset"
+
+[inputs.qemu]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu"
+
+[outputs.result]
+type = "eval_result"
+marker = "failure_probe.json"
+alias = "proper_vm_executor_failure_probe_{run.id}"
+
+[env]
+PYTHONUNBUFFERED = "1"
+CUDA_VISIBLE_DEVICES = ""
+OSWORLD_VM_SMP = "4"
+OSWORLD_VM_MEM = "8G"

@@ -1,0 +1,34 @@
+name = "proper_vm_executor_certification_v1"
+
+[stages.build]
+recipe = "../recipes/executor_cert_build_cpu.toml"
+
+[stages.preflight]
+recipe = "../recipes/executor_cert_click_preflight_cpu_kvm.toml"
+
+[stages.failure_probe]
+recipe = "../recipes/executor_cert_failure_probe_cpu_kvm.toml"
+
+[stages.click_full_0]
+recipe = "../recipes/executor_cert_click_full_0_cpu_kvm.toml"
+
+[stages.click_full_1]
+recipe = "../recipes/executor_cert_click_full_1_cpu_kvm.toml"
+
+[stages.click_full_2]
+recipe = "../recipes/executor_cert_click_full_2_cpu_kvm.toml"
+
+[stages.click_full_3]
+recipe = "../recipes/executor_cert_click_full_3_cpu_kvm.toml"
+
+[stages.rung1a]
+recipe = "../recipes/executor_cert_rung1a_dev_cpu_kvm.toml"
+
+[stages.rung1b]
+recipe = "../recipes/executor_cert_rung1b_dev_cpu_kvm.toml"
+
+[stages.sameapp]
+recipe = "../recipes/executor_cert_sameapp_dev_cpu_kvm.toml"
+
+[stages.aggregate]
+recipe = "../recipes/executor_cert_aggregate_cpu.toml"

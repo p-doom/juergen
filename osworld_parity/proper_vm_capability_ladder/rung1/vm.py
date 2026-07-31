@@ -5,12 +5,21 @@ import hmac
 import importlib.util
 import json
 import os
+import re
 import secrets
+import shutil
+import socket
+import sys
+import tempfile
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import ModuleType
+from typing import Any, Iterator
+
+import fcntl
 
 from .fixtures import Fixture
 from .server import FixtureHttpServer
@@ -125,6 +134,55 @@ def _provider_observation(provider: object, qcow: Path) -> tuple[bytes, tuple[tu
     return _canonical_json({"state": state, "timings": timings}), timings
 
 
+_VM_ID_COMPONENT = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def _safe_component(value: str, *, fallback: str) -> str:
+    cleaned = _VM_ID_COMPONENT.sub("-", value).strip("-.")
+    return (cleaned or fallback)[:40]
+
+
+def task_unique_vm_id() -> str:
+    """Return an auditable id that is unique across jobs, tasks, and processes."""
+
+    job = _safe_component(
+        os.environ.get("SLURM_JOB_ID", os.environ.get("LABCTL_JOB_ID", "local")),
+        fallback="local",
+    )
+    task = _safe_component(os.environ.get("SLURM_PROCID", "0"), fallback="0")
+    run = _safe_component(os.environ.get("LABCTL_RUN_ID", "no-run"), fallback="no-run")
+    return f"{job}-{task}-{run[:16]}-{os.getpid()}-{uuid.uuid4().hex[:10]}"
+
+
+def _atomic_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, raw = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(raw, path)
+    finally:
+        Path(raw).unlink(missing_ok=True)
+
+
+@contextmanager
+def _node_port_allocation_lock() -> Iterator[None]:
+    """Serialize bind(0)->QEMU handoff across cooperating processes on a node."""
+
+    # The provider retries a lost bind race, but serializing allocation through
+    # QEMU readiness closes that race between all certification jobs on a node.
+    path = Path(f"/tmp/proper-vm-port-allocation-{os.getuid()}.lock")
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -155,6 +213,8 @@ class KvmFixtureSession:
         smp: int = 4,
         memory: str = "8G",
         expected_provider_sha256: str | None = None,
+        scratch_root: Path | None = None,
+        vm_id: str | None = None,
     ) -> None:
         self.qcow = qcow.resolve()
         self.qemu = qemu.resolve()
@@ -163,6 +223,8 @@ class KvmFixtureSession:
         self.smp = smp
         self.memory = memory
         self.expected_provider_sha256 = expected_provider_sha256
+        self.scratch_root = scratch_root
+        self.vm_id = vm_id or task_unique_vm_id()
         self.provider = None
         self.transport: HttpVmTransport | None = None
         self._module: ModuleType | None = None
@@ -174,6 +236,160 @@ class KvmFixtureSession:
         self._last_consumed_provider_generation_id: str | None = None
         self._last_consumed_provider_transition_index: int | None = None
         self._outstanding_provider_reset_receipt_sha256: str | None = None
+        self._task_lock_handle: Any | None = None
+        self._saved_environment: dict[str, str | None] = {}
+        self.vm_scratch_dir: Path | None = None
+        self.scratch_source: str | None = None
+        self._scratch_root: Path | None = None
+        self._scratch_root_owned = False
+        self._task_lock_path: Path | None = None
+        self.metadata_path = self.vm_log_dir.parent / "vm_metadata.json"
+
+    def _set_environment(self, key: str, value: str) -> None:
+        if key not in self._saved_environment:
+            self._saved_environment[key] = os.environ.get(key)
+        os.environ[key] = value
+
+    def _restore_environment(self) -> None:
+        for key, value in self._saved_environment.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self._saved_environment.clear()
+
+    def _prepare_isolation(self) -> None:
+        if os.environ.get("CUDA_VISIBLE_DEVICES", ""):
+            raise VmHarnessError("GPU visibility is forbidden for CPU KVM certification")
+        ntasks = os.environ.get("SLURM_NTASKS")
+        if ntasks is not None and ntasks != "1":
+            raise VmHarnessError(f"exactly one SLURM task is required, got {ntasks}")
+        root = self.scratch_root
+        if root is None:
+            raw = os.environ.get("SLURM_TMPDIR")
+            if raw:
+                root = Path(raw)
+                self.scratch_source = "SLURM_TMPDIR"
+            else:
+                job = _safe_component(
+                    os.environ.get("SLURM_JOB_ID", os.environ.get("LABCTL_JOB_ID", "local")),
+                    fallback="local",
+                )
+                task = _safe_component(os.environ.get("SLURM_PROCID", "0"), fallback="0")
+                root = Path("/tmp") / f"proper-vm-job-{os.getuid()}-{job}-{task}"
+                self.scratch_source = "job_unique_tmp_fallback"
+                self._scratch_root_owned = True
+        else:
+            self.scratch_source = "explicit"
+        root = root.resolve()
+        slurm_tmp = os.environ.get("SLURM_TMPDIR")
+        if slurm_tmp and not root.is_relative_to(Path(slurm_tmp).resolve()):
+            raise VmHarnessError("VM scratch root must be below SLURM_TMPDIR")
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if root.stat().st_uid != os.geteuid():
+            raise VmHarnessError("VM scratch root is not owned by this job user")
+        if self._scratch_root_owned:
+            os.chmod(root, 0o700)
+        self._scratch_root = root
+        self.vm_scratch_dir = root / f"proper-vm-{self.vm_id}"
+        self.vm_scratch_dir.mkdir(mode=0o700, parents=False, exist_ok=False)
+
+        # A task may own at most one live VM.  The lock is intentionally scoped
+        # to the SLURM scratch root so separate array tasks do not share state.
+        lock_path = root / f"proper-vm-task-{os.environ.get('SLURM_PROCID', '0')}.lock"
+        self._task_lock_path = lock_path
+        handle = lock_path.open("a+")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            handle.close()
+            raise VmHarnessError("another VM is already live in this SLURM task") from exc
+        self._task_lock_handle = handle
+
+        # QEMU -snapshot creates and immediately unlinks a temporary qcow
+        # overlay.  TMPDIR is the only reliable placement boundary for that
+        # file; keeping it in job-unique scratch makes even SIGKILL cleanup local
+        # to the allocation. QMP remains under /tmp to stay far below sockaddr_un
+        # path limits.
+        self._set_environment("TMPDIR", str(self.vm_scratch_dir))
+        self._set_environment("OSWORLD_QMP_DIR", "/tmp")
+
+    def _overlay_fd_targets(self, proc: Any) -> list[str]:
+        pid = getattr(proc, "pid", None)
+        if not isinstance(pid, int):
+            raise VmHarnessError("provider did not expose the QEMU process id")
+        fd_root = Path(f"/proc/{pid}/fd")
+        targets: list[str] = []
+        for entry in fd_root.iterdir():
+            try:
+                target = os.readlink(entry)
+            except OSError:
+                continue
+            if self.vm_scratch_dir is not None and target.startswith(
+                str(self.vm_scratch_dir) + os.sep
+            ):
+                targets.append(target)
+        if not targets:
+            raise VmHarnessError(
+                "QEMU temporary qcow overlay is not under the per-VM SLURM scratch directory"
+            )
+        return sorted(targets)
+
+    def _metadata(self, *, state: dict[str, Any], overlay_fds: list[str]) -> dict[str, Any]:
+        ports = state.get("ports")
+        if not isinstance(ports, dict) or set(ports) != {
+            "server",
+            "chromium",
+            "vnc",
+            "vlc",
+        }:
+            raise VmHarnessError(f"provider returned invalid port map: {ports!r}")
+        parsed_ports = {str(key): int(value) for key, value in ports.items()}
+        if len(set(parsed_ports.values())) != len(parsed_ports):
+            raise VmHarnessError("provider returned colliding host ports")
+        qmp_path = str(state.get("qmp_path", ""))
+        if not qmp_path.startswith("/tmp/") or len(qmp_path.encode("utf-8")) >= 80:
+            raise VmHarnessError(f"QMP path is not short and /tmp-scoped: {qmp_path!r}")
+        log_path = Path(state.get("log", "")).resolve()
+        try:
+            log_path.relative_to(self.vm_log_dir)
+        except ValueError as exc:
+            raise VmHarnessError(f"QEMU log escaped its unique output directory: {log_path}") from exc
+        return {
+            "schema_version": "proper_vm_isolation_v1",
+            "vm_id": self.vm_id,
+            "hostname": socket.gethostname(),
+            "slurm": {
+                "job_id": os.environ.get("SLURM_JOB_ID"),
+                "array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID"),
+                "array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
+                "proc_id": os.environ.get("SLURM_PROCID", "0"),
+                "node_id": os.environ.get("SLURMD_NODENAME", socket.gethostname()),
+                "tmpdir": os.environ.get("SLURM_TMPDIR"),
+            },
+            "labctl": {
+                "run_id": os.environ.get("LABCTL_RUN_ID"),
+                "run_dir": os.environ.get("LABCTL_RUN_DIR"),
+            },
+            "base_qcow": str(self.qcow),
+            "overlay": {
+                "kind": "qemu_snapshot_temporary_qcow",
+                "directory": str(self.vm_scratch_dir),
+                "fd_targets": overlay_fds,
+                "under_slurm_tmpdir": bool(os.environ.get("SLURM_TMPDIR")),
+                "scratch_source": self.scratch_source,
+                "job_unique_scratch": self.scratch_source
+                in {"SLURM_TMPDIR", "job_unique_tmp_fallback"},
+            },
+            "qemu": str(self.qemu),
+            "provider": str(self.provider_path),
+            "qmp_path": qmp_path,
+            "ports": parsed_ports,
+            "qemu_log": str(log_path),
+            "one_vm_per_task": True,
+            "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+            "closed": False,
+        }
 
     def start(self) -> None:
         if not os.access("/dev/kvm", os.R_OK | os.W_OK):
@@ -194,27 +410,40 @@ class KvmFixtureSession:
                 raise VmHarnessError(
                     f"provider SHA-256 mismatch: {observed} != {expected}"
                 )
-        self.vm_log_dir.mkdir(parents=True, exist_ok=True)
-        os.environ["OSWORLD_QCOW2"] = str(self.qcow)
-        os.environ["OSWORLD_QEMU_BIN"] = str(self.qemu)
-        os.environ["OSWORLD_FAST_SNAPSHOT"] = "1"
-        os.environ["OSWORLD_VM_LOG_DIR"] = str(self.vm_log_dir)
-        os.environ["OSWORLD_QMP_DIR"] = "/tmp"
-        os.environ["OSWORLD_VM_SMP"] = str(self.smp)
-        os.environ["OSWORLD_VM_MEM"] = self.memory
-        module = _load_provider(self.provider_path)
-        # The provider's ordinary boot snapshot is semantically the pinned clean
-        # QCOW state. Name it exactly as preregistered before the VM is started.
-        module.BOOT_SNAPSHOT = READY_SNAPSHOT
-        provider = module.FastResetKvmProvider()
-        provider.start_emulator(str(self.qcow))
-        if not provider.has_snapshot(str(self.qcow), READY_SNAPSHOT):
-            provider.stop_emulator(str(self.qcow))
-            raise VmHarnessError("provider did not create osworld_ready snapshot")
-        port = int(provider.state(str(self.qcow))["ports"]["server"])
-        self.provider = provider
-        self.transport = HttpVmTransport(f"http://127.0.0.1:{port}")
-        self._module = module
+        self.vm_log_dir.mkdir(parents=True, exist_ok=False)
+        try:
+            self._prepare_isolation()
+            for key, value in {
+                "OSWORLD_VM_ID": self.vm_id,
+                "OSWORLD_QCOW2": str(self.qcow),
+                "OSWORLD_QEMU_BIN": str(self.qemu),
+                "OSWORLD_FAST_SNAPSHOT": "1",
+                "OSWORLD_VM_LOG_DIR": str(self.vm_log_dir),
+                "OSWORLD_VM_SMP": str(self.smp),
+                "OSWORLD_VM_MEM": self.memory,
+            }.items():
+                self._set_environment(key, value)
+            module = _load_provider(self.provider_path)
+            # The provider's ordinary boot snapshot is semantically the pinned clean
+            # QCOW state. Name it exactly as preregistered before the VM is started.
+            module.BOOT_SNAPSHOT = READY_SNAPSHOT
+            provider = module.FastResetKvmProvider()
+            self.provider = provider
+            with _node_port_allocation_lock():
+                provider.start_emulator(str(self.qcow))
+            state = provider.state(str(self.qcow))
+            if not provider.has_snapshot(str(self.qcow), READY_SNAPSHOT):
+                provider.stop_emulator(str(self.qcow))
+                raise VmHarnessError("provider did not create osworld_ready snapshot")
+            overlay_fds = self._overlay_fd_targets(state.get("proc"))
+            metadata = self._metadata(state=state, overlay_fds=overlay_fds)
+            _atomic_json(self.metadata_path, metadata)
+            port = int(metadata["ports"]["server"])
+            self.transport = HttpVmTransport(f"http://127.0.0.1:{port}")
+            self._module = module
+        except Exception:
+            self.close()
+            raise
 
     def reset_to_ready(self) -> HttpVmTransport:
         transport, receipt = self.reset_to_ready_with_receipt()
@@ -481,10 +710,63 @@ nohup "$browser" --no-first-run --no-default-browser-check \
         return int(fixture_server.store.snapshot(fixture.id)["last_pointer_buttons"])
 
     def close(self) -> None:
+        cleanup_errors: list[str] = []
+        provider_stopped = self.provider is None
         if self.provider is not None:
-            self.provider.stop_emulator(str(self.qcow))
+            provider = self.provider
+            proc = None
+            try:
+                proc = provider.state(str(self.qcow)).get("proc")
+            except (KeyError, AttributeError):
+                pass
+            try:
+                provider.stop_emulator(str(self.qcow))
+                provider_stopped = proc is None or proc.poll() is not None
+                if not provider_stopped:
+                    cleanup_errors.append("QEMU process remained live after provider stop")
+            except Exception as exc:
+                cleanup_errors.append(f"provider stop failed: {exc}")
             self.provider = None
         self.transport = None
+        scratch_path = self.vm_scratch_dir
+        if self.vm_scratch_dir is not None:
+            try:
+                shutil.rmtree(self.vm_scratch_dir)
+            except OSError as exc:
+                cleanup_errors.append(f"VM scratch cleanup failed: {exc}")
+            self.vm_scratch_dir = None
+        overlay_removed = scratch_path is None or not scratch_path.exists()
+        if not overlay_removed:
+            cleanup_errors.append("VM scratch directory still exists after cleanup")
+        if self._task_lock_handle is not None:
+            fcntl.flock(self._task_lock_handle.fileno(), fcntl.LOCK_UN)
+            self._task_lock_handle.close()
+            self._task_lock_handle = None
+        if self._task_lock_path is not None:
+            try:
+                self._task_lock_path.unlink(missing_ok=True)
+            except OSError as exc:
+                cleanup_errors.append(f"VM task lock cleanup failed: {exc}")
+            self._task_lock_path = None
+        if self._scratch_root_owned and self._scratch_root is not None:
+            try:
+                self._scratch_root.rmdir()
+            except OSError as exc:
+                cleanup_errors.append(f"job scratch root cleanup failed: {exc}")
+        self._scratch_root = None
+        self._scratch_root_owned = False
+        self._restore_environment()
+        if self.metadata_path.is_file():
+            try:
+                metadata = json.loads(self.metadata_path.read_text(encoding="utf-8"))
+                metadata["closed"] = provider_stopped
+                metadata["overlay"]["removed"] = overlay_removed
+                metadata["cleanup_errors"] = cleanup_errors
+                _atomic_json(self.metadata_path, metadata)
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                cleanup_errors.append(f"VM metadata finalization failed: {exc}")
+        if cleanup_errors and sys.exc_info()[0] is None:
+            raise VmHarnessError("; ".join(cleanup_errors))
 
     def __enter__(self) -> "KvmFixtureSession":
         self.start()

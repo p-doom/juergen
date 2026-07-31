@@ -14,7 +14,13 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..rung1.executor import CompactRawExecutor, NativeAbsoluteExecutor
-from ..rung1.vm import DEFAULT_PROVIDER, DEFAULT_QCOW, DEFAULT_QEMU, KvmFixtureSession
+from ..rung1.vm import (
+    DEFAULT_PROVIDER,
+    DEFAULT_QCOW,
+    DEFAULT_QEMU,
+    KvmFixtureSession,
+    sha256_file,
+)
 from .curriculum.manifests import TaskManifest, load_manifest
 from .curriculum.oracle import as_sameapp_fixture, as_vscode_fixture, verify_fixture_contract
 from .curriculum.program import (
@@ -424,6 +430,7 @@ def run_vm_replay(
         expected_artifact_id=task_setup_validation_artifact_id,
         expected_raw_sha256=task_setup_validation_sha256,
     )
+    provider_sha256 = sha256_file(provider)
     rows: list[dict[str, Any]] = []
     with KvmFixtureSession(
         qcow=qcow,
@@ -539,6 +546,15 @@ def run_vm_replay(
         "task_setup_validation_artifact_id": setup["artifact_id"],
         "task_setup_validation_sha256": task_setup_validation_sha256,
         "sealed_eval_executed": False,
+        "retry_count": 0,
+        "infrastructure_error_count": 0,
+        "gpu_count": 0,
+        "model_access": False,
+        "sealed_evaluation_access": False,
+        "provider": {
+            "path": str(provider.resolve()),
+            "sha256": provider_sha256,
+        },
         "rows": rows,
     }
 
