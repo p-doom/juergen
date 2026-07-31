@@ -469,14 +469,15 @@ def _launch_chrome(client: OSWorldClient, variant: str) -> None:
     elif variant == "history":
         files = {
             "/tmp/cua_history_a.html": (
-                "<title>PAGE_A</title><h1>PAGE A</h1>"
-                "<script>if(location.hash==='#start'){location.hash='return';"
-                "setTimeout(()=>location.href='file:///tmp/cua_history_b.html',50)}</script>"
+                "<title>PAGE_A</title>"
+                "<a href='file:///tmp/cua_history_b.html' "
+                "style='position:fixed;inset:0;display:grid;place-items:center;font-size:48px'>"
+                "OPEN PAGE B</a>"
             ),
             "/tmp/cua_history_b.html": "<title>PAGE_B</title><h1>PAGE B — use Chrome Back</h1>",
         }
-        urls = ["file:///tmp/cua_history_a.html#start"]
-        expected_title = "PAGE_B"
+        urls = ["file:///tmp/cua_history_a.html"]
+        expected_title = "PAGE_A"
     else:
         urls = ["file:///tmp/cua_micro.html"]
         expected_title = {
@@ -502,6 +503,9 @@ def _launch_chrome(client: OSWorldClient, variant: str) -> None:
         _wait_until(lambda: _activate_chrome_target(client, activate_title), timeout_s=20)
     _wait_until(lambda: expected_title in _active_title(client), timeout_s=20)
     if variant == "history":
+        width, height = client.screen_size()
+        client.execute(f"pyautogui.click(x={width // 2}, y={height // 2}, button='left')")
+        _wait_until(lambda: "PAGE_B" in _active_title(client), timeout_s=20)
         client.execute("pyautogui.hotkey('alt', 'left')")
         _wait_until(lambda: "PAGE_A" in _active_title(client), timeout_s=20)
         client.execute("pyautogui.hotkey('alt', 'right')")
