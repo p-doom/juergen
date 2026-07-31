@@ -1,0 +1,47 @@
+name = "proper_vm_rung1b_realapps_vm_selfcheck_cpu_kvm_v1"
+repo = "juergen_rung1b_realapps"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+cd "$SOURCE"
+[[ -r /dev/kvm && -w /dev/kvm ]] || { echo "FATAL /dev/kvm unavailable" >&2; exit 2; }
+[[ -z "${CUDA_VISIBLE_DEVICES:-}" ]] || { echo "FATAL GPU allocation is forbidden" >&2; exit 2; }
+uv run --locked --no-dev python -m \
+  osworld_parity.proper_vm_capability_ladder.rung1b_realapps.selfcheck \
+  --mode=vm "$@"
+''', "--"]
+
+[resources]
+gpus = 0
+cpus = 4
+mem = "24GB"
+time = "01:30:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001,hai005"]
+
+[inputs.vm]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_vm"
+
+[inputs.provider]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_fastreset"
+
+[outputs.result]
+type = "eval_result"
+marker = "selfcheck.json"
+alias = "proper_vm_rung1b_realapps_vm_{run.id}"
+
+[args]
+output = "{outputs.result.path}"
+qcow = "{inputs.vm.path}/Ubuntu.qcow2"
+qemu = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin/qemu-system-x86_64-wrapped"
+provider = "{inputs.provider.path}/qemu_fast_reset.py"
+expected_provider_sha256 = "76a8f44fab16c6dd38a4378a270e38758ba8d31885f244baedb95d8178f588d7"
+
+[env]
+PYTHONUNBUFFERED = "1"
+OSWORLD_VM_SMP = "4"
+OSWORLD_VM_MEM = "8G"

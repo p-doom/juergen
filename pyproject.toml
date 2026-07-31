@@ -5,6 +5,16 @@ description = "Crowd-cast SFT supply-chain monorepo: data pipeline, eval harness
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "av>=16.1.0",
+    "requests>=2.31",
+]
+
+[dependency-groups]
+# Test-only requirements for the proper-VM capability ladder. `pillow` is
+# needed by the rung-1 curriculum tests, which the consolidated build gate runs
+# together with the rung-1b real-application tests in one union suite.
+dev = [
+    "pytest>=8.4,<9",
+    "pillow>=10",
 ]
 
 [tool.uv.workspace]

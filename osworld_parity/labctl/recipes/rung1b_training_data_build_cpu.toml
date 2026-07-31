@@ -1,0 +1,33 @@
+name = "proper_vm_rung1b_training_data_build_cpu_v1"
+repo = "juergen_rung1b_realapps"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+cd "$SOURCE"
+[[ -z "${CUDA_VISIBLE_DEVICES:-}" ]] || { echo "FATAL GPU allocation is forbidden" >&2; exit 2; }
+uv run --locked --no-dev python -m \
+  osworld_parity.proper_vm_capability_ladder.rung1b_realapps.training.demonstrations "$@"
+''', "--"]
+
+[resources]
+gpus = 0
+cpus = 2
+mem = "8GB"
+time = "00:20:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1"]
+
+[outputs.result]
+type = "dataset"
+marker = "result.json"
+alias = "proper_vm_rung1b_training_data_{run.id}"
+
+[args]
+split = "train"
+output = "{outputs.result.path}"
+
+[env]
+PYTHONUNBUFFERED = "1"
+CUDA_VISIBLE_DEVICES = ""

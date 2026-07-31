@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "generator_version": "r1b-realapps-v1",
+  "official_osworld_reuse": false,
+  "eval_policy": "sealed_ids_only_never_materialize_in_build_or_collection",
+  "splits": {
+    "train": [
+      {"template": "vscode_focus_type", "seed": 4101},
+      {"template": "vscode_focus_type", "seed": 4102},
+      {"template": "vscode_focus_type", "seed": 4103},
+      {"template": "vscode_focus_type", "seed": 4104},
+      {"template": "vscode_focus_type", "seed": 4105},
+      {"template": "vscode_focus_type", "seed": 4106},
+      {"template": "local_document_scroll", "seed": 4201},
+      {"template": "local_document_scroll", "seed": 4202},
+      {"template": "local_document_scroll", "seed": 4203},
+      {"template": "local_document_scroll", "seed": 4204},
+      {"template": "local_document_scroll", "seed": 4205},
+      {"template": "local_document_scroll", "seed": 4206},
+      {"template": "files_drag", "seed": 4301},
+      {"template": "files_drag", "seed": 4302},
+      {"template": "files_drag", "seed": 4303},
+      {"template": "files_drag", "seed": 4304},
+      {"template": "files_drag", "seed": 4305},
+      {"template": "files_drag", "seed": 4306}
+    ],
+    "development": [
+      {"template": "vscode_focus_type", "seed": 3101},
+      {"template": "vscode_focus_type", "seed": 3102},
+      {"template": "local_document_scroll", "seed": 3201},
+      {"template": "local_document_scroll", "seed": 3202},
+      {"template": "files_drag", "seed": 3301},
+      {"template": "files_drag", "seed": 3302}
+    ],
+    "evaluation_sealed": [
+      {"template": "vscode_focus_type", "seed": 9101},
+      {"template": "vscode_focus_type", "seed": 9102},
+      {"template": "vscode_focus_type", "seed": 9103},
+      {"template": "vscode_focus_type", "seed": 9104},
+      {"template": "local_document_scroll", "seed": 9201},
+      {"template": "local_document_scroll", "seed": 9202},
+      {"template": "local_document_scroll", "seed": 9203},
+      {"template": "local_document_scroll", "seed": 9204},
+      {"template": "files_drag", "seed": 9301},
+      {"template": "files_drag", "seed": 9302},
+      {"template": "files_drag", "seed": 9303},
+      {"template": "files_drag", "seed": 9304}
+    ]
+  },
+  "split_sha256": {
+    "train": "11d2759c3e8018550b78fe98229acf8ca388d1b996ad00dd7bd96f8496f7ba7d",
+    "development": "bc5a1bec7fef6155d55f0d34930620abd9f43f19997365a7cfc04530b37f2a6c",
+    "evaluation_sealed": "27e3c528b68dcd24853f5f18ec5e4835c705630b876f42d2e7e52019d107af91"
+  },
+  "manifest_payload_sha256": "97a8d3e09ca07ca1ba84aa52edac302ac3629074d8ddb0c74a68d25f5d8c1e59"
+}
