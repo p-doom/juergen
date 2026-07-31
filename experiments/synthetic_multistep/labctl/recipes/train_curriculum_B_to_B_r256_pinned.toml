@@ -1,0 +1,48 @@
+name = "synthetic_multistep_train_curriculum_B_to_B_r256_pinned_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/synthetic_multistep/curriculum_train_export.sh" "$@"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 12
+mem = "150GB"
+time = "03:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--signal=USR1@600", "--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001,hai008", "--nodelist=hai003,hai004,hai007", "--deadline=2026-07-31T05:09:00"]
+
+[inputs.dataset]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_stage2_raw_pre_v1_run_019fb52cca1e7d72987b79842d2d7b08"
+[inputs.source_model]
+type = "artifact"
+artifact = "relative_factorial_relraw_pre_r256_s750_capacity_v1_run_019fb4bec0167122b655a36ea3a4237e"
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+
+[outputs.model]
+type = "checkpoint"
+marker = "curriculum_train_export_manifest.json"
+alias = "synthetic_multistep_curriculum_B_to_B_raw_pre_r256_s750_v1_{run.id}"
+
+[args]
+omegalax_repo = "{inputs.omegalax.path}"
+dataset = "{inputs.dataset.path}"
+source_model = "{inputs.source_model.path}"
+output = "{outputs.model.path}"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+WANDB_MODE = "offline"
+PYTHONUNBUFFERED = "1"
+XLA_PYTHON_CLIENT_ALLOCATOR = "cuda_async"
+XLA_PYTHON_CLIENT_MEM_FRACTION = "0.8"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

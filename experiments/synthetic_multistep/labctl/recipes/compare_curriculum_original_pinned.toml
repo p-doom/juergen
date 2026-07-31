@@ -1,0 +1,40 @@
+name = "synthetic_multistep_compare_curriculum_original_pinned_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+RUNTIME="$(jq -r '.inputs[] | select(.role == "runtime") | .resolved_path' "$LABCTL_CONTEXT")"
+"$RUNTIME/.venv/bin/python" "$REPO/experiments/synthetic_multistep/curriculum_compare.py" "$@"
+''', "--"]
+
+[resources]
+cpus = 2
+mem = "8GB"
+time = "00:15:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.a]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_A_to_B_multistep_B_v1_run_019fb581d1fe7c328498d013d228df2d"
+
+[inputs.b]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_B_to_B_multistep_B_v1_run_019fb581d1fc7401b038db7098c3b151"
+
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+
+[outputs.comparison]
+type = "eval_result"
+marker = "curriculum_comparison.json"
+alias = "synthetic_multistep_curriculum_original_comparison_v1_{run.id}"
+
+[args]
+a-to-b = "{inputs.a.path}"
+b-to-b = "{inputs.b.path}"
+out = "{outputs.comparison.path}"
+variant = "original"

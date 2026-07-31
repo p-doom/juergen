@@ -1,0 +1,48 @@
+name = "synthetic_multistep_eval_typing_B_coalesced_tp1_v10_pinned"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+[[ "$(sha256sum "$REPO/experiments/synthetic_multistep/typing_eval_stage.sh" | awk '{print $1}')" == "7a13978543f9452999b43ceed6e3bba7f04001649695470629240530c7565260" ]] || exit 2
+bash "$REPO/experiments/synthetic_multistep/typing_eval_stage.sh" "$@" \
+  "--experiment_dir=$REPO/experiments/synthetic_multistep"
+''', "--"]
+[resources]
+gpus = 1
+cpus = 12
+mem = "100GB"
+time = "00:45:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1", "--nodelist=hai006", "--deadline=2026-07-31T12:00:00"]
+[inputs.model]
+type = "artifact"
+artifact = "synthetic_typing_factorial_B_coalesced_r256_lr5e5_recovered_tp1_v10_run_019fb6c4f16970928927004f68d64137"
+[inputs.dataset]
+type = "artifact"
+artifact = "synthetic_typing_factorial_2x2_v1_run_019fb585358c7ff08fe5fbc5dd746e5d"
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+[inputs.parser]
+type = "external"
+path = "/fast/home/franz.srambical/juergen/eval"
+[outputs.result]
+type = "eval_result"
+marker = "typing_eval_manifest.json"
+alias = "synthetic_typing_factorial_B_coalesced_eval_tp1_v10_{run.id}"
+[args]
+model = "{inputs.model.path}"
+dataset = "{inputs.dataset.path}"
+out = "{outputs.result.path}"
+runtime = "{inputs.runtime.path}"
+parser = "{inputs.parser.path}"
+lineage = "B"
+format = "coalesced"
+expected_eval_source_sha = "4f2a7834f6b5f2c94f63e4d92a0b17e24b22808b71201ca327b9bea0eacaa9c5"
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

@@ -1,0 +1,78 @@
+name = "synthetic_multistep_resume_typing_B_coalesced_tp1_v10_pinned"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/synthetic_multistep/typing_factorial_resume_tp1_v10.sh" "$@" "--repo=$REPO"
+''', "--"]
+[resources]
+gpus = 1
+cpus = 12
+mem = "150GB"
+time = "02:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1", "--nodelist=hai004", "--deadline=2026-07-31T12:00:00"]
+[inputs.dataset]
+type = "artifact"
+artifact = "synthetic_typing_factorial_2x2_v1_run_019fb585358c7ff08fe5fbc5dd746e5d"
+[inputs.source_model]
+type = "artifact"
+artifact = "relative_factorial_relraw_pre_r256_s750_capacity_v1_run_019fb4bec0167122b655a36ea3a4237e"
+[inputs.partial_root]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_typing_factorial_B_coalesced_r256_lr5e5_v1_run_019fb58db83479f08c78f3a7c1ca3a66"
+[inputs.parent_run]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/labctl_runs/runs/franz.srambical/run_019fb58db83479f08c78f3a7c1ca3a66"
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+[inputs.memory_safe_smoke]
+type = "artifact"
+artifact = "synthetic_typing_tp1_legacy_dtype_memory_safe_resume_cuda_smoke_v3_run_019fb6b384a27391be5696727546b651"
+[outputs.model]
+type = "checkpoint"
+marker = "typing_train_export_manifest.json"
+alias = "synthetic_typing_factorial_B_coalesced_r256_lr5e5_recovered_tp1_v10_{run.id}"
+[args]
+omegalax_repo = "{inputs.omegalax.path}"
+dataset = "{inputs.dataset.path}"
+source_model = "{inputs.source_model.path}"
+partial_root = "{inputs.partial_root.path}"
+parent_run = "{inputs.parent_run.path}"
+memory_safe_smoke = "{inputs.memory_safe_smoke.path}"
+parent_run_id = "run_019fb58db83479f08c78f3a7c1ca3a66"
+parent_job_id = "135511"
+output = "{outputs.model.path}"
+format = "coalesced"
+expected_checkpoint_sha = "d71b1af18f0fb50f691c7d69ed2a7c5847b6464438b89b2b6df2fe4002867675"
+expected_train_state_sha = "729381d3b8f4ed8d96ba1733dba2a42adfb70117e6d8c5775cee73bec6e8298c"
+expected_iterator_sha = "7c62175f1690f6699c5e358147258c40f6d4f9814850ffc9797fd3048b3f6ba5"
+expected_lora_sha = "3e491761873096823bb0a8cb296af699ab40c588b01c8472ef3e1ed0632211ec"
+expected_parent_log_sha = "07a78bcf4180b241cf1022e26fa145d58f2e79a50c58be0940b483ce1107f4f2"
+expected_omegalax_commit = "b3f32c002998a1134c78845847a53ca9cc17fb10"
+expected_omegalax_diff_sha = "329d339f7211042e21c57346d7181374fca0593c939f770960f6f6741e793401"
+expected_api_sha = "60279aa6d3a7b1a4801937a332da12faeb9c0600764d43e4957fb2998d3ef7a5"
+expected_vlm_sha = "3dbdca68680def6c2fe081e4d0f2556022f23e66e7f82b41ad879bf646a05907"
+expected_memory_test_sha = "c776c45fbb0bae4bfbdc846d8eeb1c28a7f7becfc1140ced8a406152dea412b3"
+expected_entrypoint_sha = "b80d64d2328abe83bb8e41db804f6331361ff29f6c3b7a508f848c2edc21c670"
+expected_lora_source_sha = "f753818fb513894bbb30dbee7bc296abec966d9ae10051c56861291e06842224"
+expected_lora_test_sha = "6bb6406b5c1612e657a579efd6d08f362d3d5082129ab960b3c7dcc6c630c50e"
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+XLA_PYTHON_CLIENT_ALLOCATOR = "cuda_async"
+XLA_PYTHON_CLIENT_MEM_FRACTION = "0.95"
+OMEGALAX_REQUIRE_MEMORY_SAFE_RESTORE = "1"
+OMEGALAX_REQUIRE_EXACT_RESTORE_ATTESTATION = "1"
+OMEGALAX_EXPECT_RESUME_STEP = "250"
+OMEGALAX_EXPECT_OPTIMIZER_COUNTERS_JSON = '''{"optimizer_micro_step":2000,"global_gradient_step":250,"gradient_accumulation_remainder":0,"adam_count_0":250,"adam_count_2":250}'''
+OMEGALAX_EXPECT_RNG_KEY_DATA_JSON = '''[928981903,3453687069]'''
+OMEGALAX_EXPECT_ITERATOR_STATE_JSON = '''{"next_index_in_cycle":0,"next_index_in_datasets":2,"iterators_in_use_indices":[0,1],"iterators_in_use_states":[{"next_index":1000},{"next_index":1000}],"exhausted":[0,0]}'''
+OMEGALAX_EXPECT_ITERATOR_SHA256 = "7c62175f1690f6699c5e358147258c40f6d4f9814850ffc9797fd3048b3f6ba5"
+OMEGALAX_EXPECT_PROMOTED_OPTIMIZER_STATE_JSON = '''{"promoted_leaf_count":1512,"promoted_source_bytes":8380219392,"fresh_zero_state_bytes":4190109696}'''
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

@@ -1,0 +1,252 @@
+{
+  "schema_version": 1,
+  "frozen_at_utc": "2026-07-30T00:00:00Z",
+  "experiment": "synthetic_multistep_phase_a_v1",
+  "status": "preregistered_no_results",
+  "primary_checkpoints": {
+    "absolute_toolcall": "relative_factorial_abstool_act_hf_v1_run_019fb44ae67d76e1b022d4521c233dfb",
+    "move_rel": "relative_factorial_reltool_act_r32_s750_v1_run_019fb44ae67d76e1b022d4dbea28c4dd"
+  },
+  "optional_preamble_sensitivity": {
+    "absolute_toolcall": "relative_factorial_abstool_pre_hf_v1_run_019fb44ae67d76e1b022d4794a1bc373",
+    "move_rel": "relative_factorial_reltool_pre_r32_s750_v1_run_019fb44ae67d76e1b022d4f39937e0d9"
+  },
+  "capacity_sensitivity": {
+    "frozen_before_candidate_multistep_outputs": true,
+    "episode_artifact": "synthetic_multistep_phasea_episodes_v1_run_019fb4f69ebe76a3aef087cbaafb92fa",
+    "absolute_reference": "synthetic_multistep_phasea_absolute_primary_v1_run_019fb4f69ebe76a3aef087dd5d95a464",
+    "r32_reference": "synthetic_multistep_phasea_move_rel_r32_primary_v1_run_019fb4f69ebe76a3aef087e4e666b528",
+    "candidate_checkpoints": {
+      "64": "relative_factorial_reltool_act_r64_s750_capacity_v1_run_019fb4bf589e7bc184a34976f58a658a",
+      "256": "relative_factorial_reltool_act_r256_s750_capacity_v1_run_019fb4becd3c75f0809cb9acce69ba5e"
+    },
+    "ordered_primary_endpoints": [
+      "first_attempt_reach_rate",
+      "reach_by_attempt_2",
+      "reach_by_attempt_3"
+    ]
+  },
+  "production_movement_bridge": {
+    "frozen_before_gpu_outputs": true,
+    "evidence_scope": "movement_only_not_coalesced_typing",
+    "episode_artifact": "synthetic_multistep_phasea_episodes_v1_run_019fb4f69ebe76a3aef087cbaafb92fa",
+    "preamble": true,
+    "checkpoints": {
+      "move_rel": "relative_factorial_reltool_pre_r256_s750_capacity_v1_run_019fb4beda3472b289ae60fc612c1cea",
+      "deltatype_raw": "relative_factorial_relraw_pre_r256_s750_capacity_v1_run_019fb4bec0167122b655a36ea3a4237e"
+    },
+    "ordered_primary_endpoints": [
+      "first_attempt_reach_rate",
+      "reach_by_attempt_2",
+      "reach_by_attempt_3"
+    ]
+  },
+  "curriculum_transfer": {
+    "frozen_before_stage2_dataset_or_gpu_outputs": true,
+    "evidence_scope": "movement_only_not_coalesced_typing",
+    "contrast": "A_to_B_curriculum_minus_B_to_B_continuation",
+    "stage1_checkpoints": {
+      "A_to_B": "relative_factorial_reltool_pre_r256_s750_capacity_v1_run_019fb4beda3472b289ae60fc612c1cea",
+      "B_to_B": "relative_factorial_relraw_pre_r256_s750_capacity_v1_run_019fb4bec0167122b655a36ea3a4237e"
+    },
+    "stage2_dataset": {
+      "format": "deltatype_raw_preamble",
+      "train_records": 2000,
+      "validation_records": 200,
+      "train_seed": 2026073101,
+      "validation_seed": 2026073102,
+      "dataset_alias": "synthetic_multistep_curriculum_stage2_raw_pre_v1_run_019fb52cca1e7d72987b79842d2d7b08",
+      "required_overlap_counts": {
+        "stage1": 0,
+        "single_step_eval": 0,
+        "multistep_eval": 0,
+        "train_vs_validation": 0
+      }
+    },
+    "training": {
+      "stage2_steps": 750,
+      "fresh_optimizer": true,
+      "fresh_lora_rank": 256,
+      "fresh_lora_alpha": 256,
+      "seed": 0,
+      "only_recipe_difference": "stage1_source_checkpoint"
+    },
+    "stage2_models": {
+      "A_to_B": "synthetic_multistep_curriculum_A_to_B_raw_pre_r256_s750_recovered_v1_run_019fb56fb2f471118f1a9ed683def8b0",
+      "B_to_B": "synthetic_multistep_curriculum_B_to_B_raw_pre_r256_s750_recovered_v1_run_019fb56fb3007ee2a1deba3f28b5e5cb"
+    },
+    "teacher_forced_B_endpoints": [
+      "assistant_token_nll",
+      "action_line_token_nll"
+    ],
+    "multistep_B_ordered_primary_endpoints": [
+      "first_attempt_reach_rate",
+      "reach_by_attempt_2",
+      "reach_by_attempt_3"
+    ],
+    "low_lr_rescue_prepared": {
+      "status": "approved_for_exact_matched_pair_submission",
+      "trigger": "A_to_B finite clipped optimization spikes recurred after step 500 while exact matched B_to_B batches remained stable",
+      "learning_rate": 0.00005,
+      "rationale": "one-half of the frozen 0.0001 rate preserves optimizer/schedule shape while reducing the update scale implicated by lineage-specific shock",
+      "arms": ["A_to_B", "B_to_B"],
+      "same_stage1_checkpoints": true,
+      "same_stage2_dataset_and_order": true,
+      "same_training_settings_except_learning_rate": true,
+      "stage2_steps": 750,
+      "fresh_optimizer_and_lora": true,
+      "submission_authorized": true,
+      "approval_recorded_at": "2026-07-31T01:35:00+02:00",
+      "models": {
+        "A_to_B": "synthetic_multistep_curriculum_A_to_B_raw_pre_r256_lr5e5_s750_recovered_v1_run_019fb59ca7927631b332d44a4adc27f6",
+        "B_to_B": "synthetic_multistep_curriculum_B_to_B_raw_pre_r256_lr5e5_s750_recovered_v1_run_019fb59cbf727b028103427bea95ee88"
+      }
+    }
+  },
+  "typing_format_factorial": {
+    "frozen_before_gpu_training_or_evaluation_outputs": true,
+    "status": "authorized_pending_immutable_build_gate",
+    "stage1_checkpoints": {
+      "A": "relative_factorial_reltool_pre_r256_s750_capacity_v1_run_019fb4beda3472b289ae60fc612c1cea",
+      "B": "relative_factorial_relraw_pre_r256_s750_capacity_v1_run_019fb4bec0167122b655a36ea3a4237e"
+    },
+    "dataset_alias": "synthetic_typing_factorial_2x2_v1_run_019fb585358c7ff08fe5fbc5dd746e5d",
+    "formats": ["coalesced", "perkey"],
+    "train_pairs": 2000,
+    "validation_pairs": 200,
+    "required_parser_roundtrips": 4400,
+    "required_exact_typed_strings": 4400,
+    "required_reference_sample_id_overlap": 0,
+    "required_reference_image_overlap": 0,
+    "training": {
+      "steps": 750,
+      "learning_rate": 0.00005,
+      "fresh_optimizer": true,
+      "fresh_lora_rank": 256,
+      "fresh_lora_alpha": 256,
+      "seed": 0,
+      "only_cell_differences": ["stage1_source_checkpoint", "target_format"]
+    },
+    "models": {
+      "A_coalesced": "synthetic_typing_factorial_A_coalesced_r256_lr5e5_recovered_v1_run_019fb5cdf1c47e61b740976e674278c9",
+      "A_perkey": "synthetic_typing_factorial_A_perkey_r256_lr5e5_recovered_deadline0900_v1_run_019fb5ce10417d71b874e912951c2d1d",
+      "B_coalesced": "synthetic_typing_factorial_B_coalesced_r256_lr5e5_recovered_deadline0900_v1_run_019fb5ce2d8474d3b0ae975735090418",
+      "B_perkey": "synthetic_typing_factorial_B_perkey_r256_lr5e5_recovered_deadline0900_v1_run_019fb5ce4a8e7533b408a6fd47971508"
+    },
+    "authorized_recovery": {
+      "reason": "all four cells finalized step250 then OOMed in separate in-loop validation",
+      "resume_step": 250,
+      "required_optimizer_microstep": 2000,
+      "allowed_change": "disable_in_loop_validation_only",
+      "training_data_order_optimizer_schedule_seed_unchanged": true,
+      "external_evaluation_unchanged": true,
+      "projected_runtime_gate_minutes": 120,
+      "operational_node_amendment": "replacement resumes restricted to same-class H100-80GB nodes hai003/hai007/hai008; no training change",
+      "operational_allocator_amendment": "cuda_async with memory fraction 0.95 avoids the default 75% BFC pool stall during transient Orbax restore; no training argument change",
+      "recovery_hard_finish_deadline": "2026-07-31T09:00:00+02:00",
+      "deadline_correction_reason": "the assumed Nishant reservation did not exist; user returns at 10:00 CEST",
+      "parent_jobs": {
+        "A_coalesced": 135509,
+        "A_perkey": 135510,
+        "B_coalesced": 135511,
+        "B_perkey": 135512
+      },
+      "recovery_jobs": {
+        "A_coalesced": 135571,
+        "A_perkey": 135572,
+        "B_coalesced": 135573,
+        "B_perkey": 135574
+      },
+      "superseded_restore_stall_jobs": {
+        "A_coalesced": 135536,
+        "A_perkey": 135548,
+        "B_coalesced": 135549,
+        "B_perkey": 135550
+      },
+      "superseded_parent_root_jobs": {
+        "A_coalesced": 135563,
+        "A_perkey": 135564,
+        "B_coalesced": 135565,
+        "B_perkey": 135566
+      },
+      "superseded_short_timelimit_jobs": {
+        "A_coalesced": 135567,
+        "A_perkey": 135568,
+        "B_coalesced": 135569,
+        "B_perkey": 135570
+      },
+      "short_timelimit_partial_outputs_quarantined": true
+    },
+    "primary_endpoint": "first_attempt_exact_typed_string_success",
+    "interaction": "(A_coalesced-B_coalesced)-(A_perkey-B_perkey)",
+    "interaction_claim_gate": "paired_interval_excludes_zero_and_absolute_effect_at_least_5pp",
+    "coalescing_benefit_gate": "lineage_averaged_effect_at_least_5pp_lower_interval_above_zero_and_action_token_nll_same_direction",
+    "evaluation": {
+      "validation_examples": 200,
+      "attempts_per_example": 1,
+      "sampling": {"temperature": 0.0, "max_tokens": 256},
+      "production_action_parser_sha256": "f916757d17e4a5f53627510616ffff411e9109e8737d1309067c6338caae4a9a",
+      "execution_endpoint": "exact_typed_string_after_production_parser_execution",
+      "required_secondary_endpoints": [
+        "parse_rate",
+        "strict_schema_rate",
+        "zero_mouse_delta_rate",
+        "assistant_token_nll",
+        "action_line_token_nll"
+      ]
+    },
+    "incremental_storage_limit_bytes": 700000000000,
+    "hard_finish_deadline": "2026-07-31T04:40:00+02:00"
+  },
+  "capacity_supersession_policy": "A validated reltool_act r64/r256 winner may be evaluated only by an explicit new recipe and comparison_label=capacity_sensitivity; it never silently replaces the primary r32 alias.",
+  "sources": {
+    "rung2_scene.py": "c7c7647addf911b8aba849b798233d9367e8a06d36a272f8e1e201bcf31f7a17",
+    "audit_render.py": "534d99740a0fd79d5bdd56584e153d0e51fe84c1ac06979ad4f8869e1c6d98a5",
+    "audit_arms.py": "d1625cc4e1b1328703d211195352c6554ac2fffdaf7b53247b3efa9e4154c3dd",
+    "parity_run_parity.py": "d2a4b887ce6196663e926774b95af9b02f5fc325345782df74ba9bff678f8c5b",
+    "parity_render.py": "534d99740a0fd79d5bdd56584e153d0e51fe84c1ac06979ad4f8869e1c6d98a5",
+    "parity_arms.py": "41fd02d61c492eebddcd53d56193bd1c4b93ccfe58810971c97ae9477412d925",
+    "grounding_dataset.py": "39703b9e5be685b739ef552e2fa34c98571e1ae96a6fba59ed66395c9771f775",
+    "grounding_parsing.py": "76a194a7fb8ce37d61bed7b4315801fc95a5a25e4d5747d1bf62528f4ce75533",
+    "heldout_scenes.jsonl": "556aacfd0076e7e84e0c8721aa3a876cd2bdfd6a26a08bd61315eeaa1b7884ee",
+    "heldout_image_aggregate": "8eaca7cdba27629bc5b4f2a587eb7515b00b7b0b7d7c1ad5c8d321d3527227f3",
+    "train_scenes.jsonl": "f98d9851bca8aedaf7dfc15f82c6541dc9b2d748968afa40f2fdcf7ba6080dd4",
+    "val_scenes.jsonl": "d1ff53a0d9acfd8d363454ec92a4edefed6926933b9425ff45f86f0ad1840fde"
+  },
+  "episode_contract": {
+    "heldout_scenes": 80,
+    "targets_per_episode": 4,
+    "target_selection_seed": 314159,
+    "minimum_target_transition_px": 400,
+    "max_attempts_per_target": 3,
+    "history_turns": 3,
+    "cursor_render": "arrow_tip_hotspot",
+    "sampling": {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "max_tokens": 192},
+    "sampling_seed_scheme": "sha256(synthetic-multistep-v1|episode_id|k|target_index|attempt)[:8] & 0x7fffffff",
+    "coordinate_scale": 1000,
+    "screen": [1920, 1080],
+    "box_side_px": 150,
+    "preamble": false
+  },
+  "hard_guards": [
+    "all step-1 PNG bytes and geometry equal the frozen rung-2 single-step scenes",
+    "absolute and move_rel oracle prefixes have identical observations and cursor states",
+    "both semantic oracles parse, satisfy strict schema, and hit every target (100%)",
+    "heldout scene ids, bboxes, centers, and (cursor,bbox) geometry are disjoint from train and val",
+    "action JSON serialization differs only in action semantics and coordinate values",
+    "full model prose is stored and replayed without stripping or truncation",
+    "sampling parameters and semantic-independent seeds are explicit"
+  ],
+  "metrics": [
+    "target_reach_cdf_by_attempt",
+    "episode_completion_rate",
+    "first_miss_recovery_rate",
+    "miss_event_recovery_rate",
+    "normalized_distance_auc",
+    "progress_regression_stall_rates",
+    "oscillation_rate",
+    "parse_rate",
+    "strict_schema_rate",
+    "coordinate_unit_violation_rate"
+  ]
+}

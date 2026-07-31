@@ -1,0 +1,55 @@
+name = "synthetic_multistep_eval_production_deltatype_raw_r256_pinned_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/synthetic_multistep/eval_stage.sh" "$@" \
+  "--experiment_dir=$REPO/experiments/synthetic_multistep"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 16
+mem = "64GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--signal=USR1@600", "--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001,hai008", "--nodelist=hai003,hai004,hai007"]
+
+[inputs.model]
+type = "artifact"
+artifact = "relative_factorial_relraw_pre_r256_s750_capacity_v1_run_019fb4bec0167122b655a36ea3a4237e"
+[inputs.episodes]
+type = "artifact"
+artifact = "synthetic_multistep_phasea_episodes_v1_run_019fb4f69ebe76a3aef087cbaafb92fa"
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+[inputs.audit]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand"
+
+[outputs.result]
+type = "eval_result"
+marker = "eval_manifest.json"
+alias = "synthetic_multistep_production_deltatype_raw_r256_v1_{run.id}"
+
+[args]
+model = "{inputs.model.path}"
+episodes = "{inputs.episodes.path}"
+out = "{outputs.result.path}"
+runtime_dir = "{inputs.runtime.path}"
+audit_dir = "{inputs.audit.path}"
+semantic = "deltatype_raw"
+checkpoint_alias = "relative_factorial_relraw_pre_r256_s750_capacity_v1_run_019fb4bec0167122b655a36ea3a4237e"
+comparison_label = "production_movement_bridge"
+preamble = "true"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"
+LD_PRELOAD = "/fast/home/franz.srambical/.tmp_suite/mihir_ablation/nccl_2.28.3/libnccl.so.2"

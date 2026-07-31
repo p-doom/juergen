@@ -1,0 +1,50 @@
+name = "synthetic_multistep_phasea_capacity_curve_pinned_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+RUNTIME="$(jq -r '.inputs[] | select(.role == "runtime") | .resolved_path' "$LABCTL_CONTEXT")"
+PYTHONPATH="$REPO" "$RUNTIME/.venv/bin/python" \
+  "$REPO/experiments/synthetic_multistep/capacity_curve.py" "$@"
+''', "--"]
+
+[resources]
+cpus = 2
+mem = "8GB"
+time = "00:15:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.absolute]
+type = "artifact"
+artifact = "synthetic_multistep_phasea_absolute_primary_v1_run_019fb4f69ebe76a3aef087dd5d95a464"
+[inputs.r32]
+type = "artifact"
+artifact = "synthetic_multistep_phasea_move_rel_r32_primary_v1_run_019fb4f69ebe76a3aef087e4e666b528"
+[inputs.r64]
+type = "artifact"
+artifact = "synthetic_multistep_phasea_move_rel_r64_capacity_v1_run_019fb50dac337e60a0546f8885e437eb"
+[inputs.r256]
+type = "artifact"
+artifact = "synthetic_multistep_phasea_move_rel_r256_capacity_v1_run_019fb50dbc847ce3831963ca4dd9d600"
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+
+[outputs.result]
+type = "eval_result"
+marker = "capacity_curve.json"
+alias = "synthetic_multistep_phasea_capacity_curve_pinned_v1_{run.id}"
+
+[args]
+absolute = "{inputs.absolute.path}"
+r32 = "{inputs.r32.path}"
+r64 = "{inputs.r64.path}"
+r256 = "{inputs.r256.path}"
+out = "{outputs.result.path}"
+
+[env]
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"

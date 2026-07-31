@@ -1,0 +1,18 @@
+{
+  "all_lineage_peak_after_current_orbax_cleanup_bytes": 566080439296,
+  "all_lineage_peak_before_current_orbax_cleanup_bytes": 855213884416,
+  "deadline": "2026-07-31T05:09:00+02:00",
+  "incremental_pair_below_500GB": true,
+  "incremental_pair_peak_bound_bytes": 477116302336,
+  "latest_feasible_submission_for_two_hour_limit": "2026-07-31T03:09:00+02:00",
+  "learning_rate": 5e-05,
+  "pair_recipe_differences_allowed": [
+    "name",
+    "inputs.source_model.artifact",
+    "outputs.model.alias"
+  ],
+  "requires_current_export_eval_analysis_before_current_orbax_cleanup": true,
+  "status": "prepared_not_submitted",
+  "submission_authorized": false,
+  "two_hour_limit_end_if_submitted_now": "2026-07-31T03:34:25.616746+02:00"
+}

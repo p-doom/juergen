@@ -1,0 +1,31 @@
+name = "synthetic_multistep_cleanup_postexport_orbax_steps_pinned_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+python3 "$SOURCE/experiments/synthetic_multistep/postexport_orbax_cleanup.py" \
+  --allowlist="$SOURCE/experiments/synthetic_multistep/POSTEXPORT_ORBAX_CLEANUP_ALLOWLIST.json" \
+  --expected-allowlist-sha256=c140593bace2cc8b2c2c357c2553203c8777672f8ce0f99b6c15ded38669be89 \
+  "$@"
+''', "--"]
+
+[resources]
+cpus = 2
+mem = "8GB"
+time = "04:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--no-requeue", "--exclude=hai001"]
+
+[outputs.result]
+type = "eval_result"
+marker = "cleanup.json"
+alias = "synthetic_multistep_cleanup_postexport_orbax_steps_pinned_v1_{run.id}"
+
+[args]
+out = "{outputs.result.path}/cleanup.json"
+
+[env]
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"

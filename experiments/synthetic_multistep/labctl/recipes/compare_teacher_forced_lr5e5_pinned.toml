@@ -1,0 +1,28 @@
+name = "synthetic_multistep_compare_teacher_forced_lr5e5_pinned_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+python3 "$REPO/experiments/synthetic_multistep/teacher_forced_compare.py" "$@"
+''', "--"]
+[resources]
+cpus = 2
+mem = "16GB"
+time = "00:10:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+[inputs.a_to_b]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_A_to_B_lr5e5_teacher_forced_v1_run_019fb5a250c47de19a4129f30c87634b"
+[inputs.b_to_b]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_B_to_B_lr5e5_teacher_forced_v1_run_019fb5a2687b7c02b681248408191743"
+[outputs.result]
+type = "eval_result"
+marker = "teacher_forced_comparison.json"
+alias = "synthetic_multistep_curriculum_teacher_forced_lr5e5_comparison_v1_{run.id}"
+[args]
+a-to-b = "{inputs.a_to_b.path}"
+b-to-b = "{inputs.b_to_b.path}"
+out = "{outputs.result.path}"

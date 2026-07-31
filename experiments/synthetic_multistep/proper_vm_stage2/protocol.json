@@ -1,0 +1,308 @@
+{
+  "schema_version": 1,
+  "artifact_type": "synthetic_proper_vm_stage1_5_endpoint_actuation_preregistration",
+  "status": "authorized_ready",
+  "prepared_at": "2026-07-31",
+  "scope_classification": {
+    "roadmap_stage": "1.5",
+    "label": "proper-VM endpoint-actuation conformance",
+    "is_user_roadmap_stage_2": false,
+    "is_free_running_multi_step_closed_loop": false,
+    "observation_dynamics": "Each fixed frozen cell is independently reset; a model action never changes the next model observation, cursor, seed, or oracle-prefix context.",
+    "legacy_implementation_path_note": "The proper_vm_stage2 filesystem directory predates this mandatory roadmap scope correction and is not a scientific stage label."
+  },
+  "evidence_scope": "roadmap_stage_1_5_finite_frozen_geometry_endpoint_grounding_with_real_vm_actuation_not_roadmap_stage_2_not_free_running_not_full_osworld_task_success",
+  "estimand": "For each relative pipeline, compound click-and-drag success minus the absolute Phase-A reference on the same 320 frozen cursor-to-box geometry cells.",
+  "arms": {
+    "absolute_phase_a": {
+      "semantic": "absolute_toolcall",
+      "preamble": false,
+      "checkpoint_alias": "relative_factorial_abstool_act_hf_v1_run_019fb44ae67d76e1b022d4521c233dfb",
+      "checkpoint_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/relative_factorial_abstool_act_hf_v1_run_019fb44ae67d76e1b022d4521c233dfb",
+      "checkpoint_manifest": "export_manifest.json",
+      "checkpoint_manifest_sha256": "3b3f5bb38a815165fbd921e84c86f028d8458b04dc0c4349371e2cd57636b192",
+      "model_weights_bytes": 35068587488,
+      "model_weights_sha256": "528b4a9e2388ba2e2bf542926fb4d4c52fb682ffbe87e2e1a688d3b9061c2b42",
+      "expected_manifest": {
+        "artifact_type": "relative_factorial_hf_checkpoint",
+        "status": "complete",
+        "arm": "abstool_act",
+        "step": 750,
+        "lora_rank": 32,
+        "lora_alpha": 32,
+        "hf_subdir": "hf"
+      }
+    },
+    "normalized_phase_a": {
+      "semantic": "move_rel",
+      "preamble": true,
+      "checkpoint_alias": "relative_factorial_reltool_pre_r256_s750_capacity_v1_run_019fb4beda3472b289ae60fc612c1cea",
+      "checkpoint_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/relative_factorial_reltool_pre_r256_s750_capacity_v1_run_019fb4beda3472b289ae60fc612c1cea",
+      "checkpoint_manifest": "train_export_manifest.json",
+      "checkpoint_manifest_sha256": "d37db583163fddf85c40815417b77cafaba42bafaa1ab31382a1d427ab054e71",
+      "model_weights_bytes": 35068587488,
+      "model_weights_sha256": "18ac528de72d0da80dc82fdcb2bb885cca1a747359b5f206f811e76ebf6405f9",
+      "expected_manifest": {
+        "artifact_type": "relative_factorial_hf_checkpoint",
+        "status": "complete",
+        "arm": "reltool_pre",
+        "step": 750,
+        "lora_rank": 256,
+        "lora_alpha": 256,
+        "hf_subdir": "hf"
+      }
+    },
+    "raw_a_to_b": {
+      "semantic": "deltatype_raw",
+      "preamble": true,
+      "checkpoint_alias": "synthetic_multistep_curriculum_A_to_B_raw_pre_r256_s750_recovered_v1_run_019fb56fb2f471118f1a9ed683def8b0",
+      "checkpoint_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_multistep_curriculum_A_to_B_raw_pre_r256_s750_recovered_v1_run_019fb56fb2f471118f1a9ed683def8b0",
+      "checkpoint_manifest": "curriculum_train_export_manifest.json",
+      "checkpoint_manifest_sha256": "f0b8d729e4dfd5f1352ec92e780b13ec6ed6bf938f0e0ee7a0389750ff66cd46",
+      "model_weights_bytes": 35068587488,
+      "model_weights_sha256": "7e443d4eb555ff328afb3504c4453de25223b41415f1d0a6dbf17ac84e24b5d3",
+      "expected_manifest": {
+        "artifact_type": "synthetic_multistep_curriculum_hf_checkpoint",
+        "status": "complete",
+        "branch": "A_to_B",
+        "step": 750,
+        "lora_rank": 256,
+        "lora_alpha": 256,
+        "hf_subdir": "hf"
+      }
+    }
+  },
+  "raw_arm_choice": {
+    "choice": "canonical_original_preregistered_A_to_B",
+    "reason": "This is the frozen curriculum_transfer.stage2_models.A_to_B arm, where stage2_models is the source curriculum-training provenance label and not the user roadmap stage. The later 5e-5 pair is a registered sensitivity and does not silently replace it."
+  },
+  "geometry": {
+    "episode_artifact": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/datasets/franz.srambical/synthetic_multistep_phasea_episodes_v1_run_019fb4f69ebe76a3aef087cbaafb92fa",
+    "build_manifest_sha256": "e953b7eadc3cecc74e2c303e0035290742ca0d6575f6bce90f0faf23b584196d",
+    "episode_specs_sha256": "768b9e6020e21adef050125469104049ae640fa420b803a60d8d60d66cb3d0fd",
+    "absolute_oracle_sha256": "2d40527a34c783b1bc573f8a6ddb4c2362f4c4746f64e3ceed29b247486148eb",
+    "episodes": 80,
+    "targets_per_episode": 4,
+    "paired_cells": 320,
+    "unique_cursor_bbox_pairs": 317,
+    "screen": [1920, 1080],
+    "box_side_px": 150,
+    "cell_cursor_rule": "the byte-frozen absolute oracle cursor_before for every target; this preserves normalized-grid rounding rather than substituting target_center",
+    "image_rule": "reuse the byte-frozen canonical PNG for each cell and require decoded VM screenshot RGB SHA-256 equality before inference"
+  },
+  "sampling": {
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "max_tokens": 192,
+    "attempts_per_cell": 1,
+    "seed_rule": "existing semantic-independent synthetic-multistep request_seed(episode_id,0,target_index,1)"
+  },
+  "context": {
+    "mode": "teacher_forced_oracle_prefix",
+    "history_turns": 3,
+    "rule": "Each fixed geometry cell receives the last three ideal action strings in its own arm grammar inside the existing user-text prefix. Model outputs never alter a later cell's cursor, image, seed, or context.",
+    "reason": "This keeps the 320 cells exactly paired and isolates endpoint grounding/actuation. It is not a free-running closed-loop estimand."
+  },
+  "no_leak": {
+    "phase_a_episode_manifest_leak_fields_required_zero": ["scene_id", "bbox", "center", "geometry"],
+    "raw_curriculum_transfer_overlap_report": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/datasets/franz.srambical/synthetic_multistep_curriculum_stage2_raw_pre_v1_run_019fb52cca1e7d72987b79842d2d7b08/overlap_report.json",
+    "raw_curriculum_transfer_overlap_report_sha256": "82be6ed2e252b6e26a2c669ad3996668444ee536374364aa427bd51a78febde8",
+    "required_raw_overlap_counts": 0,
+    "note": "Phase-A heldout is disjoint from Phase-A train/validation. Raw curriculum-transfer train/validation is independently zero-overlap with stage1 training data, single-step eval, multistep eval, and each other for bbox, center, cursor_bbox, and image hash."
+  },
+  "vm": {
+    "provider": "native_qemu_kvm",
+    "provider_source": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_eval_pinned/code/qemu_kvm_provider.py",
+    "provider_sha256": "8d7e4a2602a81895a712bb275b327bd3270d43675acf6e61484be5775caefafc",
+    "qemu_bin": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin/qemu-system-x86_64-wrapped",
+    "qcow": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_vm/Ubuntu.qcow2",
+    "snapshot_name": "osworld_ready",
+    "drive_mode": "snapshot=on",
+    "screen": [1920, 1080],
+    "pairing": "each arm starts a fresh overlay from the identical qcow/snapshot; every cell and replay resets the guest app state and verifies revision, cursor, screenshot, and button-up state",
+    "guest_scene": "borderless full-screen Tk canvas displaying the exact canonical PNG with the OS cursor hidden; event state is independently read back from the guest"
+  },
+  "actuation": {
+    "scope": "model-predicted endpoint with preregistered operation adapter",
+    "operations_per_model_output": ["click", "drag"],
+    "click": "move with the arm-native absolute/normalized/raw endpoint primitive, then pyautogui left click",
+    "drag": "mouseDown at the frozen start, move with the arm-native endpoint primitive and nonzero duration, then mouseUp in the box",
+    "important_limitation": "The models were trained on target endpoint actions, not a matched drag grammar. Drag therefore tests transfer of the same predicted endpoint through a fixed operation adapter; it is not evidence that the policy natively generated a drag sequence.",
+    "fail_closed": [
+      "parse/schema/unit failure is a policy failure",
+      "request error, checkpoint drift, screenshot mismatch, stale guest revision, stuck button, cursor mismatch, or guest-state mismatch invalidates the complete arm",
+      "click and drag are reset-and-replayed independently from the same start state",
+      "observed guest success must equal endpoint-in-box geometry or the artifact is invalid"
+    ]
+  },
+  "primary_endpoint": {
+    "name": "compound_click_and_drag_success",
+    "cell_success": "parse_ok AND strict_schema_ok AND unit_range_ok AND endpoint_in_bbox AND guest_click_success AND guest_drag_success",
+    "noninferiority_margin": 0.05,
+    "contrasts": [
+      "normalized_phase_a_minus_absolute_phase_a",
+      "raw_a_to_b_minus_absolute_phase_a"
+    ],
+    "global_gate": "intersection-union: both relative arms must pass their one-sided 5pp noninferiority test",
+    "finite_benchmark_gate": "paired success-rate difference must be greater than -0.05 for both contrasts",
+    "confirmatory_sensitivity": "one-sided 95% Clopper-Pearson upper bound on absolute-success/treatment-failure discordance must be below 0.05; treatment-only successes are conservatively ignored",
+    "multiplicity": "No alpha split for the intersection-union test: the global null is the union of the two arm-specific noninferiority nulls."
+  },
+  "secondary_endpoints": [
+    "click_success",
+    "drag_success",
+    "endpoint_in_bbox",
+    "parse_rate",
+    "strict_schema_rate",
+    "unit_range_rate",
+    "cursor_endpoint_error_px",
+    "guest_action_mismatch_count",
+    "absolute_only and treatment_only paired discordances by target_index and distance quartile"
+  ],
+  "resource_estimate": {
+    "minimum_allocation": "1 H100-80GB, 32 CPU, 128GB RAM, 02:00:00, one persistent KVM VM; serve the three 35.07GB HF checkpoints serially",
+    "model_requests": 960,
+    "vm_action_replays": 1920,
+    "expected_wall_minutes": [45, 75],
+    "hard_wall_minutes": 120,
+    "incremental_output_bytes_upper_bound": 5000000000,
+    "checkpoint_copying": false,
+    "parallel_alternative": "3x one-GPU arm jobs plus a CPU aggregator; lower wall time but not the minimum concurrent resource design",
+    "prepared_arm_job_allocation": "per arm: 1 H100-80GB, 32 CPU, 128GB, 01:00:00",
+    "prepared_parallel_expected_wall_minutes": [20, 35],
+    "reporting_hard_finish": "2026-07-31T09:45:00+02:00",
+    "parallel_latest_start": "2026-07-31T08:35:00+02:00",
+    "serial_latest_start": "2026-07-31T07:25:00+02:00"
+  },
+  "live_smoke_evidence": {
+    "status": "pass",
+    "run_id": "run_019fb64ec53771f18a6a6caface915cd",
+    "slurm_job_id": "135599",
+    "manifest": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/synthetic_proper_vm_stage2_live_smoke_v1_run_019fb64ec53771f18a6a6caface915cd/live_smoke_manifest.json",
+    "manifest_sha256": "f234d6293148d1f4b387fa5c3b0784c1b53a31002e9ae729724dd9a98c9b5b0d",
+    "replays": 6,
+    "gpu_used": false,
+    "legacy_name_attestation": "The sealed historical artifact name contains stage2 because it predates the roadmap correction. Its six low-level KVM replays support only this roadmap stage-1.5 endpoint-actuation conformance study and do not evidence roadmap stage 2 or free-running closed loop."
+  },
+  "execution_recovery": {
+    "status": "fixed_four_chunk_fallback_authorized",
+    "scientific_design_changed": false,
+    "historical_failure_cells_per_arm": 115,
+    "historical_failure_scenes_per_arm": 230,
+    "failed_runs": [
+      "run_019fb67a860277609a73a2c92c12decf",
+      "run_019fb67b1ff5756389cf3358d5ba43fa",
+      "run_019fb67b868074d291ea89d727c9ab2a"
+    ],
+    "diagnosis": "Each cell creates two detached Tk/X scene processes. Teardown previously sent SIGTERM after a substring cmdline check but never waited for exit, escalated, or asserted absence. All three arms deterministically failed after 115 cells / 230 scenes with Xlib Maximum number of clients reached.",
+    "hardened_teardown": "Validate the guest source as an exact argv token, send SIGTERM, poll for /proc PID disappearance, use SIGKILL only after identity revalidation if needed, poll again, assert no exact-source peer remains, and refuse to start a new scene while one remains.",
+    "required_stress": "CPU/KVM-only replay of at least 131 cells / 262 click-or-drag scenes in one VM, with zero exact-source processes after every scene and bounded xlsclients inventories beyond the historical 115-cell boundary.",
+    "fallback_only_if_stress_fails": "Predeclare four fixed contiguous chunks of at most 80 unchanged cells per arm, each in a fresh VM, with fail-closed chunk manifests and exact paired reassembly.",
+    "active_fallback": {
+      "kind": "four_disjoint_fresh_vm_chunks",
+      "bounds": [[0, 80], [80, 160], [160, 240], [240, 320]],
+      "fresh_vm_per_chunk": true,
+      "max_cells_per_chunk": 80,
+      "strict_exact_coverage_assembly": true,
+      "oracle_prefix_independent_at_chunk_boundaries": true
+    },
+    "partial_policy": "All three 115-row partial files are quarantined, cannot be resumed, and cannot contribute to aggregation. Only infrastructure metadata, row counts, and byte hashes were inspected; outcome rates were not inspected.",
+    "screenshot_readiness_recovery": {
+      "status": "bounded_exact_hash_poll_retry_authorized",
+      "job_id": "135634",
+      "run_id": "run_019fb6bbd1c97ee19d46c022f3e57cbd",
+      "arm": "absolute_phase_a",
+      "chunk_index": 3,
+      "failed_cell": "phasea_short_0060:t00",
+      "failed_operation": "click",
+      "failure_log": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/labctl_runs/runs/franz.srambical/run_019fb6bbd1c97ee19d46c022f3e57cbd/.lab/synthetic_proper_vm_stage1_5_absolute_chunk3_recovery_v1_135634.log",
+      "failure_log_sha256": "a21b05a772766bb4b687e1bc13117072a21657dcba6614c2ce3e0d34eab10bc1",
+      "failure_output": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/synthetic_proper_vm_stage1_5_absolute_chunk3_recovery_v1_run_019fb6bbd1c97ee19d46c022f3e57cbd",
+      "rows_written": 0,
+      "failed_actual_hash_available": false,
+      "preserves_exact_decoded_pixel_gate": true,
+      "timeout_s": 5.0,
+      "poll_s": 0.1,
+      "hash_history": 8,
+      "prior_protocol_sha256": "a71507ea76aca242df387d7d5daccf1b70872a2ce788cf201efd58d1bb76cc80"
+    },
+    "accepted_prior_chunk_protocols": [
+      {
+        "protocol_sha256": "a71507ea76aca242df387d7d5daccf1b70872a2ce788cf201efd58d1bb76cc80",
+        "scopes": {
+          "absolute_phase_a": [0, 1, 2],
+          "normalized_phase_a": [0, 1, 2, 3],
+          "raw_a_to_b": [0, 1, 2, 3]
+        }
+      }
+    ]
+  },
+  "lifecycle_stress_evidence": {
+    "status": "failed_fallback_authorized",
+    "minimum_cells": 131,
+    "minimum_scenes": 262,
+    "historical_failure_cells": 115,
+    "historical_failure_scenes": 230,
+    "gpu_used": false,
+    "recipe": "experiments/synthetic_multistep/labctl/recipes/proper_vm_stage1_5_lifecycle_stress_recovery_prepared.toml",
+    "job_id": "135624",
+    "run_id": "run_019fb6a3335c7b12bedc4bfc1c61ff78",
+    "failure_log": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/labctl_runs/runs/franz.srambical/run_019fb6a3335c7b12bedc4bfc1c61ff78/.lab/synthetic_proper_vm_stage1_5_guest_lifecycle_stress_recovery_v1_135624.log",
+    "failure_log_sha256": "9e6886748d7ab3399f89fcb90c174d3af9d77e21527dae5080d8193242c72c5b",
+    "failure_signature": "Xlib.error.DisplayConnectionError: Maximum number of clients reached",
+    "diagnosis": "Every PythonController command is prefixed with a pyautogui import and therefore opens an X connection outside the tracked detached scene PID; xlsclients does not enumerate resource-only X clients. Exact scene-source teardown alone did not prove bounded X-client lifetime."
+  },
+  "implementation_sources": {
+    "aggregate.py": "3e2378234ab72bb06b079fa26fb35b18a58e44d15dab65522eeaf3f0ce86c737",
+    "assemble_chunks.py": "8f8fc98c2bc4530ee4dc7500123f00638698625a313a404e150939321ca0fc9e",
+    "gate.py": "24da6ae8c0aac9a21f77a98e7d6b74cf0f33c5d42000730d14f92ee38127c472",
+    "guest_app.py": "a49ced7918e18562c32a6d9c921a0b490e1c9108ff0a0a93b2e892017f772e37",
+    "lifecycle_stress.py": "fd6ec2c90221e835eac87dfc8a316a55200386a4370086572b63b752d538691b",
+    "live_smoke.py": "61becfdd33cde10fa216aa725b7457a7d1805b68c229b14eecb57d834244fe34",
+    "proper_vm_stage1_5_lifecycle_stress_recovery_prepared.toml": "7d2ef0aee656202f79014555a16add374b8ca3b2122814387fae09fb9fe2bee6",
+    "proper_vm_stage2_absolute_prepared.toml": "28dd6fa6527982041a3afcc398a145ea39bc17b3b73d626990d8bdddcc91ce36",
+    "proper_vm_stage2_live_smoke_prepared.toml": "1a33c7938ed901c3820572e8092b288be3789ac277f3e72469a3272c7a4ce6e2",
+    "proper_vm_stage2_normalized_prepared.toml": "2dc2ffbba496a16275497282405c7c3e8d8f95a391d27153176bb6b645750352",
+    "proper_vm_stage2_raw_a_to_b_prepared.toml": "63550d47a670a4c7138730f1fc4e1fb8d8edda06c4f769fac99f73428f44547a",
+    "proper_vm_stage2_absolute_chunk0_recovery.toml": "d2be84a94373358551a5d17b83e45f8dede0ae66fd147bc2190dc73767abb7e8",
+    "proper_vm_stage2_absolute_chunk1_recovery.toml": "764ce55d7865da80dfd2b42d0c7d6922e9a539b2c9eb61cd2bbd98cb12d412ff",
+    "proper_vm_stage2_absolute_chunk2_recovery.toml": "7581d69f5a177fb62eedcc41835465f750091cc3e5430a704b3623d0cf3df069",
+    "proper_vm_stage2_absolute_chunk3_recovery.toml": "3797a9ca0923e26cfc0aed5671fd959605459d037f0ea7f882cb5795cdb539a7",
+    "proper_vm_stage2_normalized_chunk0_recovery.toml": "4d75eaa1732e7e87b9b067c00f9debce73d0d554632fe0d94a6d20355109ff1d",
+    "proper_vm_stage2_normalized_chunk1_recovery.toml": "2b840204dafb427194e75277155f40a51e7cb27970d44244c28011c45cf42e39",
+    "proper_vm_stage2_normalized_chunk2_recovery.toml": "68bef3e26bacd6f30217dbafc7a5724182e0ec6d8f9057a3b350304df5cc8a10",
+    "proper_vm_stage2_normalized_chunk3_recovery.toml": "c1e0dd6f8001af2986062331de3d9ed055f8afef56b40586ca8a42159a7d9f10",
+    "proper_vm_stage2_raw_a_to_b_chunk0_recovery.toml": "40b3925951f65a8453193c8dd98f9ec60aeb39846b2cd1c1077e65e50fc0823b",
+    "proper_vm_stage2_raw_a_to_b_chunk1_recovery.toml": "2d753858641b734de5175a6ef0ade24485633be73701e5413fdc119e319cdfcb",
+    "proper_vm_stage2_raw_a_to_b_chunk2_recovery.toml": "c9ebdc2c43cdf9c3dc398f74619ac0997b7dcd0266484835b674b71d0a3314a2",
+    "proper_vm_stage2_raw_a_to_b_chunk3_recovery.toml": "e53104e2365c96f26620db5b619e685c43015e88a946be10b5f0a9d0e4273404",
+    "run_arm.py": "28adde8967e17988d5c248291952c54289e0bc85f0dd483b0149e9f3c352b592",
+    "run_arm_stage.sh": "118a52ceb66ff358950c594f168cc15956c7bd6de73e9be2d16a332409ab102f"
+  },
+  "launch_gate": {
+    "authorized": true,
+    "authorization_scope": "Fresh authorization is limited to the twelve fixed roadmap-stage-1.5 recovery chunks (four disjoint 80-cell chunks for each of three frozen arms), each in a fresh VM. It does not authorize roadmap stage 2, free-running execution, reuse of any 115-row partial, or any changed estimand.",
+    "authorization_history": [
+      {
+        "authorized_at": "2026-07-31T06:17:00+02:00",
+        "consumed": true,
+        "reason": "The single environment-split recovery authorization was consumed by jobs 135610, 135611, and 135612."
+      },
+      {
+        "authorized_at": "2026-07-31T07:43:05+02:00",
+        "consumed": false,
+        "reason": "Root explicitly authorized the preregistered four-chunk fallback after lifecycle stress job 135624 reproduced the X-client ceiling despite exact scene-source teardown. Authorization is exactly twelve fresh-VM chunk jobs."
+      }
+    ],
+    "environment_split": "Pinned smoke/OSWorld host venv must import gymnasium, desktop_env, OpenAI, PIL, and runner modules before GPU startup; prime-rl venv is restricted to vLLM and readiness.",
+    "required_before_launch": [
+      "CPU contract and mock-dispatch selftests pass",
+      "labctl recipe validation passes",
+      "CPU+KVM live smoke evidence remains hash-valid",
+      "failed 131-cell lifecycle-stress evidence is hash-pinned and activates only the preregistered four-by-80 fallback",
+      "every chunk is a disjoint complete 20-episode interval in a fresh VM and strict assembly requires exact 320-cell coverage/order/no overlap",
+      "design/readiness report is reviewed and launch is explicitly authorized"
+    ]
+  }
+}

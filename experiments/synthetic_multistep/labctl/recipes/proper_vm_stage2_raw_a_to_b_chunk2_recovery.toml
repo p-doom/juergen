@@ -1,0 +1,71 @@
+name = "synthetic_proper_vm_stage1_5_raw_a_to_b_chunk2_recovery_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+test "$REPO" = "$PWD"
+case "$REPO" in "$LABCTL_RUN_DIR"/source/juergen_rft) ;; *) exit 90;; esac
+bash "$REPO/experiments/synthetic_multistep/proper_vm_stage2/run_arm_stage.sh" "$@"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 32
+mem = "128GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--no-requeue", "--exclude=hai001,hai005", "--deadline=2026-07-31T09:45:00"]
+
+[inputs.model]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_multistep_curriculum_A_to_B_raw_pre_r256_s750_recovered_v1_run_019fb56fb2f471118f1a9ed683def8b0"
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning"
+[inputs.vm]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_vm"
+[inputs.provider]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_eval_pinned/code"
+[inputs.osworld]
+type = "external"
+path = "/fast/home/franz.srambical/OSWorld"
+[inputs.live_smoke]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/synthetic_proper_vm_stage2_live_smoke_v1_run_019fb64ec53771f18a6a6caface915cd"
+[inputs.host_python]
+type = "external"
+path = "/fast/home/franz.srambical/juergen/.venv"
+
+[outputs.result]
+type = "eval_result"
+marker = "chunk_manifest.json"
+alias = "synthetic_proper_vm_stage1_5_raw_a_to_b_chunk2_recovery_v1_{run.id}"
+
+[args]
+arm = "raw_a_to_b"
+grammar = "deltatype_raw"
+chunk_index = "2"
+chunk_start = "160"
+chunk_stop = "240"
+checkpoint = "{inputs.model.path}/hf"
+output = "{outputs.result.path}"
+live_smoke_manifest = "{inputs.live_smoke.path}/live_smoke_manifest.json"
+runtime_repo = "{inputs.runtime.path}"
+provider_source = "{inputs.provider.path}/qemu_kvm_provider.py"
+qcow = "{inputs.vm.path}/Ubuntu.qcow2"
+qemu_bin = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin/qemu-system-x86_64-wrapped"
+osworld_root = "{inputs.osworld.path}"
+port_lock_dir = "/tmp/osworld_port_locks"
+host_python = "{inputs.host_python.path}"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"
+LD_PRELOAD = "/fast/home/franz.srambical/.tmp_suite/mihir_ablation/nccl_2.28.3/libnccl.so.2"
+

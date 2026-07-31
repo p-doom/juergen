@@ -1,0 +1,105 @@
+name = "synthetic_multistep_build_typing_factorial_pinned_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+declare -A A
+for arg in "$@"; do
+  case "$arg" in --*=*) key="${arg%%=*}"; key="${key#--}"; A[$key]="${arg#*=}";;
+    *) echo "FATAL unexpected argument: $arg" >&2; exit 2;; esac
+done
+OUT="${A[out]}"
+"${A[runtime]}/.venv/bin/python" \
+  "$REPO/experiments/synthetic_multistep/build_typing_factorial.py" \
+  --out="$OUT" --parser-dir="${A[parser]}" \
+  --reference="${A[stage1]}" --reference="${A[single_eval]}" \
+  --reference="${A[episodes]}" --reference="${A[curriculum]}"
+for format in coalesced perkey; do
+  for split in train val; do
+    uv run --project="${A[omegalax]}" -- \
+      python "${A[omegalax]}/scripts/build_sft_records_from_chat.py" \
+      --data_path "$OUT/$format/_normalized/$split/chat.jsonl" \
+      --out_dir "$OUT/$format/$split" \
+      --model_id Qwen/Qwen3-VL-2B-Instruct \
+      --tokenizer Qwen/Qwen3-VL-2B-Instruct \
+      --processor Qwen/Qwen3-VL-2B-Instruct \
+      --max_length 4096 --overflow_mode truncate \
+      --records_per_shard 8000 --num_workers 8 --overwrite
+  done
+done
+OMX_SHA="$(git -C "${A[omegalax]}" rev-parse HEAD)"
+OMX_DIFF_SHA="$(git -C "${A[omegalax]}" diff --binary | sha256sum | awk '{print $1}')"
+python3 - "$OUT" "$OMX_SHA" "$OMX_DIFF_SHA" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+out=Path(sys.argv[1]); source=json.loads((out/'typing_source_manifest.json').read_text())
+report=json.loads((out/source['pairing_report']).read_text())
+if report.get('status')!='pass': raise SystemExit(f'FATAL pairing gate: {report}')
+expected={'roundtrip_parse_format_execute':{'passing':4400,'total':4400},
+          'typed_string_exact':{'passing':4400,'total':4400},
+          'train_val_target_overlap':0,'train_val_image_overlap':0,
+          'reference_image_overlap':0,'reference_sample_id_overlap':0}
+bad={k:(report.get(k),v) for k,v in expected.items() if report.get(k)!=v}
+if bad: raise SystemExit(f'FATAL typing audit mismatch: {bad}')
+for fmt in ('coalesced','perkey'):
+ for split,n in (('train',2000),('val',200)):
+  meta=json.loads((out/fmt/split/'metadata.json').read_text())
+  if meta.get('num_records')!=n or meta.get('max_length')!=4096:
+   raise SystemExit(f'FATAL tokenization {fmt}/{split}: {meta}')
+manifest=dict(source)
+manifest.update({'artifact_type':'synthetic_typing_factorial_tokenized','status':'complete',
+ 'max_length':4096,'pairing_report_sha256':hashlib.sha256((out/source['pairing_report']).read_bytes()).hexdigest(),
+ 'omegalax_commit':sys.argv[2],'omegalax_tracked_diff_sha256':sys.argv[3],
+ 'storage_gate':{'limit_bytes':700_000_000_000,'estimated_peak_incremental_bytes':568_000_000_000,
+  'basis':'four observed r256 three-save Orbax roots plus four merged HF exports','pass':True}})
+(out/'typing_dataset_manifest.json').write_text(json.dumps(manifest,indent=2,sort_keys=True)+'\n')
+PY
+''', "--"]
+[resources]
+cpus = 16
+mem = "96GB"
+time = "00:30:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+[inputs.parser]
+type = "external"
+path = "/fast/home/franz.srambical/juergen/eval"
+[inputs.stage1]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand/r3data_2k"
+[inputs.single_eval]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand/runs/rung2_offshelf/px"
+[inputs.episodes]
+type = "artifact"
+artifact = "synthetic_multistep_phasea_episodes_v1_run_019fb4f69ebe76a3aef087cbaafb92fa"
+[inputs.curriculum]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_stage2_raw_pre_v1_run_019fb52cca1e7d72987b79842d2d7b08"
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+[outputs.dataset]
+type = "dataset"
+marker = "typing_dataset_manifest.json"
+alias = "synthetic_typing_factorial_2x2_v1_{run.id}"
+[args]
+out = "{outputs.dataset.path}"
+parser = "{inputs.parser.path}"
+stage1 = "{inputs.stage1.path}"
+single_eval = "{inputs.single_eval.path}"
+episodes = "{inputs.episodes.path}"
+curriculum = "{inputs.curriculum.path}"
+omegalax = "{inputs.omegalax.path}"
+runtime = "{inputs.runtime.path}"
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

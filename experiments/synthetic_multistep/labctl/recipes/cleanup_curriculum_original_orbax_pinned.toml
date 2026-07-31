@@ -1,0 +1,73 @@
+name = "synthetic_multistep_cleanup_curriculum_original_orbax_pinned_v2"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+python3 "$REPO/experiments/synthetic_multistep/cleanup_curriculum_orbax.py" "$@"
+''', "--"]
+
+[resources]
+cpus = 2
+mem = "8GB"
+time = "00:30:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.original_a]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_multistep_curriculum_A_to_B_raw_pre_r256_s750_v1_run_019fb53249dc7cf28e5d5ffe62151507"
+[inputs.original_b]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_multistep_curriculum_B_to_B_raw_pre_r256_s750_v1_run_019fb53249dd781085931aa776ff8bdc"
+[inputs.failed_run_a]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/labctl_runs/runs/franz.srambical/run_019fb53249dc7cf28e5d5ffe62151507"
+[inputs.failed_run_b]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/labctl_runs/runs/franz.srambical/run_019fb53249dd781085931aa776ff8bdc"
+[inputs.recovered_a]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_A_to_B_raw_pre_r256_s750_recovered_v1_run_019fb56fb2f471118f1a9ed683def8b0"
+[inputs.recovered_b]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_B_to_B_raw_pre_r256_s750_recovered_v1_run_019fb56fb3007ee2a1deba3f28b5e5cb"
+[inputs.teacher_a]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_A_to_B_teacher_forced_v1_run_019fb57a90fc7f50b8f8b4aa9cd5c081"
+[inputs.teacher_b]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_B_to_B_teacher_forced_v1_run_019fb57a911c787095767a3911cecde5"
+[inputs.teacher_comparison]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_teacher_forced_comparison_v1_run_019fb58f6c9f7740836a3e24a5326961"
+[inputs.multistep_a]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_A_to_B_multistep_B_v1_run_019fb581d1fe7c328498d013d228df2d"
+[inputs.multistep_b]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_B_to_B_multistep_B_v1_run_019fb581d1fc7401b038db7098c3b151"
+[inputs.multistep_comparison]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_original_comparison_v1_run_019fb5909c457661b9445585a65dcd09"
+
+[outputs.audit]
+type = "eval_result"
+marker = "cleanup_manifest.json"
+alias = "synthetic_multistep_curriculum_original_orbax_cleanup_v2_{run.id}"
+
+[args]
+original-a = "{inputs.original_a.path}"
+original-b = "{inputs.original_b.path}"
+failed-run-a = "{inputs.failed_run_a.path}"
+failed-run-b = "{inputs.failed_run_b.path}"
+recovered-a = "{inputs.recovered_a.path}"
+recovered-b = "{inputs.recovered_b.path}"
+teacher-a = "{inputs.teacher_a.path}"
+teacher-b = "{inputs.teacher_b.path}"
+teacher-comparison = "{inputs.teacher_comparison.path}"
+multistep-a = "{inputs.multistep_a.path}"
+multistep-b = "{inputs.multistep_b.path}"
+multistep-comparison = "{inputs.multistep_comparison.path}"
+out = "{outputs.audit.path}"

@@ -1,0 +1,43 @@
+name = "synthetic_multistep_typing_tp2_lora_native_dot_cuda_smoke_v3"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+OMX="$(jq -r '.inputs[] | select(.role == "omegalax") | .resolved_path' "$LABCTL_CONTEXT")"
+cd "$OMX"
+uv run --project="$OMX" -- srun --gpus-per-task=2 python \
+  "$REPO/experiments/synthetic_multistep/typing_tp2_lora_cuda_smoke.py" "$@"
+''', "--"]
+
+[resources]
+gpus = 2
+cpus = 4
+mem = "16GB"
+time = "00:05:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--nodelist=hai004"]
+
+[inputs.omegalax]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp/omegalax_lora_tp2_fix_135602"
+
+[outputs.result]
+type = "eval_result"
+marker = "lora_cuda_smoke.json"
+alias = "synthetic_typing_tp2_lora_native_dot_cuda_smoke_v3_{run.id}"
+
+[args]
+omegalax = "{inputs.omegalax.path}"
+out = "{outputs.result.path}/lora_cuda_smoke.json"
+expected_backend = "gpu"
+expected_commit = "b3f32c002998a1134c78845847a53ca9cc17fb10"
+expected_diff_sha = "3c80de2ee9e0f29bbc63916ac625380bbe5e2542549a10225f6eea3a4c45546d"
+expected_lora_sha = "22f0040a508aa18bb2ee0067ba8354e4123f433a25e8574eb91e093831dc8cd2"
+expected_test_sha = "7a2dfdd1cd33c06000f2d990e2a6f6120bfe98d779e79b1fdc32138169ed90db"
+
+[env]
+PYTHONUNBUFFERED = "1"
+XLA_PYTHON_CLIENT_PREALLOCATE = "false"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

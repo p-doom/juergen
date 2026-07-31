@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "artifact_type": "typing_tp1_v10_orbax_cleanup_allowlist",
+  "authorization": "User authorized post-export cleanup of regenerable artifacts; exact scope is the 000250, 000500, and 000750 Orbax step directories in the four completed TP1-v10 typing streams, retaining every HF export, manifest, and evaluation.",
+  "checkpoint_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical",
+  "expected_allocated_bytes": 522282573824,
+  "expected_logical_bytes": 427499383570,
+  "entries": [
+    {
+      "artifact": "synthetic_typing_factorial_A_coalesced_r256_lr5e5_recovered_tp1_v10_run_019fb6b833757cd09251e95e230997da",
+      "root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_typing_factorial_A_coalesced_r256_lr5e5_recovered_tp1_v10_run_019fb6b833757cd09251e95e230997da",
+      "artifact_id": "artifact_66bd5a93f2627e65",
+      "run_id": "run_019fb6b833757cd09251e95e230997da",
+      "job_id": 135629,
+      "lineage": "A",
+      "format": "coalesced",
+      "meta_sha256": "791d7b4e86e0847cee2935707acfe3f61541b68145635d4788819b70c78bb2b9",
+      "manifest_sha256": "d0a3df2aa9001c38374748504e4606195ebb1c296b35447a965e0a3475f7e101",
+      "config_sha256": "306e36b825faad2e26a884add51223b67c8ef109521c69c4bb72ddd490e73efa",
+      "model_size": 35068587488,
+      "steps": [
+        {"name": "000250", "allocated_bytes": 35659431936, "logical_bytes": 35621287065, "metadata_sha256": "7214eab7f13bf3556be18ee25b3ec5368fe62ce46e1150c88ec26bba9d6c00ea"},
+        {"name": "000500", "allocated_bytes": 47505522688, "logical_bytes": 35616933773, "metadata_sha256": "e801f428fd691c69a4b0ae82942bbac58dcafdf3c59d27246e9c2bc15e928f04"},
+        {"name": "000750", "allocated_bytes": 47536398336, "logical_bytes": 35621507514, "metadata_sha256": "85e84163bc2b58a065c5a966968dabc4d3676f20acc0544632fe3f391b83c5a5"}
+      ]
+    },
+    {
+      "artifact": "synthetic_typing_factorial_A_perkey_r256_lr5e5_recovered_tp1_v10_run_019fb6c4f1777b40aeee4fddfa010ae0",
+      "root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_typing_factorial_A_perkey_r256_lr5e5_recovered_tp1_v10_run_019fb6c4f1777b40aeee4fddfa010ae0",
+      "artifact_id": "artifact_66e0bd35efdbabe9",
+      "run_id": "run_019fb6c4f1777b40aeee4fddfa010ae0",
+      "job_id": 135644,
+      "lineage": "A",
+      "format": "perkey",
+      "meta_sha256": "672fa89730a19d4e7a56724bb57cdc1470de2f55589747906297b581db2d481c",
+      "manifest_sha256": "01e00cdd65d18483adca7a929e6016480644d01dc787e353e52aa5d14446796f",
+      "config_sha256": "306e36b825faad2e26a884add51223b67c8ef109521c69c4bb72ddd490e73efa",
+      "model_size": 35068587488,
+      "steps": [
+        {"name": "000250", "allocated_bytes": 35910795264, "logical_bytes": 35617750369, "metadata_sha256": "a20f01fe82c02b4cc1c91292cd2a2256340749b231f7a763e9f71ab104694dd8"},
+        {"name": "000500", "allocated_bytes": 47402934272, "logical_bytes": 35620598968, "metadata_sha256": "f1f0d95d695f0ff79499ed7cfcb5f82a1bbb11e8359725a8e798134ebb0b8678"},
+        {"name": "000750", "allocated_bytes": 47538257920, "logical_bytes": 35621226085, "metadata_sha256": "f44a8783caaac0d3a219dba7fe2949bb14c37d6516a544a9f296d77934fde0f7"}
+      ]
+    },
+    {
+      "artifact": "synthetic_typing_factorial_B_coalesced_r256_lr5e5_recovered_tp1_v10_run_019fb6c4f16970928927004f68d64137",
+      "root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_typing_factorial_B_coalesced_r256_lr5e5_recovered_tp1_v10_run_019fb6c4f16970928927004f68d64137",
+      "artifact_id": "artifact_58747538994d738d",
+      "run_id": "run_019fb6c4f16970928927004f68d64137",
+      "job_id": 135643,
+      "lineage": "B",
+      "format": "coalesced",
+      "meta_sha256": "f3c4bf406b0fc8e19e843e6c62066d784d88c231951adf037903650a42b6c017",
+      "manifest_sha256": "02a757edb20f60290e1c52a61b07c1e4c481b99b855ca30fe6f57de637708b10",
+      "config_sha256": "306e36b825faad2e26a884add51223b67c8ef109521c69c4bb72ddd490e73efa",
+      "model_size": 35068587488,
+      "steps": [
+        {"name": "000250", "allocated_bytes": 35640197120, "logical_bytes": 35632231821, "metadata_sha256": "d71b1af18f0fb50f691c7d69ed2a7c5847b6464438b89b2b6df2fe4002867675"},
+        {"name": "000500", "allocated_bytes": 47630327808, "logical_bytes": 35630772456, "metadata_sha256": "b6b598efffe0840f16dc78277cf3bb93a87222d715be9c67afd6cc245539e7d9"},
+        {"name": "000750", "allocated_bytes": 47355920384, "logical_bytes": 35631059948, "metadata_sha256": "94ea8f29d040c26bd952f9fb5f959af57f6c04eae7ff130275d559913d3e2201"}
+      ]
+    },
+    {
+      "artifact": "synthetic_typing_factorial_B_perkey_r256_lr5e5_recovered_tp1_v10_run_019fb6c4f16776a3aecf23bb02f41f1d",
+      "root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_typing_factorial_B_perkey_r256_lr5e5_recovered_tp1_v10_run_019fb6c4f16776a3aecf23bb02f41f1d",
+      "artifact_id": "artifact_65bb50797ad3df34",
+      "run_id": "run_019fb6c4f16776a3aecf23bb02f41f1d",
+      "job_id": 135645,
+      "lineage": "B",
+      "format": "perkey",
+      "meta_sha256": "9aa98f8edf69d524052bccd7a9f9478071c4017479e5c186dd5c09589a3bdf75",
+      "manifest_sha256": "327b09251b9e4bb84219043f0eb0e9d15ea9bee3f8c718df025d45dc18bc2b8b",
+      "config_sha256": "306e36b825faad2e26a884add51223b67c8ef109521c69c4bb72ddd490e73efa",
+      "model_size": 35068587488,
+      "steps": [
+        {"name": "000250", "allocated_bytes": 35633537024, "logical_bytes": 35623932955, "metadata_sha256": "ff41e60139ae1a060e9e326459c14fe38ae607c264701168806037fca0bc3bb3"},
+        {"name": "000500", "allocated_bytes": 47236800512, "logical_bytes": 35631046897, "metadata_sha256": "6bd0d3a74da9615379b2bdd4c1fc5230230998f9d2b148b2c6fec79110e83cd3"},
+        {"name": "000750", "allocated_bytes": 47232450560, "logical_bytes": 35631035719, "metadata_sha256": "c8dfc9a4731bc55d79f6e90e7b4f34fe57172dd11ed1bdf6c3b3433a9d7c3668"}
+      ]
+    }
+  ]
+}

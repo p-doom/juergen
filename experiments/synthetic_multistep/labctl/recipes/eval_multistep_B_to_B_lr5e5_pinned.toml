@@ -1,0 +1,50 @@
+name = "synthetic_multistep_eval_curriculum_B_to_B_lr5e5_pinned_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/synthetic_multistep/eval_stage.sh" "$@" \
+  "--experiment_dir=$REPO/experiments/synthetic_multistep"
+''', "--"]
+[resources]
+gpus = 1
+cpus = 12
+mem = "100GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001,hai008", "--nodelist=hai003,hai004,hai007"]
+[inputs.model]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_B_to_B_raw_pre_r256_lr5e5_s750_recovered_v1_run_019fb59cbf727b028103427bea95ee88"
+[inputs.episodes]
+type = "artifact"
+artifact = "synthetic_multistep_phasea_episodes_v1_run_019fb4f69ebe76a3aef087cbaafb92fa"
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+[inputs.audit]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand"
+[outputs.result]
+type = "eval_result"
+marker = "eval_manifest.json"
+alias = "synthetic_multistep_curriculum_B_to_B_lr5e5_multistep_B_v1_{run.id}"
+[args]
+model = "{inputs.model.path}"
+episodes = "{inputs.episodes.path}"
+out = "{outputs.result.path}"
+runtime_dir = "{inputs.runtime.path}"
+experiment_dir = "{inputs.audit.path}"
+audit_dir = "{inputs.audit.path}"
+semantic = "deltatype_raw"
+preamble = "true"
+checkpoint_alias = "synthetic_multistep_curriculum_B_to_B_raw_pre_r256_lr5e5_s750_recovered_v1_run_019fb59cbf727b028103427bea95ee88"
+comparison_label = "curriculum_transfer_lr5e5"
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

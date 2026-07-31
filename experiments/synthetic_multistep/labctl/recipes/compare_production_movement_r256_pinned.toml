@@ -1,0 +1,42 @@
+name = "synthetic_multistep_compare_production_movement_r256_pinned_v2"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+RUNTIME="$(jq -r '.inputs[] | select(.role == "runtime") | .resolved_path' "$LABCTL_CONTEXT")"
+PYTHONPATH="$REPO" "$RUNTIME/.venv/bin/python" \
+  "$REPO/experiments/synthetic_multistep/production_compare.py" "$@"
+''', "--"]
+
+[resources]
+cpus = 2
+mem = "8GB"
+time = "00:15:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.move_rel]
+type = "artifact"
+artifact = "synthetic_multistep_production_move_rel_r256_v1_run_019fb51c25877821ad3f84c210e78a35"
+[inputs.deltatype_raw]
+type = "artifact"
+artifact = "synthetic_multistep_production_deltatype_raw_r256_v1_run_019fb51c365e712182d21f1efdcb8974"
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+
+[outputs.result]
+type = "eval_result"
+marker = "production_comparison.json"
+alias = "synthetic_multistep_production_movement_r256_comparison_v2_{run.id}"
+
+[args]
+move-rel = "{inputs.move_rel.path}"
+deltatype-raw = "{inputs.deltatype_raw.path}"
+out = "{outputs.result.path}"
+
+[env]
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"

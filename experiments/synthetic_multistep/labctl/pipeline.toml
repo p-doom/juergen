@@ -1,0 +1,13 @@
+name = "synthetic_multistep_phasea_primary_v1"
+
+[stages.build_episodes]
+recipe = "recipes/build_episodes.toml"
+
+[stages.eval_absolute_primary]
+recipe = "recipes/eval_absolute_primary.toml"
+
+[stages.eval_move_rel_primary]
+recipe = "recipes/eval_move_rel_primary.toml"
+
+[stages.compare_primary]
+recipe = "recipes/compare_primary.toml"

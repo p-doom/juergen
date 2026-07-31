@@ -1,0 +1,41 @@
+name = "synthetic_multistep_eval_typing_B_perkey_pinned_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/synthetic_multistep/typing_eval_stage.sh" "$@" \
+  "--experiment_dir=$REPO/experiments/synthetic_multistep"
+''', "--"]
+[resources]
+gpus = 1
+cpus = 12
+mem = "100GB"
+time = "00:40:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001,hai008", "--nodelist=hai003,hai004,hai007"]
+[inputs.model]
+type = "artifact"
+artifact = "synthetic_typing_factorial_B_perkey_r256_lr5e5_recovered_deadline0900_v1_run_019fb5ce4a8e7533b408a6fd47971508"
+[inputs.dataset]
+type = "artifact"
+artifact = "synthetic_typing_factorial_2x2_v1_run_019fb585358c7ff08fe5fbc5dd746e5d"
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+[inputs.parser]
+type = "external"
+path = "/fast/home/franz.srambical/juergen/eval"
+[outputs.result]
+type = "eval_result"
+marker = "typing_eval_manifest.json"
+alias = "synthetic_typing_factorial_B_perkey_eval_v1_{run.id}"
+[args]
+model = "{inputs.model.path}"
+dataset = "{inputs.dataset.path}"
+out = "{outputs.result.path}"
+runtime = "{inputs.runtime.path}"
+parser = "{inputs.parser.path}"
+lineage = "B"
+format = "perkey"

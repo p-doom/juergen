@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "status": "pass",
+  "audited_at": "2026-07-31T02:43:00+02:00",
+  "dataset_alias": "synthetic_typing_factorial_2x2_v1_run_019fb585358c7ff08fe5fbc5dd746e5d",
+  "dataset_manifest_sha256": "480f759346a0c3046e31c17c1445eb5154e1ac1de9c7f56d4a765a6f16365235",
+  "pairing_report_sha256": "572afc6ba5a58114fe449f2ab4084fb95c2a226e7d17f345b5a6153e741fbe4d",
+  "counts": {
+    "train": 2000,
+    "validation": 200,
+    "unique_train_strings": 2000,
+    "unique_validation_strings": 200
+  },
+  "target_visibility": {
+    "system_literal_occurrences": 0,
+    "image_byte_occurrences": 0,
+    "prose_literal_occurrences": 0,
+    "intended_user_instruction_occurrences": 2200,
+    "intended_coalesced_gold_action_occurrences": 2200,
+    "perkey_gold_action_literal_occurrences": 0,
+    "perkey_gold_action_encoding": "ordered press/release events",
+    "arrayrecord_target_text_field": "retained as scoring/session metadata but ignored by both Qwen3 collators, which encode only ex['messages']"
+  },
+  "train_validation_disjointness": {
+    "exact_string_overlap": 0,
+    "cross_split_full_string_substring_containment": 0,
+    "five_gram_overlap": 0,
+    "four_gram_overlap": 27,
+    "four_gram_union": 25860,
+    "three_gram_overlap": 908,
+    "three_gram_union": 22391,
+    "two_gram_overlap": 1278,
+    "two_gram_union": 1521,
+    "whitespace_chunk_overlap": 12,
+    "whitespace_chunk_union": 2791,
+    "shared_character_vocabulary": " -.0123456789abcdefghijklmnopqrstuvwxyz",
+    "character_vocabulary_intersection": 39,
+    "character_vocabulary_union": 39
+  },
+  "interpretation": "Exact strings and long substrings are held out while the intended character alphabet is shared; this tests compositional copying and action serialization, not unseen-character generalization.",
+  "checkpoint_retention": {
+    "save_every_steps": 250,
+    "keep_latest": 3,
+    "keep_period_steps": 250,
+    "required_retained_steps": [250, 500, 750],
+    "selection_policy": "report the preregistered step750 outcome; retain earlier steps for diagnosis only, not post-hoc selection"
+  }
+}

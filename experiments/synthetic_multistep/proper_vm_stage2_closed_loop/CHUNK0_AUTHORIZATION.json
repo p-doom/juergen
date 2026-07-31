@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "artifact_type": "synthetic_proper_vm_roadmap_stage2_chunk0_authorization",
+  "status": "authorized_ready",
+  "scope": "Exactly chunk 0 for each of the three frozen arms: episode indices 0-4, 25 complete atomic units per arm, one fresh VM per arm. Chunks 1-15 and full-arm launch remain unauthorized.",
+  "preflight_protocol_sha256": "df9a93f557fe2a6aae75d339c1b4413e6723f933b6718b029489fb5f6cea6839",
+  "chunk_index": 0,
+  "episode_start_inclusive": 0,
+  "episode_end_exclusive": 5,
+  "episodes_per_arm": 5,
+  "atomic_units_per_arm": 25,
+  "maximum_request_slots_per_arm": 80,
+  "fresh_vm_per_arm": true,
+  "matched_seed_rule": "request_seed(condition, episode_id, target_index, attempt), independent of arm",
+  "deadline_local": "2026-07-31T09:58:00+02:00",
+  "chunks_1_15_launch_authorized": false,
+  "full_arm_launch_authorized": false,
+  "preflight_manifests": {
+    "absolute_matched_control": {
+      "run_id": "run_019fb70a3d9771029edd81fe681f5f88",
+      "slurm_job_id": "135669",
+      "path": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/synthetic_proper_vm_roadmap_stage2_absolute_one_cell_preflight_v1_run_019fb70a3d9771029edd81fe681f5f88/preflight_manifest.json",
+      "sha256": "e849af2ed530cd20657deaf5b0547356f072814de454ec14dc6e4876baf2ec9e"
+    },
+    "normalized_relative": {
+      "run_id": "run_019fb70a62a97b209af9330351fe96b8",
+      "slurm_job_id": "135670",
+      "path": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/synthetic_proper_vm_roadmap_stage2_normalized_one_cell_preflight_v1_run_019fb70a62a97b209af9330351fe96b8/preflight_manifest.json",
+      "sha256": "943eae4a01f0e8828f62fc4f9949f4ccde0f78e0387e82c23c01d8c14bd7caae"
+    },
+    "raw_relative": {
+      "run_id": "run_019fb70a869f7681bb7f04a2982fe214",
+      "slurm_job_id": "135672",
+      "path": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/synthetic_proper_vm_roadmap_stage2_raw_one_cell_preflight_v1_run_019fb70a869f7681bb7f04a2982fe214/preflight_manifest.json",
+      "sha256": "05c2f1b0b13cc753b5ea61861eda6c4a1aa022228cc86afa6f119ad951c0b994"
+    }
+  }
+}

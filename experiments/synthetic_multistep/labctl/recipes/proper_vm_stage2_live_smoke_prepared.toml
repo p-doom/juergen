@@ -1,0 +1,49 @@
+name = "synthetic_proper_vm_stage2_live_smoke_prepared_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+"/fast/home/franz.srambical/juergen/.venv/bin/python" \
+  "$REPO/experiments/synthetic_multistep/proper_vm_stage2/live_smoke.py" "$@"
+''', "--"]
+
+[resources]
+cpus = 8
+mem = "32GB"
+time = "00:30:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--no-requeue", "--exclude=hai001,hai005"]
+
+[inputs.vm]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_vm"
+
+[inputs.provider]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_eval_pinned/code"
+
+[inputs.osworld]
+type = "external"
+path = "/fast/home/franz.srambical/OSWorld"
+
+[inputs.host_python]
+type = "external"
+path = "/fast/home/franz.srambical/juergen/.venv"
+
+[outputs.result]
+type = "eval_result"
+marker = "live_smoke_manifest.json"
+alias = "synthetic_proper_vm_stage2_live_smoke_v1_{run.id}"
+
+[args]
+out = "{outputs.result.path}"
+provider-source = "{inputs.provider.path}/qemu_kvm_provider.py"
+qcow = "{inputs.vm.path}/Ubuntu.qcow2"
+qemu-bin = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin/qemu-system-x86_64-wrapped"
+osworld-root = "{inputs.osworld.path}"
+port-lock-dir = "/tmp/osworld_port_locks"
+
+[env]
+PYTHONUNBUFFERED = "1"

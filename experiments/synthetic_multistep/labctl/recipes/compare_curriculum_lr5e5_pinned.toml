@@ -1,0 +1,33 @@
+name = "synthetic_multistep_compare_curriculum_lr5e5_pinned_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+RUNTIME="$(jq -r '.inputs[] | select(.role == "runtime") | .resolved_path' "$LABCTL_CONTEXT")"
+"$RUNTIME/.venv/bin/python" "$REPO/experiments/synthetic_multistep/curriculum_compare.py" "$@"
+''', "--"]
+[resources]
+cpus = 2
+mem = "16GB"
+time = "00:10:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+[inputs.a_to_b]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_A_to_B_lr5e5_multistep_B_v1_run_019fb5a27f667b829f99aaa243c97152"
+[inputs.b_to_b]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_B_to_B_lr5e5_multistep_B_v1_run_019fb5a296737fe288e38a7d3b7d31fa"
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+[outputs.result]
+type = "eval_result"
+marker = "curriculum_comparison.json"
+alias = "synthetic_multistep_curriculum_lr5e5_comparison_v1_{run.id}"
+[args]
+a-to-b = "{inputs.a_to_b.path}"
+b-to-b = "{inputs.b_to_b.path}"
+out = "{outputs.result.path}"
+variant = "lr5e5"

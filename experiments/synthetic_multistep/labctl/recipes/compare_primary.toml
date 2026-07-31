@@ -1,0 +1,46 @@
+name = "synthetic_multistep_phasea_compare_primary_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+RUNTIME="$(jq -r '.inputs[] | select(.role == "runtime") | .resolved_path' "$LABCTL_CONTEXT")"
+"$RUNTIME/.venv/bin/python" "$REPO/experiments/synthetic_multistep/compare.py" "$@"
+''', "--"]
+
+[resources]
+cpus = 2
+mem = "8GB"
+time = "00:15:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.absolute]
+type = "stage"
+stage = "eval_absolute_primary"
+role = "result"
+
+[inputs.relative]
+type = "stage"
+stage = "eval_move_rel_primary"
+role = "result"
+
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+
+[outputs.result]
+type = "eval_result"
+marker = "comparison.json"
+alias = "synthetic_multistep_phasea_primary_comparison_v1_{run.id}"
+
+[args]
+absolute = "{inputs.absolute.path}"
+relative = "{inputs.relative.path}"
+out = "{outputs.result.path}"
+comparison-label = "primary"
+
+[env]
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"

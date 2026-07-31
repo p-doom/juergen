@@ -1,0 +1,41 @@
+name = "synthetic_multistep_eval_teacher_forced_A_to_B_lr5e5_pinned_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+RUNTIME="$(jq -r '.inputs[] | select(.role == "runtime") | .resolved_path' "$LABCTL_CONTEXT")"
+"$RUNTIME/.venv/bin/python" "$REPO/experiments/synthetic_multistep/teacher_forced.py" "$@"
+''', "--"]
+[resources]
+gpus = 1
+cpus = 8
+mem = "100GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001,hai008", "--nodelist=hai003,hai004,hai007"]
+[inputs.model]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_A_to_B_raw_pre_r256_lr5e5_s750_recovered_v1_run_019fb59ca7927631b332d44a4adc27f6"
+[inputs.dataset]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_stage2_raw_pre_v1_run_019fb52cca1e7d72987b79842d2d7b08"
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+[outputs.result]
+type = "eval_result"
+marker = "teacher_forced_report.json"
+alias = "synthetic_multistep_curriculum_A_to_B_lr5e5_teacher_forced_v1_{run.id}"
+[args]
+model-root = "{inputs.model.path}"
+dataset = "{inputs.dataset.path}"
+branch = "A_to_B"
+out = "{outputs.result.path}"
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

@@ -1,0 +1,58 @@
+name = "synthetic_multistep_resume_typing_B_perkey_pinned_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/synthetic_multistep/typing_factorial_resume_export.sh" "$@" "--repo=$REPO"
+''', "--"]
+[resources]
+gpus = 1
+cpus = 12
+mem = "150GB"
+time = "02:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001,hai008", "--nodelist=hai003,hai004,hai007"]
+[inputs.dataset]
+type = "artifact"
+artifact = "synthetic_typing_factorial_2x2_v1_run_019fb585358c7ff08fe5fbc5dd746e5d"
+[inputs.source_model]
+type = "artifact"
+artifact = "relative_factorial_relraw_pre_r256_s750_capacity_v1_run_019fb4bec0167122b655a36ea3a4237e"
+[inputs.partial_root]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_typing_factorial_B_perkey_r256_lr5e5_v1_run_019fb58dcdf278d19980dd043c67f77a"
+[inputs.parent_run]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/labctl_runs/runs/franz.srambical/run_019fb58dcdf278d19980dd043c67f77a"
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+[outputs.model]
+type = "checkpoint"
+marker = "typing_train_export_manifest.json"
+alias = "synthetic_typing_factorial_B_perkey_r256_lr5e5_recovered_v1_{run.id}"
+[args]
+omegalax_repo = "{inputs.omegalax.path}"
+dataset = "{inputs.dataset.path}"
+source_model = "{inputs.source_model.path}"
+partial_root = "{inputs.partial_root.path}"
+parent_run = "{inputs.parent_run.path}"
+parent_run_id = "run_019fb58dcdf278d19980dd043c67f77a"
+parent_job_id = "135512"
+output = "{outputs.model.path}"
+format = "perkey"
+expected_checkpoint_sha = "ff41e60139ae1a060e9e326459c14fe38ae607c264701168806037fca0bc3bb3"
+expected_train_state_sha = "729381d3b8f4ed8d96ba1733dba2a42adfb70117e6d8c5775cee73bec6e8298c"
+expected_iterator_sha = "7c62175f1690f6699c5e358147258c40f6d4f9814850ffc9797fd3048b3f6ba5"
+expected_lora_sha = "3e491761873096823bb0a8cb296af699ab40c588b01c8472ef3e1ed0632211ec"
+expected_parent_log_sha = "6caabc758bd77e525162732fa90d13f1ea7e687fcd4ecb8c0dbc1fb82265b0e4"
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+XLA_PYTHON_CLIENT_ALLOCATOR = "cuda_async"
+XLA_PYTHON_CLIENT_MEM_FRACTION = "0.95"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

@@ -1,0 +1,71 @@
+name = "synthetic_multistep_resume_typing_B_coalesced_tp2_exact_pinned_v9"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/synthetic_multistep/typing_factorial_resume_export.sh" "$@" "--repo=$REPO"
+''', "--"]
+[resources]
+gpus = 2
+cpus = 24
+mem = "150GB"
+time = "02:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--nodelist=hai004", "--deadline=2026-07-31T09:00:00"]
+[inputs.dataset]
+type = "artifact"
+artifact = "synthetic_typing_factorial_2x2_v1_run_019fb585358c7ff08fe5fbc5dd746e5d"
+[inputs.source_model]
+type = "artifact"
+artifact = "relative_factorial_relraw_pre_r256_s750_capacity_v1_run_019fb4bec0167122b655a36ea3a4237e"
+[inputs.partial_root]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_typing_factorial_B_coalesced_r256_lr5e5_v1_run_019fb58db83479f08c78f3a7c1ca3a66"
+[inputs.parent_run]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/labctl_runs/runs/franz.srambical/run_019fb58db83479f08c78f3a7c1ca3a66"
+[inputs.omegalax]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp/omegalax_lora_tp2_fix_135602"
+[inputs.offline_nnx_gate]
+type = "artifact"
+artifact = "synthetic_typing_tp2_offline_real_nnx_restore_gate_v3_run_019fb64faff9736095435a17e1943be0"
+[inputs.lora_cuda_smoke]
+type = "artifact"
+artifact = "synthetic_typing_tp2_lora_native_dot_cuda_smoke_v3_run_019fb67f5b1f7630910cb1841e2ea400"
+[outputs.model]
+type = "checkpoint"
+marker = "typing_train_export_manifest.json"
+alias = "synthetic_typing_factorial_B_coalesced_r256_lr5e5_recovered_tp2_exact_v9_{run.id}"
+[args]
+omegalax_repo = "{inputs.omegalax.path}"
+dataset = "{inputs.dataset.path}"
+source_model = "{inputs.source_model.path}"
+partial_root = "{inputs.partial_root.path}"
+parent_run = "{inputs.parent_run.path}"
+parent_run_id = "run_019fb58db83479f08c78f3a7c1ca3a66"
+parent_job_id = "135511"
+output = "{outputs.model.path}"
+format = "coalesced"
+tp_size = "2"
+offline_nnx_gate = "{inputs.offline_nnx_gate.path}"
+lora_cuda_smoke = "{inputs.lora_cuda_smoke.path}"
+expected_checkpoint_sha = "d71b1af18f0fb50f691c7d69ed2a7c5847b6464438b89b2b6df2fe4002867675"
+expected_train_state_sha = "729381d3b8f4ed8d96ba1733dba2a42adfb70117e6d8c5775cee73bec6e8298c"
+expected_iterator_sha = "7c62175f1690f6699c5e358147258c40f6d4f9814850ffc9797fd3048b3f6ba5"
+expected_lora_sha = "3e491761873096823bb0a8cb296af699ab40c588b01c8472ef3e1ed0632211ec"
+expected_parent_log_sha = "07a78bcf4180b241cf1022e26fa145d58f2e79a50c58be0940b483ce1107f4f2"
+expected_omegalax_commit = "b3f32c002998a1134c78845847a53ca9cc17fb10"
+expected_omegalax_diff_sha = "3c80de2ee9e0f29bbc63916ac625380bbe5e2542549a10225f6eea3a4c45546d"
+expected_lora_source_sha = "22f0040a508aa18bb2ee0067ba8354e4123f433a25e8574eb91e093831dc8cd2"
+expected_lora_test_sha = "7a2dfdd1cd33c06000f2d990e2a6f6120bfe98d779e79b1fdc32138169ed90db"
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+XLA_PYTHON_CLIENT_ALLOCATOR = "cuda_async"
+XLA_PYTHON_CLIENT_MEM_FRACTION = "0.95"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

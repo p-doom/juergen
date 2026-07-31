@@ -1,0 +1,38 @@
+name = "synthetic_multistep_phasea_build_episodes_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/synthetic_multistep/build_stage.sh" "$@"
+''', "--"]
+
+[resources]
+cpus = 4
+mem = "16GB"
+time = "00:20:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.audit]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand"
+
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+
+[outputs.episodes]
+type = "dataset"
+marker = "build_manifest.json"
+alias = "synthetic_multistep_phasea_episodes_v1_{run.id}"
+
+[args]
+runtime_python = "{inputs.runtime.path}/.venv/bin/python"
+audit_dir = "{inputs.audit.path}"
+out = "{outputs.episodes.path}"
+
+[env]
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"

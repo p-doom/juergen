@@ -1,0 +1,33 @@
+name = "synthetic_multistep_typing_tp2_offline_real_nnx_restore_gate_v3"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+OMX="$(jq -r '.inputs[] | select(.role == "omegalax") | .resolved_path' "$LABCTL_CONTEXT")"
+[[ -f "$OMX/pyproject.toml" ]] || { echo "FATAL Omega input missing: $OMX" >&2; exit 2; }
+cd "$REPO"
+PYTHONPATH="$REPO" JAX_PLATFORMS=cpu XLA_FLAGS=--xla_force_host_platform_device_count=2 \
+uv run --project="$OMX" -- python \
+  experiments/synthetic_multistep/typing_tp2_offline_nnx_restore_gate.py "$@"
+''', "--"]
+[resources]
+cpus = 4
+mem = "150GB"
+time = "00:30:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--nodelist=hai004"]
+[inputs.root]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_typing_factorial_A_coalesced_r256_lr5e5_recovered_tp2_exact_v6_run_019fb63f393b7ab3a4e3d03a80d8c7ac"
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+[outputs.audit]
+type = "eval_result"
+marker = "offline_nnx_restore_gate.json"
+alias = "synthetic_typing_tp2_offline_real_nnx_restore_gate_v3_{run.id}"
+[args]
+root = "{inputs.root.path}"
+out = "{outputs.audit.path}"

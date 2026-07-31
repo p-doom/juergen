@@ -1,0 +1,307 @@
+{
+  "schema_version": 1,
+  "artifact_type": "synthetic_proper_vm_roadmap_stage2_free_running_design_draft",
+  "status": "design_draft_not_launch_authorized",
+  "launch_authorized": false,
+  "created_at": "2026-07-31",
+  "scope": {
+    "roadmap_stage": "2",
+    "label": "free-running synthetic proper-VM closed loop",
+    "is_endpoint_actuation_conformance_stage1_5": false,
+    "model_actions_change_next_observation": true,
+    "model_actions_change_next_cursor": true,
+    "target_advances_only_after_verified_hit": true
+  },
+  "estimand": "For each relative pipeline, the paired difference from the matched absolute-format control in the probability that a heldout four-target episode completes all four targets with at most three model attempts per target under on-policy proper-VM cursor and observation dynamics.",
+  "population": {
+    "episode_artifact": "synthetic_multistep_phasea_episodes_v1_run_019fb4f69ebe76a3aef087cbaafb92fa",
+    "episodes": 80,
+    "targets_per_episode": 4,
+    "episode_primary_units": 80,
+    "potential_target_transitions": 320,
+    "screen": [1920, 1080],
+    "note": "Use all heldout episodes and all targets. No outcome-selected subset is permitted."
+  },
+  "arms_draft": {
+    "absolute_matched_control": {
+      "semantic": "absolute_toolcall",
+      "preamble": true,
+      "checkpoint_alias": "relative_factorial_abstool_pre_hf_v1_run_019fb44ae67d76e1b022d4794a1bc373",
+      "checkpoint_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/relative_factorial_abstool_pre_hf_v1_run_019fb44ae67d76e1b022d4794a1bc373",
+      "checkpoint_manifest": "export_manifest.json",
+      "checkpoint_manifest_sha256": "c4dbae98bf5aad1812ad5bec5538d940daea872ae72f4b8696b70fde363dd867",
+      "config_sha256": "306e36b825faad2e26a884add51223b67c8ef109521c69c4bb72ddd490e73efa",
+      "model_weights_bytes": 35068587488,
+      "model_weights_sha256": "e1cacf8b423657f5576b46add9cadc58d94e94e2fc8c3b07206e3c7e2a49ccc7",
+      "expected_manifest": {
+        "artifact_type": "relative_factorial_hf_checkpoint",
+        "status": "complete",
+        "arm": "abstool_pre",
+        "step": 750,
+        "lora_rank": 32,
+        "lora_alpha": 32,
+        "hf_subdir": "hf"
+      },
+      "role": "Absolute-format control with the same preamble, guest dynamics, retry budget, seed slots, and history policy as treatment arms.",
+      "known_difference": "The existing absolute checkpoint is LoRA rank 32, whereas the selected relative checkpoints are rank 256; this must remain explicit and prevents a pure action-format causal claim."
+    },
+    "normalized_relative": {
+      "semantic": "move_rel",
+      "preamble": true,
+      "checkpoint_alias": "relative_factorial_reltool_pre_r256_s750_capacity_v1_run_019fb4beda3472b289ae60fc612c1cea",
+      "checkpoint_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/relative_factorial_reltool_pre_r256_s750_capacity_v1_run_019fb4beda3472b289ae60fc612c1cea",
+      "checkpoint_manifest": "train_export_manifest.json",
+      "checkpoint_manifest_sha256": "d37db583163fddf85c40815417b77cafaba42bafaa1ab31382a1d427ab054e71",
+      "config_sha256": "306e36b825faad2e26a884add51223b67c8ef109521c69c4bb72ddd490e73efa",
+      "model_weights_bytes": 35068587488,
+      "model_weights_sha256": "18ac528de72d0da80dc82fdcb2bb885cca1a747359b5f206f811e76ebf6405f9",
+      "expected_manifest": {
+        "artifact_type": "relative_factorial_hf_checkpoint",
+        "status": "complete",
+        "arm": "reltool_pre",
+        "step": 750,
+        "lora_rank": 256,
+        "lora_alpha": 256,
+        "hf_subdir": "hf"
+      }
+    },
+    "raw_relative": {
+      "semantic": "deltatype_raw",
+      "preamble": true,
+      "checkpoint_alias": "synthetic_multistep_curriculum_A_to_B_raw_pre_r256_s750_recovered_v1_run_019fb56fb2f471118f1a9ed683def8b0",
+      "checkpoint_root": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_multistep_curriculum_A_to_B_raw_pre_r256_s750_recovered_v1_run_019fb56fb2f471118f1a9ed683def8b0",
+      "checkpoint_manifest": "curriculum_train_export_manifest.json",
+      "checkpoint_manifest_sha256": "f0b8d729e4dfd5f1352ec92e780b13ec6ed6bf938f0e0ee7a0389750ff66cd46",
+      "config_sha256": "306e36b825faad2e26a884add51223b67c8ef109521c69c4bb72ddd490e73efa",
+      "model_weights_bytes": 35068587488,
+      "model_weights_sha256": "7e443d4eb555ff328afb3504c4453de25223b41415f1d0a6dbf17ac84e24b5d3",
+      "expected_manifest": {
+        "artifact_type": "synthetic_multistep_curriculum_hf_checkpoint",
+        "status": "complete",
+        "branch": "A_to_B",
+        "step": 750,
+        "lora_rank": 256,
+        "lora_alpha": 256,
+        "hf_subdir": "hf"
+      }
+    },
+    "contrast_interpretation": "Best-pipeline parity against the strongest existing matched-preamble absolute reference under identical evaluation dynamics. This is not a causal action-format effect because training lineage and LoRA capacity are not matched."
+  },
+  "sampling": {
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "max_tokens": 192,
+    "attempts_per_target": 3,
+    "seed_rule": "A semantic-independent seed is frozen for every condition/episode/target/attempt slot and reused across all three arms. Unreached slots are recorded as structurally unobserved and are never reassigned."
+  },
+  "conditions": {
+    "single_step_sentinel": {
+      "inferential_role": "separate diagnostic; never pooled with the multi-step primary",
+      "cells": 320,
+      "attempts_per_cell": 1,
+      "reset": "Every target transition starts independently from its frozen oracle cursor and canonical target image.",
+      "history": "none",
+      "purpose": "Measure one-attempt proper-VM grounding under the same renderer/runtime and distinguish single-step ability from closed-loop recovery.",
+      "stage1_5_reuse_boundary": "Roadmap stage-1.5 may be cited only as executor/provider/button-state evidence. Its fixed canonical pixels cannot substitute for the dynamic-renderer sentinel, whose cursor pixels must be generated and verified anew."
+    },
+    "multi_step_closed_loop": {
+      "inferential_role": "primary",
+      "episodes": 80,
+      "targets_per_episode": 4,
+      "maximum_attempts_per_target": 3,
+      "maximum_attempts_per_episode": 12,
+      "history": "The last three complete model outputs from the same on-policy episode; no oracle action is injected.",
+      "termination": "Success after four verified target hits; failure immediately after the third miss/invalid attempt on the current target. Later targets after terminal failure are counted as not completed and are not queried."
+    }
+  },
+  "closed_loop_dynamics": {
+    "episode_start": "Each arm starts each episode from an identical fresh VM overlay/application reset, frozen initial cursor, first target, and seed schedule.",
+    "valid_action": "Parse the arm grammar, compute its registered endpoint, execute the actual guest pyautogui move and left click, then read back the physical cursor and guest target state.",
+    "miss": "The physical cursor remains at the model-selected endpoint. The same target remains active. The next screenshot is deterministically rerendered with that actual cursor encoded in the cursor-arrow pixels.",
+    "hit": "Advance to the next target only after guest state independently confirms the click was inside the active box. Preserve the actual cursor endpoint as the next target's starting cursor and rerender it in the next screenshot.",
+    "invalid_output": "A parse, schema, or unit failure consumes one attempt, dispatches no action, preserves the actual cursor and target, and includes the complete failed model output in subsequent history.",
+    "pixel_contract": "Before every model request, decoded VM screenshot pixels must equal the deterministic reference render of the current active bbox and actual read-back cursor. A mismatch invalidates the arm rather than becoming a policy failure.",
+    "button_contract": "Exactly one left-button press/release for every dispatched action; button-up, cursor endpoint, target revision, and hit/miss must be read back after every attempt.",
+    "absolute_control_pairing": "The absolute control receives identical episode resets, target order, retry budget, seed slots, history length, hit/miss transition rules, screenshot renderer, and infrastructure checks."
+  },
+  "primary_endpoint": {
+    "unit": "episode",
+    "name": "all_four_targets_reached_within_three_attempts_each",
+    "n_paired_clusters": 80,
+    "contrasts": [
+      "normalized_relative_minus_absolute_matched_control",
+      "raw_relative_minus_absolute_matched_control"
+    ],
+    "noninferiority_margin": 0.05,
+    "finite_benchmark_gate": "For each contrast, the paired episode-success difference must be greater than -0.05. At n=80, three unoffset absolute-only episode successes produce -3.75pp and pass, while four produce -5pp and fail; relative-only gains enter the registered paired difference rather than being discarded.",
+    "inferential_support_gate": "Separately report the one-sided 95% exact upper confidence bound for absolute-only episode harm against 0.05. At n=80, the conservative bound passes with zero absolute-only harms and fails with one; this gate is underpowered and must not redefine the finite 5pp estimand.",
+    "joint_reporting_rule": "Report finite-benchmark parity and inferential support as two named results for each contrast. If the finite gate passes but the exact support gate fails, the required conclusion is 'finite parity but inferentially unresolved'. Global finite parity uses intersection-union across the two relative contrasts; global inferential support is reported separately.",
+    "discreteness_warning": "No threshold or conclusion category may change after observing model outputs."
+  },
+  "required_diagnostics": {
+    "step_curves": [
+      "first-attempt target success",
+      "cumulative target success by attempt 2",
+      "cumulative target success by attempt 3"
+    ],
+    "strata": [
+      "arm",
+      "target index 1 through 4",
+      "distance quartile",
+      "single-step sentinel versus multi-step risk set"
+    ],
+    "denominators": "Report both risk-set curves among reached targets and unconditional curves where transitions after terminal episode failure count as not reached. Never treat unreached later targets as missing-at-random.",
+    "paired_episode_table": "both success, absolute-only success, relative-only success, both failure",
+    "trajectory_audit": "For every attempt record requested seed, raw output and structured-call audit, parsed coordinate, cursor before/after, screenshot RGB hash before/after, active target revision, exact guest press/release counts, hit/miss, and termination reason.",
+    "distance_quartile_rule": "Assign the 320 potential target transitions to four exactly balanced quartiles using the frozen oracle cursor-to-bbox distance, with episode index and target index as deterministic tie-breakers. This paired baseline stratum is fixed before on-policy arm outcomes and remains defined for later targets that are structurally unreached."
+  },
+  "no_leak": {
+    "reuse_required": "The roadmap stage-1.5 Phase-A heldout and raw curriculum-transfer zero-overlap reports must remain hash-valid.",
+    "additional_gate": "All dynamically rendered cursor/bbox states must be derived only from heldout episode geometry and on-policy actions; no training/validation target geometry may be introduced."
+  },
+  "vm": {
+    "provider": "native_qemu_kvm",
+    "provider_source": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_eval_pinned/code/qemu_kvm_provider.py",
+    "provider_sha256": "8d7e4a2602a81895a712bb275b327bd3270d43675acf6e61484be5775caefafc",
+    "qcow": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_vm/Ubuntu.qcow2",
+    "qemu_bin": "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin/qemu-system-x86_64-wrapped",
+    "snapshot_name": "osworld_ready",
+    "drive_mode": "snapshot=on",
+    "screen": [1920, 1080]
+  },
+  "implementation_sources": {
+    "CHUNK0_AUTHORIZATION.json": "51c2b74415b291ee35ca276d3621a9ee7fe1a5d0ad54b7d29c5e460a30832fa3",
+    "aggregate.py": "f31bcefac09e460d0d08afcd175dbcb9124833a0181ab51384f5351c82ba102a",
+    "closed_loop_contract.py": "19cfc07d36ee3ef10327fe64e48b7b286836e6034550e6cbb3f06a01e1e87b79",
+    "dynamic_guest_app.py": "884dcee103a3efbccccb73070d863bd8ac492bebb193f24530054ad60d0767d7",
+    "live_dynamic_smoke.py": "0e61ef423c957b3287ce6af4107bbe7fcd808ad4c1c5bd82ea81fcbf86378e3d",
+    "synthetic_contract.py": "078f71512f3a76db16e26cb8ec3130261b225e69bd0b4d6156417958b2c6f0f0",
+    "synthetic_evaluate.py": "54c49972b0296bbd3e865fad8e5b80c626c53321d0452508c05bf55a24ce652f",
+    "stage1_5_gate.py": "24da6ae8c0aac9a21f77a98e7d6b74cf0f33c5d42000730d14f92ee38127c472",
+    "stage1_5_live_smoke.py": "61becfdd33cde10fa216aa725b7457a7d1805b68c229b14eecb57d834244fe34",
+    "model_readiness.py": "7bb4e149ca70393f080b6b362c34ab313fe5eaf597517a06b31ab7c1b0de464c",
+    "run_arm_stage.sh": "435785c9c9d36cd0468618efc7889760a7d563d914e5dc0e15eb26972d4d6b16",
+    "runner.py": "119b2ab9c3d5ea02dd2815a31a52e57523912755195996427f51133b0c008814",
+    "proper_vm_roadmap_stage2_dynamic_smoke_prepared.toml": "800f8836c844e13a44900c09269cf8efbfe83e7326dde7c3ba657e00886ed5a2",
+    "proper_vm_roadmap_stage2_absolute_prepared.toml": "d3b4f8a04746ec2dab6d5b6bde442c245ebfc98d481bfbb9dce913d8b530a748",
+    "proper_vm_roadmap_stage2_normalized_prepared.toml": "55775a01c5b6769a1cece0226ff140d29a776bc28b9bd66faa3e5661a7c71c4e",
+    "proper_vm_roadmap_stage2_raw_prepared.toml": "e219ab6ca5f6a573a418c6e53d574b46cabf65ea55cc22e1805f0d282121d3db",
+    "proper_vm_roadmap_stage2_absolute_one_cell_preflight.toml": "61a48ab9767fde13fa6b30096de39e5ed20c80e46a28f78744864dde08dc9881",
+    "proper_vm_roadmap_stage2_normalized_one_cell_preflight.toml": "25f6b4862c2f3b014772a9db11b43412d8edb6c4f29cb7f6aac26600c6ab7aeb",
+    "proper_vm_roadmap_stage2_raw_one_cell_preflight.toml": "b8f01db19f0dceaeb33ce8a6e1bf38f015dafa0dff89463c1ba79037a1403ce3",
+    "proper_vm_roadmap_stage2_absolute_chunk0_pilot.toml": "b9087daec39d0441e1f04107d41c3fb378195cf64d06b5570526597949810994",
+    "proper_vm_roadmap_stage2_normalized_chunk0_pilot.toml": "a8eb47cf4e3fa1d81aa3e10ce1773b6937bac8ad235b16a73df83e1a26bec31a",
+    "proper_vm_roadmap_stage2_raw_chunk0_pilot.toml": "2ddb66872416d0fa0e899eade381057db460c48cf53eb3c1926c9824bdce31bb"
+  },
+  "partial_resumability": {
+    "atomic_units": [
+      "one complete single-step sentinel cell",
+      "one complete multi-step episode"
+    ],
+    "mid_episode_resume_allowed": false,
+    "write_policy": "Write each fully terminated unit to a temporary JSON file and atomically rename it. Never emit a trusted unit for a partial episode.",
+    "resume_policy": "A new arm job may copy only status=complete units with matching arm and exact protocol hash from an incomplete artifact. Completed arm artifacts cannot be resume sources. Existing units are never overwritten.",
+    "trust_boundary": "Resumed units remain untrusted until the final aggregator replays every attempt transition, parse/schema/endpoint, seed, dynamic pixel hash, target revision, button count, terminal summary, grid cardinality, and merged rows hash.",
+    "failure_policy": "A failed job has no arm_manifest.json. Its atomic units may be offered explicitly through --resume-from, but loose rows and mid-episode state are never reusable."
+  },
+  "dynamic_kvm_smoke": {
+    "status": "pass",
+    "required_before_readiness": true,
+    "run_id": "run_019fb6d7b3af72f1946390d8171f4cf4",
+    "slurm_job_id": "135653",
+    "manifest": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/synthetic_proper_vm_roadmap_stage2_dynamic_kvm_smoke_v1_run_019fb6d7b3af72f1946390d8171f4cf4/dynamic_smoke_manifest.json",
+    "manifest_sha256": "f93ef5680bcd1fe5b6ecaa8028ecd85a1d8dc99070a7ba4476f0f5866a61dfd0",
+    "scope": "Four-scene CPU/KVM scripted-endpoint smoke only; no model, checkpoint, or model-generated history. This passes the dynamic renderer/executor gate but does not authorize full arms or supersede the failed long-run lifecycle stress."
+  },
+  "model_kvm_one_cell_preflight": {
+    "status": "pass_authorization_consumed",
+    "launch_authorized": false,
+    "authorization_scope": "Exactly three independent one-request GPU/KVM jobs, one per frozen arm; no full arm or multi-step launch.",
+    "cell": {"episode_index": 0, "target_index": 0},
+    "requests_per_arm": 1,
+    "independent_arms": ["absolute_matched_control", "normalized_relative", "raw_relative"],
+    "pass_gate": "Each manifest must prove exact checkpoint/semantic, model-generated raw output, strict parse/schema/unit validity, physical endpoint readback, verified guest hit, exact press/release counts, guest-process absence, bounded X clients, and VM port release. All three must pass before full-arm authorization can be considered.",
+    "deadline_local": "2026-07-31T09:45:00+02:00",
+    "evaluated_protocol_sha256": "df9a93f557fe2a6aae75d339c1b4413e6723f933b6718b029489fb5f6cea6839",
+    "authorization_artifact": "CHUNK0_AUTHORIZATION.json",
+    "authorization_artifact_sha256": "51c2b74415b291ee35ca276d3621a9ee7fe1a5d0ad54b7d29c5e460a30832fa3",
+    "full_arm_launch_authorized": false
+  },
+  "chunk0_closed_loop_pilot": {
+    "status": "pass_authorization_consumed",
+    "launch_authorized": false,
+    "authorization_scope": "Exactly chunk 0 for all three frozen arms: episode indices 0-4, 25 atomic units and at most 80 request slots per arm, one fresh VM per arm.",
+    "authorization_artifact": "CHUNK0_AUTHORIZATION.json",
+    "authorization_artifact_sha256": "51c2b74415b291ee35ca276d3621a9ee7fe1a5d0ad54b7d29c5e460a30832fa3",
+    "chunk_index": 0,
+    "episode_start_inclusive": 0,
+    "episode_end_exclusive": 5,
+    "episodes_per_arm": 5,
+    "atomic_units_per_arm": 25,
+    "maximum_request_slots_per_arm": 80,
+    "fresh_vm_per_arm": true,
+    "matched_protocol_and_seed_rule": true,
+    "deadline_local": "2026-07-31T09:58:00+02:00",
+    "evaluated_protocol_sha256": "0f197d0a0be86840a4dfb1afe509b4c59774fb7b4de41548a5dceca2eef2bcca",
+    "results": {
+      "absolute_matched_control": {
+        "run_id": "run_019fb71793817392a56785b896d2b40b",
+        "slurm_job_id": "135677",
+        "manifest": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/synthetic_proper_vm_roadmap_stage2_absolute_chunk0_pilot_v1_run_019fb71793817392a56785b896d2b40b/chunk0_pilot_manifest.json",
+        "manifest_sha256": "ed3db2e19dd18839536390d57b9ca6dabc1d6cf30cf221fe4f2b029fb3130b23"
+      },
+      "normalized_relative": {
+        "run_id": "run_019fb717b6ad7b62b3b70c6b46d145ac",
+        "slurm_job_id": "135678",
+        "manifest": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/synthetic_proper_vm_roadmap_stage2_normalized_chunk0_pilot_v1_run_019fb717b6ad7b62b3b70c6b46d145ac/chunk0_pilot_manifest.json",
+        "manifest_sha256": "65c9c9d292e397a5a9337eadf1d1b5f3e9ec10a3913d5458462c04c1929ec577"
+      },
+      "raw_relative": {
+        "run_id": "run_019fb717da547bd0bcebbd9ffdfb2af6",
+        "slurm_job_id": "135679",
+        "manifest": "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/synthetic_proper_vm_roadmap_stage2_raw_chunk0_pilot_v1_run_019fb717da547bd0bcebbd9ffdfb2af6/chunk0_pilot_manifest.json",
+        "manifest_sha256": "347c796048375919b1d4a52eb1771094c739234f4fb95170704335ee30aff8c7"
+      }
+    },
+    "chunks_1_15_launch_authorized": false,
+    "full_arm_launch_authorized": false
+  },
+  "bounded_vm_chunking": {
+    "status": "implemented_cpu_validated_chunk0_pass_chunks_1_15_not_authorized",
+    "episode_aligned": true,
+    "episodes_per_chunk": 5,
+    "chunks_per_arm": 16,
+    "atomic_units_per_chunk": 25,
+    "maximum_request_slots_per_chunk": 80,
+    "fresh_vm_per_chunk": true,
+    "disjoint_coverage": "Each chunk owns exactly five episode indices; each episode owns four sentinel units plus one whole multi-step unit. No unit or episode crosses chunks.",
+    "resume_assembly": "Only complete atomic unit JSON files with matching arm/protocol are copied; each completed chunk hashes its exact 25 units and the final arm hashes all 16 chunk manifests.",
+    "teardown_proof": "Exact dynamic guest process absence, bounded xlsclients inventory, env.close completion, and release of all four leased host ports before the next chunk.",
+    "full_arm_launch_authorized": false
+  },
+  "resource_upper_bound_draft": {
+    "single_step_requests_per_arm": 320,
+    "multi_step_requests_per_arm": 960,
+    "maximum_requests_per_arm": 1280,
+    "single_step_requests_all_arms": 960,
+    "multi_step_requests_all_arms": 2880,
+    "total_model_requests_all_arms": 3840,
+    "observed_stage1_5_steady_seconds_per_request": 5.0,
+    "planning_seconds_per_request_including_dynamic_render_overhead": 7.0,
+    "planning_model_and_vm_startup_minutes_per_arm": 15,
+    "estimated_worst_case_minutes_per_arm": 165,
+    "prepared_hard_wall_minutes_per_arm": 180,
+    "note": "This is a strict request maximum across three arms. The 165-minute per-arm planning estimate is 1,280 requests at a conservative seven seconds each plus 15 minutes startup. Early hits and terminal failures reduce actual requests. The three prepared jobs may run in parallel, but the live dynamic smoke and readiness review must precede any authorization."
+  },
+  "readiness_blockers": [
+    "Run the implemented CPU-tested dynamic guest renderer in live KVM and pin the passing manifest.",
+    "Live KVM smoke must prove miss-retains-target, hit-advances-target, cursor persistence, rerendered pixel equality, invalid-output no-op, retry exhaustion, and button-up state.",
+    "Revalidate the frozen exact checkpoint manifests and byte hashes, including the absolute preamble control, in final readiness.",
+    "Revalidate semantic-independent seed slots, paired initial snapshots, and deterministic transition replay in final readiness.",
+    "Accept or revise the n=80 episode-cluster decision rule during readiness review before any outcome is observed.",
+    "Benchmark request/VM throughput and set a hard walltime/deadline.",
+    "Validate the prepared fail-closed arm recipes, partial-unit resume policy, and episode-cluster aggregator without submission.",
+    "Obtain a separate explicit launch authorization for roadmap stage 2."
+  ]
+}

@@ -1,0 +1,49 @@
+name = "synthetic_multistep_export_recovery_B_to_B_lr5e5_pinned_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+bash "$REPO/experiments/synthetic_multistep/curriculum_export_recovery_lr5e5.sh" "$@"
+''', "--"]
+[resources]
+cpus = 8
+mem = "150GB"
+time = "00:45:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+[inputs.dataset]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_stage2_raw_pre_v1_run_019fb52cca1e7d72987b79842d2d7b08"
+[inputs.source_model]
+type = "artifact"
+artifact = "relative_factorial_relraw_pre_r256_s750_capacity_v1_run_019fb4bec0167122b655a36ea3a4237e"
+[inputs.partial]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical/synthetic_multistep_curriculum_B_to_B_raw_pre_r256_lr5e5_s750_rescue_v1_run_019fb562832e7dc38b2ad0264c508a87"
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+[inputs.terminal_run]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/labctl_runs/runs/franz.srambical/run_019fb562832e7dc38b2ad0264c508a87"
+[outputs.model]
+type = "checkpoint"
+marker = "curriculum_train_export_manifest.json"
+alias = "synthetic_multistep_curriculum_B_to_B_raw_pre_r256_lr5e5_s750_recovered_v1_{run.id}"
+[args]
+omegalax_repo = "{inputs.omegalax.path}"
+dataset = "{inputs.dataset.path}"
+source_model = "{inputs.source_model.path}"
+partial_root = "{inputs.partial.path}"
+run_dir = "{inputs.terminal_run.path}"
+run_id = "run_019fb562832e7dc38b2ad0264c508a87"
+job_id = "135476"
+output = "{outputs.model.path}"
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

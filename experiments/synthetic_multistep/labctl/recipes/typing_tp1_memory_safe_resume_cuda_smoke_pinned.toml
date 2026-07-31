@@ -1,0 +1,42 @@
+name = "synthetic_typing_tp1_legacy_dtype_memory_safe_resume_cuda_smoke_v3"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+OMX="$(jq -r '.inputs[] | select(.role == "omegalax") | .resolved_path' "$LABCTL_CONTEXT")"
+cd "$OMX"
+uv run --project="$OMX" -- srun --gpus-per-task=1 python \
+  "$REPO/experiments/synthetic_multistep/typing_tp1_memory_safe_resume_cuda_smoke.py" "$@"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 4
+mem = "16GB"
+time = "00:08:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--nodelist=hai004"]
+
+[inputs.omegalax]
+type = "external"
+path = "/fast/home/franz.srambical/omegalax"
+
+[outputs.result]
+type = "eval_result"
+marker = "memory_safe_resume_cuda_smoke.json"
+alias = "synthetic_typing_tp1_legacy_dtype_memory_safe_resume_cuda_smoke_v3_{run.id}"
+
+[args]
+omegalax = "{inputs.omegalax.path}"
+out = "{outputs.result.path}/memory_safe_resume_cuda_smoke.json"
+expected-commit = "b3f32c002998a1134c78845847a53ca9cc17fb10"
+expected-vlm-sha = "3dbdca68680def6c2fe081e4d0f2556022f23e66e7f82b41ad879bf646a05907"
+expected-test-sha = "c776c45fbb0bae4bfbdc846d8eeb1c28a7f7becfc1140ced8a406152dea412b3"
+
+[env]
+PYTHONUNBUFFERED = "1"
+XLA_PYTHON_CLIENT_PREALLOCATE = "false"
+OMEGALAX_REQUIRE_MEMORY_SAFE_RESTORE = "1"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

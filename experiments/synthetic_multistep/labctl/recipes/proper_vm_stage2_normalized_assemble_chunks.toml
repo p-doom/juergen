@@ -1,0 +1,49 @@
+name = "synthetic_proper_vm_stage1_5_normalized_assemble_chunks_v2_host_python"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+test "$REPO" = "$PWD"
+case "$REPO" in "$LABCTL_RUN_DIR"/source/juergen_rft) ;; *) exit 90;; esac
+OUT="$(jq -r '.outputs.result.path' "$LABCTL_CONTEXT")"
+PY="$(jq -r '.inputs[] | select(.role == "host_python") | .resolved_path' "$LABCTL_CONTEXT")/bin/python"
+chunks=()
+for role in chunk0 chunk1 chunk2 chunk3; do
+  chunks+=("$(jq -r --arg role "$role" '.inputs[] | select(.role == $role) | .resolved_path' "$LABCTL_CONTEXT")")
+done
+"$PY" "$REPO/experiments/synthetic_multistep/proper_vm_stage2/assemble_chunks.py" \
+  --arm normalized_phase_a --chunks "${chunks[@]}" --out "$OUT"
+''']
+
+[resources]
+cpus = 4
+mem = "16GB"
+time = "00:10:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--no-requeue", "--exclude=hai001,hai005", "--deadline=2026-07-31T09:45:00"]
+
+[inputs.chunk0]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/synthetic_proper_vm_stage1_5_normalized_chunk0_recovery_v1_run_019fb6bbf4fe7f42873758eaffcdc5f5"
+[inputs.chunk1]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/synthetic_proper_vm_stage1_5_normalized_chunk1_recovery_v1_run_019fb6bc16b37ab1b3769d3479d62e6f"
+[inputs.chunk2]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/synthetic_proper_vm_stage1_5_normalized_chunk2_recovery_v1_run_019fb6bc37a87750a69517b0f89bde47"
+[inputs.chunk3]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/eval_logs/franz.srambical/synthetic_proper_vm_stage1_5_normalized_chunk3_recovery_v1_run_019fb6bc5a8a7dd0998da139b8e5d9f9"
+[inputs.host_python]
+type = "external"
+path = "/fast/home/franz.srambical/juergen/.venv"
+
+[outputs.result]
+type = "eval_result"
+marker = "arm_manifest.json"
+alias = "synthetic_proper_vm_stage1_5_normalized_assembled_v2_host_python_{run.id}"
+
+[env]
+PYTHONUNBUFFERED = "1"

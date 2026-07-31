@@ -1,0 +1,29 @@
+name = "synthetic_multistep_cleanup_retired_nativerel_videocua_pinned_v1"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+python3 "$REPO/experiments/synthetic_multistep/cleanup_retired_nativerel_videocua.py" "$@"
+''', "--"]
+
+[resources]
+cpus = 2
+mem = "8GB"
+time = "00:30:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.checkpoint_root]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/franz.srambical"
+
+[outputs.audit]
+type = "eval_result"
+marker = "cleanup_manifest.json"
+alias = "synthetic_retired_nativerel_videocua_cleanup_v1_{run.id}"
+
+[args]
+checkpoint-root = "{inputs.checkpoint_root.path}"
+out = "{outputs.audit.path}"

@@ -1,0 +1,50 @@
+name = "synthetic_multistep_compare_typing_tp1_v10_pinned"
+repo = "juergen_rft"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+actual_sha="$(sha256sum "$REPO/experiments/synthetic_multistep/typing_compare.py" | awk '{print $1}')"
+[[ "$actual_sha" == "3801d49ef3e8c6cc4476f4d34f70ee10e8e41f481ae87d4396a1df62e4b05753" ]] || {
+  echo "FATAL typing comparator source snapshot mismatch" >&2
+  exit 2
+}
+python3 "$REPO/experiments/synthetic_multistep/typing_compare.py" "$@"
+''', "--"]
+
+[resources]
+cpus = 2
+mem = "8GB"
+time = "00:15:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1", "--deadline=2026-07-31T12:00:00"]
+
+[inputs.A_coalesced]
+type = "artifact"
+artifact = "synthetic_typing_factorial_A_coalesced_eval_tp1_v10_run_019fb701355d7f82abc8150073633ac5"
+[inputs.B_coalesced]
+type = "artifact"
+artifact = "synthetic_typing_factorial_B_coalesced_eval_tp1_v10_run_019fb7040edb7b53a2a8d5808730975a"
+[inputs.A_perkey]
+type = "artifact"
+artifact = "synthetic_typing_factorial_A_perkey_eval_tp1_v10_run_019fb7040ed979118228006092535f76"
+[inputs.B_perkey]
+type = "artifact"
+artifact = "synthetic_typing_factorial_B_perkey_eval_tp1_v10_run_019fb7040ed775e2ac045fb9643afee9"
+
+[outputs.result]
+type = "eval_result"
+marker = "typing_factorial_comparison.json"
+alias = "synthetic_typing_factorial_comparison_tp1_v10_{run.id}"
+
+[args]
+A-coalesced = "{inputs.A_coalesced.path}"
+B-coalesced = "{inputs.B_coalesced.path}"
+A-perkey = "{inputs.A_perkey.path}"
+B-perkey = "{inputs.B_perkey.path}"
+out = "{outputs.result.path}"
+
+[env]
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"

@@ -1,0 +1,68 @@
+{
+  "aggregate_peak_bound_bytes": 477119259648,
+  "aggregate_peak_limit_bytes": 500000000000,
+  "checked_at": "2026-07-31T00:43:08.672415+02:00",
+  "dataset_size_bytes": 58253312,
+  "deadline": "2026-07-31T05:09:00+02:00",
+  "filesystem_free_bytes": 2971813281792,
+  "fresh_geometry_overlap_counts": {
+    "train": {
+      "multistep_eval": {
+        "bbox": 0,
+        "center": 0,
+        "cursor_bbox": 0,
+        "image_sha256": 0
+      },
+      "single_step_eval": {
+        "bbox": 0,
+        "center": 0,
+        "cursor_bbox": 0,
+        "image_sha256": 0
+      },
+      "stage1": {
+        "bbox": 0,
+        "center": 0,
+        "cursor_bbox": 0,
+        "image_sha256": 0
+      }
+    },
+    "train_vs_validation": {
+      "bbox": 0,
+      "center": 0,
+      "cursor_bbox": 0,
+      "image_sha256": 0
+    },
+    "val": {
+      "multistep_eval": {
+        "bbox": 0,
+        "center": 0,
+        "cursor_bbox": 0,
+        "image_sha256": 0
+      },
+      "single_step_eval": {
+        "bbox": 0,
+        "center": 0,
+        "cursor_bbox": 0,
+        "image_sha256": 0
+      },
+      "stage1": {
+        "bbox": 0,
+        "center": 0,
+        "cursor_bbox": 0,
+        "image_sha256": 0
+      }
+    }
+  },
+  "output_bound_each_bytes": 189048791040,
+  "projected_end_at_full_time_limit": "2026-07-31T03:43:08.672415+02:00",
+  "recipe_differences_allowed": [
+    "inputs.source_model.artifact",
+    "name",
+    "outputs.model.alias"
+  ],
+  "source_sizes_bytes": [
+    44481355776,
+    44482068480
+  ],
+  "status": "pass"
+}
