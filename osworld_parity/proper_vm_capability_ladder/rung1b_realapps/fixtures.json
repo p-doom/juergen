@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "suite": "rung1b_real_application_development",
+  "split_policy": "development_only_no_evaluation_rows",
+  "official_osworld_reuse": false,
+  "policy_observation_contract": "instruction_and_screenshot_only",
+  "oracle_visibility": "fresh_host_process_only",
+  "fixtures": [
+    {
+      "id": "r1b-vscode-type-dev-3101",
+      "template": "vscode_focus_type",
+      "split": "development",
+      "parameter_seed": 3101,
+      "horizon": 4,
+      "instruction": "In the open VS Code document, focus the editor, replace all text with “Grüße aus Köln — Δοκιμή 🧭”, and save the file.",
+      "params": {"file_name": "memo-3101.txt", "initial_text": "replace this development note\n"},
+      "expected": {"text": "Grüße aus Köln — Δοκιμή 🧭"},
+      "near_miss": {"text": "Grusse aus Koln - Dokimi"},
+      "fixture_sha256": "1276296ada20619aea9404371e057c0bd0a37f36f0e304c7ea309b71265bcf9b"
+    },
+    {
+      "id": "r1b-vscode-type-dev-3102",
+      "template": "vscode_focus_type",
+      "split": "development",
+      "parameter_seed": 3102,
+      "horizon": 4,
+      "instruction": "In the open VS Code document, focus the editor, replace all text with “naïve café • 東京 • 🚲”, and save the file.",
+      "params": {"file_name": "memo-3102.txt", "initial_text": "development seed 3102\n"},
+      "expected": {"text": "naïve café • 東京 • 🚲"},
+      "near_miss": {"text": "naive cafe - Tokyo"},
+      "fixture_sha256": "059d428c297eba47532c847a9004c23aaa0629dc56f3da7bd833aa7ce1afbbe7"
+    },
+    {
+      "id": "r1b-scroll-dev-3201",
+      "template": "local_document_scroll",
+      "split": "development",
+      "parameter_seed": 3201,
+      "horizon": 2,
+      "instruction": "Scroll down in the open local development document by at least one screen.",
+      "params": {"direction": "down", "initial_y": 0, "port": 18321, "document_lines": 180},
+      "expected": {"min_delta": 500},
+      "near_miss": {"direction": "up"},
+      "fixture_sha256": "7306e8edb0434eff756323ee0af0ddbef49634422aa9b8e913dccc34ea948888"
+    },
+    {
+      "id": "r1b-scroll-dev-3202",
+      "template": "local_document_scroll",
+      "split": "development",
+      "parameter_seed": 3202,
+      "horizon": 2,
+      "instruction": "Scroll up in the open local development document by at least one screen.",
+      "params": {"direction": "up", "initial_y": 2800, "port": 18322, "document_lines": 180},
+      "expected": {"min_delta": 500},
+      "near_miss": {"direction": "down"},
+      "fixture_sha256": "9d00e066acadb5565003d2f3deda6d97a7fd1ede48bc56a7568e922d548288d3"
+    },
+    {
+      "id": "r1b-files-drag-dev-3301",
+      "template": "files_drag",
+      "split": "development",
+      "parameter_seed": 3301,
+      "horizon": 3,
+      "instruction": "In Files, drag “parcel-3301.txt” into the folder “Delivered-3301”.",
+      "params": {"source_name": "parcel-3301.txt", "destination_name": "Delivered-3301", "decoy_name": "Archive-3301", "content": "development parcel 3301\n"},
+      "expected": {"destination": "Delivered-3301"},
+      "near_miss": {"destination": "Archive-3301"},
+      "fixture_sha256": "a540f337eb323e434772ac62909d8b9a85f688016c93b33b349fbf98c8d1093c"
+    },
+    {
+      "id": "r1b-files-drag-dev-3302",
+      "template": "files_drag",
+      "split": "development",
+      "parameter_seed": 3302,
+      "horizon": 3,
+      "instruction": "In Files, drag “parcel-3302.txt” into the folder “Delivered-3302”.",
+      "params": {"source_name": "parcel-3302.txt", "destination_name": "Delivered-3302", "decoy_name": "Archive-3302", "content": "development parcel 3302\n"},
+      "expected": {"destination": "Delivered-3302"},
+      "near_miss": {"destination": "Archive-3302"},
+      "fixture_sha256": "6dbca109d747c7be78805f64a7d87e8ee105aa95aa6ffdb7dce59869876aa9a0"
+    }
+  ],
+  "manifest_payload_sha256": "cf0151296c950fad08be52e2bf09b582b96379bd30b33698e73e61d269516bd7"
+}
