@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -40,8 +41,8 @@ from .vm import (
 
 
 SPEC_PATH = Path(__file__).with_name("injection_ab_spec.json")
-EXPECTED_SPEC_SHA256 = "0d0a6679dfc536d16825953f12adf46eb6f98b10e2d262dcb7e1420ee7d4b039"
-SUITE = "rung1_click_release_injection_ab_v3"
+EXPECTED_SPEC_SHA256 = "91b9c19ed545739a91eb071ff1166486581ea15815c9386b9f665b0e4a2a50e0"
+SUITE = "rung1_click_release_injection_ab_v4"
 ORDER_BLOCK = ("A", "B", "B", "A", "B", "A", "A", "B")
 TRIAL_ORDER = ORDER_BLOCK * 6
 BACKEND_BY_ARM = {
@@ -93,6 +94,16 @@ AUDIT_ENVELOPE_FIELDS = (
     "host_audit_request_id",
     "host_monotonic_ns",
     "host_wall_time_ns",
+)
+AUDIT_JOURNAL_SEAL_FIELDS = (
+    "sealed_journal_through_sequence",
+    "sealed_journal_json",
+    "sealed_journal_sha256",
+)
+AUDIT_RECOVERY_FIELDS = (
+    "transport_recovered_from_marker_sequence",
+    "transport_recovery_journal_sha256",
+    "recovered_host_monotonic_upper_bound_ns",
 )
 TIMESTAMP_STAGES = (
     "click_started",
@@ -194,15 +205,17 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
             f"injection A/B preregistration drifted: {sorted(differing)}"
         )
     if spec.get("supersedes") != {
-        "suite": "rung1_click_release_injection_ab_v2",
-        "pipeline_id": "pipeline_019fb9ebfdcf73e1af0eaf02b6a12c73",
-        "run_id": "run_019fb9ebfdcf73e1af0eaef40d8fbdff",
-        "job_id": "136178",
-        "terminal_state": "trial_6_integrity_abort",
+        "suite": "rung1_click_release_injection_ab_v3",
+        "pipeline_id": "pipeline_019fba170e6175d1b0bf2e124841665f",
+        "run_id": "run_019fba170e6175d1b0bf2e069db7bb61",
+        "job_id": "136206",
+        "terminal_state": "trial_9_integrity_abort",
         "reason": (
-            "v2 used best-effort heartbeat delivery followed by a fixed 750 ms "
-            "sleep and one-shot snapshot, and did not durably checkpoint the raw "
-            "active-trial browser snapshot before validation"
+            "v3 detected a missing sendBeacon delivery at browser audit sequence "
+            "15 despite an acknowledged post-window heartbeat chain through "
+            "sequence 28; v4 seals the browser's append-only journal in each "
+            "reliable heartbeat marker and recovers only exact cross-checked "
+            "transport gaps"
         ),
     }:
         raise InjectionAbIntegrityError("successor identity provenance drifted")
@@ -281,8 +294,12 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         "duration_s": OBSERVATION_WINDOW_S,
         "deadline_basis": "dispatch_completed_host_monotonic_ns",
         "audit_event_inclusion_rule": (
+            "direct events require host_monotonic_ns <= "
+            "observation_deadline_host_monotonic_ns; recovered DOM events "
+            "require a later directly received browser-sequence event whose "
             "host_monotonic_ns <= observation_deadline_host_monotonic_ns"
         ),
+        "recovered_event_without_host_before_deadline_proof": "integrity_abort",
         "host_reporter_event_inclusion_rule": (
             "host_monotonic_ns <= observation_deadline_host_monotonic_ns"
         ),
@@ -390,8 +407,8 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
     if not isinstance(audit, dict) or (
         audit.get("transport")
         != (
-            "independent_navigator_sendBeacon_for_dom_events_and_"
-            "fetch_ack_chain_for_heartbeats"
+            "independent_navigator_sendBeacon_for_dom_events_with_append_only_"
+            "journal_and_fetch_ack_chain_for_sha256_sealed_heartbeats"
         )
         or audit.get("dom_events") != list(AUDIT_DOM_EVENTS)
         or audit.get("required_fields") != list(AUDIT_REQUIRED_FIELDS)
@@ -412,6 +429,17 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
             "expected_previous_audit_sequence",
             "expected_audit_count_through_marker",
         ]
+        or audit.get("heartbeat_journal_seal_fields")
+        != list(AUDIT_JOURNAL_SEAL_FIELDS)
+        or audit.get("journal_hash") != "sha256_utf8_exact_json"
+        or audit.get("journal_records_exclude_only_prior_sealed_journal_json")
+        is not True
+        or audit.get("cross_check_every_direct_host_event") is not True
+        or audit.get("recover_only_missing_transport_sequences") is not True
+        or audit.get("duplicate_or_disagreeing_direct_host_event_is_integrity_abort")
+        is not True
+        or audit.get("raw_direct_prefix_retained_in_completed_trial") is not True
+        or audit.get("recovery_evidence_retained_in_completed_trial") is not True
         or audit.get("classification_uses_only_sequence_sealed_prefix") is not True
         or audit.get("arm_neutral") is not True
         or audit.get("serialized_post_queue_independent") is not True
@@ -555,6 +583,62 @@ def load_injection_ab_spec(path: Path = SPEC_PATH) -> tuple[dict[str, Any], str]
         "manual_reconcile_count": 0,
     }:
         raise InjectionAbIntegrityError("v2 integrity abort provenance drifted")
+    if spec.get("v3_integrity_abort_history") != {
+        "pipeline_id": "pipeline_019fba170e6175d1b0bf2e124841665f",
+        "build_run_id": "run_019fba170e6175d1b0bf2dfe271b9a60",
+        "diagnostic_run_id": "run_019fba170e6175d1b0bf2e069db7bb61",
+        "build_job_id": "136205",
+        "diagnostic_job_id": "136206",
+        "artifact_id": "artifact_7c4847b20a7c9449",
+        "artifact_index_sha256": (
+            "3557228b84485e7be05b5f23f7dfeee745e037fa80c718792a4b28d23da4cbab"
+        ),
+        "content_address": (
+            "sha256:626aec4891897d5ab3baf8f9a94500a2f6947ab369c67a3d1824fe3dc7621b3f"
+        ),
+        "failure_sha256": (
+            "9183e4320fd4e453caac31df327205384104366a0798874d485beb5a94a78d84"
+        ),
+        "progress_sha256": (
+            "4cbe2eb0b867379f273f3ce426329d61d8ea8d4a5231ee137b59bdc3a713acda"
+        ),
+        "git_commit": "2c4833e0f8fcfaae2b6dbeb0dddd1984488e8de7",
+        "git_tree": "62725b78088e8b428e260d65a43f9e22b5e078f9",
+        "spec_sha256": (
+            "0d0a6679dfc536d16825953f12adf46eb6f98b10e2d262dcb7e1420ee7d4b039"
+        ),
+        "lock_sha256": (
+            "391e50f4a1a0d2b0aa3776ca10ed2828e8d41cbc42ffc0ba84570729df4c3163"
+        ),
+        "completed_trial_count": 8,
+        "arm_completed_counts": {"A": 4, "B": 4},
+        "primary_success_counts": {"A": 3, "B": 1},
+        "active_trial": "injection-ab-09-a",
+        "retry_count": 0,
+        "replacement_count": 0,
+        "integrity_error": "bounded causal post-window heartbeat wait timed out",
+        "root_cause": (
+            "browser append-only sequence 15 (change) was absent from direct "
+            "host delivery; sequence 14 arrived late and the acknowledged "
+            "heartbeat chain continued through sequence 28, but v3 had no "
+            "reliable browser-journal backfill"
+        ),
+        "interpretation": (
+            "protocol_inconclusive_truncated_prefix_not_inferentially_poolable"
+        ),
+        "hypothesis_update": (
+            "A 3/4 versus B 1/4, considered descriptively with the prior valid "
+            "prefix A 5/6 versus B 4/7, strongly weakens the hypothesis that "
+            "release MotionNotify harms activation; contracts remain unpooled"
+        ),
+        "browser_audit_dropped": 0,
+        "missing_browser_audit_sequences": [15],
+        "vm_closed": True,
+        "overlay_removed": True,
+        "cleanup_errors": [],
+        "manual_reconcile_count": 0,
+    }:
+        raise InjectionAbIntegrityError("v3 integrity abort provenance drifted")
     return spec, digest
 
 
@@ -616,6 +700,186 @@ def _wait_for_audit_ready(
     raise InjectionAbIntegrityError("browser audit_ready did not arrive before dispatch")
 
 
+def _is_sha256_hex(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _audit_journal_record(event: dict[str, Any]) -> dict[str, Any]:
+    omitted = {
+        "host_audit_request_id",
+        "host_monotonic_ns",
+        "host_wall_time_ns",
+        "sealed_journal_json",
+        *AUDIT_RECOVERY_FIELDS,
+    }
+    return {
+        key: copy.deepcopy(value)
+        for key, value in event.items()
+        if key not in omitted
+    }
+
+
+def _decode_sealed_journal(marker: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    marker_sequence = marker.get("audit_sequence")
+    journal_json = marker.get("sealed_journal_json")
+    journal_sha256 = marker.get("sealed_journal_sha256")
+    if (
+        not isinstance(marker_sequence, int)
+        or isinstance(marker_sequence, bool)
+        or marker.get("sealed_journal_through_sequence") != marker_sequence - 1
+        or not isinstance(journal_json, str)
+        or not _is_sha256_hex(journal_sha256)
+        or hashlib.sha256(journal_json.encode("utf-8")).hexdigest()
+        != journal_sha256
+    ):
+        raise InjectionAbIntegrityError("browser audit journal seal malformed")
+
+    def exact_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise InjectionAbIntegrityError(
+                    "browser audit journal has duplicate object keys"
+                )
+            value[key] = item
+        return value
+
+    try:
+        journal = json.loads(journal_json, object_pairs_hook=exact_object)
+    except (json.JSONDecodeError, UnicodeError) as exc:
+        raise InjectionAbIntegrityError(
+            "browser audit journal JSON malformed"
+        ) from exc
+    if (
+        not isinstance(journal, list)
+        or len(journal) != marker_sequence - 1
+        or not all(isinstance(event, dict) for event in journal)
+        or [event.get("audit_sequence") for event in journal]
+        != list(range(1, marker_sequence))
+    ):
+        raise InjectionAbIntegrityError(
+            "browser audit journal sequence/count malformed"
+        )
+    forbidden_fields = {
+        "host_audit_request_id",
+        "host_monotonic_ns",
+        "host_wall_time_ns",
+        "sealed_journal_json",
+        *AUDIT_RECOVERY_FIELDS,
+    }
+    if any(forbidden_fields.intersection(event) for event in journal):
+        raise InjectionAbIntegrityError(
+            "browser audit journal contains host-only or recursive fields"
+        )
+    return journal, journal_sha256
+
+
+def recover_sequence_sealed_audit_snapshot(
+    snapshot: dict[str, Any], marker_sequence: int
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Cross-check direct host records and recover only browser-journal gaps."""
+    if not isinstance(marker_sequence, int) or isinstance(marker_sequence, bool):
+        raise InjectionAbIntegrityError("causal audit marker sequence malformed")
+    raw = snapshot.get("browser_audit_events")
+    if not isinstance(raw, list) or not all(isinstance(item, dict) for item in raw):
+        raise InjectionAbIntegrityError("raw browser audit trace malformed")
+    if not all(
+        type(event.get("audit_sequence")) is int
+        and event["audit_sequence"] >= 1
+        for event in raw
+    ):
+        raise InjectionAbIntegrityError(
+            "raw browser audit sequence type/range malformed"
+        )
+    prefix = [
+        event
+        for event in raw
+        if event["audit_sequence"] <= marker_sequence
+    ]
+    by_sequence: dict[int, list[dict[str, Any]]] = {}
+    for event in prefix:
+        by_sequence.setdefault(int(event["audit_sequence"]), []).append(event)
+    if any(len(events) != 1 for events in by_sequence.values()):
+        raise InjectionAbIntegrityError(
+            "browser audit direct host sequence duplicated"
+        )
+    markers = by_sequence.get(marker_sequence, [])
+    if len(markers) != 1 or markers[0].get("event") != "audit_heartbeat":
+        raise InjectionAbIntegrityError("causal browser audit marker missing")
+    marker = markers[0]
+    journal, journal_sha256 = _decode_sealed_journal(marker)
+    for sequence, events in sorted(by_sequence.items()):
+        if sequence == marker_sequence:
+            continue
+        if sequence < 1 or sequence >= marker_sequence:
+            raise InjectionAbIntegrityError(
+                "browser audit direct host sequence outside marker prefix"
+            )
+        expected = journal[sequence - 1]
+        observed = _audit_journal_record(events[0])
+        if observed != expected:
+            raise InjectionAbIntegrityError(
+                "browser audit host event disagrees with sealed journal",
+                evidence={
+                    "audit_sequence": sequence,
+                    "expected": expected,
+                    "observed": observed,
+                    "journal_sha256": journal_sha256,
+                },
+            )
+    normalized: list[dict[str, Any]] = []
+    recovered_sequences: list[int] = []
+    for sequence in range(1, marker_sequence):
+        direct = by_sequence.get(sequence)
+        if direct:
+            normalized.append(copy.deepcopy(direct[0]))
+            continue
+        recovered_sequences.append(sequence)
+        later_host_receipts = [
+            event.get("host_monotonic_ns")
+            for later_sequence, events in by_sequence.items()
+            for event in events
+            if later_sequence > sequence
+            and isinstance(event.get("host_monotonic_ns"), int)
+            and not isinstance(event.get("host_monotonic_ns"), bool)
+        ]
+        recovered = copy.deepcopy(journal[sequence - 1])
+        recovered.update(
+            {
+                "host_audit_request_id": None,
+                "host_monotonic_ns": None,
+                "host_wall_time_ns": None,
+                "transport_recovered_from_marker_sequence": marker_sequence,
+                "transport_recovery_journal_sha256": journal_sha256,
+                "recovered_host_monotonic_upper_bound_ns": (
+                    min(later_host_receipts) if later_host_receipts else None
+                ),
+            }
+        )
+        normalized.append(recovered)
+    normalized.append(copy.deepcopy(marker))
+    sealed_snapshot = copy.deepcopy(snapshot)
+    sealed_snapshot["browser_audit_events"] = normalized
+    evidence = {
+        "schema_version": 1,
+        "marker_audit_sequence": marker_sequence,
+        "sealed_journal_through_sequence": marker_sequence - 1,
+        "sealed_journal_sha256": journal_sha256,
+        "raw_host_audit_sequences": sorted(by_sequence),
+        "recovered_audit_sequences": recovered_sequences,
+        "raw_post_marker_audit_sequences": sorted(
+            event["audit_sequence"]
+            for event in raw
+            if event["audit_sequence"] > marker_sequence
+        ),
+    }
+    return sealed_snapshot, evidence
+
+
 def validate_audit_trace(
     snapshot: dict[str, Any],
     generation: int,
@@ -644,6 +908,8 @@ def validate_audit_trace(
     ready = [item for item in events if item.get("event") == "audit_ready"]
     if len(ready) != 1 or ready[0].get("audit_sequence") != 1:
         raise InjectionAbIntegrityError("browser audit_ready identity mismatch")
+    if ready[0].get("transport_recovered_from_marker_sequence") is not None:
+        raise InjectionAbIntegrityError("browser audit_ready was not directly received")
     if (
         not _is_finite_number(ready[0].get("page_time_origin_ms"), minimum=0)
         or not isinstance(ready[0].get("url"), str)
@@ -653,6 +919,9 @@ def validate_audit_trace(
     prior_browser_wall_time_ms = -1.0
     prior_client_monotonic_ms = -1.0
     for event in events:
+        recovered = (
+            event.get("transport_recovered_from_marker_sequence") is not None
+        )
         if (
             not isinstance(event.get("generation"), int)
             or isinstance(event.get("generation"), bool)
@@ -670,6 +939,9 @@ def validate_audit_trace(
         if event["event"] == "audit_ready":
             expected_fields.update({"page_time_origin_ms", "url"})
         elif event["event"] == "audit_heartbeat":
+            seal_fields = set(AUDIT_JOURNAL_SEAL_FIELDS)
+            if recovered:
+                seal_fields.remove("sealed_journal_json")
             expected_fields.update(
                 {
                     "acknowledged_heartbeat_audit_sequence",
@@ -679,6 +951,9 @@ def validate_audit_trace(
                     "expected_audit_count_through_marker",
                 }
             )
+            expected_fields.update(seal_fields)
+        if recovered:
+            expected_fields.update(AUDIT_RECOVERY_FIELDS)
         if set(event) != expected_fields:
             raise InjectionAbIntegrityError("browser audit exact field set drifted")
         missing = [field for field in AUDIT_REQUIRED_FIELDS if field not in event]
@@ -692,13 +967,39 @@ def validate_audit_trace(
             "host_wall_time_ns",
         ):
             value = event.get(field)
-            if (
-                not isinstance(value, int)
-                or isinstance(value, bool)
-                or value < 1
+            if recovered and value is not None:
+                raise InjectionAbIntegrityError(
+                    f"recovered browser audit fabricated host field: {field}"
+                )
+            if not recovered and (
+                not isinstance(value, int) or isinstance(value, bool) or value < 1
             ):
                 raise InjectionAbIntegrityError(
                     f"browser audit host field malformed: {field}"
+                )
+        if recovered:
+            if (
+                type(event.get("transport_recovered_from_marker_sequence"))
+                is not int
+                or event["transport_recovered_from_marker_sequence"]
+                <= event["audit_sequence"]
+                or not _is_sha256_hex(
+                    event.get("transport_recovery_journal_sha256")
+                )
+                or (
+                    event.get("recovered_host_monotonic_upper_bound_ns")
+                    is not None
+                    and (
+                        type(
+                            event["recovered_host_monotonic_upper_bound_ns"]
+                        )
+                        is not int
+                        or event["recovered_host_monotonic_upper_bound_ns"] < 1
+                    )
+                )
+            ):
+                raise InjectionAbIntegrityError(
+                    "browser audit recovery metadata malformed"
                 )
         browser_wall_time_ms = event.get("browser_wall_time_ms")
         client_monotonic_ms = event.get("client_monotonic_ms")
@@ -785,6 +1086,16 @@ def validate_audit_trace(
                     "browser audit heartbeat sequence/count malformed"
                 )
             if event["event"] == "audit_heartbeat":
+                if (
+                    event.get("sealed_journal_through_sequence")
+                    != event["audit_sequence"] - 1
+                    or not _is_sha256_hex(event.get("sealed_journal_sha256"))
+                ):
+                    raise InjectionAbIntegrityError(
+                        "browser audit heartbeat journal seal malformed"
+                    )
+                if not recovered:
+                    _decode_sealed_journal(event)
                 acknowledgement = (
                     event.get("acknowledged_heartbeat_audit_sequence"),
                     event.get("acknowledged_host_audit_request_id"),
@@ -797,10 +1108,17 @@ def validate_audit_trace(
                     raise InjectionAbIntegrityError(
                         "browser audit heartbeat acknowledgement malformed"
                     )
-    request_ids = [int(event["host_audit_request_id"]) for event in events]
+    received_events = [
+        event
+        for event in events
+        if event.get("transport_recovered_from_marker_sequence") is None
+    ]
+    request_ids = [
+        int(event["host_audit_request_id"]) for event in received_events
+    ]
     if len(set(request_ids)) != len(request_ids) or (
         not allow_request_id_gaps_after_sequence_seal
-        and sorted(request_ids) != list(range(1, len(events) + 1))
+        and sorted(request_ids) != list(range(1, len(received_events) + 1))
     ):
         raise InjectionAbIntegrityError(
             "browser audit host request identities omitted or duplicated"
@@ -819,6 +1137,8 @@ def validate_audit_trace(
             acknowledged_sequence >= event["audit_sequence"]
             or not isinstance(acknowledged, dict)
             or acknowledged.get("event") != "audit_heartbeat"
+            or acknowledged.get("transport_recovered_from_marker_sequence")
+            is not None
             or acknowledged.get("host_audit_request_id")
             != event.get("acknowledged_host_audit_request_id")
             or acknowledged.get("host_monotonic_ns")
@@ -964,27 +1284,6 @@ def validate_post_window_audit_heartbeat(
             evidence=heartbeat_timing_evidence,
         )
     return sealed, marker
-
-
-def sequence_sealed_audit_snapshot(
-    snapshot: dict[str, Any], marker_sequence: int
-) -> dict[str, Any]:
-    if not isinstance(marker_sequence, int) or isinstance(marker_sequence, bool):
-        raise InjectionAbIntegrityError("causal audit marker sequence malformed")
-    raw = snapshot.get("browser_audit_events")
-    if not isinstance(raw, list):
-        raise InjectionAbIntegrityError("raw browser audit trace malformed")
-    sealed_events = [
-        event
-        for event in raw
-        if isinstance(event, dict)
-        and isinstance(event.get("audit_sequence"), int)
-        and not isinstance(event.get("audit_sequence"), bool)
-        and event["audit_sequence"] <= marker_sequence
-    ]
-    sealed_snapshot = dict(snapshot)
-    sealed_snapshot["browser_audit_events"] = sealed_events
-    return sealed_snapshot
 
 
 def validate_atomic_contract(
@@ -1350,6 +1649,44 @@ def validate_atomic_contract(
     }
 
 
+def select_science_window_audit_events(
+    audit_events: list[dict[str, Any]], observation_deadline_ns: int
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    for event in audit_events:
+        recovered = (
+            event.get("transport_recovered_from_marker_sequence") is not None
+        )
+        if not recovered:
+            if event["host_monotonic_ns"] <= observation_deadline_ns:
+                selected.append(event)
+            continue
+        if event.get("event") not in AUDIT_DOM_EVENTS:
+            continue
+        upper_bound_ns = event.get("recovered_host_monotonic_upper_bound_ns")
+        if (
+            not isinstance(upper_bound_ns, int)
+            or isinstance(upper_bound_ns, bool)
+            or upper_bound_ns > observation_deadline_ns
+        ):
+            raise InjectionAbIntegrityError(
+                "recovered browser DOM event lacks host-before-deadline proof",
+                evidence={
+                    "audit_sequence": event.get("audit_sequence"),
+                    "event": event.get("event"),
+                    "observation_deadline_host_monotonic_ns": (
+                        observation_deadline_ns
+                    ),
+                    "recovered_host_monotonic_upper_bound_ns": upper_bound_ns,
+                    "transport_recovered_from_marker_sequence": event.get(
+                        "transport_recovered_from_marker_sequence"
+                    ),
+                },
+            )
+        selected.append(event)
+    return selected
+
+
 def classify_trial_outcome(
     audit_events: list[dict[str, Any]],
     snapshot: dict[str, Any],
@@ -1357,9 +1694,10 @@ def classify_trial_outcome(
 ) -> dict[str, Any]:
     dom_events = [
         event
-        for event in audit_events
+        for event in select_science_window_audit_events(
+            audit_events, observation_deadline_ns
+        )
         if event["event"] in AUDIT_DOM_EVENTS
-        and event["host_monotonic_ns"] <= observation_deadline_ns
     ]
 
     def trusted_target(name: str) -> list[dict[str, Any]]:
@@ -1712,9 +2050,16 @@ def run_vm_injection_ab(
             marker_sequence = min(
                 heartbeat_wait["candidate_audit_sequences"]
             )
-            sealed_snapshot = sequence_sealed_audit_snapshot(
-                snapshot, marker_sequence
+            sealed_snapshot, audit_transport_recovery = (
+                recover_sequence_sealed_audit_snapshot(
+                    snapshot, marker_sequence
+                )
             )
+            raw_sequence_sealed_audit_events = [
+                event
+                for event in snapshot["browser_audit_events"]
+                if event["audit_sequence"] <= marker_sequence
+            ]
             audit_events = validate_audit_trace(
                 sealed_snapshot,
                 generation,
@@ -1725,11 +2070,9 @@ def run_vm_injection_ab(
                 observation_deadline_ns,
                 heartbeat_wait["wait_deadline_host_monotonic_ns"],
             )
-            science_window_audit_events = [
-                event
-                for event in sealed_audit_events
-                if event["host_monotonic_ns"] <= observation_deadline_ns
-            ]
+            science_window_audit_events = select_science_window_audit_events(
+                sealed_audit_events, observation_deadline_ns
+            )
             outcome = classify_trial_outcome(
                 sealed_audit_events,
                 snapshot,
@@ -1760,6 +2103,10 @@ def run_vm_injection_ab(
                 "audit_events": audit_events,
                 "sealed_audit_events": sealed_audit_events,
                 "science_window_audit_events": science_window_audit_events,
+                "raw_sequence_sealed_audit_events": (
+                    raw_sequence_sealed_audit_events
+                ),
+                "audit_transport_recovery": audit_transport_recovery,
                 "post_window_audit_heartbeat": audit_heartbeat,
                 "post_window_heartbeat_wait": heartbeat_wait,
                 "outcome": outcome,

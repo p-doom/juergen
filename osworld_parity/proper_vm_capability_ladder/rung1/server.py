@@ -21,7 +21,7 @@ STABLE_GEOMETRY_OBSERVATIONS = 3
 MAX_GEOMETRY_ANIMATION_FRAMES = 120
 HOST_DIAGNOSTIC_JOURNAL_LIMIT = 1024
 BROWSER_AUDIT_EVENT_LIMIT = 512
-BROWSER_AUDIT_SCHEMA_VERSION = 2
+BROWSER_AUDIT_SCHEMA_VERSION = 3
 BROWSER_AUDIT_EVENTS = {
     "audit_heartbeat",
     "audit_ready",
@@ -178,6 +178,12 @@ class FixtureStateStore:
                         and not isinstance(acknowledged_host_ns, bool)
                         else None
                     ),
+                    "sealed_journal_through_sequence": event.get(
+                        "sealed_journal_through_sequence"
+                    ),
+                    "sealed_journal_sha256": event.get(
+                        "sealed_journal_sha256"
+                    ),
                 }
             )
         return sorted(
@@ -213,6 +219,11 @@ class FixtureStateStore:
             acknowledged_host_ns = event.get("acknowledged_host_monotonic_ns")
             marker_request_id = event.get("host_audit_request_id")
             marker_host_ns = event.get("host_monotonic_ns")
+            sealed_through_sequence = event.get(
+                "sealed_journal_through_sequence"
+            )
+            sealed_journal_json = event.get("sealed_journal_json")
+            sealed_journal_sha256 = event.get("sealed_journal_sha256")
             if (
                 event.get("event") != "audit_heartbeat"
                 or not isinstance(sequence, int)
@@ -232,15 +243,16 @@ class FixtureStateStore:
                 or marker_host_ns > wait_deadline_host_monotonic_ns
                 or acknowledged_host_ns >= marker_host_ns
                 or acknowledged_request_id >= marker_request_id
-                or any(
-                    len(by_sequence.get(index, [])) != 1
-                    for index in range(1, sequence + 1)
-                )
+                or sealed_through_sequence != sequence - 1
+                or not isinstance(sealed_journal_json, str)
+                or not isinstance(sealed_journal_sha256, str)
+                or len(sealed_journal_sha256) != 64
             ):
                 continue
             acknowledged = by_sequence.get(acknowledged_sequence, [])
             if (
-                acknowledged_sequence >= sequence
+                len(by_sequence.get(sequence, [])) != 1
+                or acknowledged_sequence >= sequence
                 or len(acknowledged) != 1
                 or acknowledged[0].get("event") != "audit_heartbeat"
                 or acknowledged[0].get("host_audit_request_id")
@@ -948,6 +960,93 @@ def _browser_audit_script(fixture: Fixture) -> str:
 const auditEndpoint = __AUDIT_ENDPOINT__;
 let browserAuditSequence = 0;
 let browserHeartbeatAcknowledgement = null;
+const browserAuditJournal = [];
+const sha256Constants = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+  0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+  0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+  0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+  0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+  0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+  0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+  0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+  0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+];
+function rotateRight(value, bits) {
+  return (value >>> bits) | (value << (32 - bits));
+}
+function sha256Hex(text) {
+  const source = new TextEncoder().encode(text);
+  const paddedLength = Math.ceil((source.length + 9) / 64) * 64;
+  const padded = new Uint8Array(paddedLength);
+  padded.set(source);
+  padded[source.length] = 0x80;
+  const view = new DataView(padded.buffer);
+  const bitLength = source.length * 8;
+  view.setUint32(paddedLength - 8, Math.floor(bitLength / 0x100000000));
+  view.setUint32(paddedLength - 4, bitLength >>> 0);
+  const hash = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+  ];
+  const words = new Uint32Array(64);
+  for (let offset = 0; offset < paddedLength; offset += 64) {
+    for (let index = 0; index < 16; index += 1) {
+      words[index] = view.getUint32(offset + index * 4);
+    }
+    for (let index = 16; index < 64; index += 1) {
+      const prior15 = words[index - 15];
+      const prior2 = words[index - 2];
+      const sigma0 = rotateRight(prior15, 7) ^
+        rotateRight(prior15, 18) ^ (prior15 >>> 3);
+      const sigma1 = rotateRight(prior2, 17) ^
+        rotateRight(prior2, 19) ^ (prior2 >>> 10);
+      words[index] = (
+        words[index - 16] + sigma0 + words[index - 7] + sigma1
+      ) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, h] = hash;
+    for (let index = 0; index < 64; index += 1) {
+      const sum1 = rotateRight(e, 6) ^ rotateRight(e, 11) ^ rotateRight(e, 25);
+      const choice = (e & f) ^ ((~e) & g);
+      const temp1 = (h + sum1 + choice + sha256Constants[index] + words[index]) >>> 0;
+      const sum0 = rotateRight(a, 2) ^ rotateRight(a, 13) ^ rotateRight(a, 22);
+      const majority = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (sum0 + majority) >>> 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d + temp1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (temp1 + temp2) >>> 0;
+    }
+    hash[0] = (hash[0] + a) >>> 0;
+    hash[1] = (hash[1] + b) >>> 0;
+    hash[2] = (hash[2] + c) >>> 0;
+    hash[3] = (hash[3] + d) >>> 0;
+    hash[4] = (hash[4] + e) >>> 0;
+    hash[5] = (hash[5] + f) >>> 0;
+    hash[6] = (hash[6] + g) >>> 0;
+    hash[7] = (hash[7] + h) >>> 0;
+  }
+  return hash.map(value => value.toString(16).padStart(8, '0')).join('');
+}
+function auditJournalRecord(payload) {
+  const record = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (key !== 'sealed_journal_json') record[key] = value;
+  }
+  return record;
+}
 function auditElement(element) {
   if (!element) return null;
   return {
@@ -987,6 +1086,7 @@ function prepareBrowserAudit(payload) {
 }
 function sendBrowserAudit(payload) {
   payload = prepareBrowserAudit(payload);
+  browserAuditJournal.push(auditJournalRecord(payload));
   navigator.sendBeacon(auditEndpoint, JSON.stringify(payload));
 }
 async function sendBrowserHeartbeat() {
@@ -1012,6 +1112,10 @@ async function sendBrowserHeartbeat() {
     acknowledged_host_monotonic_ns:
       acknowledged ? acknowledged.host_monotonic_ns : null
   });
+  payload.sealed_journal_through_sequence = payload.audit_sequence - 1;
+  payload.sealed_journal_json = JSON.stringify(browserAuditJournal);
+  payload.sealed_journal_sha256 = sha256Hex(payload.sealed_journal_json);
+  browserAuditJournal.push(auditJournalRecord(payload));
   try {
     const response = await fetch(auditEndpoint, {
       method: 'POST',

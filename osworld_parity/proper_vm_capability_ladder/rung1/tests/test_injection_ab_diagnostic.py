@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
-import threading
 import time
 from pathlib import Path
 
@@ -22,7 +22,8 @@ from osworld_parity.proper_vm_capability_ladder.rung1.injection_ab_diagnostic im
     fixed_trial_schedule,
     interpret_results,
     load_injection_ab_spec,
-    sequence_sealed_audit_snapshot,
+    recover_sequence_sealed_audit_snapshot,
+    select_science_window_audit_events,
     validate_atomic_contract,
     validate_audit_trace,
     validate_injection_ab,
@@ -61,8 +62,8 @@ def test_preregistration_and_schedule_are_exact_and_development_only() -> None:
     assert spec["failure_evidence_contract"][
         "checkpoint_immediately_after_dispatch"
     ] is True
-    assert spec["suite"] == "rung1_click_release_injection_ab_v3"
-    assert spec["browser_audit"]["wire_schema_version"] == 2
+    assert spec["suite"] == "rung1_click_release_injection_ab_v4"
+    assert spec["browser_audit"]["wire_schema_version"] == 3
     assert spec["browser_audit"][
         "require_heartbeat_causally_generated_after_observation_deadline"
     ] is True
@@ -77,8 +78,12 @@ def test_preregistration_and_schedule_are_exact_and_development_only() -> None:
         "duration_s": 3.0,
         "deadline_basis": "dispatch_completed_host_monotonic_ns",
         "audit_event_inclusion_rule": (
+            "direct events require host_monotonic_ns <= "
+            "observation_deadline_host_monotonic_ns; recovered DOM events "
+            "require a later directly received browser-sequence event whose "
             "host_monotonic_ns <= observation_deadline_host_monotonic_ns"
         ),
+        "recovered_event_without_host_before_deadline_proof": "integrity_abort",
         "host_reporter_event_inclusion_rule": (
             "host_monotonic_ns <= observation_deadline_host_monotonic_ns"
         ),
@@ -105,6 +110,15 @@ def test_preregistration_and_schedule_are_exact_and_development_only() -> None:
     assert v2_history["arm_completed_counts"] == {"A": 2, "B": 3}
     assert v2_history["integrity_error_evidence"] is None
     assert v2_history["vm_closed"] is v2_history["overlay_removed"] is True
+    v3_history = spec["v3_integrity_abort_history"]
+    assert v3_history["diagnostic_job_id"] == "136206"
+    assert v3_history["completed_trial_count"] == 8
+    assert v3_history["arm_completed_counts"] == {"A": 4, "B": 4}
+    assert v3_history["primary_success_counts"] == {"A": 3, "B": 1}
+    assert v3_history["interpretation"] == (
+        "protocol_inconclusive_truncated_prefix_not_inferentially_poolable"
+    )
+    assert v3_history["vm_closed"] is v3_history["overlay_removed"] is True
     schedule = fixed_trial_schedule()
     assert len(schedule) == 48
     assert [item["arm"] for item in schedule] == list(ORDER_BLOCK) * 6
@@ -129,7 +143,7 @@ def _audit_event(sequence: int, event: str, *, checked: bool = False) -> dict:
     marker = event in {"audit_ready", "audit_heartbeat"}
     pointer_or_mouse = event.startswith(("pointer", "mouse")) or event == "click"
     value = {
-        "schema_version": 2,
+        "schema_version": 3,
         "generation": 7,
         "audit_sequence": sequence,
         "event": event,
@@ -168,6 +182,9 @@ def _audit_event(sequence: int, event: str, *, checked: bool = False) -> dict:
         value["acknowledged_heartbeat_audit_sequence"] = None
         value["acknowledged_host_audit_request_id"] = None
         value["acknowledged_host_monotonic_ns"] = None
+        value["sealed_journal_through_sequence"] = sequence - 1
+        value["sealed_journal_json"] = "[]"
+        value["sealed_journal_sha256"] = hashlib.sha256(b"[]").hexdigest()
     assert all(field in value for field in AUDIT_REQUIRED_FIELDS)
     return value
 
@@ -193,6 +210,36 @@ def _acknowledge_heartbeat(
     marker["acknowledged_host_monotonic_ns"] = acknowledged[
         "host_monotonic_ns"
     ]
+
+
+def _journal_record(event: dict) -> dict:
+    omitted = {
+        "host_audit_request_id",
+        "host_monotonic_ns",
+        "host_wall_time_ns",
+        "sealed_journal_json",
+        "transport_recovered_from_marker_sequence",
+        "transport_recovery_journal_sha256",
+        "recovered_host_monotonic_upper_bound_ns",
+    }
+    return {
+        key: copy.deepcopy(value)
+        for key, value in event.items()
+        if key not in omitted
+    }
+
+
+def _seal_heartbeat(marker: dict, prior_events: list[dict]) -> None:
+    marker["sealed_journal_through_sequence"] = marker["audit_sequence"] - 1
+    journal_json = json.dumps(
+        [_journal_record(event) for event in prior_events],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    marker["sealed_journal_json"] = journal_json
+    marker["sealed_journal_sha256"] = hashlib.sha256(
+        journal_json.encode("utf-8")
+    ).hexdigest()
 
 
 def test_audit_trace_is_independent_ordered_and_primary() -> None:
@@ -272,10 +319,12 @@ def test_classifier_filters_secondary_reporter_at_science_deadline() -> None:
 def test_post_window_heartbeat_seals_independent_audit_completeness() -> None:
     ready = _audit_event(1, "audit_ready")
     acknowledged = _audit_event(2, "audit_heartbeat")
+    _seal_heartbeat(acknowledged, [ready])
     acknowledged["host_monotonic_ns"] = 3_000_000_001
     heartbeat = _audit_event(3, "audit_heartbeat")
     heartbeat["host_monotonic_ns"] = 3_000_000_002
     _acknowledge_heartbeat(heartbeat, acknowledged)
+    _seal_heartbeat(heartbeat, [ready, acknowledged])
     trace = validate_audit_trace(
         _audit_snapshot([ready, acknowledged, heartbeat]), 7
     )
@@ -299,10 +348,12 @@ def test_post_window_heartbeat_seals_independent_audit_completeness() -> None:
 def test_post_window_marker_detects_lost_tail_and_excludes_post_marker_events() -> None:
     ready = _audit_event(1, "audit_ready")
     acknowledged = _audit_event(2, "audit_heartbeat")
+    _seal_heartbeat(acknowledged, [ready])
     acknowledged["host_monotonic_ns"] = 101
     heartbeat = _audit_event(3, "audit_heartbeat")
     heartbeat["host_monotonic_ns"] = 102
     _acknowledge_heartbeat(heartbeat, acknowledged)
+    _seal_heartbeat(heartbeat, [ready, acknowledged])
     post_marker_click = _audit_event(4, "click", checked=True)
     trace = validate_audit_trace(
         _audit_snapshot([ready, acknowledged, heartbeat, post_marker_click]), 7
@@ -325,10 +376,12 @@ def test_post_window_marker_detects_lost_tail_and_excludes_post_marker_events() 
 def test_post_window_validator_rejects_marker_after_absolute_wait_cap() -> None:
     ready = _audit_event(1, "audit_ready")
     acknowledged = _audit_event(2, "audit_heartbeat")
+    _seal_heartbeat(acknowledged, [ready])
     acknowledged["host_monotonic_ns"] = 101
     marker = _audit_event(3, "audit_heartbeat")
     marker["host_monotonic_ns"] = 201
     _acknowledge_heartbeat(marker, acknowledged)
+    _seal_heartbeat(marker, [ready, acknowledged])
     trace = validate_audit_trace(
         _audit_snapshot([ready, acknowledged, marker]), 7
     )
@@ -341,6 +394,235 @@ def test_post_window_validator_rejects_marker_after_absolute_wait_cap() -> None:
 
     assert caught.value.evidence["wait_deadline_host_monotonic_ns"] == 200
     assert caught.value.evidence["heartbeats"][-1]["host_monotonic_ns"] == 201
+
+
+def _journal_recovery_case(
+    dropped_sequences: set[int], *, witness_host_ns: int = 90
+) -> tuple[dict, int]:
+    ready = _audit_event(1, "audit_ready")
+    pointerdown = _audit_event(2, "pointerdown")
+    pointerup = _audit_event(3, "pointerup")
+    pointerup["host_monotonic_ns"] = witness_host_ns
+    witness = _audit_event(4, "mousemove")
+    witness["host_monotonic_ns"] = witness_host_ns
+    acknowledged = _audit_event(5, "audit_heartbeat")
+    acknowledged["host_monotonic_ns"] = 150
+    _seal_heartbeat(
+        acknowledged, [ready, pointerdown, pointerup, witness]
+    )
+    marker = _audit_event(6, "audit_heartbeat")
+    marker["host_monotonic_ns"] = 160
+    _acknowledge_heartbeat(marker, acknowledged)
+    all_events = [ready, pointerdown, pointerup, witness, acknowledged]
+    _seal_heartbeat(marker, all_events)
+    raw = [
+        event
+        for event in [ready, pointerdown, pointerup, witness, acknowledged, marker]
+        if event["audit_sequence"] not in dropped_sequences
+    ]
+    return _audit_snapshot(raw), marker["audit_sequence"]
+
+
+@pytest.mark.parametrize("dropped_sequences", [{2}, {2, 3}])
+def test_sealed_browser_journal_recovers_one_or_multiple_dropped_beacons(
+    dropped_sequences: set[int],
+) -> None:
+    snapshot, marker_sequence = _journal_recovery_case(dropped_sequences)
+    sealed_snapshot, recovery = recover_sequence_sealed_audit_snapshot(
+        snapshot, marker_sequence
+    )
+    trace = validate_audit_trace(
+        sealed_snapshot,
+        7,
+        allow_request_id_gaps_after_sequence_seal=True,
+    )
+
+    assert [event["audit_sequence"] for event in trace] == list(range(1, 7))
+    assert recovery["recovered_audit_sequences"] == sorted(dropped_sequences)
+    assert recovery["raw_host_audit_sequences"] == sorted(
+        set(range(1, 7)) - dropped_sequences
+    )
+    for sequence in dropped_sequences:
+        recovered = trace[sequence - 1]
+        assert recovered["transport_recovered_from_marker_sequence"] == 6
+        assert recovered["host_monotonic_ns"] is None
+        assert recovered["recovered_host_monotonic_upper_bound_ns"] == 90
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["hash", "direct_event", "sequence", "reserved_field", "duplicate_key"],
+)
+def test_tampered_browser_journal_is_integrity_abort(mutation: str) -> None:
+    snapshot, marker_sequence = _journal_recovery_case({2})
+    marker = next(
+        event
+        for event in snapshot["browser_audit_events"]
+        if event["audit_sequence"] == marker_sequence
+    )
+    journal = json.loads(marker["sealed_journal_json"])
+    if mutation == "hash":
+        journal[1]["event"] = "change"
+        marker["sealed_journal_json"] = json.dumps(
+            journal, separators=(",", ":")
+        )
+    elif mutation == "direct_event":
+        journal[3]["client_x"] += 1
+        marker["sealed_journal_json"] = json.dumps(
+            journal, separators=(",", ":")
+        )
+        marker["sealed_journal_sha256"] = hashlib.sha256(
+            marker["sealed_journal_json"].encode()
+        ).hexdigest()
+    elif mutation == "sequence":
+        journal[1]["audit_sequence"] = 9
+        marker["sealed_journal_json"] = json.dumps(
+            journal, separators=(",", ":")
+        )
+        marker["sealed_journal_sha256"] = hashlib.sha256(
+            marker["sealed_journal_json"].encode()
+        ).hexdigest()
+    elif mutation == "reserved_field":
+        journal[1]["host_monotonic_ns"] = 50
+        marker["sealed_journal_json"] = json.dumps(
+            journal, separators=(",", ":")
+        )
+        marker["sealed_journal_sha256"] = hashlib.sha256(
+            marker["sealed_journal_json"].encode()
+        ).hexdigest()
+    else:
+        marker["sealed_journal_json"] = marker[
+            "sealed_journal_json"
+        ].replace(
+            '"audit_sequence":1',
+            '"audit_sequence":1,"audit_sequence":1',
+            1,
+        )
+        marker["sealed_journal_sha256"] = hashlib.sha256(
+            marker["sealed_journal_json"].encode()
+        ).hexdigest()
+
+    with pytest.raises(InjectionAbIntegrityError, match="journal"):
+        recover_sequence_sealed_audit_snapshot(snapshot, marker_sequence)
+
+
+def test_journal_recovery_accepts_reordered_transport_and_rejects_duplicate() -> None:
+    snapshot, marker_sequence = _journal_recovery_case({2})
+    snapshot["browser_audit_events"].reverse()
+    sealed_snapshot, _recovery = recover_sequence_sealed_audit_snapshot(
+        snapshot, marker_sequence
+    )
+    assert [
+        event["audit_sequence"]
+        for event in sealed_snapshot["browser_audit_events"]
+    ] == list(range(1, 7))
+
+    duplicate = copy.deepcopy(snapshot)
+    duplicate["browser_audit_events"].append(
+        copy.deepcopy(duplicate["browser_audit_events"][-1])
+    )
+    with pytest.raises(InjectionAbIntegrityError, match="duplicated"):
+        recover_sequence_sealed_audit_snapshot(duplicate, marker_sequence)
+
+
+@pytest.mark.parametrize("malformed_sequence", [None, True, 0, "7"])
+def test_journal_recovery_rejects_malformed_raw_sequence(
+    malformed_sequence,
+) -> None:
+    snapshot, marker_sequence = _journal_recovery_case({2})
+    snapshot["browser_audit_events"].append(
+        {"audit_sequence": malformed_sequence}
+    )
+
+    with pytest.raises(
+        InjectionAbIntegrityError,
+        match="raw browser audit sequence type/range malformed",
+    ):
+        recover_sequence_sealed_audit_snapshot(snapshot, marker_sequence)
+
+
+def test_journal_recovery_cannot_substitute_for_direct_ready_receipt() -> None:
+    snapshot, marker_sequence = _journal_recovery_case({1})
+    sealed_snapshot, _recovery = recover_sequence_sealed_audit_snapshot(
+        snapshot, marker_sequence
+    )
+
+    with pytest.raises(
+        InjectionAbIntegrityError,
+        match="audit_ready was not directly received",
+    ):
+        validate_audit_trace(
+            sealed_snapshot,
+            7,
+            allow_request_id_gaps_after_sequence_seal=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("witness_host_ns", "accepted"), [(100, True), (101, False)]
+)
+def test_recovered_event_requires_exact_host_deadline_causal_bound(
+    witness_host_ns: int, accepted: bool
+) -> None:
+    snapshot, marker_sequence = _journal_recovery_case(
+        {2}, witness_host_ns=witness_host_ns
+    )
+    sealed_snapshot, _recovery = recover_sequence_sealed_audit_snapshot(
+        snapshot, marker_sequence
+    )
+    trace = validate_audit_trace(
+        sealed_snapshot,
+        7,
+        allow_request_id_gaps_after_sequence_seal=True,
+    )
+
+    if accepted:
+        science = select_science_window_audit_events(trace, 100)
+        assert 2 in [event["audit_sequence"] for event in science]
+    else:
+        with pytest.raises(
+            InjectionAbIntegrityError,
+            match="host-before-deadline proof",
+        ):
+            select_science_window_audit_events(trace, 100)
+
+
+def test_recovered_change_counts_only_with_causal_predeadline_witness() -> None:
+    ready = _audit_event(1, "audit_ready")
+    events = [ready]
+    for sequence, name in enumerate(
+        ("pointerdown", "pointerup", "click", "input", "change"), start=2
+    ):
+        event = _audit_event(sequence, name, checked=True)
+        event["host_monotonic_ns"] = 50 + sequence
+        events.append(event)
+    witness = _audit_event(7, "audit_heartbeat")
+    witness["host_monotonic_ns"] = 100
+    _seal_heartbeat(witness, events)
+    acknowledged = _audit_event(8, "audit_heartbeat")
+    acknowledged["host_monotonic_ns"] = 150
+    _seal_heartbeat(acknowledged, [*events, witness])
+    marker = _audit_event(9, "audit_heartbeat")
+    marker["host_monotonic_ns"] = 160
+    _acknowledge_heartbeat(marker, acknowledged)
+    _seal_heartbeat(marker, [*events, witness, acknowledged])
+    raw = [ready, *events[1:-1], witness, acknowledged, marker]
+    snapshot = _audit_snapshot(raw)
+
+    sealed_snapshot, recovery = recover_sequence_sealed_audit_snapshot(
+        snapshot, 9
+    )
+    trace = validate_audit_trace(
+        sealed_snapshot,
+        7,
+        allow_request_id_gaps_after_sequence_seal=True,
+    )
+    outcome = classify_trial_outcome(trace, snapshot, 100)
+
+    assert recovery["recovered_audit_sequences"] == [6]
+    assert trace[5]["event"] == "change"
+    assert trace[5]["recovered_host_monotonic_upper_bound_ns"] == 100
+    assert outcome["primary_success"] is True
 
 
 def _apply_store_audit(
@@ -369,7 +651,7 @@ def _set_heartbeat_ack_from_response(marker: dict, response: dict) -> None:
     ]
 
 
-def test_causal_wait_accepts_batched_out_of_order_arrival_after_gap_fills() -> None:
+def test_causal_wait_accepts_journal_marker_despite_direct_gap() -> None:
     fixture = next(
         item
         for item in load_manifest().select(split="development")
@@ -377,60 +659,41 @@ def test_causal_wait_accepts_batched_out_of_order_arrival_after_gap_fills() -> N
     )
     store = FixtureStateStore(load_manifest())
     generation = store.snapshot(fixture.id)["generation"]
-    _apply_store_audit(store, fixture, _audit_event(1, "audit_ready"))
+    ready = _audit_event(1, "audit_ready")
+    _apply_store_audit(store, fixture, ready)
+    acknowledged_event = _audit_event(2, "audit_heartbeat")
+    _seal_heartbeat(acknowledged_event, [ready])
     acknowledged = _apply_store_audit(
-        store, fixture, _audit_event(2, "audit_heartbeat")
+        store, fixture, acknowledged_event
     )
     marker = _audit_event(4, "audit_heartbeat")
     _set_heartbeat_ack_from_response(marker, acknowledged)
+    _seal_heartbeat(
+        marker,
+        [ready, acknowledged_event, _audit_event(3, "pointermove")],
+    )
     _apply_store_audit(store, fixture, marker)
     _apply_store_audit(store, fixture, _audit_event(6, "pointermove"))
-    result: dict[str, object] = {}
-
-    def wait_for_marker() -> None:
-        result["value"] = store.wait_for_causal_post_window_heartbeat(
-            fixture.id,
-            generation=generation,
-            observation_deadline_host_monotonic_ns=(
-                acknowledged["host_monotonic_ns"] - 1
-            ),
-            timeout_s=0.5,
-        )
-
-    waiter = threading.Thread(target=wait_for_marker)
-    waiter.start()
-    time.sleep(0.01)
-    assert waiter.is_alive()
-    _apply_store_audit(store, fixture, _audit_event(3, "pointermove"))
-    waiter.join(timeout=1)
-    assert not waiter.is_alive()
-    snapshot, wait = result["value"]
+    snapshot, wait = store.wait_for_causal_post_window_heartbeat(
+        fixture.id,
+        generation=generation,
+        observation_deadline_host_monotonic_ns=(
+            acknowledged["host_monotonic_ns"] - 1
+        ),
+        timeout_s=0.5,
+    )
 
     assert [event["audit_sequence"] for event in snapshot["browser_audit_events"]] == [
         1,
         2,
         4,
         6,
-        3,
     ]
     assert wait["timed_out"] is False
     assert wait["candidate_audit_sequences"] == [4]
-    sealed_snapshot = sequence_sealed_audit_snapshot(snapshot, 4)
-    trace = validate_audit_trace(
-        sealed_snapshot,
-        generation,
-        allow_request_id_gaps_after_sequence_seal=True,
-    )
-    sealed, selected = validate_post_window_audit_heartbeat(
-        trace,
-        acknowledged["host_monotonic_ns"] - 1,
-        wait["wait_deadline_host_monotonic_ns"],
-    )
-    assert selected["audit_sequence"] == 4
-    assert [event["audit_sequence"] for event in sealed] == [1, 2, 3, 4]
 
 
-@pytest.mark.parametrize("failure", ["stale_ack", "dropped_sequence"])
+@pytest.mark.parametrize("failure", ["stale_ack", "missing_journal_seal"])
 def test_causal_wait_times_out_with_exact_raw_evidence(
     failure: str,
 ) -> None:
@@ -441,15 +704,21 @@ def test_causal_wait_times_out_with_exact_raw_evidence(
     )
     store = FixtureStateStore(load_manifest())
     generation = store.snapshot(fixture.id)["generation"]
-    _apply_store_audit(store, fixture, _audit_event(1, "audit_ready"))
+    ready = _audit_event(1, "audit_ready")
+    _apply_store_audit(store, fixture, ready)
+    acknowledged_event = _audit_event(2, "audit_heartbeat")
+    _seal_heartbeat(acknowledged_event, [ready])
     acknowledged = _apply_store_audit(
-        store, fixture, _audit_event(2, "audit_heartbeat")
+        store, fixture, acknowledged_event
     )
-    marker_sequence = 3 if failure == "stale_ack" else 4
+    marker_sequence = 3
     marker = _audit_event(marker_sequence, "audit_heartbeat")
     _set_heartbeat_ack_from_response(marker, acknowledged)
+    _seal_heartbeat(marker, [ready, acknowledged_event])
     if failure == "stale_ack":
         marker["acknowledged_host_audit_request_id"] += 1
+    else:
+        marker.pop("sealed_journal_json")
     _apply_store_audit(store, fixture, marker)
 
     snapshot, wait = store.wait_for_causal_post_window_heartbeat(
@@ -486,8 +755,10 @@ def test_heartbeat_acknowledgement_identity_corruption_aborts(
 ) -> None:
     ready = _audit_event(1, "audit_ready")
     acknowledged = _audit_event(2, "audit_heartbeat")
+    _seal_heartbeat(acknowledged, [ready])
     marker = _audit_event(3, "audit_heartbeat")
     _acknowledge_heartbeat(marker, acknowledged)
+    _seal_heartbeat(marker, [ready, acknowledged])
     if mutation == "partial":
         marker["acknowledged_host_monotonic_ns"] = None
     elif mutation == "future":
@@ -549,6 +820,9 @@ def test_late_prestored_marker_is_rejected_by_absolute_wait_cap() -> None:
                     "acknowledged_heartbeat_audit_sequence": 2,
                     "acknowledged_host_audit_request_id": 2,
                     "acknowledged_host_monotonic_ns": 150,
+                    "sealed_journal_through_sequence": 2,
+                    "sealed_journal_json": "[]",
+                    "sealed_journal_sha256": "0" * 64,
                 },
             ]
         }
@@ -558,6 +832,13 @@ def test_late_prestored_marker_is_rejected_by_absolute_wait_cap() -> None:
     ) == [3]
     assert FixtureStateStore._causal_post_window_marker_sequences(
         state(wait_deadline + 1), observation_deadline, wait_deadline
+    ) == []
+    duplicate_marker = state(wait_deadline)
+    duplicate_marker["browser_audit_events"].append(
+        copy.deepcopy(duplicate_marker["browser_audit_events"][-1])
+    )
+    assert FixtureStateStore._causal_post_window_marker_sequences(
+        duplicate_marker, observation_deadline, wait_deadline
     ) == []
 
 

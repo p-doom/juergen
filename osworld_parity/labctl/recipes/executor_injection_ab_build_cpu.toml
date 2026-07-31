@@ -1,4 +1,4 @@
-name = "proper_vm_executor_injection_ab_build_cpu_v3"
+name = "proper_vm_executor_injection_ab_build_cpu_v4"
 repo = "juergen_gui_executor_injection_ab"
 command = ["bash", "-c", '''
 set -euo pipefail

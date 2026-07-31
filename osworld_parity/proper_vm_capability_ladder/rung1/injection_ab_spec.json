@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
-  "suite": "rung1_click_release_injection_ab_v3",
+  "suite": "rung1_click_release_injection_ab_v4",
   "status": "preregistered_cpu_development_diagnostic",
   "supersedes": {
-    "suite": "rung1_click_release_injection_ab_v2",
-    "pipeline_id": "pipeline_019fb9ebfdcf73e1af0eaf02b6a12c73",
-    "run_id": "run_019fb9ebfdcf73e1af0eaef40d8fbdff",
-    "job_id": "136178",
-    "terminal_state": "trial_6_integrity_abort",
-    "reason": "v2 used best-effort heartbeat delivery followed by a fixed 750 ms sleep and one-shot snapshot, and did not durably checkpoint the raw active-trial browser snapshot before validation"
+    "suite": "rung1_click_release_injection_ab_v3",
+    "pipeline_id": "pipeline_019fba170e6175d1b0bf2e124841665f",
+    "run_id": "run_019fba170e6175d1b0bf2e069db7bb61",
+    "job_id": "136206",
+    "terminal_state": "trial_9_integrity_abort",
+    "reason": "v3 detected a missing sendBeacon delivery at browser audit sequence 15 despite an acknowledged post-window heartbeat chain through sequence 28; v4 seals the browser's append-only journal in each reliable heartbeat marker and recovers only exact cross-checked transport gaps"
   },
   "control_plane_guardrail": {
     "authoritative_host": "hai-login2.haicore.berlin",
@@ -84,7 +84,8 @@
   "science_window_contract": {
     "duration_s": 3.0,
     "deadline_basis": "dispatch_completed_host_monotonic_ns",
-    "audit_event_inclusion_rule": "host_monotonic_ns <= observation_deadline_host_monotonic_ns",
+    "audit_event_inclusion_rule": "direct events require host_monotonic_ns <= observation_deadline_host_monotonic_ns; recovered DOM events require a later directly received browser-sequence event whose host_monotonic_ns <= observation_deadline_host_monotonic_ns",
+    "recovered_event_without_host_before_deadline_proof": "integrity_abort",
     "host_reporter_event_inclusion_rule": "host_monotonic_ns <= observation_deadline_host_monotonic_ns",
     "post_window_sequence_prefix_retained_as_evidence": true,
     "post_window_events_are_not_outcome_bearing": true
@@ -261,8 +262,8 @@
   "replacement_count": 0,
   "stop_policy": "integrity_abort_only",
   "browser_audit": {
-    "transport": "independent_navigator_sendBeacon_for_dom_events_and_fetch_ack_chain_for_heartbeats",
-    "wire_schema_version": 2,
+    "transport": "independent_navigator_sendBeacon_for_dom_events_with_append_only_journal_and_fetch_ack_chain_for_sha256_sealed_heartbeats",
+    "wire_schema_version": 3,
     "serialized_post_queue_independent": true,
     "cdp_independent": true,
     "arm_neutral": true,
@@ -280,6 +281,18 @@
       "expected_previous_audit_sequence",
       "expected_audit_count_through_marker"
     ],
+    "heartbeat_journal_seal_fields": [
+      "sealed_journal_through_sequence",
+      "sealed_journal_json",
+      "sealed_journal_sha256"
+    ],
+    "journal_hash": "sha256_utf8_exact_json",
+    "journal_records_exclude_only_prior_sealed_journal_json": true,
+    "cross_check_every_direct_host_event": true,
+    "recover_only_missing_transport_sequences": true,
+    "duplicate_or_disagreeing_direct_host_event_is_integrity_abort": true,
+    "raw_direct_prefix_retained_in_completed_trial": true,
+    "recovery_evidence_retained_in_completed_trial": true,
     "bounded_condition_wait": true,
     "raw_snapshot_checkpoint_before_validation": true,
     "classification_uses_only_sequence_sealed_prefix": true,
@@ -336,7 +349,8 @@
   "integrity_abort_conditions": [
     "spec, parent evidence, fixture, provider, source, or lock seal drift",
     "reset or fresh Chromium launch failure",
-    "missing or duplicate audit_ready, non-contiguous audit sequence, audit overflow, or malformed required audit fields",
+    "missing or duplicate audit_ready, audit overflow, malformed required audit fields, invalid journal seal, or a direct host event that disagrees with the sealed browser journal",
+    "recovered DOM event without a causal host-before-deadline upper bound",
     "bounded post-window wait timeout or missing, stale, mismatched, or non-causal heartbeat acknowledgement",
     "canonical action format, semantic operations, endpoint, or only-backend-difference contract drift",
     "missing guest injection timestamps, one-process contract failure, nonzero final pointer mask, or dispatch count other than one"
@@ -407,10 +421,48 @@
     "cleanup_errors": [],
     "manual_reconcile_count": 0
   },
+  "v3_integrity_abort_history": {
+    "pipeline_id": "pipeline_019fba170e6175d1b0bf2e124841665f",
+    "build_run_id": "run_019fba170e6175d1b0bf2dfe271b9a60",
+    "diagnostic_run_id": "run_019fba170e6175d1b0bf2e069db7bb61",
+    "build_job_id": "136205",
+    "diagnostic_job_id": "136206",
+    "artifact_id": "artifact_7c4847b20a7c9449",
+    "artifact_index_sha256": "3557228b84485e7be05b5f23f7dfeee745e037fa80c718792a4b28d23da4cbab",
+    "content_address": "sha256:626aec4891897d5ab3baf8f9a94500a2f6947ab369c67a3d1824fe3dc7621b3f",
+    "failure_sha256": "9183e4320fd4e453caac31df327205384104366a0798874d485beb5a94a78d84",
+    "progress_sha256": "4cbe2eb0b867379f273f3ce426329d61d8ea8d4a5231ee137b59bdc3a713acda",
+    "git_commit": "2c4833e0f8fcfaae2b6dbeb0dddd1984488e8de7",
+    "git_tree": "62725b78088e8b428e260d65a43f9e22b5e078f9",
+    "spec_sha256": "0d0a6679dfc536d16825953f12adf46eb6f98b10e2d262dcb7e1420ee7d4b039",
+    "lock_sha256": "391e50f4a1a0d2b0aa3776ca10ed2828e8d41cbc42ffc0ba84570729df4c3163",
+    "completed_trial_count": 8,
+    "arm_completed_counts": {
+      "A": 4,
+      "B": 4
+    },
+    "primary_success_counts": {
+      "A": 3,
+      "B": 1
+    },
+    "active_trial": "injection-ab-09-a",
+    "retry_count": 0,
+    "replacement_count": 0,
+    "integrity_error": "bounded causal post-window heartbeat wait timed out",
+    "root_cause": "browser append-only sequence 15 (change) was absent from direct host delivery; sequence 14 arrived late and the acknowledged heartbeat chain continued through sequence 28, but v3 had no reliable browser-journal backfill",
+    "interpretation": "protocol_inconclusive_truncated_prefix_not_inferentially_poolable",
+    "hypothesis_update": "A 3/4 versus B 1/4, considered descriptively with the prior valid prefix A 5/6 versus B 4/7, strongly weakens the hypothesis that release MotionNotify harms activation; contracts remain unpooled",
+    "browser_audit_dropped": 0,
+    "missing_browser_audit_sequences": [15],
+    "vm_closed": true,
+    "overlay_removed": true,
+    "cleanup_errors": [],
+    "manual_reconcile_count": 0
+  },
   "interpretation_table": [
     {
       "condition": "any integrity abort",
-      "interpretation": "invalid_experiment"
+      "interpretation": "protocol_inconclusive"
     },
     {
       "condition": "A failures = 0 and B failures = 0",
