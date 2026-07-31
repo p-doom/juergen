@@ -1,0 +1,52 @@
+name = "proper_vm_rung5_official_pilot_aggregate_cpu_v1"
+repo = "juergen_rung5_official_pilot"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+cd "$SOURCE"
+[[ -z "${CUDA_VISIBLE_DEVICES:-}" ]] || { echo "FATAL GPU allocation is forbidden" >&2; exit 2; }
+python3 -m osworld_parity.proper_vm_capability_ladder.rung5_official_pilot.aggregate "$@"
+''', "--"]
+
+[resources]
+gpus = 0
+cpus = 2
+mem = "4GB"
+time = "00:10:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1"]
+
+[inputs.release_gates]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/proper_vm_release_gates/rung5_v1"
+
+[inputs.release_trust]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/proper_vm_release_trust/v1"
+
+# Sanitized rows contain only opaque cluster indices and status traces.  They
+# contain no instructions, task IDs, task files, raw model output, or source
+# locations.
+[inputs.sanitized_rows]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/proper_vm_rung5_sanitized_rows/v1"
+
+[outputs.aggregate]
+type = "eval_result"
+marker = "aggregate.json"
+alias = "proper_vm_rung5_aggregate_{run.id}"
+
+[args]
+prerequisites_gate = "{inputs.release_gates.path}/prerequisites.json"
+prerequisites_signature = "{inputs.release_gates.path}/prerequisites.json.sig"
+pilot_release_gate = "{inputs.release_gates.path}/pilot_release.json"
+pilot_release_signature = "{inputs.release_gates.path}/pilot_release.json.sig"
+allowed_signers = "{inputs.release_trust.path}/allowed_signers"
+signer_identity = "proper-vm-roadmap-release"
+rows = "{inputs.sanitized_rows.path}/rows.jsonl"
+output = "{outputs.aggregate.path}/aggregate.json"
+
+[env]
+PYTHONUNBUFFERED = "1"
