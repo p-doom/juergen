@@ -51,6 +51,9 @@ FIXTURE_READINESS_ATTEMPT_TIMEOUT_S = 20.0
 FIXTURE_READINESS_MAX_ATTEMPTS = 3
 FIXTURE_READINESS_DIAGNOSTIC_TAIL = 16
 FIXTURE_BROWSER_RESTART_BUDGET_S = 2.5
+FIXTURE_READINESS_TEXT_LIMIT_BYTES = 512
+FIXTURE_READINESS_DIAGNOSTIC_ENTRY_LIMIT_BYTES = 1024
+FIXTURE_READINESS_EVIDENCE_LIMIT_BYTES = 64 * 1024
 
 
 class VmHarnessError(RuntimeError):
@@ -184,6 +187,49 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
         os.replace(raw, path)
     finally:
         Path(raw).unlink(missing_ok=True)
+
+
+def _bounded_readiness_text(value: object) -> str:
+    text = str(value)
+    raw = text.encode("utf-8", errors="replace")
+    if len(raw) <= FIXTURE_READINESS_TEXT_LIMIT_BYTES:
+        return raw.decode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()
+    suffix = (
+        f"...[truncated original_bytes={len(raw)} sha256={digest}]"
+    ).encode("ascii")
+    prefix = raw[: FIXTURE_READINESS_TEXT_LIMIT_BYTES - len(suffix)].decode(
+        "utf-8", errors="ignore"
+    )
+    return prefix + suffix.decode("ascii")
+
+
+def _bounded_readiness_optional_text(value: object | None) -> str | None:
+    return None if value is None else _bounded_readiness_text(value)
+
+
+def _bounded_readiness_json(value: Any, *, limit_bytes: int) -> Any:
+    try:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError, OverflowError, UnicodeError) as exc:
+        return {
+            "truncated": True,
+            "serialization_error_type": type(exc).__name__,
+            "serialization_error": _bounded_readiness_text(exc),
+        }
+    if len(encoded) <= limit_bytes:
+        return copy.deepcopy(value)
+    return {
+        "truncated": True,
+        "original_json_bytes": len(encoded),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "json_prefix": _bounded_readiness_text(encoded.decode("utf-8")),
+    }
 
 
 @contextmanager
@@ -889,8 +935,8 @@ class KvmFixtureSession:
             )
         evidence: dict[str, Any] = {
             "schema_version": FIXTURE_READINESS_SCHEMA_VERSION,
-            "fixture_id": fixture.id,
-            "fixture_sha256": fixture.fixture_sha256,
+            "fixture_id": _bounded_readiness_text(fixture.id),
+            "fixture_sha256": _bounded_readiness_text(fixture.fixture_sha256),
             "status": "running",
             "setup_started_host_monotonic_ns": setup_started_ns,
             "setup_deadline_host_monotonic_ns": setup_deadline_ns,
@@ -900,6 +946,9 @@ class KvmFixtureSession:
             ),
             "readiness_attempt_limit": FIXTURE_READINESS_MAX_ATTEMPTS,
             "browser_restart_budget_s": FIXTURE_BROWSER_RESTART_BUDGET_S,
+            "serialized_size_limit_bytes": (
+                FIXTURE_READINESS_EVIDENCE_LIMIT_BYTES
+            ),
             "attempt_count": 0,
             "attempts": [],
             "input_audit_before": audit_before,
@@ -936,21 +985,38 @@ class KvmFixtureSession:
                 "recoverable": None,
                 "host_state": None,
                 "guest_launch": None,
+                "guest_launch_request_timeout_s": None,
             }
             evidence["attempts"].append(attempt)
             evidence["attempt_count"] = attempt_index
             try:
                 generation = fixture_server.store.reset(fixture)
                 attempt["generation"] = generation
+                remaining_before_launch_ns = setup_deadline_ns - time.monotonic_ns()
+                if remaining_before_launch_ns <= 0:
+                    raise TimeoutError(
+                        "fixture reset exhausted the fixed setup deadline"
+                    )
+                launch_request_timeout_s = remaining_before_launch_ns / 1_000_000_000
+                attempt["guest_launch_request_timeout_s"] = (
+                    launch_request_timeout_s
+                )
                 launch = self._launch_fixture_browser(
                     url,
                     attempt_index=attempt_index,
                     restart=attempt_index > 1,
+                    request_timeout_s=launch_request_timeout_s,
                 )
                 attempt["guest_launch"] = {
-                    "status": launch.get("status"),
-                    "returncode": launch.get("returncode"),
-                    "error": launch.get("error"),
+                    "status": _bounded_readiness_optional_text(
+                        launch.get("status")
+                    ),
+                    "returncode": _bounded_readiness_json(
+                        launch.get("returncode"), limit_bytes=128
+                    ),
+                    "error": _bounded_readiness_optional_text(
+                        launch.get("error")
+                    ),
                 }
                 remaining_ns = setup_deadline_ns - time.monotonic_ns()
                 attempt["deadline_remaining_ns_after_launch"] = remaining_ns
@@ -998,8 +1064,8 @@ class KvmFixtureSession:
                         "status": "failed",
                         "completed_host_monotonic_ns": completed_ns,
                         "duration_ns": completed_ns - attempt_started_ns,
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
+                        "error_type": _bounded_readiness_text(type(exc).__name__),
+                        "error": _bounded_readiness_text(exc),
                         "recoverable": recoverable,
                         "host_state": self._fixture_readiness_state_summary(
                             fixture_server, fixture.id
@@ -1029,7 +1095,7 @@ class KvmFixtureSession:
                     type(last_error).__name__ if last_error is not None else "TimeoutError"
                 ),
                 "terminal_error": (
-                    str(last_error)
+                    _bounded_readiness_text(last_error)
                     if last_error is not None
                     else "fixed fixture setup deadline expired before an attempt started"
                 ),
@@ -1044,7 +1110,12 @@ class KvmFixtureSession:
         ) from last_error
 
     def _launch_fixture_browser(
-        self, url: str, *, attempt_index: int, restart: bool
+        self,
+        url: str,
+        *,
+        attempt_index: int,
+        restart: bool,
+        request_timeout_s: float,
     ) -> dict[str, Any]:
         if self.transport is None:
             raise VmHarnessError("VM session is not started")
@@ -1073,7 +1144,12 @@ nohup "$browser" --no-first-run --no-default-browser-check \
   --disable-session-crashed-bubble --disable-features=TranslateUI \
   --start-maximized {url!r} >>/tmp/rung1a_chrome.log 2>&1 </dev/null &
 """.strip()
-        return self.transport.execute_argv(["bash", "-lc", script])
+        original_timeout_s = self.transport.timeout_s
+        self.transport.timeout_s = min(original_timeout_s, request_timeout_s)
+        try:
+            return self.transport.execute_argv(["bash", "-lc", script])
+        finally:
+            self.transport.timeout_s = original_timeout_s
 
     def _input_audit_summary(self) -> dict[str, Any]:
         if self.transport is None:
@@ -1089,12 +1165,26 @@ nohup "$browser" --no-first-run --no-default-browser-check \
 
     @staticmethod
     def _recoverable_fixture_readiness_error(exc: Exception) -> bool:
-        if isinstance(exc, TimeoutError):
-            return True
+        pending: list[BaseException] = [exc]
+        seen: set[int] = set()
+        while pending:
+            candidate = pending.pop()
+            if id(candidate) in seen:
+                continue
+            seen.add(id(candidate))
+            if isinstance(candidate, TimeoutError):
+                return True
+            for nested in (
+                candidate.__cause__,
+                candidate.__context__,
+                getattr(candidate, "reason", None),
+            ):
+                if isinstance(nested, BaseException):
+                    pending.append(nested)
         if not isinstance(exc, FixtureServerError):
             return False
         message = str(exc).lower()
-        return "failed to fetch" in message or "networkerror" in message
+        return "typeerror: failed to fetch" in message
 
     @staticmethod
     def _fixture_readiness_state_summary(
@@ -1104,32 +1194,48 @@ nohup "$browser" --no-first-run --no-default-browser-check \
             state = fixture_server.store.snapshot(fixture_id)
         except Exception as exc:
             return {
-                "snapshot_error_type": type(exc).__name__,
-                "snapshot_error": str(exc),
+                "snapshot_error_type": _bounded_readiness_text(
+                    type(exc).__name__
+                ),
+                "snapshot_error": _bounded_readiness_text(exc),
             }
         journal = state.get("diagnostic_journal")
         diagnostic_tail = (
-            copy.deepcopy(journal[-FIXTURE_READINESS_DIAGNOSTIC_TAIL:])
+            [
+                _bounded_readiness_json(
+                    entry,
+                    limit_bytes=FIXTURE_READINESS_DIAGNOSTIC_ENTRY_LIMIT_BYTES,
+                )
+                for entry in journal[-FIXTURE_READINESS_DIAGNOSTIC_TAIL:]
+            ]
             if isinstance(journal, list)
             else None
         )
         return {
-            "generation": state.get("generation"),
-            "ready": state.get("ready"),
-            "geometry_stabilization_error": state.get(
-                "geometry_stabilization_error"
+            "generation": _bounded_readiness_json(
+                state.get("generation"), limit_bytes=128
+            ),
+            "ready": _bounded_readiness_json(
+                state.get("ready"), limit_bytes=128
+            ),
+            "geometry_stabilization_error": _bounded_readiness_optional_text(
+                state.get("geometry_stabilization_error")
             ),
             "geometry_observation_count": len(
                 state.get("geometry_observations", [])
             ),
             "event_count": len(state.get("events", [])),
-            "last_client_sequence": state.get("last_client_sequence"),
+            "last_client_sequence": _bounded_readiness_json(
+                state.get("last_client_sequence"), limit_bytes=128
+            ),
             "browser_audit_event_count": len(
                 state.get("browser_audit_events", [])
             ),
-            "browser_audit_dropped": state.get("browser_audit_dropped"),
-            "diagnostic_journal_dropped": state.get(
-                "diagnostic_journal_dropped"
+            "browser_audit_dropped": _bounded_readiness_json(
+                state.get("browser_audit_dropped"), limit_bytes=128
+            ),
+            "diagnostic_journal_dropped": _bounded_readiness_json(
+                state.get("diagnostic_journal_dropped"), limit_bytes=128
             ),
             "diagnostic_tail": diagnostic_tail,
         }
@@ -1145,6 +1251,26 @@ nohup "$browser" --no-first-run --no-default-browser-check \
         if evidence["input_audit_unchanged"] is not True:
             raise VmHarnessError(
                 "fixture readiness setup unexpectedly changed the input audit"
+            )
+        evidence["serialized_size_bytes"] = 0
+        for _ in range(3):
+            encoded = json.dumps(
+                evidence,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            evidence["serialized_size_bytes"] = len(encoded)
+        encoded = json.dumps(
+            evidence,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        if len(encoded) > FIXTURE_READINESS_EVIDENCE_LIMIT_BYTES:
+            raise VmHarnessError(
+                "fixture readiness evidence exceeded its fixed "
+                f"{FIXTURE_READINESS_EVIDENCE_LIMIT_BYTES}-byte bound"
             )
         self._fixture_readiness_launches.append(copy.deepcopy(evidence))
         if not self.metadata_path.is_file():

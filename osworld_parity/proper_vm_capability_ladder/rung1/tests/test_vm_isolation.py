@@ -24,12 +24,20 @@ from osworld_parity.proper_vm_capability_ladder.rung1.transport import (
 
 
 class _ReadinessTransport:
-    def __init__(self) -> None:
+    def __init__(self, *, launch_delay_s: float = 0.0) -> None:
         self.audit = InputAudit()
         self.commands: list[list[str]] = []
+        self.timeout_s = 30.0
+        self.launch_delay_s = launch_delay_s
+        self.observed_timeouts: list[float] = []
 
     def execute_argv(self, argv: list[str]) -> dict:
         self.commands.append(argv)
+        self.observed_timeouts.append(self.timeout_s)
+        if self.launch_delay_s > 0:
+            time.sleep(min(self.launch_delay_s, self.timeout_s))
+            if self.launch_delay_s > self.timeout_s:
+                raise TimeoutError("simulated launch RPC timeout")
         return {"status": "success", "returncode": 0, "error": None}
 
 
@@ -86,9 +94,11 @@ class _ReadinessServer:
         return f"http://10.0.2.2:12345/fixture/{fixture.id}"
 
 
-def _readiness_session(tmp_path: Path) -> tuple[KvmFixtureSession, _ReadinessTransport]:
+def _readiness_session(
+    tmp_path: Path, *, launch_delay_s: float = 0.0
+) -> tuple[KvmFixtureSession, _ReadinessTransport]:
     session = KvmFixtureSession(vm_log_dir=tmp_path / "vm_logs")
-    transport = _ReadinessTransport()
+    transport = _ReadinessTransport(launch_delay_s=launch_delay_s)
     session.transport = transport
     session.metadata_path.parent.mkdir(parents=True, exist_ok=True)
     session.metadata_path.write_text(
@@ -274,6 +284,43 @@ def test_fixture_readiness_attempts_are_bounded_by_one_setup_deadline(
     assert len(transport.commands) == 1
 
 
+def test_fixture_readiness_launch_rpc_is_clamped_to_remaining_deadline(
+    tmp_path: Path,
+) -> None:
+    fixture = SimpleNamespace(id="fixture", fixture_sha256="fixture-sha")
+    store = _ReadinessStore([{"ready": True, "generation": 1}])
+    session, transport = _readiness_session(tmp_path, launch_delay_s=0.06)
+
+    started = time.monotonic()
+    with pytest.raises(FixtureReadinessError) as caught:
+        session.launch_fixture(
+            _ReadinessServer(store), fixture, timeout_s=0.01
+        )
+    elapsed = time.monotonic() - started
+
+    evidence = caught.value.evidence
+    assert elapsed < 0.05
+    assert evidence["attempt_count"] == 1
+    assert evidence["attempts"][0]["error_type"] == "TimeoutError"
+    assert evidence["attempts"][0]["recoverable"] is True
+    assert store.wait_timeouts == []
+    assert 0 < transport.observed_timeouts[0] <= 0.01
+    assert transport.timeout_s == 30.0
+
+
+def test_fixture_readiness_timeout_allowlist_walks_wrapped_causes() -> None:
+    try:
+        try:
+            raise TimeoutError("socket timed out")
+        except TimeoutError as exc:
+            raise RuntimeError("transport wrapper") from exc
+    except RuntimeError as wrapped:
+        assert KvmFixtureSession._recoverable_fixture_readiness_error(wrapped)
+    assert not KvmFixtureSession._recoverable_fixture_readiness_error(
+        FixtureServerError("fixture: NetworkError without a Chromium fetch failure")
+    )
+
+
 def test_fixture_readiness_has_a_fixed_attempt_ceiling(tmp_path: Path) -> None:
     fixture = SimpleNamespace(id="fixture", fixture_sha256="fixture-sha")
     store = _ReadinessStore(
@@ -307,3 +354,36 @@ def test_fixture_readiness_rejects_post_action_use(tmp_path: Path) -> None:
 
     assert transport.commands == []
     assert store.generation == 0
+
+
+def test_fixture_readiness_persisted_errors_have_a_fixed_size_bound(
+    tmp_path: Path,
+) -> None:
+    fixture = SimpleNamespace(id="fixture", fixture_sha256="fixture-sha")
+    oversized_error = "deterministic:" + "x" * 200_000
+    store = _ReadinessStore([FixtureServerError(oversized_error)])
+    session, _transport = _readiness_session(tmp_path)
+
+    with pytest.raises(FixtureReadinessError) as caught:
+        session.launch_fixture(
+            _ReadinessServer(store), fixture, timeout_s=1.0
+        )
+
+    evidence = caught.value.evidence
+    attempt = evidence["attempts"][0]
+    assert "original_bytes=200014" in attempt["error"]
+    assert "sha256=" in attempt["error"]
+    assert len(attempt["error"].encode("utf-8")) <= 512
+    geometry_error = attempt["host_state"]["geometry_stabilization_error"]
+    assert "original_bytes=200014" in geometry_error
+    diagnostic_entry = attempt["host_state"]["diagnostic_tail"][0]
+    assert diagnostic_entry["truncated"] is True
+    assert diagnostic_entry["original_json_bytes"] > 200_000
+    assert len(diagnostic_entry["json_prefix"].encode("utf-8")) <= 512
+    compact = json.dumps(
+        evidence, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    assert evidence["serialized_size_bytes"] == len(compact)
+    assert len(compact) <= evidence["serialized_size_limit_bytes"] == 64 * 1024
+    persisted = session.metadata_path.read_bytes()
+    assert len(persisted) < 70 * 1024
