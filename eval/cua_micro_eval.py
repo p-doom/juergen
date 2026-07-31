@@ -373,6 +373,8 @@ def _active_title(client: OSWorldClient) -> str:
                     "-lc",
                     "if command -v xdotool >/dev/null; then "
                     "xdotool getactivewindow getwindowname; "
+                    "elif command -v wmctrl >/dev/null; then "
+                    "wmctrl -l; "
                     "elif command -v gdbus >/dev/null; then "
                     "gdbus call --session --dest org.gnome.Shell.Introspect "
                     "--object-path /org/gnome/Shell/Introspect "
