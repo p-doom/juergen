@@ -4,13 +4,16 @@ repo = "juergen_relative_onpolicy_launch"
 command = ["bash", "-c", '''
 set -euo pipefail
 REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+PROBE="$(jq -er '.inputs[] | select(.role == "probe") | .resolved_path' "$LABCTL_CONTEXT")"
+OUT="$(jq -er '.outputs.report.path' "$LABCTL_CONTEXT")"
+mkdir -p "$OUT"
 uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli relative-mouse-launch-gate \
-  --probe "$1" \
+  --probe "$PROBE" \
   --attestation "$REPO/stage5_rft/config/relative_mouse_probe_r0_seed.attestation.json" \
   --config "$REPO/stage5_rft/config/relative_mouse_launch_gate.json" \
-  --out "$2/gate_report.json"
-jq -e '.threshold_crossed == true and .launch_authorized == false' "$2/gate_report.json"
-''', "--", "{inputs.probe.path}", "{outputs.report.path}"]
+  --out "$OUT/gate_report.json"
+jq -e '.threshold_crossed == true and .launch_authorized == false' "$OUT/gate_report.json"
+''']
 
 [resources]
 gpus = 0

@@ -4,9 +4,12 @@ repo = "juergen_relative_onpolicy_launch"
 command = ["bash", "-c", '''
 set -euo pipefail
 REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+GATE="$(jq -er '.inputs[] | select(.role == "gate") | .resolved_path' "$LABCTL_CONTEXT")"
+PARENT="$(jq -er '.inputs[] | select(.role == "parent") | .resolved_path' "$LABCTL_CONTEXT")"
+OUT="$(jq -er '.outputs.rollouts.path' "$LABCTL_CONTEXT")"
 bash "$REPO/stage5_rft/scripts/collect_relative_mouse_shard.sh" \
-  "$1/gate_report.json" "$2" "$3" 2 "$REPO"
-''', "--", "{inputs.gate.path}", "{inputs.parent.path}", "{outputs.rollouts.path}"]
+  "$GATE/gate_report.json" "$PARENT" "$OUT" 2 "$REPO"
+''']
 
 [resources]
 gpus = 1

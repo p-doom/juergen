@@ -4,8 +4,9 @@ repo = "juergen_relative_onpolicy_launch"
 command = ["bash", "-c", '''
 set -euo pipefail
 REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+OUT="$(jq -er '.outputs.report.path' "$LABCTL_CONTEXT")"
 WORK="$LABCTL_RUN_DIR/synthetic_evidence"
-mkdir -p "$WORK" "$1"
+mkdir -p "$WORK" "$OUT"
 python3 - "$WORK" <<'PY'
 import hashlib, json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
@@ -29,10 +30,10 @@ PY
 uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli relative-mouse-launch-gate \
   --probe "$WORK/probe.json" --attestation "$WORK/attestation.json" \
   --config "$REPO/stage5_rft/config/relative_mouse_launch_gate.json" \
-  --out "$1/gate_report.json"
+  --out "$OUT/gate_report.json"
 jq -e '.threshold_crossed == true and .launch_authorized == false
-  and .binding.checkpoint_uri == "/synthetic/no-model-loaded"' "$1/gate_report.json"
-''', "--", "{outputs.report.path}"]
+  and .binding.checkpoint_uri == "/synthetic/no-model-loaded"' "$OUT/gate_report.json"
+''']
 
 [resources]
 gpus = 0

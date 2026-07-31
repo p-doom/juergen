@@ -4,10 +4,11 @@ repo = "omegalax"
 command = ["bash", "-c", '''
 set -euo pipefail
 REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
-GATE="$1/gate_report.json"
-DATASET="$2"
-PARENT="$3"
-OUT="$4"
+GATE_DIR="$(jq -er '.inputs[] | select(.role == "gate") | .resolved_path' "$LABCTL_CONTEXT")"
+GATE="$GATE_DIR/gate_report.json"
+DATASET="$(jq -er '.inputs[] | select(.role == "dataset") | .resolved_path' "$LABCTL_CONTEXT")"
+PARENT="$(jq -er '.inputs[] | select(.role == "parent") | .resolved_path' "$LABCTL_CONTEXT")"
+OUT="$(jq -er '.outputs.model.path' "$LABCTL_CONTEXT")"
 jq -e '.threshold_crossed == true and .launch_authorized == false' "$GATE"
 jq -e '.method == "pure_rejection_sft" and .tokenized == true
   and .synthetic_actions_added == 0 and .synthetic_terminate_added == false
@@ -75,7 +76,7 @@ payload = {"schema_version": "stage5.relative_mouse_pilot_model.v1", "status": "
            "contains_official_heldout": False, "contains_crowd_cast": False}
 (out / "pilot_manifest.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
-''', "--", "{inputs.gate.path}", "{inputs.dataset.path}", "{inputs.parent.path}", "{outputs.model.path}"]
+''']
 
 [resources]
 gpus = 1

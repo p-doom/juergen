@@ -4,18 +4,21 @@ repo = "juergen_relative_onpolicy_launch"
 command = ["bash", "-c", '''
 set -euo pipefail
 REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+ROLLOUTS="$(jq -er '.inputs[] | select(.role == "rollouts") | .resolved_path' "$LABCTL_CONTEXT")"
+BACKGROUNDS="$(jq -er '.inputs[] | select(.role == "backgrounds") | .resolved_path' "$LABCTL_CONTEXT")"
+OUT="$(jq -er '.outputs.records.path' "$LABCTL_CONTEXT")"
 jq -e '.status == "complete" and .attempts == 12288 and .errors == 0
-  and .accepted >= 1200 and .adaptive_resampling == false' "$1/manifest.json"
+  and .accepted >= 1200 and .adaptive_resampling == false' "$ROLLOUTS/manifest.json"
 uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli build-relative-mouse-rft \
-  --rollouts-glob "$1/rollouts_shard*.jsonl" \
-  --approved-background-root "$2" --out "$3" \
+  --rollouts-glob "$ROLLOUTS/rollouts_shard*.jsonl" \
+  --approved-background-root "$BACKGROUNDS" --out "$OUT" \
   --val-fraction 0.05 --split-salt stage5-relative-mouse-pilot-v1 \
   --maximum-trajectories-per-task 4
 jq -e '.status == "complete" and .method == "pure_rejection_sft"
   and .synthetic_actions_added == 0 and .synthetic_terminate_added == false
   and .no_op_actions_dropped == 0 and .trajectories_kept > 0
-  and .contains_official_heldout == false and .contains_crowd_cast == false' "$3/manifest.json"
-''', "--", "{inputs.rollouts.path}", "{inputs.backgrounds.path}", "{outputs.records.path}"]
+  and .contains_official_heldout == false and .contains_crowd_cast == false' "$OUT/manifest.json"
+''']
 
 [resources]
 gpus = 0

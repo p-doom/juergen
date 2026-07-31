@@ -4,8 +4,8 @@ repo = "omegalax"
 command = ["bash", "-c", '''
 set -euo pipefail
 REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
-SRC="$1"
-OUT="$2"
+SRC="$(jq -er '.inputs[] | select(.role == "records") | .resolved_path' "$LABCTL_CONTEXT")"
+OUT="$(jq -er '.outputs.dataset.path' "$LABCTL_CONTEXT")"
 jq -e '.method == "pure_rejection_sft" and .synthetic_actions_added == 0
   and .synthetic_terminate_added == false and .no_op_actions_dropped == 0' "$SRC/manifest.json"
 mkdir -p "$OUT"
@@ -21,7 +21,7 @@ for split in train val; do
 done
 jq '. + {tokenized: true, tokenizer: "Qwen/Qwen3-VL-8B-Instruct", max_length: 16384}' \
   "$SRC/manifest.json" >"$OUT/manifest.json"
-''', "--", "{inputs.records.path}", "{outputs.dataset.path}"]
+''']
 
 [resources]
 gpus = 0

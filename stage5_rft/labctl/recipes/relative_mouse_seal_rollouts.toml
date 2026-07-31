@@ -4,16 +4,20 @@ repo = "juergen_relative_onpolicy_launch"
 command = ["bash", "-c", '''
 set -euo pipefail
 REPO="$(jq -r '.provenance.repo_path' "$LABCTL_CONTEXT")"
+SHARD0="$(jq -er '.inputs[] | select(.role == "shard0") | .resolved_path' "$LABCTL_CONTEXT")"
+SHARD1="$(jq -er '.inputs[] | select(.role == "shard1") | .resolved_path' "$LABCTL_CONTEXT")"
+SHARD2="$(jq -er '.inputs[] | select(.role == "shard2") | .resolved_path' "$LABCTL_CONTEXT")"
+OUT="$(jq -er '.outputs.rollouts.path' "$LABCTL_CONTEXT")"
 uv run --project="$REPO/stage5_rft" -- python -m stage5_rft.cli seal-relative-mouse-batch \
-  --shard "$1" --shard "$2" --shard "$3" --out "$4" \
+  --shard "$SHARD0" --shard "$SHARD1" --shard "$SHARD2" --out "$OUT" \
   --expected-tasks 1536 --expected-k 8 --minimum-accepted 1200 \
   --expected-train-seed 1001
 jq -e '.status == "complete" and .attempts == 12288 and .errors == 0
   and .accepted >= 1200 and .adaptive_resampling == false
   and .contains_official_heldout == false
   and .contains_real_vm_eval == false
-  and .contains_crowd_cast == false' "$4/manifest.json"
-''', "--", "{inputs.shard0.path}", "{inputs.shard1.path}", "{inputs.shard2.path}", "{outputs.rollouts.path}"]
+  and .contains_crowd_cast == false' "$OUT/manifest.json"
+''']
 
 [resources]
 gpus = 0
