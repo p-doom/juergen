@@ -4,7 +4,7 @@ import copy
 
 import pytest
 
-from ..contracts import ARMS
+from ..contracts import ARMS, GENERATION_SEED_SOURCE
 from ..manifest import ManifestError, load_evaluation_manifest, validate_evaluation_manifest
 from ..planning import build_plan, task_shard
 from .helpers import evaluation_manifest, ready_marker, sealed_file, task_manifest
@@ -33,6 +33,17 @@ def test_manifest_and_deterministic_plan_keep_pairs_together(tmp_path) -> None:
     assert all(trial.horizon == 4 for trial in one_step)
     assert all(trial.snapshot_id == "osworld_ready" for trial in plan)
     assert all(trial.parameter_seed == 101 for trial in plan)
+    assert all(
+        trial.generation_seed_for(ARMS[0]) != trial.generation_seed_for(ARMS[1])
+        for trial in plan
+    )
+    assert len(
+        {
+            trial.generation_seed_for(arm)
+            for trial in plan
+            for arm in ARMS
+        }
+    ) == len(plan) * len(ARMS)
 
     assigned = task_shard(manifest, manifest.tasks[0], 7)
     shards = [build_plan(manifest, shard_index=index, shard_count=7) for index in range(7)]
@@ -74,9 +85,27 @@ def test_manifest_rejects_deterministic_replication_as_pass_at_k(tmp_path) -> No
     _, marker_sha = ready_marker(tmp_path / "EXECUTOR_READY.json")
     tasks, task_seal = task_manifest()
     value = evaluation_manifest(task_seal, marker_sha)
-    value["arms"][1]["generation"] = {"do_sample": False, "temperature": 1.0}
+    value["arms"][1]["generation"] = {
+        "do_sample": False,
+        "temperature": 1.0,
+        "seed_source": GENERATION_SEED_SOURCE,
+    }
     with pytest.raises(ManifestError, match="do_sample must be true"):
         validate_evaluation_manifest(value, tasks, task_manifest_payload_sha256=task_seal)
+
+
+def test_manifest_rejects_nested_arm_generation_seeds(tmp_path) -> None:
+    _, marker_sha = ready_marker(tmp_path / "EXECUTOR_READY.json")
+    tasks, task_seal = task_manifest()
+    value = evaluation_manifest(task_seal, marker_sha)
+    value["arms"][0]["generation"]["seed"] = 7
+    value["arms"][1]["generation"]["seed"] = 7
+    with pytest.raises(ManifestError, match="nested seeds are forbidden"):
+        validate_evaluation_manifest(
+            value,
+            tasks,
+            task_manifest_payload_sha256=task_seal,
+        )
 
 
 def test_manifest_seals_are_enforced(tmp_path) -> None:

@@ -16,6 +16,8 @@ from .contracts import (
     InfrastructureFailure,
     PairedRuntime,
     RUNTIME_CONTRACT_SCHEMA,
+    GENERATION_SEED_DERIVATION,
+    SAMPLING_SEED_POLICY,
     RequestedAction,
     StateProbe,
     VerifierState,
@@ -26,6 +28,7 @@ from .planning import TrialSpec
 from .readiness import ConsumedReadiness
 from .receipts import (
     executed_aggregate,
+    ordered_trace_aggregate,
     validate_binding_receipt,
     validate_binding_successor,
     validate_executed_segment,
@@ -202,7 +205,8 @@ class PairedEvaluationRunner:
             "curriculum_commit": APPROVED_CURRICULUM_COMMIT,
             "live_binding": APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
             "resolved_budget_receipts": "executed_segment_receipt_v1",
-            "ordered_executed_aggregate": "compiled_program_receipt_v1",
+            "ordered_execution_trace_aggregate": "paired_policy_turn_receipt_trace_v1",
+            "complete_program_aggregate": "c603_compiled_program_receipt_v1",
         }
         if getattr(runtime, "contract", None) != expected_runtime_contract:
             raise PairingViolation("runtime identity/interface/executor contract mismatch")
@@ -312,8 +316,10 @@ class PairedEvaluationRunner:
                 "parameter_seed": trial.parameter_seed,
                 "initial_cursor_ref": trial.initial_cursor_ref,
                 "initial_cursor": resolved_initial_cursor,
-                "generation_seed": trial.generation_seed,
-                "sampling_seed_policy": "paired_fixed_per_attempt_v1",
+                "sampling_draw_seed": trial.sampling_draw_seed,
+                "generation_seeds_by_arm": trial.generation_seeds_by_arm,
+                "generation_seed_derivation": GENERATION_SEED_DERIVATION,
+                "sampling_seed_policy": SAMPLING_SEED_POLICY,
                 "budget": trial.budget,
                 "arm_order": list(trial.arm_order),
                 "shard_index": trial.shard_index,
@@ -374,6 +380,20 @@ class PairedEvaluationRunner:
             raise PairingViolation("trial horizon/model-turn budget mismatch")
         if set(trial.arm_order) != set(ARMS) or len(trial.arm_order) != 2:
             raise PairingViolation("trial arm order is not a permutation of both arms")
+        stochastic_seeds = [trial.generation_seed_for(name) for name in ARMS]
+        if (
+            not isinstance(trial.sampling_draw_seed, int)
+            or isinstance(trial.sampling_draw_seed, bool)
+            or not 0 <= trial.sampling_draw_seed < 2**63
+            or any(
+                not isinstance(seed, int)
+                or isinstance(seed, bool)
+                or not 0 <= seed < 2**63
+                for seed in stochastic_seeds
+            )
+            or len(set(stochastic_seeds)) != len(ARMS)
+        ):
+            raise PairingViolation("trial stochastic seed contract mismatch")
         if (
             trial.mode == "gold_history_one_step"
             and trial.budget.get("logical_semantic_steps") != 1
@@ -406,7 +426,7 @@ class PairedEvaluationRunner:
                 mode=trial.mode,
                 gold_prefix_length=trial.gold_prefix_length,
                 horizon=trial.horizon,
-                generation_seed=trial.generation_seed,
+                generation_seed=trial.generation_seed_for(arm.name),
             )
             start = session.start
             if start.task_id != task.task_id:
@@ -499,9 +519,13 @@ class PairedEvaluationRunner:
                 requested = session.request_action(
                     observation=observation,
                     history=tuple(history),
-                    generation_seed=trial.generation_seed,
+                    generation_seed=trial.generation_seed_for(arm.name),
                     budget=budget.snapshot(),
                 )
+                if requested.generation_seed != trial.generation_seed_for(arm.name):
+                    raise PairingViolation(
+                        f"{arm.name}: model call did not bind the planned stochastic seed"
+                    )
                 budget.add_output_tokens(requested.usage)
                 if budget.failure is None:
                     receipt = session.execute(requested)
@@ -616,7 +640,12 @@ class PairedEvaluationRunner:
 
         final_verifier = turns[-1]["verifier_state"] if turns else None
         score = _score_arm(task, trial, turns, infra_class, budget.failure)
-        resolved_budget_aggregate = _resolved_budget_aggregate(
+        ordered_execution_trace = _ordered_execution_trace_aggregate(
+            task,
+            arm,
+            turns,
+        )
+        complete_program_aggregate = _complete_program_aggregate(
             task,
             arm,
             turns,
@@ -624,6 +653,7 @@ class PairedEvaluationRunner:
         return {
             "arm": arm.name,
             "action_interface": arm.action_interface,
+            "generation_seed": trial.generation_seed_for(arm.name),
             "reset_signature": reset_signature,
             "start_cursor_ref": start_cursor_ref,
             "start_cursor": None if start_cursor is None else list(start_cursor),
@@ -649,7 +679,13 @@ class PairedEvaluationRunner:
             "first_divergence_from_gold": score["first_divergence_from_gold"],
             "budget_accounting": budget.snapshot(),
             "budget_failure": budget.failure,
-            "resolved_budget_aggregate": resolved_budget_aggregate,
+            "ordered_execution_trace_aggregate": ordered_execution_trace,
+            "complete_program_aggregate": complete_program_aggregate,
+            "complete_program_aggregate_status": (
+                "validated_c603_complete_program"
+                if complete_program_aggregate is not None
+                else "not_complete_semantic_coverage"
+            ),
             "infra_failure_class": infra_class,
             "infra_failure_phase": infra_phase,
             "infra_failure_message": infra_message,
@@ -908,7 +944,6 @@ class PairedEvaluationRunner:
                 "filesystem_readonly_state_probe",
                 "browser_dom_readonly_state_probe",
                 "editor_readonly_state_probe",
-                "test_readonly_state_probe",
             }
         ):
             raise PairingViolation(
@@ -948,6 +983,7 @@ def _turn_record(
         "requested_action": requested.value,
         "requested_action_sha256": sha256_json(requested.value),
         "model_call_id": requested.model_call_id,
+        "model_generation_seed": requested.generation_seed,
         "model_usage": requested.usage,
         "budget_before": budget_before,
         "budget_after": budget_after,
@@ -984,23 +1020,52 @@ def _turn_record(
     return record
 
 
-def _resolved_budget_aggregate(
-    task: Task,
-    arm: Arm,
-    turns: list[dict[str, Any]],
-) -> dict[str, Any]:
-    resolved = [
-        turn
+def _successful_executed_receipts(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        turn["executed_segment_receipt"]
         for turn in turns
         if turn.get("parse_status") == "ok"
         and turn.get("dispatch_status") == "ok"
         and isinstance(turn.get("executed_segment_receipt"), dict)
     ]
+
+
+def _ordered_execution_trace_aggregate(
+    task: Task,
+    arm: Arm,
+    turns: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return ordered_trace_aggregate(
+        task_id=task.task_id,
+        fixture_sha256=task.fixture_sha256,
+        action_schema=arm.action_interface,
+        receipts=_successful_executed_receipts(turns),
+    )
+
+
+def _complete_program_aggregate(
+    task: Task,
+    arm: Arm,
+    turns: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    receipts = _successful_executed_receipts(turns)
+    if [item["semantic_step_index"] for item in receipts] != list(
+        range(1, task.semantic_step_count + 1)
+    ):
+        return None
     return executed_aggregate(
         task_id=task.task_id,
         fixture_sha256=task.fixture_sha256,
         action_schema=arm.action_interface,
-        receipts=[turn["executed_segment_receipt"] for turn in resolved],
+        app=task.app,
+        semantic_step_count=task.semantic_step_count,
+        primitive_action_cap=task.budget_contract["primitive_action_caps"][
+            arm.action_interface
+        ],
+        primitive_event_cap=task.budget_contract["primitive_event_caps"][
+            arm.action_interface
+        ],
+        receipts=receipts,
     )
 
 

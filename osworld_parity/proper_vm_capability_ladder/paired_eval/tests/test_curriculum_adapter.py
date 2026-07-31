@@ -13,7 +13,11 @@ from ..curriculum_adapter import (
     load_curriculum_evaluation_manifest,
 )
 from ..manifest import ManifestError
-from ..receipts import validate_binding_receipt, validate_executed_segment
+from ..receipts import (
+    executed_aggregate,
+    validate_binding_receipt,
+    validate_executed_segment,
+)
 from ..verifier import FreshProcessTaskVerifier
 from .helpers import evaluation_manifest, ready_marker, sealed_file, task_manifest, task_row
 
@@ -171,38 +175,59 @@ def test_approved_curriculum_receipts_match_paired_validator() -> None:
         setup_commit=binding.reset_probes[0].reset_cycle_evidence.setup_commit,
         require_fresh=True,
     )
-    segment = compile_semantic_step(
-        task,
-        "native_absolute_sequence_v1",
-        binding=binding,
-        semantic_step_index=1,
-    )
     transport = RecordingTransport(
-        cursor=segment.expected_cursor_before,
+        cursor=binding.resolved_initial_cursor,
         screen=(1400, 900),
     )
-    started = time.monotonic_ns()
-    dispatches = tuple(
-        replay._dispatch_compiled_action(
-            transport, "native_absolute_sequence_v1", action
+    executed_receipts = []
+    for semantic_step in range(1, task.semantic_step_count + 1):
+        segment = compile_semantic_step(
+            task,
+            "native_absolute_sequence_v1",
+            binding=binding,
+            semantic_step_index=semantic_step,
         )
-        for action in segment.actions
-    )
-    completed = time.monotonic_ns()
-    executed = record_executed_segment(
-        segment,
-        dispatches,
-        execution_started_monotonic_ns=started,
-        execution_completed_monotonic_ns=completed,
-    )
-    validate_executed_segment(
-        compiled_segment=asdict(segment),
-        dispatches=dispatches,
-        executed_receipt=asdict(executed),
-        binding_receipt=binding_receipt,
+        started = time.monotonic_ns()
+        dispatches = tuple(
+            replay._dispatch_compiled_action(
+                transport, "native_absolute_sequence_v1", action
+            )
+            for action in segment.actions
+        )
+        completed = time.monotonic_ns()
+        executed = record_executed_segment(
+            segment,
+            dispatches,
+            execution_started_monotonic_ns=started,
+            execution_completed_monotonic_ns=completed,
+        )
+        serialized = asdict(executed)
+        validate_executed_segment(
+            compiled_segment=asdict(segment),
+            dispatches=dispatches,
+            executed_receipt=serialized,
+            binding_receipt=binding_receipt,
+            task_id=task.task_id,
+            fixture_sha256=task.fixture_sha256,
+            action_schema="native_absolute_sequence_v1",
+            expected_semantic_step=semantic_step,
+            expected_cursor_before=segment.expected_cursor_before,
+        )
+        executed_receipts.append(serialized)
+    aggregate = executed_aggregate(
         task_id=task.task_id,
         fixture_sha256=task.fixture_sha256,
         action_schema="native_absolute_sequence_v1",
-        expected_semantic_step=1,
-        expected_cursor_before=segment.expected_cursor_before,
+        app=task.app,
+        semantic_step_count=task.semantic_step_count,
+        primitive_action_cap=task.budget_contract["primitive_action_caps"][
+            "native_absolute_sequence_v1"
+        ],
+        primitive_event_cap=task.budget_contract["primitive_event_caps"][
+            "native_absolute_sequence_v1"
+        ],
+        receipts=executed_receipts,
     )
+    assert aggregate["executed_segment_receipt_sha256"] == [
+        item["executed_receipt_sha256"] for item in executed_receipts
+    ]

@@ -16,6 +16,9 @@ APPROVED_CURRICULUM_COMMIT = "c6039b7658e89ef6d1aae607bd0c19281b0354ef"
 APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA = (
     "proper_vm_sameapp_runtime_binding_receipt_v1"
 )
+GENERATION_SEED_SOURCE = "trial_generation_seeds_by_arm_v1"
+SAMPLING_SEED_POLICY = "deterministic_unique_per_attempt_arm_v1"
+GENERATION_SEED_DERIVATION = "sha256_sampling_seed_pair_id_arm_generation_63bit_v1"
 MODES = (
     "gold_history_one_step",
     "gold_prefix_horizon",
@@ -112,6 +115,7 @@ class RequestedAction:
     value: Any
     model_call_id: str
     usage: dict[str, int] = field(default_factory=dict)
+    generation_seed: int | None = None
 
 
 @dataclass(frozen=True)

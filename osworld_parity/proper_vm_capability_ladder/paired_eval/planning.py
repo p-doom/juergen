@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from .contracts import ARMS, GOLD_PREFIX_HORIZONS
+from .contracts import ARMS, GENERATION_SEED_DERIVATION, GOLD_PREFIX_HORIZONS
 from .manifest import EvaluationManifest, Task
 
 
@@ -26,10 +26,23 @@ class TrialSpec:
     gold_prefix_length: int
     horizon: int
     attempt_id: int
-    generation_seed: int
+    sampling_draw_seed: int
+    native_generation_seed: int
+    compact_generation_seed: int
     arm_order: tuple[str, str]
     shard_index: int
     shard_count: int
+
+    def generation_seed_for(self, arm: str) -> int:
+        if arm == ARMS[0]:
+            return self.native_generation_seed
+        if arm == ARMS[1]:
+            return self.compact_generation_seed
+        raise KeyError(f"unknown evaluation arm: {arm}")
+
+    @property
+    def generation_seeds_by_arm(self) -> dict[str, int]:
+        return {arm: self.generation_seed_for(arm) for arm in ARMS}
 
 
 def task_shard(
@@ -72,7 +85,20 @@ def _trial(
         "\x00".join(str(item) for item in cell_payload).encode("utf-8")
     ).hexdigest()
     pair_id = hashlib.sha256(f"{cell_id}\x00{attempt}".encode("utf-8")).hexdigest()
-    generation_seed = _digest_int(manifest.sampling_seed, pair_id, "generation") & 0x7FFFFFFF
+    mask_63bit = (1 << 63) - 1
+    sampling_draw_seed = _digest_int(
+        manifest.sampling_seed, pair_id, "pass@k-draw"
+    ) & mask_63bit
+    generation_seeds = {
+        arm: _digest_int(
+            manifest.sampling_seed,
+            pair_id,
+            arm,
+            GENERATION_SEED_DERIVATION,
+        )
+        & mask_63bit
+        for arm in ARMS
+    }
     order_bit = _digest_int(manifest.order_seed, pair_id, "arm-order") & 1
     arm_order = ARMS if order_bit == 0 else tuple(reversed(ARMS))
     logical_steps = (
@@ -119,7 +145,9 @@ def _trial(
         gold_prefix_length=prefix,
         horizon=horizon,
         attempt_id=attempt,
-        generation_seed=generation_seed,
+        sampling_draw_seed=sampling_draw_seed,
+        native_generation_seed=generation_seeds[ARMS[0]],
+        compact_generation_seed=generation_seeds[ARMS[1]],
         arm_order=arm_order,  # type: ignore[arg-type]
         shard_index=shard_index,
         shard_count=shard_count,
@@ -178,10 +206,22 @@ def build_plan(
     pair_ids = [trial.pair_id for trial in plan]
     if len(pair_ids) != len(set(pair_ids)):
         raise AssertionError("deterministic plan produced duplicate pair IDs")
-    generation_seeds: dict[str, set[int]] = {}
+    draw_seeds: dict[str, set[int]] = {}
+    all_draw_seeds: set[int] = set()
+    all_arm_seeds: set[int] = set()
     for trial in plan:
-        seen = generation_seeds.setdefault(trial.cell_id, set())
-        if trial.generation_seed in seen:
-            raise AssertionError("generation seed collision within a pass@k cell")
-        seen.add(trial.generation_seed)
+        seen = draw_seeds.setdefault(trial.cell_id, set())
+        if trial.sampling_draw_seed in seen:
+            raise AssertionError("sampling draw seed collision within a pass@k cell")
+        seen.add(trial.sampling_draw_seed)
+        if trial.sampling_draw_seed in all_draw_seeds:
+            raise AssertionError("sampling draw seed collision across evaluation cells")
+        all_draw_seeds.add(trial.sampling_draw_seed)
+        arm_seeds = tuple(trial.generation_seed_for(arm) for arm in ARMS)
+        if len(set(arm_seeds)) != len(ARMS):
+            raise AssertionError("paired arms share a stochastic generation seed")
+        for seed in arm_seeds:
+            if seed in all_arm_seeds:
+                raise AssertionError("stochastic generation seed collision across draws/arms")
+            all_arm_seeds.add(seed)
     return tuple(plan)

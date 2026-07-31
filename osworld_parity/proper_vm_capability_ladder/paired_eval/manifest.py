@@ -12,8 +12,10 @@ from .contracts import (
     APPROVED_CURRICULUM_COMMIT,
     APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
     ARMS,
+    GENERATION_SEED_SOURCE,
     GOLD_PREFIX_HORIZONS,
     MODES,
+    SAMPLING_SEED_POLICY,
     canonical_json,
 )
 
@@ -314,8 +316,10 @@ def validate_evaluation_manifest(
     attempts = evaluation.get("attempts_per_cell", 1)
     if not isinstance(attempts, int) or isinstance(attempts, bool) or not 8 <= attempts <= 128:
         raise ManifestError("true pass@8 requires attempts_per_cell in [8, 128]")
-    if evaluation.get("sampling_seed_policy") != "paired_fixed_per_attempt_v1":
-        raise ManifestError("sampling_seed_policy must be paired_fixed_per_attempt_v1")
+    if evaluation.get("sampling_seed_policy") != SAMPLING_SEED_POLICY:
+        raise ManifestError(
+            f"sampling_seed_policy must be {SAMPLING_SEED_POLICY}"
+        )
     seeds = {}
     for key in ("order_seed", "shard_seed", "sampling_seed", "bootstrap_seed"):
         value = evaluation.get(key)
@@ -421,6 +425,18 @@ def _parse_arm(value: Any) -> Arm:
     generation = value.get("generation", {})
     if not isinstance(generation, dict):
         raise ManifestError(f"{name}.generation must be an object")
+    if any("seed" in str(key).casefold() for key in generation if key != "seed_source"):
+        raise ManifestError(f"{name}.generation nested seeds are forbidden")
+    if set(generation) != {
+        "do_sample",
+        "temperature",
+        "seed_source",
+    }:
+        raise ManifestError(f"{name}.generation field set drift")
+    if generation.get("seed_source") != GENERATION_SEED_SOURCE:
+        raise ManifestError(
+            f"{name}.generation.seed_source must bind trial arm seeds"
+        )
     if generation.get("do_sample") is not True:
         raise ManifestError(f"{name}.generation.do_sample must be true for pass@k")
     temperature = generation.get("temperature")

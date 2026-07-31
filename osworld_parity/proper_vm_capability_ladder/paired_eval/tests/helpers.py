@@ -9,7 +9,9 @@ from ..contracts import (
     APPROVED_CURRICULUM_COMMIT,
     APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
     ARMS,
+    GENERATION_SEED_SOURCE,
     MODES,
+    SAMPLING_SEED_POLICY,
     canonical_json,
 )
 
@@ -177,7 +179,11 @@ def evaluation_manifest(
                 "checkpoint_sha256": "1" * 64,
                 "prompt_id": "native-prompt-v1",
                 "prompt_sha256": "2" * 64,
-                "generation": {"do_sample": True, "temperature": 0.7},
+                "generation": {
+                    "do_sample": True,
+                    "temperature": 0.7,
+                    "seed_source": GENERATION_SEED_SOURCE,
+                },
             },
             {
                 "name": ARMS[1],
@@ -186,7 +192,11 @@ def evaluation_manifest(
                 "checkpoint_sha256": "3" * 64,
                 "prompt_id": "compact-prompt-v1",
                 "prompt_sha256": "4" * 64,
-                "generation": {"do_sample": True, "temperature": 0.7},
+                "generation": {
+                    "do_sample": True,
+                    "temperature": 0.7,
+                    "seed_source": GENERATION_SEED_SOURCE,
+                },
             },
         ],
         "runtime": {
@@ -212,7 +222,7 @@ def evaluation_manifest(
         "order_seed": 20260731,
         "shard_seed": 10101,
         "sampling_seed": 424242,
-        "sampling_seed_policy": "paired_fixed_per_attempt_v1",
+        "sampling_seed_policy": SAMPLING_SEED_POLICY,
         "bootstrap_seed": 20260731,
         "bootstrap_resamples": 200,
         "exclusions": [],

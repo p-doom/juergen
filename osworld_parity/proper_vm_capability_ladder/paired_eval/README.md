@@ -10,9 +10,11 @@ back to another schema.
 
 The comparison is explicitly a **complete-system comparison**.  Checkpoint,
 prompt, generation settings, and action interface are recorded for each arm and
-may differ.  Task ID, reset snapshot, parameter seed, gold-prefix cursor,
-generation seed, and inference/action budget are common pair properties and
-cannot be overridden inside an arm.
+may differ. Task ID, reset snapshot, parameter seed, gold-prefix cursor,
+sampling-draw identity, and inference/action budget are common pair properties.
+Each arm gets a distinct deterministic stochastic generation seed derived from
+the sealed sampling seed, pair ID, and arm name; nested arm `generation.seed`
+values are forbidden.
 
 ## Development modes
 
@@ -29,7 +31,8 @@ always reports whether pass@1, pass@4, and pass@8 are actually estimable; it
 does not invent pass@k values when there are too few complete attempts or when
 multi-sample generation is deterministic.
 The sealed config requires at least eight attempts, sampling enabled with a
-positive temperature, and a unique deterministic generation seed per attempt.
+positive temperature, and unique deterministic generation seeds for every
+attempt-and-arm draw.
 
 ## Fail-closed execution gate
 
@@ -93,6 +96,11 @@ semantic success or failure.
 Model turns, logical steps, primitive action lines, emitted events, output
 tokens, and wall time are separately decremented and logged. Any overrun or
 parse/dispatch error is a scored failure.
+The ordered policy-turn trace has its own partial-trace schema. It is never
+presented as a curriculum `CompiledProgram`. A c603 complete-program aggregate
+is emitted only for exact semantic-step coverage `1..N`; it revalidates ordered
+segment receipts, conservative caps, stable non-Chrome bindings, and Chrome's
+exact `(1, 1, 2)` / `A, A, B` transition.
 Known VM/setup/observation/model-service/verifier failures can exclude only the
 whole pair.  Parse and executor-dispatch errors remain scored system failures.
 

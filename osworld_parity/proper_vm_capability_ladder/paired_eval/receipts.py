@@ -818,26 +818,147 @@ def validate_executed_segment(
     return receipt
 
 
-def executed_aggregate(
+def _validate_aggregate_receipt(
+    item: Any, *, task_id: str, fixture_sha256: str, action_schema: str
+) -> dict[str, Any]:
+    value = _exact_keys(item, EXECUTED_KEYS, "aggregate executed-segment receipt")
+    if (
+        value["schema_version"] != 1
+        or action_schema not in ACTION_INTERFACES.values()
+        or (value["task_id"], value["fixture_sha256"], value["action_schema"])
+        != (task_id, fixture_sha256, action_schema)
+    ):
+        raise ValueError("aggregate executed-segment identity mismatch")
+    _integer(value["semantic_step_index"], "aggregate semantic step", minimum=1)
+    _integer(
+        value["resolved_primitive_actions"],
+        "aggregate primitive actions",
+        minimum=1,
+    )
+    _integer(
+        value["resolved_primitive_events"],
+        "aggregate primitive events",
+        minimum=1,
+    )
+    _integer(value["binding_revision"], "aggregate binding revision", minimum=1)
+    for field in (
+        "fixture_sha256",
+        "resolved_budget_sha256",
+        "binding_sha256",
+        "dispatch_receipt_sha256",
+        "executed_receipt_sha256",
+    ):
+        if not is_sha256(value[field]):
+            raise ValueError(f"aggregate executed-segment {field} is invalid")
+    started = _integer(
+        value["execution_started_monotonic_ns"], "aggregate execution start", minimum=1
+    )
+    completed = _integer(
+        value["execution_completed_monotonic_ns"],
+        "aggregate execution completion",
+        minimum=1,
+    )
+    if completed <= started:
+        raise ValueError("aggregate execution timestamps are not monotonic")
+    _sealed(value, "executed_receipt_sha256", "aggregate executed-segment receipt")
+    return value
+
+
+def ordered_trace_aggregate(
     *, task_id: str, fixture_sha256: str, action_schema: str, receipts: list[dict[str, Any]]
 ) -> dict[str, Any]:
+    values = [
+        _validate_aggregate_receipt(
+            item,
+            task_id=task_id,
+            fixture_sha256=fixture_sha256,
+            action_schema=action_schema,
+        )
+        for item in receipts
+    ]
+    payload = {
+        "schema_version": 1,
+        "schema_id": "paired_policy_turn_receipt_trace_v1",
+        "task_id": task_id,
+        "fixture_sha256": fixture_sha256,
+        "action_schema": action_schema,
+        "executed_segment_receipt_sha256": [
+            item["executed_receipt_sha256"] for item in values
+        ],
+        "segment_semantic_step_indices": [item["semantic_step_index"] for item in values],
+        "segment_budget_sha256": [item["resolved_budget_sha256"] for item in values],
+        "segment_binding_sha256": [item["binding_sha256"] for item in values],
+        "segment_binding_revisions": [item["binding_revision"] for item in values],
+        "resolved_primitive_actions": sum(
+            item["resolved_primitive_actions"] for item in values
+        ),
+        "resolved_primitive_events": sum(
+            item["resolved_primitive_events"] for item in values
+        ),
+    }
+    payload["binding_chain_sha256"] = sha256_json(payload["segment_binding_sha256"])
+    result = dict(payload)
+    result["trace_receipt_sha256"] = sha256_json(payload)
+    return result
+
+
+def executed_aggregate(
+    *,
+    task_id: str,
+    fixture_sha256: str,
+    action_schema: str,
+    app: str,
+    semantic_step_count: int,
+    primitive_action_cap: int,
+    primitive_event_cap: int,
+    receipts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Replicate c603 ``aggregate_executed_segments`` over serialized receipts."""
+
+    values = [
+        _validate_aggregate_receipt(
+            item,
+            task_id=task_id,
+            fixture_sha256=fixture_sha256,
+            action_schema=action_schema,
+        )
+        for item in receipts
+    ]
+    if [item["semantic_step_index"] for item in values] != list(
+        range(1, semantic_step_count + 1)
+    ):
+        raise ValueError("executed segment coverage/order mismatch")
+    revisions = [item["binding_revision"] for item in values]
+    binding_hashes = [item["binding_sha256"] for item in values]
+    if app == "chrome":
+        if (
+            revisions != [1, 1, 2]
+            or len(binding_hashes) != 3
+            or binding_hashes[0] != binding_hashes[1]
+            or binding_hashes[2] == binding_hashes[1]
+        ):
+            raise ValueError("Chrome binding transition mismatch")
+    elif len(set(revisions)) != 1 or len(set(binding_hashes)) != 1:
+        raise ValueError("unexpected mid-trajectory binding change")
+    resolved_actions = sum(item["resolved_primitive_actions"] for item in values)
+    resolved_events = sum(item["resolved_primitive_events"] for item in values)
+    if resolved_actions > primitive_action_cap:
+        raise ValueError("aggregate primitive actions exceed cap")
+    if resolved_events > primitive_event_cap:
+        raise ValueError("aggregate primitive events exceed cap")
     payload = {
         "schema_version": 1,
         "task_id": task_id,
         "fixture_sha256": fixture_sha256,
         "action_schema": action_schema,
         "executed_segment_receipt_sha256": [
-            item["executed_receipt_sha256"] for item in receipts
+            item["executed_receipt_sha256"] for item in values
         ],
-        "segment_budget_sha256": [item["resolved_budget_sha256"] for item in receipts],
-        "segment_binding_sha256": [item["binding_sha256"] for item in receipts],
-        "segment_binding_revisions": [item["binding_revision"] for item in receipts],
-        "resolved_primitive_actions": sum(
-            item["resolved_primitive_actions"] for item in receipts
-        ),
-        "resolved_primitive_events": sum(
-            item["resolved_primitive_events"] for item in receipts
-        ),
+        "segment_budget_sha256": [item["resolved_budget_sha256"] for item in values],
+        "segment_binding_sha256": binding_hashes,
+        "segment_binding_revisions": revisions,
+        "resolved_primitive_actions": resolved_actions,
+        "resolved_primitive_events": resolved_events,
     }
     payload["binding_sha256"] = sha256_json(payload["segment_binding_sha256"])
     result = dict(payload)

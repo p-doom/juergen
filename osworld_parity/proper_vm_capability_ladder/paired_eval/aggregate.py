@@ -11,6 +11,8 @@ from .contracts import (
     APPROVED_CURRICULUM_COMMIT,
     APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
     ARMS,
+    GENERATION_SEED_DERIVATION,
+    SAMPLING_SEED_POLICY,
     sha256_json,
 )
 from .manifest import EvaluationManifest
@@ -18,6 +20,7 @@ from .planning import TrialSpec
 from .receipts import (
     executed_aggregate,
     is_sha256,
+    ordered_trace_aggregate,
     validate_binding_receipt,
     validate_binding_successor,
     validate_executed_segment,
@@ -48,6 +51,7 @@ def aggregate_results(
     records: Iterable[dict[str, Any]],
 ) -> dict[str, Any]:
     trials = {trial.pair_id: trial for trial in plan}
+    _validate_planned_generation_seeds(trials.values())
     rows: dict[str, dict[str, Any]] = {}
     for row in records:
         pair_id = row.get("pair_id")
@@ -111,6 +115,12 @@ def aggregate_results(
                 "action_interface": arm.action_interface,
             }
             for arm in manifest.arms
+        },
+        "generation_seed_contract": {
+            "sampling_seed_policy": SAMPLING_SEED_POLICY,
+            "generation_seed_derivation": GENERATION_SEED_DERIVATION,
+            "unique_per_planned_attempt_and_arm": True,
+            "nested_arm_generation_seed_forbidden": True,
         },
         "pair_accounting": {
             "planned": len(trials),
@@ -189,8 +199,10 @@ def _validate_row(
         "parameter_seed": trial.parameter_seed,
         "initial_cursor_ref": trial.initial_cursor_ref,
         "initial_cursor": row.get("pairing", {}).get("initial_cursor"),
-        "generation_seed": trial.generation_seed,
-        "sampling_seed_policy": "paired_fixed_per_attempt_v1",
+        "sampling_draw_seed": trial.sampling_draw_seed,
+        "generation_seeds_by_arm": trial.generation_seeds_by_arm,
+        "generation_seed_derivation": GENERATION_SEED_DERIVATION,
+        "sampling_seed_policy": SAMPLING_SEED_POLICY,
         "budget": trial.budget,
         "arm_order": list(trial.arm_order),
         "shard_index": trial.shard_index,
@@ -284,6 +296,10 @@ def _validate_row(
         }
         if system != expected:
             raise ValueError(f"{trial.pair_id}: complete-system provenance drift for {arm.name}")
+        if _arm(row, arm.name).get("generation_seed") != trial.generation_seed_for(
+            arm.name
+        ):
+            raise ValueError(f"{trial.pair_id}: arm stochastic seed evidence mismatch")
         _validate_and_recompute_arm(
             manifest.task(trial.task_id),
             trial,
@@ -302,7 +318,8 @@ def _validate_row(
         "curriculum_commit": APPROVED_CURRICULUM_COMMIT,
         "live_binding": APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
         "resolved_budget_receipts": "executed_segment_receipt_v1",
-        "ordered_executed_aggregate": "compiled_program_receipt_v1",
+        "ordered_execution_trace_aggregate": "paired_policy_turn_receipt_trace_v1",
+        "complete_program_aggregate": "c603_compiled_program_receipt_v1",
     }
     if row.get("runtime") != expected_runtime:
         raise ValueError(f"{trial.pair_id}: runtime contract drift")
@@ -462,6 +479,8 @@ def _validate_turn_trace_evidence(
         turn_seal = unsigned_turn.pop("turn_payload_sha256", None)
         if turn_seal != sha256_json(unsigned_turn):
             raise ValueError(f"{trial.pair_id}: turn payload hash mismatch")
+        if turn.get("model_generation_seed") != trial.generation_seed_for(arm["arm"]):
+            raise ValueError(f"{trial.pair_id}: model stochastic seed evidence mismatch")
         verifier = turn.get("verifier_state")
         if not isinstance(verifier, dict):
             raise ValueError(f"{trial.pair_id}: verifier evidence missing")
@@ -594,7 +613,7 @@ def _validate_turn_trace_evidence(
                 completed_step_2_receipt = turn["executed_segment_receipt"][
                     "executed_receipt_sha256"
                 ]
-    _validate_resolved_budget_aggregate(task, trial, arm, turns)
+    _validate_execution_aggregates(task, trial, arm, turns)
 
 
 def _validate_executor_evidence(
@@ -709,13 +728,12 @@ def _validate_state_probe_evidence(
             "filesystem_readonly_state_probe",
             "browser_dom_readonly_state_probe",
             "editor_readonly_state_probe",
-            "test_readonly_state_probe",
         }
     ):
         raise ValueError(f"{trial.pair_id}: state probe was not input-free/read-only")
 
 
-def _validate_resolved_budget_aggregate(
+def _validate_execution_aggregates(
     task: Any,
     trial: TrialSpec,
     arm: dict[str, Any],
@@ -728,14 +746,43 @@ def _validate_resolved_budget_aggregate(
         and turn.get("dispatch_status") == "ok"
         and isinstance(turn.get("executed_segment_receipt"), dict)
     ]
-    expected = executed_aggregate(
+    expected_trace = ordered_trace_aggregate(
         task_id=task.task_id,
         fixture_sha256=task.fixture_sha256,
         action_schema=arm["action_interface"],
         receipts=resolved,
     )
-    if arm.get("resolved_budget_aggregate") != expected:
-        raise ValueError(f"{trial.pair_id}: resolved budget aggregate mismatch")
+    if arm.get("ordered_execution_trace_aggregate") != expected_trace:
+        raise ValueError(f"{trial.pair_id}: ordered execution trace aggregate mismatch")
+    complete_coverage = [item["semantic_step_index"] for item in resolved] == list(
+        range(1, task.semantic_step_count + 1)
+    )
+    if complete_coverage:
+        expected_complete = executed_aggregate(
+            task_id=task.task_id,
+            fixture_sha256=task.fixture_sha256,
+            action_schema=arm["action_interface"],
+            app=task.app,
+            semantic_step_count=task.semantic_step_count,
+            primitive_action_cap=task.budget_contract["primitive_action_caps"][
+                arm["action_interface"]
+            ],
+            primitive_event_cap=task.budget_contract["primitive_event_caps"][
+                arm["action_interface"]
+            ],
+            receipts=resolved,
+        )
+    else:
+        expected_complete = None
+    if arm.get("complete_program_aggregate") != expected_complete:
+        raise ValueError(f"{trial.pair_id}: complete program aggregate mismatch")
+    expected_status = (
+        "validated_c603_complete_program"
+        if expected_complete is not None
+        else "not_complete_semantic_coverage"
+    )
+    if arm.get("complete_program_aggregate_status") != expected_status:
+        raise ValueError(f"{trial.pair_id}: complete program aggregate status mismatch")
 
 
 def _recompute_budget_failure(
@@ -913,6 +960,27 @@ def _pass_at_k(
             "estimate_by_arm": estimates,
         }
     return output
+
+
+def _validate_planned_generation_seeds(trials: Iterable[TrialSpec]) -> None:
+    draws_by_cell: dict[str, set[int]] = defaultdict(set)
+    all_draw_seeds: set[int] = set()
+    all_arm_seeds: set[int] = set()
+    for trial in trials:
+        draws = draws_by_cell[trial.cell_id]
+        if trial.sampling_draw_seed in draws:
+            raise ValueError("duplicate stochastic sampling draw within pass@k cell")
+        draws.add(trial.sampling_draw_seed)
+        if trial.sampling_draw_seed in all_draw_seeds:
+            raise ValueError("stochastic sampling draw seed reused across cells")
+        all_draw_seeds.add(trial.sampling_draw_seed)
+        arm_seeds = [trial.generation_seed_for(arm) for arm in ARMS]
+        if len(set(arm_seeds)) != len(ARMS):
+            raise ValueError("paired arms share a stochastic generation seed")
+        for seed in arm_seeds:
+            if seed in all_arm_seeds:
+                raise ValueError("stochastic generation seed reused across draws/arms")
+            all_arm_seeds.add(seed)
 
 
 def _stochastic_generation(generation: dict[str, Any]) -> bool:

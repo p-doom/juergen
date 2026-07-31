@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import os
 import time
+from dataclasses import replace
 
 import pytest
 
@@ -23,7 +24,11 @@ from ..contracts import (
 from ..manifest import load_evaluation_manifest
 from ..planning import build_plan
 from ..readiness import consume_executor_ready
-from ..receipts import validate_binding_receipt, validate_binding_successor
+from ..receipts import (
+    executed_aggregate,
+    validate_binding_receipt,
+    validate_binding_successor,
+)
 from ..runner import PairedEvaluationRunner, PairingViolation, write_jsonl_atomic
 from ..setup_validation import consume_task_setup_validation
 from .helpers import (
@@ -291,6 +296,12 @@ def _refreshed_binding(task, binding, executed_receipt_sha256):
     )
 
 
+def _resign_executed(receipt, **changes):
+    value = {**copy.deepcopy(receipt), **changes}
+    value.pop("executed_receipt_sha256", None)
+    return _seal(value, "executed_receipt_sha256")
+
+
 class FakeSession:
     def __init__(
         self, task, arm, mode, prefix, fail=False, semantic_fail=False,
@@ -298,6 +309,8 @@ class FakeSession:
         cursor_precentered=False, hidden_intervention=False,
         active_window_verified=True, native_click_proof=True, click=False,
         alternative_execution=False, state_probe_intervention=False,
+        probe_method="uno_readonly_state_probe",
+        reported_seed_offset=0,
     ) -> None:
         self.task, self.arm, self.mode, self.prefix = task, arm, mode, prefix
         self.fail, self.semantic_fail = fail, semantic_fail
@@ -308,6 +321,8 @@ class FakeSession:
         self.native_click_proof = native_click_proof
         self.click, self.alternative_execution = click, alternative_execution
         self.state_probe_intervention = state_probe_intervention
+        self.probe_method = probe_method
+        self.reported_seed_offset = reported_seed_offset
         self.executed_turns = 0
         self.binding = _binding(task, arm.name)
         self.cursor = (960, 540)
@@ -369,7 +384,10 @@ class FakeSession:
                 else "0 0 0; +ControlLeft +KeyS -KeyS -ControlLeft"
             )
         return RequestedAction(
-            value, f"{self.arm.name}-{self.executed_turns}", {"output_tokens": 4}
+            value,
+            f"{self.arm.name}-{self.executed_turns}",
+            {"output_tokens": 4},
+            generation_seed=generation_seed + self.reported_seed_offset,
         )
 
     def execute(self, requested):
@@ -480,7 +498,7 @@ class FakeSession:
             {"read_only": True,
              "input_events": ([{"kind": "hotkey", "keys": ["ControlLeft", "KeyS"]}]
                               if self.state_probe_intervention else []),
-             "application": self.task.app, "method": "test_readonly_state_probe"},
+             "application": self.task.app, "method": self.probe_method},
         )
 
     def close(self):
@@ -503,6 +521,8 @@ class FakeRuntime:
         click: bool = False,
         alternative_execution: bool = False,
         state_probe_intervention: bool = False,
+        probe_method: str = "uno_readonly_state_probe",
+        reported_seed_offset: int = 0,
     ) -> None:
         self.fail_arm = fail_arm
         self.semantic_fail_arm = semantic_fail_arm
@@ -517,6 +537,8 @@ class FakeRuntime:
         self.click = click
         self.alternative_execution = alternative_execution
         self.state_probe_intervention = state_probe_intervention
+        self.probe_method = probe_method
+        self.reported_seed_offset = reported_seed_offset
         self.contract = {
             "schema": "proper_vm_paired_runtime_v1",
             "runtime_id": "fake-paired-runtime-v1",
@@ -532,7 +554,8 @@ class FakeRuntime:
             "curriculum_commit": APPROVED_CURRICULUM_COMMIT,
             "live_binding": APPROVED_CURRICULUM_RUNTIME_BINDING_SCHEMA,
             "resolved_budget_receipts": "executed_segment_receipt_v1",
-            "ordered_executed_aggregate": "compiled_program_receipt_v1",
+            "ordered_execution_trace_aggregate": "paired_policy_turn_receipt_trace_v1",
+            "complete_program_aggregate": "c603_compiled_program_receipt_v1",
         }
 
     def open_session(self, *, task, arm, mode, gold_prefix_length, horizon, generation_seed):
@@ -557,6 +580,8 @@ class FakeRuntime:
             self.click,
             self.alternative_execution,
             self.state_probe_intervention,
+            self.probe_method,
+            self.reported_seed_offset,
         )
 
 
@@ -714,6 +739,10 @@ def test_budget_overrun_forces_scored_failure(tmp_path) -> None:
         (FakeRuntime(hidden_intervention=True), "hidden between-turn intervention"),
         (FakeRuntime(active_window_verified=False), "true active-window evidence"),
         (FakeRuntime(state_probe_intervention=True), "input-free/read-only"),
+        (
+            FakeRuntime(probe_method="test_readonly_state_probe"),
+            "input-free/read-only",
+        ),
         (FakeRuntime(click=True, native_click_proof=False), "native requested click coordinate"),
     ],
 )
@@ -725,6 +754,26 @@ def test_runner_rejects_cursor_and_executor_audit_violations(
         _runner(manifest, readiness, setup, runtime).run_trial(
             build_plan(manifest)[0]
         )
+
+
+def test_runner_and_offline_aggregate_reject_reused_or_unbound_model_seeds(
+    tmp_path,
+) -> None:
+    manifest, readiness, setup = _setup(tmp_path)
+    trial = build_plan(manifest)[0]
+    with pytest.raises(PairingViolation, match="model call did not bind"):
+        _runner(
+            manifest,
+            readiness,
+            setup,
+            FakeRuntime(reported_seed_offset=1),
+        ).run_trial(trial)
+    reused = replace(
+        trial,
+        compact_generation_seed=trial.native_generation_seed,
+    )
+    with pytest.raises(ValueError, match="paired arms share"):
+        aggregate_results(manifest, [reused], [])
 
 
 def test_native_coordinate_dispatch_uses_post_cursor_and_semantic_state_wins(tmp_path) -> None:
@@ -766,7 +815,7 @@ def test_mcnemar_is_descriptive_for_a_discordant_pair(tmp_path) -> None:
     plan = build_plan(manifest)
     runtime = FakeRuntime(
         semantic_fail_arm=ARMS[1],
-        semantic_fail_seed=plan[0].generation_seed,
+        semantic_fail_seed=plan[0].generation_seed_for(ARMS[1]),
     )
     rows = _runner(manifest, readiness, setup, runtime).run(plan)
     report = aggregate_results(manifest, plan, rows)
@@ -799,6 +848,18 @@ def test_aggregate_rejects_stored_success_or_verifier_tampering(tmp_path) -> Non
     tampered = copy.deepcopy(row)
     tampered["arms"][0]["turns"][0]["verifier_state"]["semantic_state"]["target"] = "tampered"
     with pytest.raises(ValueError, match="record payload hash mismatch"):
+        aggregate_results(manifest, [trial], [tampered])
+
+    tampered = copy.deepcopy(row)
+    turn = tampered["arms"][0]["turns"][0]
+    turn["state_probe_evidence"]["method"] = "test_readonly_state_probe"
+    unsigned_turn = dict(turn)
+    unsigned_turn.pop("turn_payload_sha256")
+    turn["turn_payload_sha256"] = sha256_json(unsigned_turn)
+    unsigned_row = dict(tampered)
+    unsigned_row.pop("record_payload_sha256")
+    tampered["record_payload_sha256"] = sha256_json(unsigned_row)
+    with pytest.raises(ValueError, match="input-free/read-only"):
         aggregate_results(manifest, [trial], [tampered])
 
 
@@ -849,6 +910,91 @@ def test_provider_generation_and_aab_refresh_receipts_are_fail_closed(tmp_path) 
             initial,
             refreshed,
             completed_step_2_receipt_sha256="c" * 64,
+        )
+
+
+def test_complete_aggregate_requires_c603_coverage_order_and_aab(tmp_path) -> None:
+    manifest, _, _ = _setup(tmp_path)
+    task = manifest.tasks[0]
+    arm = manifest.arm(ARMS[0])
+    binding = _binding(task, ARMS[0])
+    action = {
+        "schema": arm.action_interface,
+        "semantic_step": 1,
+        "operations": [
+            {"action": "key_chord", "keys": ["ControlLeft", "KeyS"]}
+        ],
+    }
+    _, _, first = _segment_receipts(task, arm, binding, 1, [action], (960, 540))
+    _, _, second = _segment_receipts(task, arm, binding, 2, [action], (960, 540))
+    complete = executed_aggregate(
+        task_id=task.task_id,
+        fixture_sha256=task.fixture_sha256,
+        action_schema=arm.action_interface,
+        app=task.app,
+        semantic_step_count=2,
+        primitive_action_cap=3,
+        primitive_event_cap=8,
+        receipts=[first, second],
+    )
+    assert complete["segment_binding_revisions"] == [1, 1]
+    with pytest.raises(ValueError, match="coverage/order"):
+        executed_aggregate(
+            task_id=task.task_id,
+            fixture_sha256=task.fixture_sha256,
+            action_schema=arm.action_interface,
+            app=task.app,
+            semantic_step_count=2,
+            primitive_action_cap=3,
+            primitive_event_cap=8,
+            receipts=[first],
+        )
+    with pytest.raises(ValueError, match="coverage/order"):
+        executed_aggregate(
+            task_id=task.task_id,
+            fixture_sha256=task.fixture_sha256,
+            action_schema=arm.action_interface,
+            app=task.app,
+            semantic_step_count=2,
+            primitive_action_cap=3,
+            primitive_event_cap=8,
+            receipts=[second, first],
+        )
+
+    binding_a = "a" * 64
+    binding_b = "b" * 64
+    chrome = [
+        _resign_executed(first, semantic_step_index=1, binding_revision=1,
+                         binding_sha256=binding_a),
+        _resign_executed(second, semantic_step_index=2, binding_revision=1,
+                         binding_sha256=binding_a),
+        _resign_executed(second, semantic_step_index=3, binding_revision=2,
+                         binding_sha256=binding_b),
+    ]
+    executed_aggregate(
+        task_id=task.task_id,
+        fixture_sha256=task.fixture_sha256,
+        action_schema=arm.action_interface,
+        app="chrome",
+        semantic_step_count=3,
+        primitive_action_cap=4,
+        primitive_event_cap=12,
+        receipts=chrome,
+    )
+    forged = list(chrome)
+    forged[2] = _resign_executed(
+        forged[2], binding_revision=1, binding_sha256=binding_a
+    )
+    with pytest.raises(ValueError, match="Chrome binding transition"):
+        executed_aggregate(
+            task_id=task.task_id,
+            fixture_sha256=task.fixture_sha256,
+            action_schema=arm.action_interface,
+            app="chrome",
+            semantic_step_count=3,
+            primitive_action_cap=4,
+            primitive_event_cap=12,
+            receipts=forged,
         )
 
 

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .aggregate import aggregate_results, load_jsonl
+from .contracts import GENERATION_SEED_DERIVATION, SAMPLING_SEED_POLICY
 from .curriculum_adapter import load_curriculum_evaluation_manifest
 from .manifest import EvaluationManifest
 from .planning import build_plan
@@ -122,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
                 "suite": manifest.suite,
                 "development_only": True,
                 "scored_execution": False,
+                "sampling_seed_policy": SAMPLING_SEED_POLICY,
+                "generation_seed_derivation": GENERATION_SEED_DERIVATION,
                 "trials": [asdict(trial) for trial in plan],
             },
         )
