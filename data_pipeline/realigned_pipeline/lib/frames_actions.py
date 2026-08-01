@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 01: extract frames (default 0.5 fps) and align per-bin action strings."""
+"""Stage 01: extract 2fps frames and align next-window action bins."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from annotation_pipeline import config
-from annotation_pipeline.common import (
+from realigned_pipeline.lib import config
+from realigned_pipeline.lib.common import (
     ActionBin,
     aggregate_actions,
     ceil_frames,
@@ -25,7 +25,7 @@ from annotation_pipeline.common import (
     write_json,
     write_jsonl,
 )
-from annotation_pipeline.image_store import make_arrayrecord_image_uri
+from realigned_pipeline.lib.image_store import make_arrayrecord_image_uri
 
 
 def jpeg_quality_to_qscale(jpeg_quality: int) -> int:

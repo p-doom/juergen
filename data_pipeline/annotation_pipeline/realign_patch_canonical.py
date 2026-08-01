@@ -35,7 +35,9 @@ from annotation_pipeline.common import (
     resolve_key_name,
 )
 
-TERMINAL_TOKENS = {"<TERMINATED>"}
+# Old artifacts (ccast0618d) end with <TERMINATED>; plan-aware builds use
+# <TERMINATE> (see prompts/desktop_action_plan.txt).
+TERMINAL_TOKENS = {"<TERMINATED>", "<TERMINATE>"}
 
 
 def _aggregate_actions_realigned(keylog_path, n_bins, target_fps, splices):
@@ -176,10 +178,22 @@ def tags_for(row: dict | None) -> dict[str, Any]:
             "alignment_residual_s": row["residual_s"]}
 
 
+def _split_plan_prefix(text: str, plan: str) -> tuple[str, str]:
+    """(prefix, action) for an assistant turn. A plan-bearing sample's FIRST
+    assistant turn is `<plan>\\n<action>` (stage 02b/03); the prefix must
+    survive action patching, so split it off and re-attach after."""
+    if plan and text.startswith(plan):
+        rest = text[len(plan):]
+        if rest.startswith("\n"):
+            return plan + "\n", rest[1:]
+    return "", text
+
+
 def patch_chat_row(row: dict, cache: ActionMapCache, align_by_sid: dict[str, dict],
                    stats: dict) -> int:
     """Patch a chat.jsonl record in place; return new n_non_noop."""
     clip_id = str(row.get("clip_id") or "")
+    plan = str(row.get("plan") or "")
     amap = cache.get(clip_id)
     msgs = row.get("messages", [])
     last_img: str | None = None
@@ -192,15 +206,16 @@ def patch_chat_row(row: dict, cache: ActionMapCache, align_by_sid: dict[str, dic
         text = _assistant_text(msg)
         if text is None or text in TERMINAL_TOKENS:
             continue
-        new_text = text
+        prefix, action = _split_plan_prefix(text, plan)
         if amap is not None and last_img is not None and last_img in amap:
-            new_text = amap[last_img]
-            if new_text != text:
+            new_action = amap[last_img]
+            if new_action != action:
                 stats["turns_changed"] += 1
-            _set_assistant_text(msg, new_text)
+            action = new_action
+            _set_assistant_text(msg, prefix + action)
         elif amap is not None and last_img is not None:
             stats["turns_unmatched"] += 1
-        if new_text != "NO_OP":
+        if action != "NO_OP":
             n_non_noop += 1
     row["n_non_noop"] = n_non_noop
     row.update(tags_for(align_by_sid.get(clip_id)))
