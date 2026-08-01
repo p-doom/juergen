@@ -44,6 +44,7 @@ qcow = "{inputs.vm.path}/Ubuntu.qcow2"
 qemu = "{inputs.qemu.path}/bin/qemu-system-x86_64-wrapped"
 provider = "{inputs.provider.path}/qemu_fast_reset.py"
 "task-id" = "cln-smoke-calc-01-three-plus-five"
+"max-attempts" = "1"
 
 [env]
 PYTHONUNBUFFERED = "1"

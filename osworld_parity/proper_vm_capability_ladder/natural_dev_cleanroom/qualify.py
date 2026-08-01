@@ -270,9 +270,12 @@ def qualify_vm(
     qemu: Path,
     provider: Path,
     work_dir: Path,
+    max_attempts: int = 2,
 ) -> dict[str, Any]:
     if not 1 <= per_app <= 10:
         raise ValueError("per-app qualification count must be in [1, 10]")
+    if max_attempts not in {1, 2}:
+        raise ValueError("max-attempts must be 1 or 2")
     if task_id is not None:
         if shard_index is not None:
             raise ValueError("task-id and shard-index are mutually exclusive")
@@ -306,7 +309,7 @@ def qualify_vm(
         session.start()
         for task in selected:
             attempt_failures: list[dict[str, Any]] = []
-            for attempt_index in range(1, 3):
+            for attempt_index in range(1, max_attempts + 1):
                 try:
                     row = _vm_task(session, task)
                     row["attempt_index"] = attempt_index
@@ -320,7 +323,7 @@ def qualify_vm(
                         "traceback": traceback.format_exc(),
                     }
                     attempt_failures.append(failure)
-                    if not isinstance(exc, (TimeoutError, AppReadinessError)) or attempt_index == 2:
+                    if not isinstance(exc, (TimeoutError, AppReadinessError)) or attempt_index == max_attempts:
                         row = {
                             "task_id": task.id,
                             "app": task.app,
@@ -362,6 +365,7 @@ def qualify_vm(
         "qualification": "cpu_kvm_native_absolute_gold",
         "shard_index": shard_index,
         "task_id_filter": task_id,
+        "max_attempts": max_attempts,
         "suite_manifest_sha256": corpus.manifest_payload_sha256,
         "model_runs": False,
         "task_count": len(rows),
@@ -403,6 +407,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--per-app", type=int, default=10)
     parser.add_argument("--shard-index", type=int)
     parser.add_argument("--task-id")
+    parser.add_argument("--max-attempts", type=int, default=2)
     parser.add_argument("--qcow", type=Path, default=DEFAULT_QCOW)
     parser.add_argument("--qemu", type=Path, default=DEFAULT_QEMU)
     parser.add_argument("--provider", type=Path, default=DEFAULT_PROVIDER)
@@ -423,6 +428,7 @@ def main(argv: list[str] | None = None) -> int:
             qemu=args.qemu,
             provider=args.provider,
             work_dir=work_dir,
+            max_attempts=args.max_attempts,
         )
     _atomic_json(args.output, receipt)
     print(json.dumps({key: receipt[key] for key in ("qualification", "status", "task_count", "passed_count")}, sort_keys=True))

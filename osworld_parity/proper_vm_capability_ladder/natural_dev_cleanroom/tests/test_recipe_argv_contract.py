@@ -25,7 +25,8 @@ def test_labctl_args_render_as_supported_cli_flags() -> None:
     smoke = _load("natural_dev_cleanroom_plumbing_smoke_cpu_kvm.toml")
     calc = _load("natural_dev_cleanroom_calc_smoke_cpu_kvm.toml")
     supported = {
-        "output", "work-dir", "qcow", "qemu", "provider", "shard-index", "task-id"
+        "output", "work-dir", "qcow", "qemu", "provider", "shard-index", "task-id",
+        "max-attempts",
     }
     for recipe in (full, smoke, calc):
         args = recipe["args"]
@@ -33,6 +34,7 @@ def test_labctl_args_render_as_supported_cli_flags() -> None:
         assert set(args) <= supported
         assert "work-dir" in args
         assert all("_" not in key for key in args)
+    assert calc["args"]["max-attempts"] == "1"
 
 
 def test_full_corpus_sweep_binds_the_hyphenated_shard_flag() -> None:
