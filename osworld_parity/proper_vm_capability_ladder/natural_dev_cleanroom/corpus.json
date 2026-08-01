@@ -1,0 +1,2008 @@
+{
+  "manifest_payload_sha256": "5a74ef76c88a45436af731e38543552cb52237272f86516f47e96643cef62e1e",
+  "model_runs": false,
+  "observation_contract": "instruction_and_screenshot_only",
+  "oracle_visibility": "fresh_host_process_only",
+  "provenance": {
+    "construction": "first_principles_parameterized_local_app_primitives",
+    "external_benchmark_material_consumed": false,
+    "source_scope": "explicit_safe_development_fixture_apis_only",
+    "test_derived": false
+  },
+  "schema_version": 1,
+  "split": "development",
+  "suite": "cleanroom_natural_multistep_vm_development_v1",
+  "task_count": 40,
+  "tasks": [
+    {
+      "app": "writer",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "easy",
+      "expected": {
+        "bold": true,
+        "text": "Lantern review: confirm Room Cedar at 14:30."
+      },
+      "fixture_sha256": "939ddc1b476e96b41b6b8131008725da5374944b06fa93b348ed00b66228e4e5",
+      "horizon": 4,
+      "id": "cln-dev-writer-01-bold-note",
+      "instruction": "In the open Writer document, replace all text with exactly “Lantern review: confirm Room Cedar at 14:30.” Make the complete replacement bold, then save the document.",
+      "near_miss": {
+        "bold": false,
+        "text": "Lantern review: confirm Room Cedar at 14:30."
+      },
+      "parameter_seed": 4101,
+      "params": {
+        "file_name": "cleanroom_writer_01.odt",
+        "initial_text": "Temporary Writer draft 01"
+      },
+      "recovery": {
+        "corrective_action": "select the full replacement, apply bold, and save again",
+        "near_miss_class": "correct_text_missing_bold_format"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "f16497dbde01abed5a6a7e704bb822f6c3e1ec28ad275130bba906d7585f50e4",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "writer",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "bold": true,
+        "text": "Harbor checklist: pack badges, cables, and spare labels."
+      },
+      "fixture_sha256": "148e31229eb649a7a8e37e288e82a24e9be193baaed6470acf71bbad19a65480",
+      "horizon": 4,
+      "id": "cln-dev-writer-02-bold-note",
+      "instruction": "In the open Writer document, replace all text with exactly “Harbor checklist: pack badges, cables, and spare labels.” Make the complete replacement bold, then save the document.",
+      "near_miss": {
+        "bold": false,
+        "text": "Harbor checklist: pack badges, cables, and spare labels."
+      },
+      "parameter_seed": 4102,
+      "params": {
+        "file_name": "cleanroom_writer_02.odt",
+        "initial_text": "Temporary Writer draft 02"
+      },
+      "recovery": {
+        "corrective_action": "select the full replacement, apply bold, and save again",
+        "near_miss_class": "correct_text_missing_bold_format"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "39d0071a592b170bb5d6843213986c40727102b50778fcd4c534dcc53cf83af4",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "writer",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "hard",
+      "expected": {
+        "bold": true,
+        "text": "Orchid brief: publish the draft after the noon review."
+      },
+      "fixture_sha256": "5dbe27a48ae6e9ab2b5eb6a1aaf12a2d8847a34145ef8c2c73cd0f5d44d0ef02",
+      "horizon": 4,
+      "id": "cln-dev-writer-03-bold-note",
+      "instruction": "In the open Writer document, replace all text with exactly “Orchid brief: publish the draft after the noon review.” Make the complete replacement bold, then save the document.",
+      "near_miss": {
+        "bold": false,
+        "text": "Orchid brief: publish the draft after the noon review."
+      },
+      "parameter_seed": 4103,
+      "params": {
+        "file_name": "cleanroom_writer_03.odt",
+        "initial_text": "Temporary Writer draft 03"
+      },
+      "recovery": {
+        "corrective_action": "select the full replacement, apply bold, and save again",
+        "near_miss_class": "correct_text_missing_bold_format"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "e49d4a419dab23d9b7f840b9e49bafd5f6cd6765747deb84cf01755a2654a0a4",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "writer",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "bold": true,
+        "text": "Juniper memo: send the revised estimate before Friday."
+      },
+      "fixture_sha256": "d549bdc14f17791ea785ff619c62854e064aca937137725f62130bb1c5f646d8",
+      "horizon": 4,
+      "id": "cln-dev-writer-04-bold-note",
+      "instruction": "In the open Writer document, replace all text with exactly “Juniper memo: send the revised estimate before Friday.” Make the complete replacement bold, then save the document.",
+      "near_miss": {
+        "bold": false,
+        "text": "Juniper memo: send the revised estimate before Friday."
+      },
+      "parameter_seed": 4104,
+      "params": {
+        "file_name": "cleanroom_writer_04.odt",
+        "initial_text": "Temporary Writer draft 04"
+      },
+      "recovery": {
+        "corrective_action": "select the full replacement, apply bold, and save again",
+        "near_miss_class": "correct_text_missing_bold_format"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "5b661c11faeb04bdf89b26d9b80b9938db67226d279e7753dd40c13d3d819fc6",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "writer",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "hard",
+      "expected": {
+        "bold": true,
+        "text": "Copper plan: archive receipts after the budget check."
+      },
+      "fixture_sha256": "c4a4ae5183420f08d581169661f719656465aab65221758cbb322ac5e4762310",
+      "horizon": 4,
+      "id": "cln-dev-writer-05-bold-note",
+      "instruction": "In the open Writer document, replace all text with exactly “Copper plan: archive receipts after the budget check.” Make the complete replacement bold, then save the document.",
+      "near_miss": {
+        "bold": false,
+        "text": "Copper plan: archive receipts after the budget check."
+      },
+      "parameter_seed": 4105,
+      "params": {
+        "file_name": "cleanroom_writer_05.odt",
+        "initial_text": "Temporary Writer draft 05"
+      },
+      "recovery": {
+        "corrective_action": "select the full replacement, apply bold, and save again",
+        "near_miss_class": "correct_text_missing_bold_format"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "6a363bf1646a2701eb5a4dd6bc0e54c3e90c804a0a65a03f3ec6d58bba4e733b",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "writer",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "easy",
+      "expected": {
+        "bold": true,
+        "text": "Nimbus note: reserve two quiet desks for the visitors."
+      },
+      "fixture_sha256": "66a9dea733a61304843e632c5a358a2f826ebf155ac3710e124f7f14298e4ea6",
+      "horizon": 4,
+      "id": "cln-dev-writer-06-bold-note",
+      "instruction": "In the open Writer document, replace all text with exactly “Nimbus note: reserve two quiet desks for the visitors.” Make the complete replacement bold, then save the document.",
+      "near_miss": {
+        "bold": false,
+        "text": "Nimbus note: reserve two quiet desks for the visitors."
+      },
+      "parameter_seed": 4106,
+      "params": {
+        "file_name": "cleanroom_writer_06.odt",
+        "initial_text": "Temporary Writer draft 06"
+      },
+      "recovery": {
+        "corrective_action": "select the full replacement, apply bold, and save again",
+        "near_miss_class": "correct_text_missing_bold_format"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "0bf724665b1ec49b55c30262488b419746ce15ee0a199ea8b30293dd49c6e521",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "writer",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "bold": true,
+        "text": "Maple update: route the sample box through reception."
+      },
+      "fixture_sha256": "e25daf1c772e0fb3385bd850d427cceb6195eeb66b27e845ed7d9ef485f5c26e",
+      "horizon": 4,
+      "id": "cln-dev-writer-07-bold-note",
+      "instruction": "In the open Writer document, replace all text with exactly “Maple update: route the sample box through reception.” Make the complete replacement bold, then save the document.",
+      "near_miss": {
+        "bold": false,
+        "text": "Maple update: route the sample box through reception."
+      },
+      "parameter_seed": 4107,
+      "params": {
+        "file_name": "cleanroom_writer_07.odt",
+        "initial_text": "Temporary Writer draft 07"
+      },
+      "recovery": {
+        "corrective_action": "select the full replacement, apply bold, and save again",
+        "near_miss_class": "correct_text_missing_bold_format"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "6361d7a5f0269b3491fd1a8c16477d58ab14268dcf5d1f17ded99e1b7515f705",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "writer",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "hard",
+      "expected": {
+        "bold": true,
+        "text": "Quartz log: record the calibration result as 7.25."
+      },
+      "fixture_sha256": "0fd6cc7822df3b1fe96cb3a7cd0fbc398f231f465a4f4dcd5823c2a29e88f77e",
+      "horizon": 4,
+      "id": "cln-dev-writer-08-bold-note",
+      "instruction": "In the open Writer document, replace all text with exactly “Quartz log: record the calibration result as 7.25.” Make the complete replacement bold, then save the document.",
+      "near_miss": {
+        "bold": false,
+        "text": "Quartz log: record the calibration result as 7.25."
+      },
+      "parameter_seed": 4108,
+      "params": {
+        "file_name": "cleanroom_writer_08.odt",
+        "initial_text": "Temporary Writer draft 08"
+      },
+      "recovery": {
+        "corrective_action": "select the full replacement, apply bold, and save again",
+        "near_miss_class": "correct_text_missing_bold_format"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "ee901e84630b83c2e6aa3fff85686c0a659d868bff8ceaf4e32f1255f424f866",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "writer",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "easy",
+      "expected": {
+        "bold": true,
+        "text": "Willow agenda: discuss hiring, travel, then security."
+      },
+      "fixture_sha256": "1054e0adea65d465bf9463009fc0c40ea705c4f27257d7eed9bd0d1f31db2563",
+      "horizon": 4,
+      "id": "cln-dev-writer-09-bold-note",
+      "instruction": "In the open Writer document, replace all text with exactly “Willow agenda: discuss hiring, travel, then security.” Make the complete replacement bold, then save the document.",
+      "near_miss": {
+        "bold": false,
+        "text": "Willow agenda: discuss hiring, travel, then security."
+      },
+      "parameter_seed": 4109,
+      "params": {
+        "file_name": "cleanroom_writer_09.odt",
+        "initial_text": "Temporary Writer draft 09"
+      },
+      "recovery": {
+        "corrective_action": "select the full replacement, apply bold, and save again",
+        "near_miss_class": "correct_text_missing_bold_format"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "6b612a22d4278a31a8c0b67736645c9923a9dc59d245115e6012cb6fb3821647",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "writer",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "bold": true,
+        "text": "Saffron recap: share action items with the design group."
+      },
+      "fixture_sha256": "6bc7e2129509e57143f619291c89a9873be5f990b69fb79827b3cbcf0c22a416",
+      "horizon": 4,
+      "id": "cln-dev-writer-10-bold-note",
+      "instruction": "In the open Writer document, replace all text with exactly “Saffron recap: share action items with the design group.” Make the complete replacement bold, then save the document.",
+      "near_miss": {
+        "bold": false,
+        "text": "Saffron recap: share action items with the design group."
+      },
+      "parameter_seed": 4110,
+      "params": {
+        "file_name": "cleanroom_writer_10.odt",
+        "initial_text": "Temporary Writer draft 10"
+      },
+      "recovery": {
+        "corrective_action": "select the full replacement, apply bold, and save again",
+        "near_miss_class": "correct_text_missing_bold_format"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "d53dc3bddb9b4d731a7ed7a3577e724c4a49b13a16b7f4f928d776edc2bdabaa",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "calc",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "easy",
+      "expected": {
+        "display_value": "13",
+        "formula": "of:=SUM(4;9)"
+      },
+      "fixture_sha256": "db8da3880bfe9e866f05d86160cd39e44f9f5f6d46e184971a0cfdccd1b666ae",
+      "horizon": 6,
+      "id": "cln-dev-calc-01-sum-cell",
+      "instruction": "In Calc, go to cell B3, enter a formula that adds 4 and 9, confirm it, and save the spreadsheet.",
+      "near_miss": {
+        "display_value": "12",
+        "formula": "of:=SUM(4;8)"
+      },
+      "parameter_seed": 4201,
+      "params": {
+        "cell": "B3",
+        "file_name": "cleanroom_calc_01.ods",
+        "initial_value": "0"
+      },
+      "recovery": {
+        "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
+        "near_miss_class": "formula_second_operand_off_by_one"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 4,
+      "split": "development",
+      "task_sha256": "ff70749cfdc64c42a58dbb14fb3f1795919f9465485c1d0f973193ccc2da51fd",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "calc",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "display_value": "19",
+        "formula": "of:=SUM(6;13)"
+      },
+      "fixture_sha256": "b3413736103ccf67d5de845a678b31f646eaa92e2a609d20d18534307ef60f2d",
+      "horizon": 6,
+      "id": "cln-dev-calc-02-sum-cell",
+      "instruction": "In Calc, go to cell C4, enter a formula that adds 6 and 13, confirm it, and save the spreadsheet.",
+      "near_miss": {
+        "display_value": "18",
+        "formula": "of:=SUM(6;12)"
+      },
+      "parameter_seed": 4202,
+      "params": {
+        "cell": "C4",
+        "file_name": "cleanroom_calc_02.ods",
+        "initial_value": "0"
+      },
+      "recovery": {
+        "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
+        "near_miss_class": "formula_second_operand_off_by_one"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 4,
+      "split": "development",
+      "task_sha256": "0a15dcbe36ada1fe253a31a88bf4727c8ffe5adc699098a24bb18d45bf669473",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "calc",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "hard",
+      "expected": {
+        "display_value": "25",
+        "formula": "of:=SUM(8;17)"
+      },
+      "fixture_sha256": "905e5c53ed5c54f7eebab8341caed9193f08687d69bd15ad6abb83e4bf5c3049",
+      "horizon": 6,
+      "id": "cln-dev-calc-03-sum-cell",
+      "instruction": "In Calc, go to cell D5, enter a formula that adds 8 and 17, confirm it, and save the spreadsheet.",
+      "near_miss": {
+        "display_value": "24",
+        "formula": "of:=SUM(8;16)"
+      },
+      "parameter_seed": 4203,
+      "params": {
+        "cell": "D5",
+        "file_name": "cleanroom_calc_03.ods",
+        "initial_value": "0"
+      },
+      "recovery": {
+        "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
+        "near_miss_class": "formula_second_operand_off_by_one"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 4,
+      "split": "development",
+      "task_sha256": "eacfbf5aa709641880e7f7f3025ed6b76daecc976b10bd8cc5c63a55fc1c8d07",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "calc",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "display_value": "18",
+        "formula": "of:=SUM(11;7)"
+      },
+      "fixture_sha256": "248a9cd550edf57f04769383d1be7f55c1cb78df9f10efd289d4aa0f555d48bd",
+      "horizon": 6,
+      "id": "cln-dev-calc-04-sum-cell",
+      "instruction": "In Calc, go to cell E6, enter a formula that adds 11 and 7, confirm it, and save the spreadsheet.",
+      "near_miss": {
+        "display_value": "17",
+        "formula": "of:=SUM(11;6)"
+      },
+      "parameter_seed": 4204,
+      "params": {
+        "cell": "E6",
+        "file_name": "cleanroom_calc_04.ods",
+        "initial_value": "0"
+      },
+      "recovery": {
+        "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
+        "near_miss_class": "formula_second_operand_off_by_one"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 4,
+      "split": "development",
+      "task_sha256": "f0560af2823405cde81d7eddd9769bea11ba4259beaa25a86c1da54330efda9c",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "calc",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "hard",
+      "expected": {
+        "display_value": "31",
+        "formula": "of:=SUM(12;19)"
+      },
+      "fixture_sha256": "983698c2121b4366a22153b65134dbd70557fd81ff58f9ae1024804ca036dd0d",
+      "horizon": 6,
+      "id": "cln-dev-calc-05-sum-cell",
+      "instruction": "In Calc, go to cell F7, enter a formula that adds 12 and 19, confirm it, and save the spreadsheet.",
+      "near_miss": {
+        "display_value": "30",
+        "formula": "of:=SUM(12;18)"
+      },
+      "parameter_seed": 4205,
+      "params": {
+        "cell": "F7",
+        "file_name": "cleanroom_calc_05.ods",
+        "initial_value": "0"
+      },
+      "recovery": {
+        "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
+        "near_miss_class": "formula_second_operand_off_by_one"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 4,
+      "split": "development",
+      "task_sha256": "e0339a39dc0d3727a38b405c19104d0a529c88ea621935ec5d11fc8a7559f76a",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "calc",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "easy",
+      "expected": {
+        "display_value": "23",
+        "formula": "of:=SUM(15;8)"
+      },
+      "fixture_sha256": "85a9db256b050df6dce73d4a6ffedfcafde3ebc4bdfac853311b6bb7aab88c97",
+      "horizon": 6,
+      "id": "cln-dev-calc-06-sum-cell",
+      "instruction": "In Calc, go to cell G8, enter a formula that adds 15 and 8, confirm it, and save the spreadsheet.",
+      "near_miss": {
+        "display_value": "22",
+        "formula": "of:=SUM(15;7)"
+      },
+      "parameter_seed": 4206,
+      "params": {
+        "cell": "G8",
+        "file_name": "cleanroom_calc_06.ods",
+        "initial_value": "0"
+      },
+      "recovery": {
+        "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
+        "near_miss_class": "formula_second_operand_off_by_one"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 4,
+      "split": "development",
+      "task_sha256": "a748bc2bf75f217faef4b0839cce6a1ae6655a0286678ebc8e174e99ac547a6a",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "calc",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "display_value": "32",
+        "formula": "of:=SUM(18;14)"
+      },
+      "fixture_sha256": "10cccb2820c6ab3a906222f4a6f84a05661f89df1a0a66ec863b433669a49476",
+      "horizon": 6,
+      "id": "cln-dev-calc-07-sum-cell",
+      "instruction": "In Calc, go to cell H9, enter a formula that adds 18 and 14, confirm it, and save the spreadsheet.",
+      "near_miss": {
+        "display_value": "31",
+        "formula": "of:=SUM(18;13)"
+      },
+      "parameter_seed": 4207,
+      "params": {
+        "cell": "H9",
+        "file_name": "cleanroom_calc_07.ods",
+        "initial_value": "0"
+      },
+      "recovery": {
+        "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
+        "near_miss_class": "formula_second_operand_off_by_one"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 4,
+      "split": "development",
+      "task_sha256": "d74a1a78953cec4c4b85c149f417f2b26c20ef72a16e3e968fb65b2793bb991e",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "calc",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "hard",
+      "expected": {
+        "display_value": "37",
+        "formula": "of:=SUM(21;16)"
+      },
+      "fixture_sha256": "c96d28fa836b5f37d1feb499f54b049f05177103b140631e7c84b68f8bc14b6c",
+      "horizon": 6,
+      "id": "cln-dev-calc-08-sum-cell",
+      "instruction": "In Calc, go to cell I10, enter a formula that adds 21 and 16, confirm it, and save the spreadsheet.",
+      "near_miss": {
+        "display_value": "36",
+        "formula": "of:=SUM(21;15)"
+      },
+      "parameter_seed": 4208,
+      "params": {
+        "cell": "I10",
+        "file_name": "cleanroom_calc_08.ods",
+        "initial_value": "0"
+      },
+      "recovery": {
+        "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
+        "near_miss_class": "formula_second_operand_off_by_one"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 4,
+      "split": "development",
+      "task_sha256": "8047be9bef33817692c75d920bb4560e41d5f7f255c3d6bcd4c1c1b583e91860",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "calc",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "easy",
+      "expected": {
+        "display_value": "29",
+        "formula": "of:=SUM(24;5)"
+      },
+      "fixture_sha256": "d4b2062ea592016228f68a2836c521e38c4a9e33799ead508b42e70a9246af0a",
+      "horizon": 6,
+      "id": "cln-dev-calc-09-sum-cell",
+      "instruction": "In Calc, go to cell J11, enter a formula that adds 24 and 5, confirm it, and save the spreadsheet.",
+      "near_miss": {
+        "display_value": "28",
+        "formula": "of:=SUM(24;4)"
+      },
+      "parameter_seed": 4209,
+      "params": {
+        "cell": "J11",
+        "file_name": "cleanroom_calc_09.ods",
+        "initial_value": "0"
+      },
+      "recovery": {
+        "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
+        "near_miss_class": "formula_second_operand_off_by_one"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 4,
+      "split": "development",
+      "task_sha256": "b67ed137a91401a43f2b97c5efdc866bf058fc528281f46ae8f48e86edea7b1e",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "calc",
+      "capabilities": [
+        "click",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "display_value": "39",
+        "formula": "of:=SUM(27;12)"
+      },
+      "fixture_sha256": "da49af32fbfadbf3c61724009e15374785cda507ae1f5fdd1f3f2510f8d32feb",
+      "horizon": 6,
+      "id": "cln-dev-calc-10-sum-cell",
+      "instruction": "In Calc, go to cell K12, enter a formula that adds 27 and 12, confirm it, and save the spreadsheet.",
+      "near_miss": {
+        "display_value": "38",
+        "formula": "of:=SUM(27;11)"
+      },
+      "parameter_seed": 4210,
+      "params": {
+        "cell": "K12",
+        "file_name": "cleanroom_calc_10.ods",
+        "initial_value": "0"
+      },
+      "recovery": {
+        "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
+        "near_miss_class": "formula_second_operand_off_by_one"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 4,
+      "split": "development",
+      "task_sha256": "44558f8bde4c27a4747a806c4617ae7b8990b4440136ef09d0c2b74031913287",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "files",
+      "capabilities": [
+        "click",
+        "drag",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "easy",
+      "expected": {
+        "destination": "b_archive_amber",
+        "final_name": "amber_approved.txt"
+      },
+      "fixture_sha256": "24cc6692159b9ba83834fa2375954ee3c4954f1ec3c0fb0a8af55968a9362a0a",
+      "horizon": 8,
+      "id": "cln-dev-files-01-amber-archive",
+      "instruction": "In Files, move z_source_amber.txt into the folder b_archive_amber, then rename the moved file to amber_approved.txt.",
+      "near_miss": {
+        "destination": "a_review_amber",
+        "final_name": "amber_approved.txt"
+      },
+      "parameter_seed": 4301,
+      "params": {
+        "content": "Clean-room archive payload 01: amber.\n",
+        "decoy_name": "a_review_amber",
+        "destination_name": "b_archive_amber",
+        "source_name": "z_source_amber.txt"
+      },
+      "recovery": {
+        "corrective_action": "move the renamed file from the review folder into the requested archive folder",
+        "near_miss_class": "correct_rename_in_decoy_folder"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "1addb38a3e0050d87140903123437c076e6fced27a5c80eaf2e5c0813f89095f",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "files",
+      "capabilities": [
+        "click",
+        "drag",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "destination": "b_archive_birch",
+        "final_name": "birch_approved.txt"
+      },
+      "fixture_sha256": "05c0b6413bf576faf4d4b2b3957ddedbbe828ab6650027b85987fb0ed64c6045",
+      "horizon": 8,
+      "id": "cln-dev-files-02-birch-archive",
+      "instruction": "In Files, move z_source_birch.txt into the folder b_archive_birch, then rename the moved file to birch_approved.txt.",
+      "near_miss": {
+        "destination": "a_review_birch",
+        "final_name": "birch_approved.txt"
+      },
+      "parameter_seed": 4302,
+      "params": {
+        "content": "Clean-room archive payload 02: birch.\n",
+        "decoy_name": "a_review_birch",
+        "destination_name": "b_archive_birch",
+        "source_name": "z_source_birch.txt"
+      },
+      "recovery": {
+        "corrective_action": "move the renamed file from the review folder into the requested archive folder",
+        "near_miss_class": "correct_rename_in_decoy_folder"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "e16f3c4ba3e3efa7a79efac1939b39fa1af96eeb511b35f063d257b307489e03",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "files",
+      "capabilities": [
+        "click",
+        "drag",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "hard",
+      "expected": {
+        "destination": "b_archive_coral",
+        "final_name": "coral_approved.txt"
+      },
+      "fixture_sha256": "2d05b9c683b1d643232f92a46b609fb341fc0b9a586ac890c1ce621a78565953",
+      "horizon": 8,
+      "id": "cln-dev-files-03-coral-archive",
+      "instruction": "In Files, move z_source_coral.txt into the folder b_archive_coral, then rename the moved file to coral_approved.txt.",
+      "near_miss": {
+        "destination": "a_review_coral",
+        "final_name": "coral_approved.txt"
+      },
+      "parameter_seed": 4303,
+      "params": {
+        "content": "Clean-room archive payload 03: coral.\n",
+        "decoy_name": "a_review_coral",
+        "destination_name": "b_archive_coral",
+        "source_name": "z_source_coral.txt"
+      },
+      "recovery": {
+        "corrective_action": "move the renamed file from the review folder into the requested archive folder",
+        "near_miss_class": "correct_rename_in_decoy_folder"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "d120f31c4df676b404829849277b4e9a048e9de0d74ebcee9d00db76941f56f2",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "files",
+      "capabilities": [
+        "click",
+        "drag",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "destination": "b_archive_dune",
+        "final_name": "dune_approved.txt"
+      },
+      "fixture_sha256": "e56dcb60602fbca5e127b4019a577be876fb52b181e67bb926c8a33e2e392ab4",
+      "horizon": 8,
+      "id": "cln-dev-files-04-dune-archive",
+      "instruction": "In Files, move z_source_dune.txt into the folder b_archive_dune, then rename the moved file to dune_approved.txt.",
+      "near_miss": {
+        "destination": "a_review_dune",
+        "final_name": "dune_approved.txt"
+      },
+      "parameter_seed": 4304,
+      "params": {
+        "content": "Clean-room archive payload 04: dune.\n",
+        "decoy_name": "a_review_dune",
+        "destination_name": "b_archive_dune",
+        "source_name": "z_source_dune.txt"
+      },
+      "recovery": {
+        "corrective_action": "move the renamed file from the review folder into the requested archive folder",
+        "near_miss_class": "correct_rename_in_decoy_folder"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "64adbda4084539de16f628a2f657a5686c0215b808cc6f765aa8836f00bf1461",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "files",
+      "capabilities": [
+        "click",
+        "drag",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "hard",
+      "expected": {
+        "destination": "b_archive_ember",
+        "final_name": "ember_approved.txt"
+      },
+      "fixture_sha256": "853d414ebd87e42ae8e3e156acce86c3300f47eae48a42c1095b471220eb075e",
+      "horizon": 8,
+      "id": "cln-dev-files-05-ember-archive",
+      "instruction": "In Files, move z_source_ember.txt into the folder b_archive_ember, then rename the moved file to ember_approved.txt.",
+      "near_miss": {
+        "destination": "a_review_ember",
+        "final_name": "ember_approved.txt"
+      },
+      "parameter_seed": 4305,
+      "params": {
+        "content": "Clean-room archive payload 05: ember.\n",
+        "decoy_name": "a_review_ember",
+        "destination_name": "b_archive_ember",
+        "source_name": "z_source_ember.txt"
+      },
+      "recovery": {
+        "corrective_action": "move the renamed file from the review folder into the requested archive folder",
+        "near_miss_class": "correct_rename_in_decoy_folder"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "165ece0a135533257610a0062bda8b51e6893c640cc94f6977d4dc640258a03a",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "files",
+      "capabilities": [
+        "click",
+        "drag",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "easy",
+      "expected": {
+        "destination": "b_archive_fjord",
+        "final_name": "fjord_approved.txt"
+      },
+      "fixture_sha256": "f1b5cf55236c3014852bd9ed154ca9ab56e1b7cd53ff3aa182d310f666b554c6",
+      "horizon": 8,
+      "id": "cln-dev-files-06-fjord-archive",
+      "instruction": "In Files, move z_source_fjord.txt into the folder b_archive_fjord, then rename the moved file to fjord_approved.txt.",
+      "near_miss": {
+        "destination": "a_review_fjord",
+        "final_name": "fjord_approved.txt"
+      },
+      "parameter_seed": 4306,
+      "params": {
+        "content": "Clean-room archive payload 06: fjord.\n",
+        "decoy_name": "a_review_fjord",
+        "destination_name": "b_archive_fjord",
+        "source_name": "z_source_fjord.txt"
+      },
+      "recovery": {
+        "corrective_action": "move the renamed file from the review folder into the requested archive folder",
+        "near_miss_class": "correct_rename_in_decoy_folder"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "d2cbbe5d70130d9f880f2da4b924b70cf8824a5dbff895bae8ba2a73b9352bf0",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "files",
+      "capabilities": [
+        "click",
+        "drag",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "destination": "b_archive_grove",
+        "final_name": "grove_approved.txt"
+      },
+      "fixture_sha256": "2706b57b5dba94444f551285d504d996fe2c3c6fa566a1c00a934910dc0011d7",
+      "horizon": 8,
+      "id": "cln-dev-files-07-grove-archive",
+      "instruction": "In Files, move z_source_grove.txt into the folder b_archive_grove, then rename the moved file to grove_approved.txt.",
+      "near_miss": {
+        "destination": "a_review_grove",
+        "final_name": "grove_approved.txt"
+      },
+      "parameter_seed": 4307,
+      "params": {
+        "content": "Clean-room archive payload 07: grove.\n",
+        "decoy_name": "a_review_grove",
+        "destination_name": "b_archive_grove",
+        "source_name": "z_source_grove.txt"
+      },
+      "recovery": {
+        "corrective_action": "move the renamed file from the review folder into the requested archive folder",
+        "near_miss_class": "correct_rename_in_decoy_folder"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "0d452a7304190d3f6f8eaea299b76336af671ef4011718aaeeda82345baa6f22",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "files",
+      "capabilities": [
+        "click",
+        "drag",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "hard",
+      "expected": {
+        "destination": "b_archive_hazel",
+        "final_name": "hazel_approved.txt"
+      },
+      "fixture_sha256": "18a40b5c40a50045f60467c33e5dbd74c95fe298c3989cb3e82b68af9e61fa5c",
+      "horizon": 8,
+      "id": "cln-dev-files-08-hazel-archive",
+      "instruction": "In Files, move z_source_hazel.txt into the folder b_archive_hazel, then rename the moved file to hazel_approved.txt.",
+      "near_miss": {
+        "destination": "a_review_hazel",
+        "final_name": "hazel_approved.txt"
+      },
+      "parameter_seed": 4308,
+      "params": {
+        "content": "Clean-room archive payload 08: hazel.\n",
+        "decoy_name": "a_review_hazel",
+        "destination_name": "b_archive_hazel",
+        "source_name": "z_source_hazel.txt"
+      },
+      "recovery": {
+        "corrective_action": "move the renamed file from the review folder into the requested archive folder",
+        "near_miss_class": "correct_rename_in_decoy_folder"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "cb2d2df05865ff80d4eb8c72cd2508d42acb1e1a4c11d729e602ac114ba25653",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "files",
+      "capabilities": [
+        "click",
+        "drag",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "easy",
+      "expected": {
+        "destination": "b_archive_ivory",
+        "final_name": "ivory_approved.txt"
+      },
+      "fixture_sha256": "26ffe3d9a0f13494ad210abeff13b3fcb4e60818b43334db763ea3a85943e538",
+      "horizon": 8,
+      "id": "cln-dev-files-09-ivory-archive",
+      "instruction": "In Files, move z_source_ivory.txt into the folder b_archive_ivory, then rename the moved file to ivory_approved.txt.",
+      "near_miss": {
+        "destination": "a_review_ivory",
+        "final_name": "ivory_approved.txt"
+      },
+      "parameter_seed": 4309,
+      "params": {
+        "content": "Clean-room archive payload 09: ivory.\n",
+        "decoy_name": "a_review_ivory",
+        "destination_name": "b_archive_ivory",
+        "source_name": "z_source_ivory.txt"
+      },
+      "recovery": {
+        "corrective_action": "move the renamed file from the review folder into the requested archive folder",
+        "near_miss_class": "correct_rename_in_decoy_folder"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "e276ec1ec4017908cdbc84461e335be41a8994644eaa4952fb652917464e744f",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "files",
+      "capabilities": [
+        "click",
+        "drag",
+        "coalesced_type",
+        "hotkey",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "destination": "b_archive_jade",
+        "final_name": "jade_approved.txt"
+      },
+      "fixture_sha256": "01d153d53a1bdc1e3573144b784c16a035c19cf32eee57d93016cfe5d551d5fc",
+      "horizon": 8,
+      "id": "cln-dev-files-10-jade-archive",
+      "instruction": "In Files, move z_source_jade.txt into the folder b_archive_jade, then rename the moved file to jade_approved.txt.",
+      "near_miss": {
+        "destination": "a_review_jade",
+        "final_name": "jade_approved.txt"
+      },
+      "parameter_seed": 4310,
+      "params": {
+        "content": "Clean-room archive payload 10: jade.\n",
+        "decoy_name": "a_review_jade",
+        "destination_name": "b_archive_jade",
+        "source_name": "z_source_jade.txt"
+      },
+      "recovery": {
+        "corrective_action": "move the renamed file from the review folder into the requested archive folder",
+        "near_miss_class": "correct_rename_in_decoy_folder"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "11324092ebbd40291daed18667aab8a023cfd2cb9091e9eef62a1cbdca90f9ca",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "chrome",
+      "capabilities": [
+        "click",
+        "signed_vertical_scroll",
+        "multi_step_state_change"
+      ],
+      "difficulty": "easy",
+      "expected": {
+        "section": "privacy",
+        "setting_enabled": true
+      },
+      "fixture_sha256": "9fb4470984ae49f53841b14d3093486692e10ed592aaddc03d4b73a9b7b24df5",
+      "horizon": 6,
+      "id": "cln-dev-chrome-01-privacy-toggle",
+      "instruction": "On the local settings page, open privacy, scroll down to the controls, and enable “Allow local diagnostics”.",
+      "near_miss": {
+        "section": "appearance",
+        "setting_enabled": false
+      },
+      "parameter_seed": 4401,
+      "params": {
+        "initial_scroll_y": 0,
+        "minimum_scroll_delta": 500,
+        "port": 18401,
+        "scroll_direction": "down",
+        "section": "privacy",
+        "setting": "Allow local diagnostics"
+      },
+      "recovery": {
+        "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
+        "near_miss_class": "decoy_section_and_decoy_toggle"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "21e50de0aeff3b56ffbdd44c6d321736f8000039c77338da5cd1e1a9903e23da",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "chrome",
+      "capabilities": [
+        "click",
+        "signed_vertical_scroll",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "section": "updates",
+        "setting_enabled": true
+      },
+      "fixture_sha256": "d496661109080235ca5d89eabb4eb89ab8e467af2ca05384ea22d9799fe93d36",
+      "horizon": 6,
+      "id": "cln-dev-chrome-02-updates-toggle",
+      "instruction": "On the local settings page, open updates, scroll down to the controls, and enable “Notify before restart”.",
+      "near_miss": {
+        "section": "appearance",
+        "setting_enabled": false
+      },
+      "parameter_seed": 4402,
+      "params": {
+        "initial_scroll_y": 0,
+        "minimum_scroll_delta": 500,
+        "port": 18402,
+        "scroll_direction": "down",
+        "section": "updates",
+        "setting": "Notify before restart"
+      },
+      "recovery": {
+        "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
+        "near_miss_class": "decoy_section_and_decoy_toggle"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "087500e7f5cf646d22aca7033db0daf0a2ac66d09033aefaa9b2b6b11bdc68f1",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "chrome",
+      "capabilities": [
+        "click",
+        "signed_vertical_scroll",
+        "multi_step_state_change"
+      ],
+      "difficulty": "hard",
+      "expected": {
+        "section": "downloads",
+        "setting_enabled": true
+      },
+      "fixture_sha256": "7059e4e7f9a7d14cd8a6097401c2f3f7477c04ed0fa1746997ed0275cad42dd4",
+      "horizon": 6,
+      "id": "cln-dev-chrome-03-downloads-toggle",
+      "instruction": "On the local settings page, open downloads, scroll down to the controls, and enable “Ask where to save files”.",
+      "near_miss": {
+        "section": "appearance",
+        "setting_enabled": false
+      },
+      "parameter_seed": 4403,
+      "params": {
+        "initial_scroll_y": 0,
+        "minimum_scroll_delta": 500,
+        "port": 18403,
+        "scroll_direction": "down",
+        "section": "downloads",
+        "setting": "Ask where to save files"
+      },
+      "recovery": {
+        "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
+        "near_miss_class": "decoy_section_and_decoy_toggle"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "e232a01d28f3623289892dee8c82b00b1c93c861fd716e96357c9e3159b341c2",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "chrome",
+      "capabilities": [
+        "click",
+        "signed_vertical_scroll",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "section": "accessibility",
+        "setting_enabled": true
+      },
+      "fixture_sha256": "84fddeb60b3f159e93f0b67365e4413996afb7e555c12134a957be4e988d3267",
+      "horizon": 6,
+      "id": "cln-dev-chrome-04-accessibility-toggle",
+      "instruction": "On the local settings page, open accessibility, scroll down to the controls, and enable “Show focus indicators”.",
+      "near_miss": {
+        "section": "appearance",
+        "setting_enabled": false
+      },
+      "parameter_seed": 4404,
+      "params": {
+        "initial_scroll_y": 0,
+        "minimum_scroll_delta": 500,
+        "port": 18404,
+        "scroll_direction": "down",
+        "section": "accessibility",
+        "setting": "Show focus indicators"
+      },
+      "recovery": {
+        "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
+        "near_miss_class": "decoy_section_and_decoy_toggle"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "7f9ac769cbdf56df05e9ad9cbe7e150271c5e509919ba68b601740a95da114f1",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "chrome",
+      "capabilities": [
+        "click",
+        "signed_vertical_scroll",
+        "multi_step_state_change"
+      ],
+      "difficulty": "hard",
+      "expected": {
+        "section": "language",
+        "setting_enabled": true
+      },
+      "fixture_sha256": "7fe7e2d86d98effda442f9d2b454820661819bb3920257b5b3f4f7331f5a312e",
+      "horizon": 6,
+      "id": "cln-dev-chrome-05-language-toggle",
+      "instruction": "On the local settings page, open language, scroll down to the controls, and enable “Offer page translations”.",
+      "near_miss": {
+        "section": "appearance",
+        "setting_enabled": false
+      },
+      "parameter_seed": 4405,
+      "params": {
+        "initial_scroll_y": 0,
+        "minimum_scroll_delta": 500,
+        "port": 18405,
+        "scroll_direction": "down",
+        "section": "language",
+        "setting": "Offer page translations"
+      },
+      "recovery": {
+        "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
+        "near_miss_class": "decoy_section_and_decoy_toggle"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "a2551b23415ee02543e011beb498f03bc1192665752760ed7fdd7690918beee3",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "chrome",
+      "capabilities": [
+        "click",
+        "signed_vertical_scroll",
+        "multi_step_state_change"
+      ],
+      "difficulty": "easy",
+      "expected": {
+        "section": "security",
+        "setting_enabled": true
+      },
+      "fixture_sha256": "2ad147f195acc9da996052dfb93fab1a29aa7e582f4eeaab9b5ee9d1c0726ef4",
+      "horizon": 6,
+      "id": "cln-dev-chrome-06-security-toggle",
+      "instruction": "On the local settings page, open security, scroll down to the controls, and enable “Warn about unsafe forms”.",
+      "near_miss": {
+        "section": "appearance",
+        "setting_enabled": false
+      },
+      "parameter_seed": 4406,
+      "params": {
+        "initial_scroll_y": 0,
+        "minimum_scroll_delta": 500,
+        "port": 18406,
+        "scroll_direction": "down",
+        "section": "security",
+        "setting": "Warn about unsafe forms"
+      },
+      "recovery": {
+        "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
+        "near_miss_class": "decoy_section_and_decoy_toggle"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "582cb2288abfd500a09e6993bfd0871b355e997bfc1eccca0796fdc07ba0b6c8",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "chrome",
+      "capabilities": [
+        "click",
+        "signed_vertical_scroll",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "section": "startup",
+        "setting_enabled": true
+      },
+      "fixture_sha256": "4faffe0312045e286a7339a527f388b546cbfdb64eae32183f6d2caec9d4e720",
+      "horizon": 6,
+      "id": "cln-dev-chrome-07-startup-toggle",
+      "instruction": "On the local settings page, open startup, scroll down to the controls, and enable “Restore the last workspace”.",
+      "near_miss": {
+        "section": "appearance",
+        "setting_enabled": false
+      },
+      "parameter_seed": 4407,
+      "params": {
+        "initial_scroll_y": 0,
+        "minimum_scroll_delta": 500,
+        "port": 18407,
+        "scroll_direction": "down",
+        "section": "startup",
+        "setting": "Restore the last workspace"
+      },
+      "recovery": {
+        "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
+        "near_miss_class": "decoy_section_and_decoy_toggle"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "637b802b4b5e73953908330c71221c672ed82534840bff719dbf5e6e0d34c348",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "chrome",
+      "capabilities": [
+        "click",
+        "signed_vertical_scroll",
+        "multi_step_state_change"
+      ],
+      "difficulty": "hard",
+      "expected": {
+        "section": "content",
+        "setting_enabled": true
+      },
+      "fixture_sha256": "1ae0cc014b063bfddd171cb1566ae2b7f1c8b37b6a3e215d7a739bedc6399ad4",
+      "horizon": 6,
+      "id": "cln-dev-chrome-08-content-toggle",
+      "instruction": "On the local settings page, open content, scroll down to the controls, and enable “Block intrusive popups”.",
+      "near_miss": {
+        "section": "appearance",
+        "setting_enabled": false
+      },
+      "parameter_seed": 4408,
+      "params": {
+        "initial_scroll_y": 0,
+        "minimum_scroll_delta": 500,
+        "port": 18408,
+        "scroll_direction": "down",
+        "section": "content",
+        "setting": "Block intrusive popups"
+      },
+      "recovery": {
+        "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
+        "near_miss_class": "decoy_section_and_decoy_toggle"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "7322ee46e661b057372006246c7bd9b783dbb8db6ca29eec89f0ef694c1f8845",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "chrome",
+      "capabilities": [
+        "click",
+        "signed_vertical_scroll",
+        "multi_step_state_change"
+      ],
+      "difficulty": "easy",
+      "expected": {
+        "section": "performance",
+        "setting_enabled": true
+      },
+      "fixture_sha256": "86d5771451a90535632107c680fadf23446079bb20c3b4db78114b03d3b8d083",
+      "horizon": 6,
+      "id": "cln-dev-chrome-09-performance-toggle",
+      "instruction": "On the local settings page, open performance, scroll down to the controls, and enable “Pause sleeping tabs”.",
+      "near_miss": {
+        "section": "appearance",
+        "setting_enabled": false
+      },
+      "parameter_seed": 4409,
+      "params": {
+        "initial_scroll_y": 0,
+        "minimum_scroll_delta": 500,
+        "port": 18409,
+        "scroll_direction": "down",
+        "section": "performance",
+        "setting": "Pause sleeping tabs"
+      },
+      "recovery": {
+        "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
+        "near_miss_class": "decoy_section_and_decoy_toggle"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "a32cd1a28537ae9c67944706c1a08749f55044209517a853e710d63acfc96f82",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    },
+    {
+      "app": "chrome",
+      "capabilities": [
+        "click",
+        "signed_vertical_scroll",
+        "multi_step_state_change"
+      ],
+      "difficulty": "medium",
+      "expected": {
+        "section": "appearance",
+        "setting_enabled": true
+      },
+      "fixture_sha256": "3d6759c28f405c0326847015d5adc1017f41fdf3f30a2c595aa3b3bb6d98d5ee",
+      "horizon": 6,
+      "id": "cln-dev-chrome-10-appearance-toggle",
+      "instruction": "On the local settings page, open appearance, scroll down to the controls, and enable “Use compact controls”.",
+      "near_miss": {
+        "section": "appearance",
+        "setting_enabled": false
+      },
+      "parameter_seed": 4410,
+      "params": {
+        "initial_scroll_y": 0,
+        "minimum_scroll_delta": 500,
+        "port": 18410,
+        "scroll_direction": "down",
+        "section": "appearance",
+        "setting": "Use compact controls"
+      },
+      "recovery": {
+        "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
+        "near_miss_class": "decoy_section_and_decoy_toggle"
+      },
+      "reset": {
+        "reproducible_signature_required": true,
+        "snapshot": "osworld_ready",
+        "state_isolation": "unique_guest_root_per_task",
+        "strategy": "restore_then_seed_private_fixture"
+      },
+      "semantic_steps": 3,
+      "split": "development",
+      "task_sha256": "8b2ca985f703c3e5d40fbee71999e9d01ac98af02d8a15e5dc25bb2500d9e1b4",
+      "verifier": {
+        "fresh_process": true,
+        "gold_pass": true,
+        "machine_readable": true,
+        "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+        "near_miss_reject": true,
+        "reset_reject": true
+      }
+    }
+  ]
+}

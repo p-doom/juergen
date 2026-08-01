@@ -1,0 +1,370 @@
+{
+  "development_only": true,
+  "inventory_payload_sha256": "c052fbdc3bd606470aaf821c6bcb56e877d56292e7c718ca29bef77eca6575aa",
+  "role": "plumbing_smoke_only",
+  "schema_version": 1,
+  "source_policy": {
+    "construction": "first_principles_parameterized_local_app_primitives",
+    "deny_before_open": true,
+    "external_benchmark_material_consumed": false,
+    "external_rollout_systems_used": false,
+    "model_runs": false,
+    "source_scope": "explicit_safe_development_fixture_apis_only",
+    "test_derived": false
+  },
+  "split": "development",
+  "status": "authored",
+  "suite": "natural_dev_disjoint_smoke_inventory_v1",
+  "tasks": [
+    {
+      "anchor_app": "writer",
+      "bridge": "single_app",
+      "eligibility": {
+        "final": false,
+        "purpose": "plumbing_smoke_only",
+        "stage0": false
+      },
+      "id": "cln-smoke-writer-01-pine-check",
+      "mode": "single",
+      "ordered_components": [
+        {
+          "app": "writer",
+          "order": 1,
+          "semantic_steps": 3,
+          "task_id": "cln-smoke-writer-01-pine-check"
+        }
+      ],
+      "record_sha256": "d5ac3748d84a490fcf24096e97edd1d3d37b764ea6132ac7268ed356ec52716d",
+      "source_task": {
+        "app": "writer",
+        "capabilities": [
+          "click",
+          "coalesced_type",
+          "hotkey",
+          "multi_step_state_change"
+        ],
+        "difficulty": "easy",
+        "expected": {
+          "bold": true,
+          "text": "Pine smoke: input path ready."
+        },
+        "fixture_sha256": "f258b7b6ce1b640420d9498090bcda8f41ba788767b1eed495e5f1c42cd0ebfb",
+        "horizon": 4,
+        "id": "cln-smoke-writer-01-pine-check",
+        "instruction": "In the open Writer document, replace all text with exactly “Pine smoke: input path ready.” Make the complete replacement bold, then save the document.",
+        "near_miss": {
+          "bold": false,
+          "text": "Pine smoke: input path ready."
+        },
+        "parameter_seed": 5101,
+        "params": {
+          "file_name": "smoke_writer_pine.odt",
+          "initial_text": "Temporary smoke draft"
+        },
+        "recovery": {
+          "corrective_action": "select the replacement, apply bold, and save again",
+          "near_miss_class": "correct_text_missing_bold_format"
+        },
+        "reset": {
+          "reproducible_signature_required": true,
+          "snapshot": "osworld_ready",
+          "state_isolation": "unique_guest_root_per_task",
+          "strategy": "restore_then_seed_private_fixture"
+        },
+        "semantic_steps": 3,
+        "split": "development",
+        "task_sha256": "2f2814bcf94ba578d7a191a8c96c179ea706ffc4ed860c43de2e893689b1de2e",
+        "verifier": {
+          "fresh_process": true,
+          "gold_pass": true,
+          "machine_readable": true,
+          "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+          "near_miss_reject": true,
+          "reset_reject": true
+        }
+      },
+      "source_task_payload_sha256": "d05cd49a836816de1bd9242cfd6b234b1e80bd25946e59a966758d5aa8dae8a1"
+    },
+    {
+      "anchor_app": "vscode",
+      "bridge": "single_app",
+      "eligibility": {
+        "final": false,
+        "purpose": "plumbing_smoke_only",
+        "stage0": false
+      },
+      "id": "cln-smoke-vscode-01-oak-check",
+      "mode": "single",
+      "ordered_components": [
+        {
+          "app": "vscode",
+          "order": 1,
+          "semantic_steps": 3,
+          "task_id": "cln-smoke-vscode-01-oak-check"
+        }
+      ],
+      "record_sha256": "f1eef7cfed288cedd5c92f5044a6fc38a9740f6d87dbca3bbef44f9f5c482a24",
+      "source_task": {
+        "app": "vscode",
+        "capabilities": [
+          "click",
+          "coalesced_type",
+          "hotkey",
+          "multi_step_state_change"
+        ],
+        "difficulty": "medium",
+        "expected": {
+          "text": "Oak smoke: receipt path ready."
+        },
+        "fixture_sha256": "3b7e9586bdd7ae3af73386ff5dd0a48ab3022b6e4a62d651ec98420150b4b0d7",
+        "horizon": 4,
+        "id": "cln-smoke-vscode-01-oak-check",
+        "instruction": "In the open VS Code editor, replace all text with exactly “Oak smoke: receipt path ready.” Then save the file.",
+        "near_miss": {
+          "text": "Oak smoke: receipt path almost ready."
+        },
+        "parameter_seed": 5102,
+        "params": {
+          "file_name": "smoke_vscode_oak.txt",
+          "initial_text": "Another temporary smoke draft"
+        },
+        "recovery": {
+          "corrective_action": "replace the near miss with the exact requested text and save",
+          "near_miss_class": "near_exact_text_not_saved_as_requested"
+        },
+        "reset": {
+          "reproducible_signature_required": true,
+          "snapshot": "osworld_ready",
+          "state_isolation": "unique_guest_root_per_task",
+          "strategy": "restore_then_seed_private_fixture"
+        },
+        "semantic_steps": 3,
+        "split": "development",
+        "task_sha256": "6216a851cf828e8c3f5412ce458d55f711e234eeefee7b51d36efef4aa07d62a",
+        "verifier": {
+          "fresh_process": true,
+          "gold_pass": true,
+          "machine_readable": true,
+          "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+          "near_miss_reject": true,
+          "reset_reject": true
+        }
+      },
+      "source_task_payload_sha256": "9408f45619f2eb577daad1a576d62efbb6af72d23b45a4bdfc250c4479ecabf5"
+    },
+    {
+      "anchor_app": "calc",
+      "bridge": "single_app",
+      "eligibility": {
+        "final": false,
+        "purpose": "plumbing_smoke_only",
+        "stage0": false
+      },
+      "id": "cln-smoke-calc-01-three-plus-five",
+      "mode": "single",
+      "ordered_components": [
+        {
+          "app": "calc",
+          "order": 1,
+          "semantic_steps": 4,
+          "task_id": "cln-smoke-calc-01-three-plus-five"
+        }
+      ],
+      "record_sha256": "d7b3de338e06b7bc6a14a932fd5f5c28280af4828f29a694598a93ff0c4ad6b4",
+      "source_task": {
+        "app": "calc",
+        "capabilities": [
+          "click",
+          "coalesced_type",
+          "hotkey",
+          "multi_step_state_change"
+        ],
+        "difficulty": "hard",
+        "expected": {
+          "display_value": "8",
+          "formula": "of:=SUM(3;5)"
+        },
+        "fixture_sha256": "5bd54a39c84a79a6c81ff2291da4ffa4d1987b67b557ff1624d1e4872ae2a798",
+        "horizon": 6,
+        "id": "cln-smoke-calc-01-three-plus-five",
+        "instruction": "In Calc, go to cell C3, enter a formula that adds 3 and 5, confirm it, and save the spreadsheet.",
+        "near_miss": {
+          "display_value": "7",
+          "formula": "of:=SUM(3;4)"
+        },
+        "parameter_seed": 5103,
+        "params": {
+          "cell": "C3",
+          "file_name": "smoke_calc_sum.ods",
+          "initial_value": "0"
+        },
+        "recovery": {
+          "corrective_action": "correct the second operand, confirm, and save",
+          "near_miss_class": "formula_second_operand_off_by_one"
+        },
+        "reset": {
+          "reproducible_signature_required": true,
+          "snapshot": "osworld_ready",
+          "state_isolation": "unique_guest_root_per_task",
+          "strategy": "restore_then_seed_private_fixture"
+        },
+        "semantic_steps": 4,
+        "split": "development",
+        "task_sha256": "7c6408d1d6a65cfa489ee41bdbd49464076b0089e5612c3fd438042614b74f66",
+        "verifier": {
+          "fresh_process": true,
+          "gold_pass": true,
+          "machine_readable": true,
+          "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+          "near_miss_reject": true,
+          "reset_reject": true
+        }
+      },
+      "source_task_payload_sha256": "88aa016f4505e17ffb52be1ec4c28ced0659c8ebacb8d0fd46a8c598de20882b"
+    },
+    {
+      "anchor_app": "files",
+      "bridge": "single_app",
+      "eligibility": {
+        "final": false,
+        "purpose": "plumbing_smoke_only",
+        "stage0": false
+      },
+      "id": "cln-smoke-files-01-spruce-move",
+      "mode": "single",
+      "ordered_components": [
+        {
+          "app": "files",
+          "order": 1,
+          "semantic_steps": 3,
+          "task_id": "cln-smoke-files-01-spruce-move"
+        }
+      ],
+      "record_sha256": "503ec610b2714a60a0cc0ad44487fdecab13a4b2e544ab58885f9b2cb051052e",
+      "source_task": {
+        "app": "files",
+        "capabilities": [
+          "click",
+          "drag",
+          "coalesced_type",
+          "hotkey",
+          "multi_step_state_change"
+        ],
+        "difficulty": "medium",
+        "expected": {
+          "destination": "b_archive_spruce",
+          "final_name": "spruce_ready.txt"
+        },
+        "fixture_sha256": "432b3cb1694a46daf36c442ce9cbbb4a32f6f899324b75caf20b769ba11b56a1",
+        "horizon": 8,
+        "id": "cln-smoke-files-01-spruce-move",
+        "instruction": "In Files, move z_source_spruce.txt into the folder b_archive_spruce, then rename the moved file to spruce_ready.txt.",
+        "near_miss": {
+          "destination": "a_review_spruce",
+          "final_name": "spruce_ready.txt"
+        },
+        "parameter_seed": 5104,
+        "params": {
+          "content": "Clean-room plumbing smoke payload: spruce.\n",
+          "decoy_name": "a_review_spruce",
+          "destination_name": "b_archive_spruce",
+          "source_name": "z_source_spruce.txt"
+        },
+        "recovery": {
+          "corrective_action": "move the renamed file into the requested archive folder",
+          "near_miss_class": "correct_rename_in_decoy_folder"
+        },
+        "reset": {
+          "reproducible_signature_required": true,
+          "snapshot": "osworld_ready",
+          "state_isolation": "unique_guest_root_per_task",
+          "strategy": "restore_then_seed_private_fixture"
+        },
+        "semantic_steps": 3,
+        "split": "development",
+        "task_sha256": "695e588fbdae9cce64bb73d13144d60d4b8d925c00f89738d380db9ae4b7b2c3",
+        "verifier": {
+          "fresh_process": true,
+          "gold_pass": true,
+          "machine_readable": true,
+          "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+          "near_miss_reject": true,
+          "reset_reject": true
+        }
+      },
+      "source_task_payload_sha256": "4b0ce2e483716c6da8838f85dd4b4821d891b2642f4891beebcfcd3321956c39"
+    },
+    {
+      "anchor_app": "chrome",
+      "bridge": "single_app",
+      "eligibility": {
+        "final": false,
+        "purpose": "plumbing_smoke_only",
+        "stage0": false
+      },
+      "id": "cln-smoke-chrome-01-network-toggle",
+      "mode": "single",
+      "ordered_components": [
+        {
+          "app": "chrome",
+          "order": 1,
+          "semantic_steps": 3,
+          "task_id": "cln-smoke-chrome-01-network-toggle"
+        }
+      ],
+      "record_sha256": "98e261b971115e724829addab4c8cc036fb38a55f9e2c14f3c4205d48c6fd246",
+      "source_task": {
+        "app": "chrome",
+        "capabilities": [
+          "click",
+          "signed_vertical_scroll",
+          "multi_step_state_change"
+        ],
+        "difficulty": "hard",
+        "expected": {
+          "section": "network",
+          "setting_enabled": true
+        },
+        "fixture_sha256": "3bf8fd01ebc3ccf193ac825990f99d18c2468353f5e156b40bce912c4b4725d9",
+        "horizon": 6,
+        "id": "cln-smoke-chrome-01-network-toggle",
+        "instruction": "On the local settings page, open network, scroll down to the controls, and enable “Report offline transitions”.",
+        "near_miss": {
+          "section": "appearance",
+          "setting_enabled": false
+        },
+        "parameter_seed": 5105,
+        "params": {
+          "initial_scroll_y": 0,
+          "minimum_scroll_delta": 500,
+          "port": 18505,
+          "scroll_direction": "down",
+          "section": "network",
+          "setting": "Report offline transitions"
+        },
+        "recovery": {
+          "corrective_action": "open network, scroll to its control, and enable the requested setting",
+          "near_miss_class": "decoy_section_and_decoy_toggle"
+        },
+        "reset": {
+          "reproducible_signature_required": true,
+          "snapshot": "osworld_ready",
+          "state_isolation": "unique_guest_root_per_task",
+          "strategy": "restore_then_seed_private_fixture"
+        },
+        "semantic_steps": 3,
+        "split": "development",
+        "task_sha256": "8725539797556f4b51949ec65bc30b8d59b47e112e0f2b166dbd07aac9f43a95",
+        "verifier": {
+          "fresh_process": true,
+          "gold_pass": true,
+          "machine_readable": true,
+          "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+          "near_miss_reject": true,
+          "reset_reject": true
+        }
+      },
+      "source_task_payload_sha256": "5253b4dfb9f4e6f15b6de63b1d3b7143e6741760c322ee225e66d757967e608a"
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "eligibility": {
+    "final": false,
+    "purpose": "plumbing_smoke_only",
+    "stage0": false
+  },
+  "inventory_role": "plumbing_smoke_only",
+  "model_runs": false,
+  "passed_count": 5,
+  "qualification": "host_contract",
+  "receipt_sha256": "2a70f180cc9375734fea42847406ef004258c014497464733f4a2f99fc0aecbc",
+  "schema_version": 1,
+  "status": "pass",
+  "suite_manifest_sha256": "c052fbdc3bd606470aaf821c6bcb56e877d56292e7c718ca29bef77eca6575aa",
+  "task_count": 5,
+  "tasks": [
+    {
+      "app": "writer",
+      "difficulty": "easy",
+      "fixture_sha256": "f258b7b6ce1b640420d9498090bcda8f41ba788767b1eed495e5f1c42cd0ebfb",
+      "fresh_oracle_pids": [
+        1892058,
+        1892066
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "82a669542c787b0a1ff61e910d2dbd235a2c46c2928de06a21ff40c2e446ad27",
+      "status": "pass",
+      "task_id": "cln-smoke-writer-01-pine-check",
+      "task_sha256": "2f2814bcf94ba578d7a191a8c96c179ea706ffc4ed860c43de2e893689b1de2e"
+    },
+    {
+      "app": "vscode",
+      "difficulty": "medium",
+      "fixture_sha256": "3b7e9586bdd7ae3af73386ff5dd0a48ab3022b6e4a62d651ec98420150b4b0d7",
+      "fresh_oracle_pids": [
+        1892085,
+        1892090
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "54ded984f02d8f353961cac17de5040675155da83cc9759a4ca84d36594e8b23",
+      "status": "pass",
+      "task_id": "cln-smoke-vscode-01-oak-check",
+      "task_sha256": "6216a851cf828e8c3f5412ce458d55f711e234eeefee7b51d36efef4aa07d62a"
+    },
+    {
+      "app": "calc",
+      "difficulty": "hard",
+      "fixture_sha256": "5bd54a39c84a79a6c81ff2291da4ffa4d1987b67b557ff1624d1e4872ae2a798",
+      "fresh_oracle_pids": [
+        1892100,
+        1892107
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "da73e438cda264dc480541d54181747c01f0ad80fb730e017c6e0e965ec32890",
+      "status": "pass",
+      "task_id": "cln-smoke-calc-01-three-plus-five",
+      "task_sha256": "7c6408d1d6a65cfa489ee41bdbd49464076b0089e5612c3fd438042614b74f66"
+    },
+    {
+      "app": "files",
+      "difficulty": "medium",
+      "fixture_sha256": "432b3cb1694a46daf36c442ce9cbbb4a32f6f899324b75caf20b769ba11b56a1",
+      "fresh_oracle_pids": [
+        1892116,
+        1892129
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "1c27c7975b06c09d413664bf1c0eb44f036109cc07038961af3e9e47aac3622c",
+      "status": "pass",
+      "task_id": "cln-smoke-files-01-spruce-move",
+      "task_sha256": "695e588fbdae9cce64bb73d13144d60d4b8d925c00f89738d380db9ae4b7b2c3"
+    },
+    {
+      "app": "chrome",
+      "difficulty": "hard",
+      "fixture_sha256": "3bf8fd01ebc3ccf193ac825990f99d18c2468353f5e156b40bce912c4b4725d9",
+      "fresh_oracle_pids": [
+        1892146,
+        1892151
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "5dfd67df881d3deaf974cd77d33baeadb4d84354754f83c27a86f5145830450a",
+      "status": "pass",
+      "task_id": "cln-smoke-chrome-01-network-toggle",
+      "task_sha256": "8725539797556f4b51949ec65bc30b8d59b47e112e0f2b166dbd07aac9f43a95"
+    }
+  ]
+}

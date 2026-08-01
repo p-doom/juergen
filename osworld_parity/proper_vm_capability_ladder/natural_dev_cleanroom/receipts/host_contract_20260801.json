@@ -1,0 +1,657 @@
+{
+  "eligibility": {
+    "final": false,
+    "stage0": true
+  },
+  "inventory_role": "stage0_development",
+  "model_runs": false,
+  "passed_count": 40,
+  "qualification": "host_contract",
+  "receipt_sha256": "b1cf9840eeef2344b4e64b2d44a5727cbe54529ca1ba30c78869069d4a190fd6",
+  "schema_version": 1,
+  "status": "pass",
+  "suite_manifest_sha256": "5a74ef76c88a45436af731e38543552cb52237272f86516f47e96643cef62e1e",
+  "task_count": 40,
+  "tasks": [
+    {
+      "app": "writer",
+      "difficulty": "easy",
+      "fixture_sha256": "939ddc1b476e96b41b6b8131008725da5374944b06fa93b348ed00b66228e4e5",
+      "fresh_oracle_pids": [
+        1892173,
+        1892181
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "56d0cb60a75c30b9a82e8107937800e25eeb7bcc5daf0d180b7baf23545fbccf",
+      "status": "pass",
+      "task_id": "cln-dev-writer-01-bold-note",
+      "task_sha256": "f16497dbde01abed5a6a7e704bb822f6c3e1ec28ad275130bba906d7585f50e4"
+    },
+    {
+      "app": "writer",
+      "difficulty": "medium",
+      "fixture_sha256": "148e31229eb649a7a8e37e288e82a24e9be193baaed6470acf71bbad19a65480",
+      "fresh_oracle_pids": [
+        1892189,
+        1892194
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "91dce6283b5942fdd498bad191ff0e71451a231459a0e8edeaf6b27d9d6c1ae4",
+      "status": "pass",
+      "task_id": "cln-dev-writer-02-bold-note",
+      "task_sha256": "39d0071a592b170bb5d6843213986c40727102b50778fcd4c534dcc53cf83af4"
+    },
+    {
+      "app": "writer",
+      "difficulty": "hard",
+      "fixture_sha256": "5dbe27a48ae6e9ab2b5eb6a1aaf12a2d8847a34145ef8c2c73cd0f5d44d0ef02",
+      "fresh_oracle_pids": [
+        1892202,
+        1892209
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "6fbffa6a29caf42f4316f643c8cac56115bece5d9c84ae360ef2c6b68f892ff5",
+      "status": "pass",
+      "task_id": "cln-dev-writer-03-bold-note",
+      "task_sha256": "e49d4a419dab23d9b7f840b9e49bafd5f6cd6765747deb84cf01755a2654a0a4"
+    },
+    {
+      "app": "writer",
+      "difficulty": "medium",
+      "fixture_sha256": "d549bdc14f17791ea785ff619c62854e064aca937137725f62130bb1c5f646d8",
+      "fresh_oracle_pids": [
+        1892212,
+        1892217
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "0174b51310951d18fb763564774c5496d5eec612879ba5950c56c48e3927800f",
+      "status": "pass",
+      "task_id": "cln-dev-writer-04-bold-note",
+      "task_sha256": "5b661c11faeb04bdf89b26d9b80b9938db67226d279e7753dd40c13d3d819fc6"
+    },
+    {
+      "app": "writer",
+      "difficulty": "hard",
+      "fixture_sha256": "c4a4ae5183420f08d581169661f719656465aab65221758cbb322ac5e4762310",
+      "fresh_oracle_pids": [
+        1892224,
+        1892292
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "581d24236d7bcc2526198d0ad2fe5b99546562056803dc424cf6c85f337d43ae",
+      "status": "pass",
+      "task_id": "cln-dev-writer-05-bold-note",
+      "task_sha256": "6a363bf1646a2701eb5a4dd6bc0e54c3e90c804a0a65a03f3ec6d58bba4e733b"
+    },
+    {
+      "app": "writer",
+      "difficulty": "easy",
+      "fixture_sha256": "66a9dea733a61304843e632c5a358a2f826ebf155ac3710e124f7f14298e4ea6",
+      "fresh_oracle_pids": [
+        1892297,
+        1892306
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "abe43bfd3b74692d2ad59ac46ce0ec4f6c22e2e9db028b52e1534a223b4cbe9b",
+      "status": "pass",
+      "task_id": "cln-dev-writer-06-bold-note",
+      "task_sha256": "0bf724665b1ec49b55c30262488b419746ce15ee0a199ea8b30293dd49c6e521"
+    },
+    {
+      "app": "writer",
+      "difficulty": "medium",
+      "fixture_sha256": "e25daf1c772e0fb3385bd850d427cceb6195eeb66b27e845ed7d9ef485f5c26e",
+      "fresh_oracle_pids": [
+        1892312,
+        1892316
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "fd2f7eaf3cebaef62dfb0f3f8f67221d590530cda6e0ff189776bae1c3952a34",
+      "status": "pass",
+      "task_id": "cln-dev-writer-07-bold-note",
+      "task_sha256": "6361d7a5f0269b3491fd1a8c16477d58ab14268dcf5d1f17ded99e1b7515f705"
+    },
+    {
+      "app": "writer",
+      "difficulty": "hard",
+      "fixture_sha256": "0fd6cc7822df3b1fe96cb3a7cd0fbc398f231f465a4f4dcd5823c2a29e88f77e",
+      "fresh_oracle_pids": [
+        1892322,
+        1892340
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "29f8ecb5fe128cf64ac9604f97a6a90e06030b41013f9576d5ca87f68897cd44",
+      "status": "pass",
+      "task_id": "cln-dev-writer-08-bold-note",
+      "task_sha256": "ee901e84630b83c2e6aa3fff85686c0a659d868bff8ceaf4e32f1255f424f866"
+    },
+    {
+      "app": "writer",
+      "difficulty": "easy",
+      "fixture_sha256": "1054e0adea65d465bf9463009fc0c40ea705c4f27257d7eed9bd0d1f31db2563",
+      "fresh_oracle_pids": [
+        1892347,
+        1892351
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "884499e93b519fa40a44b2479331464150e96ef0d22a07c1fcb3dd369c937499",
+      "status": "pass",
+      "task_id": "cln-dev-writer-09-bold-note",
+      "task_sha256": "6b612a22d4278a31a8c0b67736645c9923a9dc59d245115e6012cb6fb3821647"
+    },
+    {
+      "app": "writer",
+      "difficulty": "medium",
+      "fixture_sha256": "6bc7e2129509e57143f619291c89a9873be5f990b69fb79827b3cbcf0c22a416",
+      "fresh_oracle_pids": [
+        1892354,
+        1892358
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "53f8959f11ea0f8cf3269aebb1b3ab58ff04d8a967fd75182ff6ee6a29ddd2b6",
+      "status": "pass",
+      "task_id": "cln-dev-writer-10-bold-note",
+      "task_sha256": "d53dc3bddb9b4d731a7ed7a3577e724c4a49b13a16b7f4f928d776edc2bdabaa"
+    },
+    {
+      "app": "calc",
+      "difficulty": "easy",
+      "fixture_sha256": "db8da3880bfe9e866f05d86160cd39e44f9f5f6d46e184971a0cfdccd1b666ae",
+      "fresh_oracle_pids": [
+        1892365,
+        1892377
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "0061a73947913f176f6c36d8531277bf3646536bda84d57f716de049abe3bb3b",
+      "status": "pass",
+      "task_id": "cln-dev-calc-01-sum-cell",
+      "task_sha256": "ff70749cfdc64c42a58dbb14fb3f1795919f9465485c1d0f973193ccc2da51fd"
+    },
+    {
+      "app": "calc",
+      "difficulty": "medium",
+      "fixture_sha256": "b3413736103ccf67d5de845a678b31f646eaa92e2a609d20d18534307ef60f2d",
+      "fresh_oracle_pids": [
+        1892387,
+        1892397
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "62e94a797db725980c5249738dbf8b228878b776ce8cdc6d903ce6cfcb7d9389",
+      "status": "pass",
+      "task_id": "cln-dev-calc-02-sum-cell",
+      "task_sha256": "0a15dcbe36ada1fe253a31a88bf4727c8ffe5adc699098a24bb18d45bf669473"
+    },
+    {
+      "app": "calc",
+      "difficulty": "hard",
+      "fixture_sha256": "905e5c53ed5c54f7eebab8341caed9193f08687d69bd15ad6abb83e4bf5c3049",
+      "fresh_oracle_pids": [
+        1892406,
+        1892409
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "336f9772c27dfed70f2c7cefb648dcd6060cfbdcb1723295ee7c1e11d83fc5f2",
+      "status": "pass",
+      "task_id": "cln-dev-calc-03-sum-cell",
+      "task_sha256": "eacfbf5aa709641880e7f7f3025ed6b76daecc976b10bd8cc5c63a55fc1c8d07"
+    },
+    {
+      "app": "calc",
+      "difficulty": "medium",
+      "fixture_sha256": "248a9cd550edf57f04769383d1be7f55c1cb78df9f10efd289d4aa0f555d48bd",
+      "fresh_oracle_pids": [
+        1892416,
+        1892420
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "1d8c6cd4e59b2c9be4769b30425525e2d4838133ef9cba14e75d00bc52e17ad3",
+      "status": "pass",
+      "task_id": "cln-dev-calc-04-sum-cell",
+      "task_sha256": "f0560af2823405cde81d7eddd9769bea11ba4259beaa25a86c1da54330efda9c"
+    },
+    {
+      "app": "calc",
+      "difficulty": "hard",
+      "fixture_sha256": "983698c2121b4366a22153b65134dbd70557fd81ff58f9ae1024804ca036dd0d",
+      "fresh_oracle_pids": [
+        1892424,
+        1892433
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "fb565c6f0e2316502dc6d9e34dc7a9fc04d9347983fc48cb8828e753e86bce0d",
+      "status": "pass",
+      "task_id": "cln-dev-calc-05-sum-cell",
+      "task_sha256": "e0339a39dc0d3727a38b405c19104d0a529c88ea621935ec5d11fc8a7559f76a"
+    },
+    {
+      "app": "calc",
+      "difficulty": "easy",
+      "fixture_sha256": "85a9db256b050df6dce73d4a6ffedfcafde3ebc4bdfac853311b6bb7aab88c97",
+      "fresh_oracle_pids": [
+        1892443,
+        1892450
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "f040fbf58520e88055d9d2da4725665bf13c0b3f72ef56f2458445c87281c2bf",
+      "status": "pass",
+      "task_id": "cln-dev-calc-06-sum-cell",
+      "task_sha256": "a748bc2bf75f217faef4b0839cce6a1ae6655a0286678ebc8e174e99ac547a6a"
+    },
+    {
+      "app": "calc",
+      "difficulty": "medium",
+      "fixture_sha256": "10cccb2820c6ab3a906222f4a6f84a05661f89df1a0a66ec863b433669a49476",
+      "fresh_oracle_pids": [
+        1892462,
+        1892471
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "447171161d8104de3dba1cdf9e5df3aade9b7014f5c4a655d7a2a9db72751791",
+      "status": "pass",
+      "task_id": "cln-dev-calc-07-sum-cell",
+      "task_sha256": "d74a1a78953cec4c4b85c149f417f2b26c20ef72a16e3e968fb65b2793bb991e"
+    },
+    {
+      "app": "calc",
+      "difficulty": "hard",
+      "fixture_sha256": "c96d28fa836b5f37d1feb499f54b049f05177103b140631e7c84b68f8bc14b6c",
+      "fresh_oracle_pids": [
+        1892474,
+        1892481
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "a2b0c83bf9c8c96ab70b20f9a64181e338cf8b5211240ca3ecb2fff2c1c6e31e",
+      "status": "pass",
+      "task_id": "cln-dev-calc-08-sum-cell",
+      "task_sha256": "8047be9bef33817692c75d920bb4560e41d5f7f255c3d6bcd4c1c1b583e91860"
+    },
+    {
+      "app": "calc",
+      "difficulty": "easy",
+      "fixture_sha256": "d4b2062ea592016228f68a2836c521e38c4a9e33799ead508b42e70a9246af0a",
+      "fresh_oracle_pids": [
+        1892487,
+        1892496
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "2005035d5a21dc99f2fb7401c90daf4006890e381e988a7df37e9b6a8c6a7a1b",
+      "status": "pass",
+      "task_id": "cln-dev-calc-09-sum-cell",
+      "task_sha256": "b67ed137a91401a43f2b97c5efdc866bf058fc528281f46ae8f48e86edea7b1e"
+    },
+    {
+      "app": "calc",
+      "difficulty": "medium",
+      "fixture_sha256": "da49af32fbfadbf3c61724009e15374785cda507ae1f5fdd1f3f2510f8d32feb",
+      "fresh_oracle_pids": [
+        1892504,
+        1892517
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "79b1d9025cff7faebae44b59c70a5315b8061137106512e0108ebf75f0c38a24",
+      "status": "pass",
+      "task_id": "cln-dev-calc-10-sum-cell",
+      "task_sha256": "44558f8bde4c27a4747a806c4617ae7b8990b4440136ef09d0c2b74031913287"
+    },
+    {
+      "app": "files",
+      "difficulty": "easy",
+      "fixture_sha256": "24cc6692159b9ba83834fa2375954ee3c4954f1ec3c0fb0a8af55968a9362a0a",
+      "fresh_oracle_pids": [
+        1892521,
+        1892531
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "eb941506e008025867e63c768782b6906e7962342158e92b1e13ce64bd6b1904",
+      "status": "pass",
+      "task_id": "cln-dev-files-01-amber-archive",
+      "task_sha256": "1addb38a3e0050d87140903123437c076e6fced27a5c80eaf2e5c0813f89095f"
+    },
+    {
+      "app": "files",
+      "difficulty": "medium",
+      "fixture_sha256": "05c0b6413bf576faf4d4b2b3957ddedbbe828ab6650027b85987fb0ed64c6045",
+      "fresh_oracle_pids": [
+        1892541,
+        1892548
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "b00696bc47919aebcce1c6c76af68d4037142b48879de3b03367addb55247fab",
+      "status": "pass",
+      "task_id": "cln-dev-files-02-birch-archive",
+      "task_sha256": "e16f3c4ba3e3efa7a79efac1939b39fa1af96eeb511b35f063d257b307489e03"
+    },
+    {
+      "app": "files",
+      "difficulty": "hard",
+      "fixture_sha256": "2d05b9c683b1d643232f92a46b609fb341fc0b9a586ac890c1ce621a78565953",
+      "fresh_oracle_pids": [
+        1892556,
+        1892561
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "6e2b4466f3cbdf56a798741dda34fba3a5d969de132a4828ffd53df3ee086264",
+      "status": "pass",
+      "task_id": "cln-dev-files-03-coral-archive",
+      "task_sha256": "d120f31c4df676b404829849277b4e9a048e9de0d74ebcee9d00db76941f56f2"
+    },
+    {
+      "app": "files",
+      "difficulty": "medium",
+      "fixture_sha256": "e56dcb60602fbca5e127b4019a577be876fb52b181e67bb926c8a33e2e392ab4",
+      "fresh_oracle_pids": [
+        1892568,
+        1892574
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "26c1bf0aec44f4bed50398520ac978106776f821181deaf5ba9499577fcb3b0b",
+      "status": "pass",
+      "task_id": "cln-dev-files-04-dune-archive",
+      "task_sha256": "64adbda4084539de16f628a2f657a5686c0215b808cc6f765aa8836f00bf1461"
+    },
+    {
+      "app": "files",
+      "difficulty": "hard",
+      "fixture_sha256": "853d414ebd87e42ae8e3e156acce86c3300f47eae48a42c1095b471220eb075e",
+      "fresh_oracle_pids": [
+        1892580,
+        1892584
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "ea41e390e3444e1bf9187b3d870ec25944b19829444cce6afc58a8369d849350",
+      "status": "pass",
+      "task_id": "cln-dev-files-05-ember-archive",
+      "task_sha256": "165ece0a135533257610a0062bda8b51e6893c640cc94f6977d4dc640258a03a"
+    },
+    {
+      "app": "files",
+      "difficulty": "easy",
+      "fixture_sha256": "f1b5cf55236c3014852bd9ed154ca9ab56e1b7cd53ff3aa182d310f666b554c6",
+      "fresh_oracle_pids": [
+        1892590,
+        1892603
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "7fbafe409093100b9e3a3d33bbe910f4438c94a9bd50814b12d9f9b35e510847",
+      "status": "pass",
+      "task_id": "cln-dev-files-06-fjord-archive",
+      "task_sha256": "d2cbbe5d70130d9f880f2da4b924b70cf8824a5dbff895bae8ba2a73b9352bf0"
+    },
+    {
+      "app": "files",
+      "difficulty": "medium",
+      "fixture_sha256": "2706b57b5dba94444f551285d504d996fe2c3c6fa566a1c00a934910dc0011d7",
+      "fresh_oracle_pids": [
+        1892616,
+        1892618
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "6ce770ff8cde041d49853ca6323becf18c6c7bd3d80eb72904fbfd06a0f4a8e2",
+      "status": "pass",
+      "task_id": "cln-dev-files-07-grove-archive",
+      "task_sha256": "0d452a7304190d3f6f8eaea299b76336af671ef4011718aaeeda82345baa6f22"
+    },
+    {
+      "app": "files",
+      "difficulty": "hard",
+      "fixture_sha256": "18a40b5c40a50045f60467c33e5dbd74c95fe298c3989cb3e82b68af9e61fa5c",
+      "fresh_oracle_pids": [
+        1892621,
+        1892623
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "67ca71d8cd4ed190c2c666eb514e0fb5fc42a74c2d1846b6c10ee73d87699248",
+      "status": "pass",
+      "task_id": "cln-dev-files-08-hazel-archive",
+      "task_sha256": "cb2d2df05865ff80d4eb8c72cd2508d42acb1e1a4c11d729e602ac114ba25653"
+    },
+    {
+      "app": "files",
+      "difficulty": "easy",
+      "fixture_sha256": "26ffe3d9a0f13494ad210abeff13b3fcb4e60818b43334db763ea3a85943e538",
+      "fresh_oracle_pids": [
+        1892625,
+        1892627
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "49de468b3fc48c86b9fc5adbd9f4d00a24ecc5a953de96dabedbbfe3d7ca8d43",
+      "status": "pass",
+      "task_id": "cln-dev-files-09-ivory-archive",
+      "task_sha256": "e276ec1ec4017908cdbc84461e335be41a8994644eaa4952fb652917464e744f"
+    },
+    {
+      "app": "files",
+      "difficulty": "medium",
+      "fixture_sha256": "01d153d53a1bdc1e3573144b784c16a035c19cf32eee57d93016cfe5d551d5fc",
+      "fresh_oracle_pids": [
+        1892634,
+        1892637
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "2f6a14cf5232f90534d5fbb4a51fbb27576ac75ad197bba1fe20c5c4e91e7cd9",
+      "status": "pass",
+      "task_id": "cln-dev-files-10-jade-archive",
+      "task_sha256": "11324092ebbd40291daed18667aab8a023cfd2cb9091e9eef62a1cbdca90f9ca"
+    },
+    {
+      "app": "chrome",
+      "difficulty": "easy",
+      "fixture_sha256": "9fb4470984ae49f53841b14d3093486692e10ed592aaddc03d4b73a9b7b24df5",
+      "fresh_oracle_pids": [
+        1892646,
+        1892653
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "ea8a594ce2693ab2fb5cc6935b60552c05011543808f9cad0a90b548b5c1644c",
+      "status": "pass",
+      "task_id": "cln-dev-chrome-01-privacy-toggle",
+      "task_sha256": "21e50de0aeff3b56ffbdd44c6d321736f8000039c77338da5cd1e1a9903e23da"
+    },
+    {
+      "app": "chrome",
+      "difficulty": "medium",
+      "fixture_sha256": "d496661109080235ca5d89eabb4eb89ab8e467af2ca05384ea22d9799fe93d36",
+      "fresh_oracle_pids": [
+        1892662,
+        1892677
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "dd0c16a01562db49d3f6b0d7080613ab6a29d6717f9463c415f2e66718668e5c",
+      "status": "pass",
+      "task_id": "cln-dev-chrome-02-updates-toggle",
+      "task_sha256": "087500e7f5cf646d22aca7033db0daf0a2ac66d09033aefaa9b2b6b11bdc68f1"
+    },
+    {
+      "app": "chrome",
+      "difficulty": "hard",
+      "fixture_sha256": "7059e4e7f9a7d14cd8a6097401c2f3f7477c04ed0fa1746997ed0275cad42dd4",
+      "fresh_oracle_pids": [
+        1892690,
+        1892695
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "11250966bf109a950c3569761face2c539149459505044a44815412cf9d5044e",
+      "status": "pass",
+      "task_id": "cln-dev-chrome-03-downloads-toggle",
+      "task_sha256": "e232a01d28f3623289892dee8c82b00b1c93c861fd716e96357c9e3159b341c2"
+    },
+    {
+      "app": "chrome",
+      "difficulty": "medium",
+      "fixture_sha256": "84fddeb60b3f159e93f0b67365e4413996afb7e555c12134a957be4e988d3267",
+      "fresh_oracle_pids": [
+        1892708,
+        1892712
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "848bac1569f36e3709c6126a3947f1e0c5e778a800bb47c1a76c64e2c4e5822a",
+      "status": "pass",
+      "task_id": "cln-dev-chrome-04-accessibility-toggle",
+      "task_sha256": "7f9ac769cbdf56df05e9ad9cbe7e150271c5e509919ba68b601740a95da114f1"
+    },
+    {
+      "app": "chrome",
+      "difficulty": "hard",
+      "fixture_sha256": "7fe7e2d86d98effda442f9d2b454820661819bb3920257b5b3f4f7331f5a312e",
+      "fresh_oracle_pids": [
+        1892717,
+        1892729
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "f73ac99f8a1948fbbe9810cfa42d2675090d60263484dd0f560189b3b784158e",
+      "status": "pass",
+      "task_id": "cln-dev-chrome-05-language-toggle",
+      "task_sha256": "a2551b23415ee02543e011beb498f03bc1192665752760ed7fdd7690918beee3"
+    },
+    {
+      "app": "chrome",
+      "difficulty": "easy",
+      "fixture_sha256": "2ad147f195acc9da996052dfb93fab1a29aa7e582f4eeaab9b5ee9d1c0726ef4",
+      "fresh_oracle_pids": [
+        1892781,
+        1892911
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "441aee89588a9d5df50cb210f2dd0a13c41c44fe4ab5cb5262d4a0eb3f15fcee",
+      "status": "pass",
+      "task_id": "cln-dev-chrome-06-security-toggle",
+      "task_sha256": "582cb2288abfd500a09e6993bfd0871b355e997bfc1eccca0796fdc07ba0b6c8"
+    },
+    {
+      "app": "chrome",
+      "difficulty": "medium",
+      "fixture_sha256": "4faffe0312045e286a7339a527f388b546cbfdb64eae32183f6d2caec9d4e720",
+      "fresh_oracle_pids": [
+        1893010,
+        1893021
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "fb2ee5da70b55c459fcdbef9042c3aea1b21c568c1706110d05b65de5c3d17e2",
+      "status": "pass",
+      "task_id": "cln-dev-chrome-07-startup-toggle",
+      "task_sha256": "637b802b4b5e73953908330c71221c672ed82534840bff719dbf5e6e0d34c348"
+    },
+    {
+      "app": "chrome",
+      "difficulty": "hard",
+      "fixture_sha256": "1ae0cc014b063bfddd171cb1566ae2b7f1c8b37b6a3e215d7a739bedc6399ad4",
+      "fresh_oracle_pids": [
+        1893028,
+        1893036
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "94034fae66452a9188e8e86a6eb7e62b051b4d6afada17a3d1ebb6cb10f5d021",
+      "status": "pass",
+      "task_id": "cln-dev-chrome-08-content-toggle",
+      "task_sha256": "7322ee46e661b057372006246c7bd9b783dbb8db6ca29eec89f0ef694c1f8845"
+    },
+    {
+      "app": "chrome",
+      "difficulty": "easy",
+      "fixture_sha256": "86d5771451a90535632107c680fadf23446079bb20c3b4db78114b03d3b8d083",
+      "fresh_oracle_pids": [
+        1893045,
+        1893070
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "5eb16124b11809c48fa0e54d5a5ce63cf6e4c1e78b1c8c952f3699070d75ede4",
+      "status": "pass",
+      "task_id": "cln-dev-chrome-09-performance-toggle",
+      "task_sha256": "a32cd1a28537ae9c67944706c1a08749f55044209517a853e710d63acfc96f82"
+    },
+    {
+      "app": "chrome",
+      "difficulty": "medium",
+      "fixture_sha256": "3d6759c28f405c0326847015d5adc1017f41fdf3f30a2c595aa3b3bb6d98d5ee",
+      "fresh_oracle_pids": [
+        1893081,
+        1893091
+      ],
+      "gold_pass": true,
+      "near_miss_reject": true,
+      "reset_reject": true,
+      "reset_signature": "eb1b99e559b5c6de48efd3d3ab9587ca7fe159b617668e45ef07c60d57a4e319",
+      "status": "pass",
+      "task_id": "cln-dev-chrome-10-appearance-toggle",
+      "task_sha256": "8b2ca985f703c3e5d40fbee71999e9d01ac98af02d8a15e5dc25bb2500d9e1b4"
+    }
+  ]
+}
