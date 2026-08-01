@@ -35,14 +35,21 @@ path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_fastreset"
 [outputs.result]
 type = "eval_result"
 marker = "qualification.json"
-alias = "natural_dev_cleanroom_cpu_kvm_{run.id}"
+alias = "natural_dev_cleanroom_cpu_kvm_{run.id}_shard{args.shard_index}"
 
 [args]
 output = "{outputs.result.path}/qualification.json"
-work_dir = "{outputs.result.path}/vm_work"
+"work-dir" = "{outputs.result.path}/vm_work"
 qcow = "{inputs.vm.path}/Ubuntu.qcow2"
 qemu = "{inputs.qemu.path}/bin/qemu-system-x86_64-wrapped"
 provider = "{inputs.provider.path}/qemu_fast_reset.py"
+"shard-index" = "0"
+
+[sweep]
+arg = "shard-index"
+start = 0
+end = 3
+throttle = 4
 
 [env]
 PYTHONUNBUFFERED = "1"

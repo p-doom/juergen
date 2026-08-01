@@ -259,12 +259,23 @@ def qualify_vm(
     *,
     per_app: int,
     plumbing_smoke: bool,
+    shard_index: int | None,
     qcow: Path,
     qemu: Path,
     provider: Path,
     work_dir: Path,
 ) -> dict[str, Any]:
-    selected = corpus.tasks if plumbing_smoke else _selected_tasks(corpus, per_app)
+    if plumbing_smoke:
+        if shard_index is not None:
+            raise ValueError("the five-task plumbing smoke is not shardable")
+        selected = corpus.tasks
+    elif shard_index is None:
+        selected = _selected_tasks(corpus, per_app)
+    else:
+        if not 0 <= shard_index < len(APPS):
+            raise ValueError(f"shard index must be in [0, {len(APPS) - 1}]")
+        app = APPS[shard_index]
+        selected = tuple(task for task in corpus.tasks if task.app == app)[:per_app]
     work_dir.mkdir(parents=True, exist_ok=False)
     rows: list[dict[str, Any]] = []
     session = KvmFixtureSession(
@@ -312,6 +323,7 @@ def qualify_vm(
     payload = {
         "schema_version": 1,
         "qualification": "cpu_kvm_native_absolute_gold",
+        "shard_index": shard_index,
         "suite_manifest_sha256": corpus.manifest_payload_sha256,
         "model_runs": False,
         "task_count": len(rows),
@@ -347,6 +359,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--inventory", choices=("corpus", "plumbing-smoke"), default="corpus")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--per-app", type=int, default=10)
+    parser.add_argument("--shard-index", type=int)
     parser.add_argument("--qcow", type=Path, default=DEFAULT_QCOW)
     parser.add_argument("--qemu", type=Path, default=DEFAULT_QEMU)
     parser.add_argument("--provider", type=Path, default=DEFAULT_PROVIDER)
@@ -361,6 +374,7 @@ def main(argv: list[str] | None = None) -> int:
             corpus,
             per_app=args.per_app,
             plumbing_smoke=args.inventory == "plumbing-smoke",
+            shard_index=args.shard_index,
             qcow=args.qcow,
             qemu=args.qemu,
             provider=args.provider,

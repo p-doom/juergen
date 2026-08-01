@@ -39,7 +39,7 @@ alias = "natural_dev_cleanroom_plumbing_smoke_{run.id}"
 
 [args]
 output = "{outputs.result.path}/qualification.json"
-work_dir = "{outputs.result.path}/vm_work"
+"work-dir" = "{outputs.result.path}/vm_work"
 qcow = "{inputs.vm.path}/Ubuntu.qcow2"
 qemu = "{inputs.qemu.path}/bin/qemu-system-x86_64-wrapped"
 provider = "{inputs.provider.path}/qemu_fast_reset.py"
