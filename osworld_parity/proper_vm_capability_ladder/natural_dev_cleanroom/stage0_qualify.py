@@ -394,7 +394,10 @@ _SWITCH_REBIND_RECEIPT_FIELDS = {
     "schema_version",
     "receipt_type",
     "record_id",
+    "record_sha256",
     "task_id",
+    "target_task_sha256",
+    "source_task_sha256s",
     "fixture_sha256",
     "record_semantic_step",
     "app",
@@ -418,6 +421,83 @@ _SWITCH_REBIND_RECEIPT_FIELDS = {
     "switch_rebind_receipt_sha256",
 }
 
+_ACTIVE_WINDOW_FIELDS = {"window_id", "window_line"}
+_ACTIVE_FRAME_FIELDS = {
+    "window_id",
+    "x",
+    "y",
+    "width",
+    "height",
+    "window_class",
+    "window_line",
+}
+_GEOMETRY_EVIDENCE_FIELDS = {
+    "probe",
+    "activation_commands",
+    "active_before",
+    "active_after",
+}
+_GEOMETRY_FIELDS_BY_APP = {
+    "writer": {"editor"},
+    "calc": {"cell"},
+    "files": {"decoy", "destination", "source", "moved"},
+    "chrome": {"nav", "decoy_nav", "toggle", "decoy_toggle", "scroll_surface"},
+    "vscode": {"editor"},
+}
+
+
+def _verify_window_object(
+    value: Any, *, frame: bool, label: str
+) -> dict[str, Any]:
+    expected = _ACTIVE_FRAME_FIELDS if frame else _ACTIVE_WINDOW_FIELDS
+    if not isinstance(value, dict) or set(value) != expected:
+        raise RuntimeError(f"{label} schema mismatch")
+    if (
+        not isinstance(value["window_id"], str)
+        or not isinstance(value["window_line"], str)
+        or not value["window_line"]
+    ):
+        raise RuntimeError(f"{label} identity mismatch")
+    try:
+        parsed_window_id = int(value["window_id"], 16)
+    except ValueError as exc:
+        raise RuntimeError(f"{label} window ID mismatch") from exc
+    if not value["window_id"].lower().startswith("0x") or parsed_window_id <= 0:
+        raise RuntimeError(f"{label} window ID mismatch")
+    if frame:
+        if (
+            not isinstance(value["window_class"], str)
+            or not value["window_class"]
+            or any(
+                not isinstance(value[field], int)
+                or isinstance(value[field], bool)
+                for field in ("x", "y", "width", "height")
+            )
+            or value["x"] < 0
+            or value["y"] < 0
+            or value["width"] <= 0
+            or value["height"] <= 0
+        ):
+            raise RuntimeError(f"{label} frame mismatch")
+    return value
+
+
+def _verify_geometry_object(value: Any, app: str) -> dict[str, Any]:
+    expected = _GEOMETRY_FIELDS_BY_APP[app]
+    if not isinstance(value, dict) or set(value) != expected:
+        raise RuntimeError("switch/rebind app-specific geometry schema mismatch")
+    if any(
+        not isinstance(point, list)
+        or len(point) != 2
+        or any(
+            not isinstance(coordinate, int) or isinstance(coordinate, bool)
+            for coordinate in point
+        )
+        for point in value.values()
+    ):
+        raise RuntimeError("switch/rebind geometry coordinate mismatch")
+    return value
+
 
 def _verify_switch_rebind_receipt(
     receipt: dict[str, Any], record: Stage0Record, task: Stage0SourceTask
@@ -432,7 +512,11 @@ def _verify_switch_rebind_receipt(
         receipt["schema_version"] != 1
         or receipt["receipt_type"] != "stage0_visible_switch_passive_rebind_v1"
         or receipt["record_id"] != record.id
+        or receipt["record_sha256"] != record.record_sha256
         or receipt["task_id"] != task.id
+        or receipt["target_task_sha256"] != task.task_sha256
+        or receipt["source_task_sha256s"]
+        != [source.task_sha256 for source in record.component_tasks]
         or receipt["fixture_sha256"] != task.fixture_sha256
         or receipt["record_semantic_step"] != 2
         or receipt["app"] != task.app
@@ -463,15 +547,32 @@ def _verify_switch_rebind_receipt(
         receipt["partner_geometry_binding"]
     ):
         raise RuntimeError("switch/rebind geometry seal mismatch")
+    _verify_window_object(
+        receipt["active_before"], frame=False, label="switch active-before"
+    )
+    _verify_window_object(
+        receipt["active_after"], frame=False, label="switch active-after"
+    )
+    _verify_geometry_object(receipt["partner_geometry_binding"], task.app)
     evidence = receipt["geometry_probe_evidence"]
+    if not isinstance(evidence, dict) or set(evidence) != _GEOMETRY_EVIDENCE_FIELDS:
+        raise RuntimeError("switch/rebind geometry evidence schema mismatch")
+    evidence_before = _verify_window_object(
+        evidence["active_before"], frame=True, label="geometry active-before"
+    )
+    evidence_after = _verify_window_object(
+        evidence["active_after"], frame=True, label="geometry active-after"
+    )
     if (
         evidence.get("probe") != "active_window_geometry_read_only_v1"
         or evidence.get("activation_commands") != 0
         or int(receipt["active_after"]["window_id"], 16)
-        != int(evidence["active_before"]["window_id"], 16)
-        or int(evidence["active_before"]["window_id"], 16)
-        != int(evidence["active_after"]["window_id"], 16)
+        != int(evidence_before["window_id"], 16)
+        or int(evidence_before["window_id"], 16)
+        != int(evidence_after["window_id"], 16)
         or receipt["target_token"] not in receipt["active_after"]["window_line"]
+        or receipt["target_token"] not in evidence_before["window_line"]
+        or receipt["target_token"] not in evidence_after["window_line"]
     ):
         raise RuntimeError("switch/rebind passive-active evidence mismatch")
 
@@ -505,7 +606,12 @@ def _switch_rebind_receipt(
         "schema_version": 1,
         "receipt_type": "stage0_visible_switch_passive_rebind_v1",
         "record_id": record.id,
+        "record_sha256": record.record_sha256,
         "task_id": task.id,
+        "target_task_sha256": task.task_sha256,
+        "source_task_sha256s": [
+            source.task_sha256 for source in record.component_tasks
+        ],
         "fixture_sha256": task.fixture_sha256,
         "record_semantic_step": 2,
         "app": task.app,

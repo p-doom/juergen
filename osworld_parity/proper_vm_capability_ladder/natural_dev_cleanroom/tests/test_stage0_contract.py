@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import copy
 import inspect
 import subprocess
 import tomllib
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
+
+import pytest
 
 from osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle import (
     initial_state,
@@ -261,7 +264,7 @@ def test_switch_rebind_receipt_is_exactly_bound_and_independently_sealed() -> No
         switch,
         {"window_id": "0x10", "window_line": "anchor"},
         window,
-        {"editor": (600, 350)},
+        {"cell": (600, 350)},
         {
             "probe": "active_window_geometry_read_only_v1",
             "activation_commands": 0,
@@ -273,6 +276,11 @@ def test_switch_rebind_receipt_is_exactly_bound_and_independently_sealed() -> No
     seal = unsigned.pop("switch_rebind_receipt_sha256")
     assert seal == sha256_value(unsigned)
     assert receipt["task_id"] == task.id
+    assert receipt["record_sha256"] == record.record_sha256
+    assert receipt["target_task_sha256"] == task.task_sha256
+    assert receipt["source_task_sha256s"] == [
+        source.task_sha256 for source in record.component_tasks
+    ]
     assert receipt["fixture_sha256"] == task.fixture_sha256
     assert receipt["record_semantic_step"] == 2
     assert receipt["app"] == task.app
@@ -281,6 +289,62 @@ def test_switch_rebind_receipt_is_exactly_bound_and_independently_sealed() -> No
         receipt["exact_dispatched_events"]
     )
     _verify_switch_rebind_receipt(receipt, record, task)
+
+    def reseal(value: dict[str, object]) -> dict[str, object]:
+        value["partner_geometry_sha256"] = sha256_value(
+            value["partner_geometry_binding"]
+        )
+        unsigned_value = dict(value)
+        unsigned_value.pop("switch_rebind_receipt_sha256", None)
+        value["switch_rebind_receipt_sha256"] = sha256_value(unsigned_value)
+        return value
+
+    tampered: list[dict[str, object]] = []
+    for field in ("active_before", "active_after"):
+        extra = copy.deepcopy(receipt)
+        extra[field]["unexpected"] = True
+        tampered.append(reseal(extra))
+        substituted = copy.deepcopy(receipt)
+        line = substituted[field].pop("window_line")
+        substituted[field]["title"] = line
+        tampered.append(reseal(substituted))
+    evidence_extra = copy.deepcopy(receipt)
+    evidence_extra["geometry_probe_evidence"]["unexpected"] = True
+    tampered.append(reseal(evidence_extra))
+    evidence_substituted = copy.deepcopy(receipt)
+    activation = evidence_substituted["geometry_probe_evidence"].pop(
+        "activation_commands"
+    )
+    evidence_substituted["geometry_probe_evidence"]["activation_count"] = activation
+    tampered.append(reseal(evidence_substituted))
+    for frame_field in ("active_before", "active_after"):
+        frame_extra = copy.deepcopy(receipt)
+        frame_extra["geometry_probe_evidence"][frame_field]["unexpected"] = True
+        tampered.append(reseal(frame_extra))
+        frame_substituted = copy.deepcopy(receipt)
+        window_class = frame_substituted["geometry_probe_evidence"][
+            frame_field
+        ].pop("window_class")
+        frame_substituted["geometry_probe_evidence"][frame_field][
+            "application_class"
+        ] = window_class
+        tampered.append(reseal(frame_substituted))
+    geometry_extra = copy.deepcopy(receipt)
+    geometry_extra["partner_geometry_binding"]["unexpected"] = [1, 2]
+    tampered.append(reseal(geometry_extra))
+    geometry_substituted = copy.deepcopy(receipt)
+    point = geometry_substituted["partner_geometry_binding"].pop("cell")
+    geometry_substituted["partner_geometry_binding"]["editor"] = point
+    tampered.append(reseal(geometry_substituted))
+    record_tampered = copy.deepcopy(receipt)
+    record_tampered["record_sha256"] = "0" * 64
+    tampered.append(reseal(record_tampered))
+    source_tampered = copy.deepcopy(receipt)
+    source_tampered["source_task_sha256s"][0] = "0" * 64
+    tampered.append(reseal(source_tampered))
+    for value in tampered:
+        with pytest.raises(RuntimeError):
+            _verify_switch_rebind_receipt(value, record, task)
 
 
 def test_short_files_probe_observes_exact_near_miss_path(tmp_path: Path) -> None:
