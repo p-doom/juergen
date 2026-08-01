@@ -342,6 +342,17 @@ def test_switch_rebind_receipt_is_exactly_bound_and_independently_sealed() -> No
     source_tampered = copy.deepcopy(receipt)
     source_tampered["source_task_sha256s"][0] = "0" * 64
     tampered.append(reseal(source_tampered))
+    for forged_token in ("", "unrelated-window-token"):
+        token_tampered = copy.deepcopy(receipt)
+        token_tampered["target_token"] = forged_token
+        token_tampered["active_after"]["window_line"] = (
+            f"0x20 unrelated {forged_token}"
+        )
+        for frame_field in ("active_before", "active_after"):
+            token_tampered["geometry_probe_evidence"][frame_field][
+                "window_line"
+            ] = f"0x20 unrelated {forged_token}"
+        tampered.append(reseal(token_tampered))
     for value in tampered:
         with pytest.raises(RuntimeError):
             _verify_switch_rebind_receipt(value, record, task)

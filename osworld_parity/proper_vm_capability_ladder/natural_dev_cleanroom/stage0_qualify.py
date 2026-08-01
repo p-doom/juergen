@@ -508,6 +508,7 @@ def _verify_switch_rebind_receipt(
     seal = unsigned.pop("switch_rebind_receipt_sha256")
     if seal != sha256_value(unsigned):
         raise RuntimeError("switch/rebind receipt seal mismatch")
+    expected_target_token = _window_token(task)
     if (
         receipt["schema_version"] != 1
         or receipt["receipt_type"] != "stage0_visible_switch_passive_rebind_v1"
@@ -521,6 +522,9 @@ def _verify_switch_rebind_receipt(
         or receipt["record_semantic_step"] != 2
         or receipt["app"] != task.app
         or receipt["arm"] != "native_absolute_control"
+        or not isinstance(receipt["target_token"], str)
+        or not receipt["target_token"]
+        or receipt["target_token"] != expected_target_token
     ):
         raise RuntimeError("switch/rebind receipt identity binding mismatch")
     if (
