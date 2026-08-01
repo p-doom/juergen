@@ -4,6 +4,27 @@ Boots the VM via native qemu+KVM, starts sglang, runs a closed-loop
 rollout, writes result.json for labctl.
 
 Replaces the former run_freeroll_recipe.sh + rollout.py split.
+
+Action formats
+--------------
+A checkpoint replies in whatever format it was trained on, so the parser and
+the VM dispatch path must match the training data. ``--action_format`` selects
+them and defaults to ``auto``, which derives the format from
+``--system_prompt_id`` (osworld_system_prompts.SYSTEM_PROMPT_ACTION_FORMATS) —
+a prompt states its reply contract in prose and that table is the same fact in
+machine-readable form, so the two cannot drift apart:
+
+  aggregate     `dx dy scroll [; +EV -EV]`      (the default for every prompt
+                                                 with no explicit entry)
+  ordered       `move(4,-1); down(LMB); up(LMB)` — ordered_events_v2, and v3
+                which adds `type("...")`. Paired with cua_ordered_v1 /
+                cua_ordered_typing_v1 / yll_ordered_v1; produced by stage 04
+                `--action-format ordered_events_v2|ordered_events_v3`.
+  computer_use  Qwen3-VL native `<tool_call>` JSON.
+
+Mismatching the format is not a silent failure but not a loud one either: every
+step raises a parse error, nothing is dispatched, and the rollout runs to
+max_steps with a motionless VM. Check ``parse_errors`` in result.json.
 """
 
 from __future__ import annotations
@@ -35,9 +56,15 @@ _JUERGEN_EVAL = str(Path(__file__).resolve().parent)
 if _JUERGEN_EVAL not in sys.path:
     sys.path.insert(0, _JUERGEN_EVAL)
 
-from action_parser import parse_action_tolerant, parse_computer_use_tool_call  # noqa: E402
-from osworld_vm_client import OSWorldClient  # noqa: E402
-from osworld_system_prompts import SYSTEM_PROMPTS  # noqa: E402
+from action_parser import (  # noqa: E402
+    ComputerUseCall, parse_action_tolerant, parse_computer_use_tool_call,
+    parse_ordered_action_tolerant,
+)
+from osworld_vm_client import OSWorldClient, StepResult  # noqa: E402
+from osworld_system_prompts import (  # noqa: E402
+    ACTION_FORMAT_AGGREGATE, ACTION_FORMAT_COMPUTER_USE, ACTION_FORMAT_ORDERED,
+    SYSTEM_PROMPTS, action_format_for_prompt,
+)
 from osworld_runtime import (  # noqa: E402
     _DEFAULT_QCOW2, _DEFAULT_QEMU_BIN, _EVAL_DIR,
     _call_model, _pil_to_data_url, _wait_for, append_turn,
@@ -78,6 +105,78 @@ def _computer_use_terminate_status(text: str) -> str | None:
     if str(call.arguments.get("action", "")).strip().lower() != "terminate":
         return None
     return str(call.arguments.get("status", "success")).strip().lower() or "success"
+
+
+def _parse_and_dispatch(
+    client: OSWorldClient, action_text: str, action_format: str
+) -> tuple[dict, StepResult]:
+    """Parse one model reply per ``action_format`` and dispatch it to the VM.
+
+    Returns ``(parsed, step_result)`` where ``parsed`` is the JSON-safe record
+    written to the trajectory. Raises ``TypeError``/``ValueError`` when the
+    reply violates the format's grammar; the caller counts that as a parse
+    error and the VM is left untouched for that step.
+
+    ``"aggregate"`` keeps the historical behaviour of trying a ``computer_use``
+    tool call first and falling back to the delta grammar, because several
+    aggregate prompts (e.g. cua_v1) draw replies in either shape. The
+    ``"ordered"`` and ``"computer_use"`` branches are strict: a checkpoint
+    trained on one of those formats emitting anything else is a real failure
+    and should be counted, not silently reinterpreted.
+    """
+    if action_format == ACTION_FORMAT_ORDERED:
+        action = parse_ordered_action_tolerant(action_text)
+        return {
+            "no_op": action.no_op,
+            "primitives": [
+                {
+                    k: v for k, v in (
+                        ("kind", p.kind), ("dx", p.dx), ("dy", p.dy),
+                        ("input_name", p.input_name), ("text", p.text),
+                    ) if v is not None
+                }
+                for p in action.primitives
+            ],
+            # Flat key/button projection so click-driven logic (_is_left_click /
+            # --stop_on_click) and existing trajectory analysis work unchanged
+            # on ordered rollouts. Lossy by construction: motion and typing are
+            # not represented here, only in "primitives".
+            "events": [
+                {"kind": e.kind, "what": e.what, "mouse_button": e.mouse_button}
+                for e in action.key_events
+            ],
+        }, client.dispatch_ordered(action)
+
+    if action_format == ACTION_FORMAT_COMPUTER_USE:
+        call = parse_computer_use_tool_call(action_text)
+        return _computer_use_parsed(call), client.dispatch_computer_use(call.arguments)
+
+    try:
+        call = parse_computer_use_tool_call(action_text)
+    except (TypeError, ValueError):
+        call = None
+    if call is not None:
+        return _computer_use_parsed(call), client.dispatch_computer_use(call.arguments)
+
+    action = parse_action_tolerant(action_text)
+    return {
+        "dx": action.dx, "dy": action.dy,
+        "scroll": action.scroll, "no_op": action.no_op,
+        "events": [
+            {"kind": e.kind, "what": e.what, "mouse_button": e.mouse_button}
+            for e in action.events
+        ],
+    }, client.dispatch_action(action)
+
+
+def _computer_use_parsed(call: ComputerUseCall) -> dict:
+    """The trajectory record for a parsed computer_use tool call."""
+    return {
+        "computer_use": call.arguments,
+        "no_op": str(
+            call.arguments.get("action", "")
+        ).strip().lower() == "answer",
+    }
 
 
 def _is_left_click(parsed: dict | None) -> bool:
@@ -140,6 +239,7 @@ def _run_rollout(
     settle_stable_timeout_s: float,
     settle_poll_s: float,
     model_resolution: tuple[int, int] | None,
+    action_format: str,
 ) -> dict:
     steps_dir = output_dir / "steps"
     if save_frames:
@@ -152,10 +252,10 @@ def _run_rollout(
     client.wait_ready()
     sw, sh = client.screen_size()
     _LOGGER.info(
-        "VM screen %dx%d; model sees %s; max_steps=%d; instruction=%r",
+        "VM screen %dx%d; model sees %s; action_format=%s; max_steps=%d; instruction=%r",
         sw, sh,
         "%dx%d" % model_resolution if model_resolution else "native",
-        max_steps, instruction,
+        action_format, max_steps, instruction,
     )
     _prepare_desktop(client, desktop_setup)
 
@@ -272,33 +372,7 @@ def _run_rollout(
             parsed = None
             sr_dict: dict | None = None
             try:
-                try:
-                    computer_call = parse_computer_use_tool_call(action_text)
-                except (TypeError, ValueError):
-                    computer_call = None
-                if computer_call is not None:
-                    parsed = {
-                        "computer_use": computer_call.arguments,
-                        "no_op": str(
-                            computer_call.arguments.get("action", "")
-                        ).strip().lower() == "answer",
-                    }
-                    sr = client.dispatch_computer_use(computer_call.arguments)
-                else:
-                    action = parse_action_tolerant(action_text)
-                    parsed = {
-                        "dx": action.dx, "dy": action.dy,
-                        "scroll": action.scroll, "no_op": action.no_op,
-                        "events": [
-                            {
-                                "kind": e.kind,
-                                "what": e.what,
-                                "mouse_button": e.mouse_button,
-                            }
-                            for e in action.events
-                        ],
-                    }
-                    sr = client.dispatch_action(action)
+                parsed, sr = _parse_and_dispatch(client, action_text, action_format)
                 sr_dict = {
                     "cursor_before": list(sr.cursor_before),
                     "cursor_after": list(sr.cursor_after),
@@ -363,6 +437,7 @@ def _run_rollout(
         "sglang_url": sglang_url,
         "screen_size": [sw, sh],
         "model_resolution": list(model_resolution) if model_resolution else None,
+        "action_format": action_format,
         "n_steps": len(steps),
         "max_steps": max_steps,
         "stop_reason": stop_reason,
@@ -460,6 +535,20 @@ def main() -> int:
              "each on a freshly rebooted VM but the same sglang server.",
     )
     p.add_argument("--system_prompt_id", default="training_v1")
+    p.add_argument(
+        "--action_format",
+        choices=("auto", ACTION_FORMAT_AGGREGATE, ACTION_FORMAT_ORDERED,
+                 ACTION_FORMAT_COMPUTER_USE),
+        default="auto",
+        help="Which reply format to parse and dispatch. 'auto' (default) "
+             "derives it from --system_prompt_id via "
+             "osworld_system_prompts.SYSTEM_PROMPT_ACTION_FORMATS, so the "
+             "ordered prompts (cua_ordered_v1, cua_ordered_typing_v1, "
+             "yll_ordered_v1) select the ordered_events_v2/v3 parser and "
+             "everything else stays on the aggregate delta grammar. Set it "
+             "explicitly only to override that pairing (e.g. a custom prompt "
+             "that is not in the table).",
+    )
     p.add_argument("--max_tokens", type=int, default=64)
     p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--n_history_frames", type=int, default=16)
@@ -515,6 +604,17 @@ def main() -> int:
         print(f"Unknown --system_prompt_id {args.system_prompt_id!r}. "
               f"Available: {list(SYSTEM_PROMPTS)}", file=sys.stderr)
         return 1
+
+    action_format = (
+        action_format_for_prompt(args.system_prompt_id)
+        if args.action_format == "auto" else args.action_format
+    )
+    _LOGGER.info(
+        "action_format=%s (%s from system_prompt_id=%s)",
+        action_format,
+        "derived" if args.action_format == "auto" else "forced",
+        args.system_prompt_id,
+    )
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -624,6 +724,7 @@ def main() -> int:
                 settle_stable_timeout_s=args.settle_stable_timeout_s,
                 settle_poll_s=args.settle_poll_s,
                 model_resolution=args.model_resolution,
+                action_format=action_format,
             )
             with (run_dir / "result.json").open("w") as f:
                 json.dump(result, f, indent=2)
@@ -649,6 +750,7 @@ def main() -> int:
                 "schema_version": 1,
                 "model": args.model_path,
                 "system_prompt_id": args.system_prompt_id,
+                "action_format": action_format,
                 "desktop_setup": args.desktop_setup,
                 "n_instructions": len(instructions),
                 "runs": runs,

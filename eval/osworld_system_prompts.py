@@ -692,3 +692,42 @@ For each function call, return a json object with function name and arguments wi
         "primitives."
     ),
 }
+
+
+# Which action format each prompt's reply contract describes, i.e. which
+# parser + dispatch path the reply must be routed to. A prompt states the
+# contract in prose; this is the same fact in machine-readable form, so
+# freeroll can pick the parser from --system_prompt_id instead of the operator
+# having to keep two flags consistent (see freeroll --action_format=auto).
+#
+#   "aggregate"    -> parse_action_tolerant  + client.dispatch_action
+#                     one line: `dx dy scroll [; +EV -EV]`
+#   "ordered"      -> parse_ordered_action_tolerant + client.dispatch_ordered
+#                     ordered_events_v2/v3 mini-programs: `move(4,-1); down(LMB)`
+#   "computer_use" -> parse_computer_use_tool_call + client.dispatch_computer_use
+#                     Qwen3-VL native <tool_call> JSON
+#
+# Prompts absent from this table default to "aggregate", which is what every
+# pre-ordered prompt emits. Keep an entry here whenever you add a prompt.
+ACTION_FORMAT_AGGREGATE = "aggregate"
+ACTION_FORMAT_ORDERED = "ordered"
+ACTION_FORMAT_COMPUTER_USE = "computer_use"
+
+SYSTEM_PROMPT_ACTION_FORMATS: dict[str, str] = {
+    # ordered_events_v2: move/scroll/down/up, no type()
+    "yll_ordered_v1": ACTION_FORMAT_ORDERED,
+    "yll_ordered_v1_no_goal": ACTION_FORMAT_ORDERED,
+    "cua_ordered_v1": ACTION_FORMAT_ORDERED,
+    # ordered_events_v3: the above plus type("...")
+    "cua_ordered_typing_v1": ACTION_FORMAT_ORDERED,
+    # Qwen3-VL native tool calls
+    "computer_use_v1": ACTION_FORMAT_COMPUTER_USE,
+}
+
+
+def action_format_for_prompt(prompt_id: str) -> str:
+    """The action format a prompt id's reply contract describes.
+
+    Defaults to ``"aggregate"`` for prompts with no explicit entry.
+    """
+    return SYSTEM_PROMPT_ACTION_FORMATS.get(prompt_id, ACTION_FORMAT_AGGREGATE)

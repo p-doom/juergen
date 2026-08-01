@@ -27,9 +27,16 @@ swept motion) but preserves the model's emission format. Good enough
 for free rollouts where we're watching behavior, not measuring
 grounding precision against deltas-as-such.
 
+Three dispatch paths share that machinery, one per action format the
+model may be trained on:
+  ``dispatch_action``       aggregate ``dx dy scroll [; +EV -EV]``
+  ``dispatch_ordered``      ordered_events_v2/v3 mini-programs, executed
+                            primitive by primitive in the emitted order
+  ``dispatch_computer_use`` Qwen3-VL native ``computer_use`` tool calls
+
 ``model_resolution`` makes the client the translation boundary between
 the model's frame space and the VM's native screen: ``screenshot()``
-downscales frames to that size before anyone sees them, and both
+downscales frames to that size before anyone sees them, and all
 dispatch paths scale model-emitted deltas / absolute coordinates back
 up to the native screen. Use it when the checkpoint was trained at a
 different resolution (e.g. 1280x720) than the VM runs at.
@@ -47,7 +54,7 @@ from dataclasses import dataclass
 import requests
 from PIL import Image
 
-from action_parser import Action, KeyEvent
+from action_parser import Action, KeyEvent, OrderedAction
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -356,6 +363,100 @@ class OSWorldClient:
             intended_target=(tx, ty),
             delta=(dx, dy),  # as applied (screen px), not as emitted (model px)
             scroll=action.scroll,
+            events_dispatched=executed,
+            parse_ok=True,
+            action_text="",  # caller fills the raw text
+        )
+
+    def dispatch_ordered(self, action: OrderedAction) -> StepResult:
+        """Apply a parsed ordered_events_v2/v3 ``OrderedAction`` to the VM.
+
+        Primitives are executed strictly left to right, which is the point of
+        the format: ``move -> click -> move`` in a single turn is dispatched as
+        three ordered operations, where ``dispatch_action`` would have to
+        collapse them (one moveTo, then all events).
+
+        Per primitive:
+          ``move``   -> absolute ``moveTo`` of the running cursor + delta
+          ``scroll`` -> ``pyautogui.scroll(dy)`` and/or ``hscroll(dx)``
+          ``down``/``up`` -> ``mouseDown``/``mouseUp`` / ``keyDown``/``keyUp``
+          ``type``   -> ``pyautogui.write(text, interval=0)``
+
+        The cursor is tracked locally across moves (one ``moveTo`` per move
+        primitive, no per-move round-trip to read it back) and clipped to the
+        screen at each step, so a long overshoot pins at the edge exactly as
+        the aggregate path does. ``model_resolution`` scaling applies to move
+        deltas only -- scroll units are not pixels.
+        """
+        cursor_before = self.cursor_position()
+        sw, sh = self.screen_size()
+        cx, cy = cursor_before
+        executed: list[str] = []
+
+        if action.no_op:
+            return StepResult(
+                cursor_before=cursor_before,
+                cursor_after=cursor_before,
+                intended_target=cursor_before,
+                delta=(0, 0),
+                scroll=0,
+                events_dispatched=[],
+                parse_ok=True,
+                action_text="NO_OP",
+            )
+
+        kx, ky = self._model_to_screen_scale(sw, sh)
+        # Summary fields for the trajectory log: net applied motion and net
+        # vertical scroll. The authoritative per-primitive record is
+        # ``events_dispatched``, which keeps the order.
+        total_dx = total_dy = total_scroll = 0
+
+        for prim in action.primitives:
+            if prim.kind == "move":
+                dx = round(prim.dx * kx)
+                dy = round(prim.dy * ky)
+                tx = max(0, min(sw - 1, cx + dx))
+                ty = max(0, min(sh - 1, cy + dy))
+                if (tx, ty) != (cx, cy):
+                    cmd = f"pyautogui.moveTo({tx}, {ty})"
+                    self.execute(cmd)
+                    executed.append(cmd)
+                    total_dx += tx - cx
+                    total_dy += ty - cy
+                    cx, cy = tx, ty
+            elif prim.kind == "scroll":
+                # Vertical first, then horizontal: pyautogui has no combined
+                # call, and the grammar imposes no order within one primitive.
+                if prim.dy:
+                    cmd = f"pyautogui.scroll({int(prim.dy)})"
+                    self.execute(cmd)
+                    executed.append(cmd)
+                    total_scroll += int(prim.dy)
+                if prim.dx:
+                    cmd = f"pyautogui.hscroll({int(prim.dx)})"
+                    self.execute(cmd)
+                    executed.append(cmd)
+            elif prim.kind in ("down", "up"):
+                cmd = _event_to_pyautogui(prim.as_key_event())
+                if cmd is None:
+                    _LOGGER.debug("skipping unmapped primitive %r", prim)
+                    continue
+                self.execute(cmd)
+                executed.append(cmd)
+            elif prim.kind == "type":
+                cmd = f"pyautogui.write({prim.text!r}, interval=0)"
+                self.execute(cmd)
+                executed.append(cmd)
+            else:
+                raise ValueError(f"unknown ordered primitive kind {prim.kind!r}")
+
+        cursor_after = self.cursor_position()
+        return StepResult(
+            cursor_before=cursor_before,
+            cursor_after=cursor_after,
+            intended_target=(cx, cy),
+            delta=(total_dx, total_dy),  # as applied (screen px)
+            scroll=total_scroll,
             events_dispatched=executed,
             parse_ok=True,
             action_text="",  # caller fills the raw text
