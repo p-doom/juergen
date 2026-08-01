@@ -141,16 +141,6 @@ def _dispatch_gold(
     ):
         for turn_index, turn in grouped:
             payload = compile_native(turn, geometry)
-            # The production coalesced-type primitive deliberately reasserts
-            # Ctrl-A immediately before its clipboard paste.  With a merely
-            # selected Calc cell, that shortcut selects the entire sheet and
-            # sends the formula to A1.  F2 first enters the requested cell's
-            # edit mode, where the same Ctrl-A correctly selects only its
-            # existing value before replacement.
-            if task.app == "calc" and turn.semantic_step == 2:
-                payload["operations"].insert(
-                    0, {"action": "key_chord", "keys": ["F2"]}
-                )
             for operation_index, operation in enumerate(payload["operations"]):
                 action = dict(operation)
                 action["action"] = {"click": "left_click", "key_chord": "key"}.get(

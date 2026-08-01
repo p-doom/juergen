@@ -4,6 +4,13 @@ from dataclasses import replace
 
 import pytest
 
+from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.actions import (
+    compile_compact,
+    compile_native,
+)
+from osworld_parity.proper_vm_capability_ladder.rung2_sameapp.trajectory import (
+    build_trajectory,
+)
 from osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.qualify import (
     qualify_vm,
 )
@@ -55,3 +62,22 @@ def test_legacy_forty_task_corpus_is_permanently_auxiliary() -> None:
         "stage0": False,
         "final": False,
     }
+
+
+def test_calc_f2_is_explicit_in_both_materialized_action_arms() -> None:
+    task = next(task for task in load_smoke().tasks if task.app == "calc")
+    step_two = next(
+        turn
+        for turn in build_trajectory(task.as_fixture()).turns
+        if turn.semantic_step == 2
+    )
+
+    native = compile_native(step_two, {"cell": (125, 185)})
+    compact, _ = compile_compact(step_two, {"cell": (125, 185)}, (125, 185))
+
+    assert native["operations"] == [
+        {"action": "key_chord", "keys": ["F2"]},
+        {"action": "type", "text": "=SUM(3;5)"},
+    ]
+    assert "+F2 -F2" in compact
+    assert 'type("=SUM(3;5)")' in compact

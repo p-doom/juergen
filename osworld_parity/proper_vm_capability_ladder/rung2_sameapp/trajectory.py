@@ -33,7 +33,19 @@ def build_trajectory(fixture: Fixture, *, near_miss: bool = False) -> ScriptedTr
                     _op("key_chord", keys=("Return",)),
                 ),
             ),
-            ActionTurn(2, (_op("type", text=formula),)),
+            # ``type`` lowers to the production GTK clipboard primitive, which
+            # deliberately sends Ctrl-A immediately before pasting.  Enter cell
+            # edit mode first so that replacement is scoped to the selected
+            # cell rather than selecting the entire sheet.  Keeping F2 in the
+            # symbolic program makes this contract identical in native and
+            # compact materializations.
+            ActionTurn(
+                2,
+                (
+                    _op("key_chord", keys=("F2",)),
+                    _op("type", text=formula),
+                ),
+            ),
             ActionTurn(3, (_op("key_chord", keys=("Return",)),)),
             ActionTurn(4, (_op("key_chord", keys=("ControlLeft", "KeyS")),)),
         )
