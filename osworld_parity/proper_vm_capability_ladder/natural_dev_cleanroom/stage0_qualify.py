@@ -10,6 +10,7 @@ import tempfile
 import time
 import traceback
 from dataclasses import asdict
+from itertools import groupby
 from pathlib import Path
 from typing import Any
 
@@ -21,9 +22,12 @@ from ..rung1.vm import (
     KvmFixtureSession,
     sha256_file,
 )
-from ..rung2_sameapp.vm import probe_state, setup_fixture
+from ..rung2_sameapp.actions import compile_native
+from ..rung2_sameapp.trajectory import build_trajectory
+from ..rung2_sameapp.vm import probe_geometry, probe_state, setup_fixture
 from .oracle import initial_state, reset_signature, scripted_state
 from .qualify import EXPECTED_PROVIDER_SHA256, _dispatch_gold
+from .stage0_actions import compile_multi_native, compile_visible_app_switch_native
 from .stage0_loader import (
     ANCHOR_APPS,
     RECORD_ELIGIBILITY,
@@ -139,21 +143,74 @@ def _setup_source(transport: Any, task: Stage0SourceTask) -> dict[str, Any]:
 
             fixture = task.as_vscode_fixture()
             guest = setup_vscode(transport, fixture)
+            setup_preparation = None
+            if "-multi-" in task.id:
+                x, y = guest.geometry.editor
+                transport.execute_argv(
+                    [
+                        "python3",
+                        "-c",
+                        f"import pyautogui,time;pyautogui.click({x},{y});time.sleep(0.75)",
+                    ]
+                )
+                setup_preparation = {
+                    "kind": "fixture_editor_focus",
+                    "target": "editor",
+                    "coordinate": [x, y],
+                    "qualification_action": False,
+                }
             return {
                 "task": task,
                 "fixture": fixture,
                 "initial_state": guest.state,
                 "geometry": {"editor": guest.geometry.editor},
                 "readiness": guest.readiness,
+                "setup_preparation": setup_preparation,
             }
         fixture = task.as_fixture()
         guest = setup_fixture(transport, fixture)
+        setup_preparation = None
+        if "-multi-" in task.id:
+            if task.app in {"writer", "files"}:
+                target = "editor" if task.app == "writer" else "source"
+                x, y = guest.geometry[target]
+                transport.execute_argv(
+                    [
+                        "python3",
+                        "-c",
+                        f"import pyautogui,time;pyautogui.click({x},{y});time.sleep(0.75)",
+                    ]
+                )
+                setup_preparation = {
+                    "kind": (
+                        "fixture_editor_focus"
+                        if task.app == "writer"
+                        else "fixture_initial_selection"
+                    ),
+                    "target": target,
+                    "coordinate": [x, y],
+                    "qualification_action": False,
+                }
+            elif task.app == "calc":
+                transport.execute_argv(
+                    [
+                        "python3",
+                        "-c",
+                        "import pyautogui,time;pyautogui.hotkey('ctrl','home');time.sleep(0.75)",
+                    ]
+                )
+                setup_preparation = {
+                    "kind": "fixture_initial_selection",
+                    "target": "A1",
+                    "qualification_action": False,
+                }
         return {
             "task": task,
             "fixture": fixture,
             "initial_state": guest.state,
             "geometry": guest.geometry,
             "readiness": guest.readiness,
+            "setup_preparation": setup_preparation,
         }
     finally:
         transport.timeout_s = old_timeout
@@ -204,13 +261,166 @@ def _probe_source(transport: Any, task: Stage0SourceTask, fixture: Any) -> dict[
         from ..rung1b_realapps.vm import probe_fixture
 
         return probe_fixture(transport, fixture)
-    return probe_state(transport, fixture)
+    if task.app == "files" and task.params.get("stage0_program") == "files_rename_selected_source":
+        from ..rung2_sameapp.vm import resolve_guest_root
+
+        root = resolve_guest_root(transport) / task.id
+        source = root / str(task.params["source_name"])
+        final = root / str(task.expected["final_name"])
+        code = f"""
+import hashlib,json,pathlib
+source=pathlib.Path({str(source)!r}); final=pathlib.Path({str(final)!r})
+path=final if final.is_file() else source
+data=path.read_bytes() if path.is_file() else b''
+value={{
+ 'schema_version':1,
+ 'fixture_id':{task.id!r},
+ 'fixture_sha256':{task.fixture_sha256!r},
+ 'app':'files',
+ 'source_exists':source.is_file(),
+ 'destination':'root' if final.is_file() else None,
+ 'final_name':path.name,
+ 'content_sha256':hashlib.sha256(data).hexdigest(),
+ 'saved':final.is_file(),
+}}
+print('STAGE0_STATE='+json.dumps(value,sort_keys=True))
+""".strip()
+        output = str(transport.execute_argv(["python3", "-c", code]).get("output", ""))
+        rows = [line for line in output.splitlines() if line.startswith("STAGE0_STATE=")]
+        if len(rows) != 1:
+            raise RuntimeError("short Files state evidence missing")
+        return json.loads(rows[0].removeprefix("STAGE0_STATE="))
+    state = probe_state(transport, fixture)
+    state.pop("_geometry", None)
+    return state
+
+
+def _rebind_active_geometry(
+    transport: Any,
+    task: Stage0SourceTask,
+    fixture: Any,
+) -> dict[str, tuple[int, int]]:
+    if task.app == "vscode":
+        from ..rung1b_realapps.vm import probe_geometry as probe_vscode_geometry
+
+        value = probe_vscode_geometry(transport, fixture)
+        return {"editor": value.editor}
+    state = probe_state(transport, fixture)
+    return probe_geometry(transport, fixture, state)
+
+
+def _dispatch_multi_program(
+    transport: Any,
+    task: Stage0SourceTask,
+    geometry: dict[str, tuple[int, int]],
+    *,
+    near_miss: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    executor = NativeAbsoluteExecutor(transport)
+    receipts: list[dict[str, Any]] = []
+    for turn_index, payload in enumerate(
+        compile_multi_native(task, geometry, near_miss=near_miss)
+    ):
+        for operation_index, operation in enumerate(payload["operations"]):
+            action = dict(operation)
+            action["action"] = {"click": "left_click", "key_chord": "key"}.get(
+                action["action"], action["action"]
+            )
+            result = executor.execute(action)
+            receipts.append(
+                {
+                    "turn_index": turn_index,
+                    "operation_index": operation_index,
+                    "semantic_step": 1,
+                    "action_class": result.action_class,
+                    "operation_count": len(result.operations),
+                    "dispatch_status": result.executor_dispatch_status,
+                    "atomic_ok": bool(
+                        result.atomic_state and result.atomic_state.get("ok") is True
+                    ),
+                }
+            )
+            transport.wait(0.5)
+        transport.wait(0.75)
+    return receipts, []
+
+
+def _dispatch_single_near_miss(
+    transport: Any,
+    task: Stage0SourceTask,
+    geometry: dict[str, tuple[int, int]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    executor = NativeAbsoluteExecutor(transport)
+    receipts: list[dict[str, Any]] = []
+    bindings: list[dict[str, Any]] = []
+    if task.app == "vscode":
+        actions = (
+            {"action": "left_click", "coordinate": list(geometry["editor"])},
+            {"action": "key", "keys": ["ControlLeft", "KeyA"]},
+            {"action": "type", "text": str(task.near_miss["text"])},
+            {"action": "key", "keys": ["ControlLeft", "KeyS"]},
+        )
+        for operation_index, action in enumerate(actions):
+            result = executor.execute(action)
+            receipts.append(
+                {
+                    "turn_index": operation_index,
+                    "operation_index": 0,
+                    "semantic_step": min(operation_index + 1, task.semantic_steps),
+                    "action_class": result.action_class,
+                    "operation_count": len(result.operations),
+                    "dispatch_status": result.executor_dispatch_status,
+                    "atomic_ok": bool(result.atomic_state and result.atomic_state.get("ok") is True),
+                }
+            )
+            transport.wait(0.5)
+        transport.wait(2.0)
+        return receipts, bindings
+    fixture = task.as_fixture()
+    indexed_turns = tuple(enumerate(build_trajectory(fixture, near_miss=True).turns))
+    for semantic_step, grouped in groupby(
+        indexed_turns, key=lambda item: item[1].semantic_step
+    ):
+        for turn_index, turn in grouped:
+            payload = compile_native(turn, geometry)
+            for operation_index, operation in enumerate(payload["operations"]):
+                action = dict(operation)
+                action["action"] = {"click": "left_click", "key_chord": "key"}.get(
+                    action["action"], action["action"]
+                )
+                result = executor.execute(action)
+                receipts.append(
+                    {
+                        "turn_index": turn_index,
+                        "operation_index": operation_index,
+                        "semantic_step": turn.semantic_step,
+                        "action_class": result.action_class,
+                        "operation_count": len(result.operations),
+                        "dispatch_status": result.executor_dispatch_status,
+                        "atomic_ok": bool(result.atomic_state and result.atomic_state.get("ok") is True),
+                    }
+                )
+                transport.wait(0.5)
+        transport.wait(1.0)
+        if semantic_step < task.semantic_steps and task.app in {"files", "chrome"}:
+            rebound_state = probe_state(transport, fixture)
+            geometry = probe_geometry(transport, fixture, rebound_state)
+            bindings.append(
+                {
+                    "completed_semantic_step": semantic_step,
+                    "geometry": {key: list(value) for key, value in geometry.items()},
+                }
+            )
+    transport.wait(2.0)
+    return receipts, bindings
 
 
 def _vm_repetition(
     session: KvmFixtureSession,
     record: Stage0Record,
     repetition_index: int,
+    *,
+    near_miss_order: int | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
     transport, provider_reset = session.reset_to_ready_with_receipt()
@@ -229,9 +439,10 @@ def _vm_repetition(
         task = component["task"]
         if order == 2:
             before = _active_window(transport)
-            switch = NativeAbsoluteExecutor(transport).execute(
-                {"action": "key", "keys": ["Alt", "Tab"]}
-            )
+            switch_payload = compile_visible_app_switch_native()
+            switch_operation = dict(switch_payload["operations"][0])
+            switch_operation["action"] = "key"
+            switch = NativeAbsoluteExecutor(transport).execute(switch_operation)
             transport.wait(1.5)
             after = _active_window(transport)
             target_token = _window_token(task)
@@ -239,30 +450,57 @@ def _vm_repetition(
                 raise RuntimeError(
                     f"visible Alt+Tab did not activate ordered partner {target_token!r}: {after}"
                 )
+            partner_geometry = _rebind_active_geometry(
+                transport, task, component["fixture"]
+            )
+            component["geometry"] = partner_geometry
+            after_binding = _active_window(transport)
+            if target_token not in after_binding["window_line"]:
+                raise RuntimeError(
+                    f"partner geometry bind changed active app {target_token!r}: {after_binding}"
+                )
             switch_rows.append(
                 {
                     "record_semantic_step": 2,
                     "policy_visible": True,
-                    "input": {"action": "key", "keys": ["Alt", "Tab"]},
+                    "input": {"action": "key", "keys": ["AltLeft", "Tab"]},
                     "action_class": switch.action_class,
                     "dispatch_status": switch.executor_dispatch_status,
                     "atomic_ok": bool(switch.atomic_state and switch.atomic_state.get("ok") is True),
                     "active_before": before,
                     "active_after": after,
+                    "active_after_geometry_binding": after_binding,
                     "target_token": target_token,
+                    "partner_geometry_binding": {
+                        key: list(value) for key, value in partner_geometry.items()
+                    },
+                    "geometry_binding_phase": "after_partner_active_attestation",
+                    "geometry_binding_source": "fresh_post_switch_probe",
                 }
             )
-        actions, bindings = _dispatch_gold(
-            transport,
-            task,
-            component["geometry"],
-        )
+        is_near_miss = near_miss_order == order
+        if record.mode == "multi":
+            actions, bindings = _dispatch_multi_program(
+                transport,
+                task,
+                component["geometry"],
+                near_miss=is_near_miss,
+            )
+        elif is_near_miss:
+            actions, bindings = _dispatch_single_near_miss(
+                transport, task, component["geometry"]
+            )
+        else:
+            actions, bindings = _dispatch_gold(
+                transport, task, component["geometry"]
+            )
         action_rows.append(
             {
                 "record_semantic_step": order if record.mode == "multi" else None,
                 "source_task_id": task.id,
                 "app": task.app,
                 "source_semantic_steps": task.semantic_steps,
+                "near_miss_program": is_near_miss,
                 "actions": actions,
                 "runtime_bindings": bindings,
             }
@@ -272,6 +510,16 @@ def _vm_repetition(
         for component in components
     ]
     final_result = evaluate_composed_in_fresh_process(record, final_states)
+    near_miss_exact = None
+    trial_state_exact = None
+    if near_miss_order is not None:
+        target_index = near_miss_order - 1
+        expected_states = [
+            scripted_state(task, near_miss=index == target_index)
+            for index, task in enumerate(record.component_tasks)
+        ]
+        near_miss_exact = final_states[target_index] == expected_states[target_index]
+        trial_state_exact = final_states == expected_states
     audit = transport.audit
     dispatch_ok = all(
         row["dispatch_status"] == "ok" and row["atomic_ok"]
@@ -280,11 +528,16 @@ def _vm_repetition(
     ) and all(
         row["dispatch_status"] == "ok" and row["atomic_ok"] for row in switch_rows
     )
+    expected_outcome = (
+        final_result.MOUSE_SOLVED
+        if near_miss_order is None
+        else not final_result.MOUSE_SOLVED and trial_state_exact is True
+    )
     passed = bool(
         initial_result.oracle_status == "ok"
         and not initial_result.MOUSE_SOLVED
         and final_result.oracle_status == "ok"
-        and final_result.MOUSE_SOLVED
+        and expected_outcome
         and dispatch_ok
         and not audit.held_buttons
         and not audit.held_keys
@@ -292,15 +545,21 @@ def _vm_repetition(
     )
     return {
         "repetition_index": repetition_index,
+        "trial_kind": "gold" if near_miss_order is None else "component_near_miss",
+        "near_miss_order": near_miss_order,
         "status": "pass" if passed else "fail",
         "duration_s": round(time.monotonic() - started, 3),
         "provider_reset_receipt": asdict(provider_reset),
         "reset_signatures": reset_signatures,
         "setup_activation": setup_activation,
         "readiness": [component["readiness"] for component in components],
+        "setup_preparations": [component["setup_preparation"] for component in components],
         "initial_reject": not initial_result.MOUSE_SOLVED,
         "initial_oracle_pid": initial_result.oracle_pid,
         "gold_pass": final_result.MOUSE_SOLVED,
+        "near_miss_reject": not final_result.MOUSE_SOLVED if near_miss_order is not None else None,
+        "near_miss_exact": near_miss_exact,
+        "trial_state_exact": trial_state_exact,
         "gold_oracle_pid": final_result.oracle_pid,
         "gold_oracle_status": final_result.oracle_status,
         "gold_oracle_reason": final_result.reason,
@@ -319,20 +578,38 @@ def _vm_repetition(
 
 
 def _vm_record(session: KvmFixtureSession, record: Stage0Record) -> dict[str, Any]:
+    def run_trial(
+        repetition_index: int, *, near_miss_order: int | None
+    ) -> dict[str, Any]:
+        try:
+            return _vm_repetition(
+                session,
+                record,
+                repetition_index,
+                near_miss_order=near_miss_order,
+            )
+        except Exception as exc:
+            return {
+                "repetition_index": repetition_index,
+                "trial_kind": (
+                    "gold" if near_miss_order is None else "component_near_miss"
+                ),
+                "near_miss_order": near_miss_order,
+                "status": "fail",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "traceback": traceback.format_exc(),
+            }
+
+    near_miss_trials = [
+        run_trial(order, near_miss_order=order)
+        for order in range(1, len(record.component_tasks) + 1)
+    ]
     repetitions: list[dict[str, Any]] = []
     for repetition_index in range(1, REPEATABILITY_RUNS + 1):
-        try:
-            repetitions.append(_vm_repetition(session, record, repetition_index))
-        except Exception as exc:
-            repetitions.append(
-                {
-                    "repetition_index": repetition_index,
-                    "status": "fail",
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                    "traceback": traceback.format_exc(),
-                }
-            )
+        row = run_trial(repetition_index, near_miss_order=None)
+        repetitions.append(row)
+        if row["status"] != "pass":
             break
     reset_signatures = [row.get("reset_signatures") for row in repetitions]
     reset_repeatable = bool(
@@ -340,17 +617,37 @@ def _vm_record(session: KvmFixtureSession, record: Stage0Record) -> dict[str, An
         and reset_signatures[0] is not None
         and all(value == reset_signatures[0] for value in reset_signatures)
     )
-    reset_receipts = [row.get("provider_reset_receipt", {}) for row in repetitions]
+    all_trials = near_miss_trials + repetitions
+    all_reset_signatures = [row.get("reset_signatures") for row in all_trials]
+    all_trial_resets_repeatable = bool(
+        all_reset_signatures
+        and all_reset_signatures[0] is not None
+        and all(value == all_reset_signatures[0] for value in all_reset_signatures)
+    )
+    reset_receipts = [row.get("provider_reset_receipt", {}) for row in all_trials]
     distinct_resets = bool(
-        len(reset_receipts) == REPEATABILITY_RUNS
-        and len({row.get("reset_id") for row in reset_receipts}) == REPEATABILITY_RUNS
-        and len({row.get("new_generation_id") for row in reset_receipts}) == REPEATABILITY_RUNS
+        len(reset_receipts) == REPEATABILITY_RUNS + len(record.component_tasks)
+        and None not in {row.get("reset_id") for row in reset_receipts}
+        and len({row.get("reset_id") for row in reset_receipts}) == len(reset_receipts)
+        and len({row.get("new_generation_id") for row in reset_receipts}) == len(reset_receipts)
+    )
+    live_near_misses_pass = bool(
+        len(near_miss_trials) == len(record.component_tasks)
+        and all(
+            row["status"] == "pass"
+            and row.get("near_miss_reject") is True
+            and row.get("near_miss_exact") is True
+            and row.get("trial_state_exact") is True
+            for row in near_miss_trials
+        )
     )
     passed = bool(
         len(repetitions) == REPEATABILITY_RUNS
         and all(row["status"] == "pass" for row in repetitions)
         and reset_repeatable
         and distinct_resets
+        and live_near_misses_pass
+        and all_trial_resets_repeatable
     )
     return {
         "record_id": record.id,
@@ -358,11 +655,15 @@ def _vm_record(session: KvmFixtureSession, record: Stage0Record) -> dict[str, An
         "mode": record.mode,
         "difficulty": record.difficulty,
         "record_sha256": record.record_sha256,
+        "program_budget": record.program_budget,
         "status": "pass" if passed else "fail",
         "repeatability_runs_required": REPEATABILITY_RUNS,
         "repeatability_runs_observed": len(repetitions),
         "reset_signatures_repeatable": reset_repeatable,
+        "all_trial_reset_signatures_repeatable": all_trial_resets_repeatable,
         "provider_resets_distinct": distinct_resets,
+        "live_each_component_near_miss_reject": live_near_misses_pass,
+        "near_miss_trials": near_miss_trials,
         "repetitions": repetitions,
     }
 

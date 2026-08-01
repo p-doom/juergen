@@ -81,7 +81,9 @@ def qualify_static(corpus: Corpus | SmokeInventory) -> dict[str, Any]:
     payload = {
         "schema_version": 1,
         "qualification": "host_contract",
-        "inventory_role": "plumbing_smoke_only" if plumbing_smoke else "stage0_development",
+        "inventory_role": (
+            "plumbing_smoke_only" if plumbing_smoke else "auxiliary_development_only"
+        ),
         "eligibility": corpus.eligibility,
         "suite_manifest_sha256": corpus.manifest_payload_sha256,
         "model_runs": False,
@@ -371,7 +373,9 @@ def qualify_vm(
         "task_count": len(rows),
         "passed_count": sum(row["status"] == "pass" for row in rows),
         "status": "pass" if all(row["status"] == "pass" for row in rows) else "fail",
-        "inventory_role": "plumbing_smoke_only" if plumbing_smoke else "stage0_development",
+        "inventory_role": (
+            "plumbing_smoke_only" if plumbing_smoke else "auxiliary_development_only"
+        ),
         "eligibility": corpus.eligibility,
         "application_counts": {
             app: sum(row["app"] == app for row in rows)

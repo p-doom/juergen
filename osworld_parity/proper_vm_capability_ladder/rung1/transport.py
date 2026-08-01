@@ -175,6 +175,7 @@ _KEYS = {
     "ShiftLeft": "shiftleft",
     "ShiftRight": "shiftright",
     "Alt": "alt",
+    "AltLeft": "altleft",
     "AltGr": "altright",
     "MetaLeft": "winleft",
     "MetaRight": "winright",

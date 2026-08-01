@@ -8,7 +8,11 @@ from osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle imp
     initial_state,
     scripted_state,
 )
+from osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.qualify import (
+    qualify_static as qualify_auxiliary_static,
+)
 from osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.schema import (
+    Corpus,
     load_corpus,
 )
 from osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.smoke_schema import (
@@ -16,6 +20,15 @@ from osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.smoke_sche
 )
 from osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.stage0_generate_inventory import (
     build,
+)
+from osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.stage0_actions import (
+    MAX_MULTI_EMITTED_EVENTS,
+    MAX_MULTI_PRIMITIVES,
+    compile_multi_compact,
+    compile_multi_native,
+    compile_visible_app_switch_compact,
+    compile_visible_app_switch_native,
+    record_program_counts,
 )
 from osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.stage0_loader import (
     ANCHOR_APPS,
@@ -28,6 +41,7 @@ from osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.stage0_ora
     evaluate_composed_in_fresh_process,
 )
 from osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.stage0_qualify import (
+    _vm_record,
     _vm_repetition,
 )
 
@@ -67,6 +81,24 @@ def test_stage0_inventory_is_generator_clean_balanced_and_disjoint() -> None:
     }
     assert not old_ids & new_ids
     assert not old_seeds & new_seeds
+    source_instructions = [
+        source.instruction
+        for task in inventory.tasks
+        for source in task.component_tasks
+    ]
+    assert len(source_instructions) == 60
+    assert len(set(source_instructions)) == 60
+    old_corpus = load_corpus()
+    auxiliary = qualify_auxiliary_static(
+        Corpus(
+            tasks=(old_corpus.tasks[0],),
+            manifest_payload_sha256=old_corpus.manifest_payload_sha256,
+            provenance=old_corpus.provenance,
+            eligibility=old_corpus.eligibility,
+        )
+    )
+    assert auxiliary["inventory_role"] == "auxiliary_development_only"
+    assert auxiliary["eligibility"]["stage0"] is False
 
 
 def test_multi_records_cover_true_ordered_cross_app_composition() -> None:
@@ -91,6 +123,38 @@ def test_multi_records_cover_true_ordered_cross_app_composition() -> None:
                 1,
                 1,
             ]
+            counts = record_program_counts(record.component_tasks)
+            assert counts["primitive_actions"] <= MAX_MULTI_PRIMITIVES
+            assert counts["emitted_events"] <= MAX_MULTI_EMITTED_EVENTS
+            assert record.program_budget == {
+                "primitive_actions": counts["primitive_actions"],
+                "primitive_action_ceiling": MAX_MULTI_PRIMITIVES,
+                "emitted_events": counts["emitted_events"],
+                "emitted_event_ceiling": MAX_MULTI_EMITTED_EVENTS,
+                "visible_app_switch_included": True,
+            }
+            for source in record.component_tasks:
+                geometry = (
+                    {
+                        "nav": (100, 100),
+                        "toggle": (100, 500),
+                        "decoy_nav": (200, 100),
+                        "decoy_toggle": (200, 500),
+                    }
+                    if source.app == "chrome"
+                    else {}
+                )
+                native = compile_multi_native(source, geometry)
+                compact = compile_multi_compact(source, geometry, (50, 50))
+                near_native = compile_multi_native(source, geometry, near_miss=True)
+                near_compact = compile_multi_compact(
+                    source, geometry, (50, 50), near_miss=True
+                )
+                assert native and compact
+                assert near_native and near_compact
+                assert sum(len(turn["operations"]) for turn in native) == source.horizon
+                assert source.semantic_steps == 1
+                assert source.horizon <= 3
 
 
 def test_fresh_composed_oracle_rejects_each_component_near_miss() -> None:
@@ -112,11 +176,25 @@ def test_fresh_composed_oracle_rejects_each_component_near_miss() -> None:
 
 
 def test_stage0_runtime_uses_one_visible_alt_tab_and_no_retry_loop() -> None:
+    assert compile_visible_app_switch_native()["operations"] == [
+        {"action": "key_chord", "keys": ["AltLeft", "Tab"]}
+    ]
+    assert compile_visible_app_switch_compact() == (
+        "0 0 0; +AltLeft +Tab -Tab -AltLeft"
+    )
     source = inspect.getsource(_vm_repetition)
-    assert '{"action": "key", "keys": ["Alt", "Tab"]}' in source
+    assert '{"action": "key", "keys": ["AltLeft", "Tab"]}' in source
     assert '"policy_visible": True' in source
     assert "for attempt" not in source
     assert "target_token not in after" in source
+    assert "_rebind_active_geometry" in source
+    assert '"fresh_post_switch_probe"' in source
+    assert "near_miss_order" in source
+    record_source = inspect.getsource(_vm_record)
+    assert "near_miss_trials" in record_source
+    assert 'row.get("near_miss_exact") is True' in record_source
+    assert 'row.get("trial_state_exact") is True' in record_source
+    assert "for attempt" not in record_source
 
 
 def test_stage0_recipe_is_cpu_only_five_shard_repeatability_path() -> None:

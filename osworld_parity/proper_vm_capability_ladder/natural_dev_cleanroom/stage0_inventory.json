@@ -15,7 +15,7 @@
     "stage0_eligible": true
   },
   "development_only": true,
-  "manifest_payload_sha256": "3be98737b7ff4636037d6ba3a70a5c8b81ed9bc7dc9425e2a62e59dbaa9643f5",
+  "manifest_payload_sha256": "b96dba335f264a1c2ba8b5c223136f6e2e7b655b755c68fb1019f62d758b75d5",
   "modes": [
     "single",
     "multi"
@@ -431,7 +431,6 @@
       "bridge": "multi_app",
       "capabilities": [
         "app_switch",
-        "click",
         "coalesced_type",
         "hotkey",
         "multi_step_state_change"
@@ -443,7 +442,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-writer-multi-c01",
-      "instruction": "Complete both parts in order using handoff code “503”. In the open Writer document, replace all text with exactly “Handoff code 503: confirm the clean-room review.” Make the complete replacement bold, then save the document. Then switch applications with Alt+Tab. In Calc, go to cell B3, enter a formula that adds 502 and 1, confirm it, and save the spreadsheet.",
+      "instruction": "Complete both parts in order using handoff code “503”. In the active Writer document, replace all text with exactly “Handoff code 503: ready for transfer.” and save the document without adding formatting. Then switch applications with Alt+Tab. In the selected Calc cell A1, enter a formula that adds 502 and 1, confirm it, and save the spreadsheet.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -460,7 +459,14 @@
         }
       ],
       "parameter_seed": 910011,
-      "record_sha256": "1a203e7c170aa2c3cffece0be96ec04b8d07fb2fca24abf3cd7b873f11c9a5ba",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 20,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 7,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "efab57958f1769e6c8f000d4efcfb8af20383e89855ac9181fdcb48dc72a444d",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -469,39 +475,39 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "8f272466f81d5570b4943c55d4b167eb127c6ba1dfcc15aade31446eec713e15",
-        "629d5628fc07e733aa79485d7014442e0673d43bd5217ab377952f3a6958f07f"
+        "f9bea0072840f6a721537bd0b683191dc41796d8ee2d8a8233e7f7eb5bd74353",
+        "27575f0595b207a403917160d295763222bf74b93f53fd28027452ce8bd07e0a"
       ],
       "source_tasks": [
         {
           "app": "writer",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
           ],
           "difficulty": "easy",
           "expected": {
-            "bold": true,
-            "text": "Handoff code 503: confirm the clean-room review."
+            "bold": false,
+            "text": "Handoff code 503: ready for transfer."
           },
-          "fixture_sha256": "0fc4769489640bbb16ac006f4f8c4c4959e95917dea0d3caeee4a47f3ae5e2c3",
-          "horizon": 4,
+          "fixture_sha256": "6b323afbe226510c89b4aee5007ed6248963364268cc69fa9b4e66577734cc3c",
+          "horizon": 3,
           "id": "cln-s0-src-writer-multi-c01-01",
-          "instruction": "In the open Writer document, replace all text with exactly “Handoff code 503: confirm the clean-room review.” Make the complete replacement bold, then save the document.",
+          "instruction": "In the active Writer document, replace all text with exactly “Handoff code 503: ready for transfer.” and save the document without adding formatting.",
           "near_miss": {
             "bold": false,
-            "text": "Handoff code 503: confirm the clean-room review."
+            "text": "Handoff code 503: pending transfer."
           },
           "parameter_seed": 920111,
           "params": {
             "file_name": "stage0_writer_multi_c01_01.odt",
-            "initial_text": "Temporary Writer draft for code 503"
+            "initial_text": "Temporary Writer draft for code 503",
+            "stage0_program": "writer_replace_active_body"
           },
           "recovery": {
-            "corrective_action": "select the full replacement, apply bold, and save again",
-            "near_miss_class": "correct_text_missing_bold_format"
+            "corrective_action": "replace the complete line with the requested ready status and save again",
+            "near_miss_class": "handoff_status_pending_instead_of_ready"
           },
           "reset": {
             "reproducible_signature_required": true,
@@ -509,9 +515,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "5e281c23ca6931bb201d08b40e4c4db6f7e5735995a8442e2d23b75e3333dbe0",
+          "task_sha256": "7fad66524e31e64be812d51449560ffd40007add56b2918ca72cacf6f605c2c8",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -524,7 +530,6 @@
         {
           "app": "calc",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
@@ -534,19 +539,20 @@
             "display_value": "503",
             "formula": "of:=SUM(502;1)"
           },
-          "fixture_sha256": "1be7516768bf98048ce9bcda07e48f55cab5c876f389b13b0c8c1578da415005",
-          "horizon": 6,
+          "fixture_sha256": "c7e243cada0bf44d2b8c6a0e0d3b7dae2163833e99fd24e8845c2e79d1fd1a2c",
+          "horizon": 3,
           "id": "cln-s0-src-writer-multi-c01-02",
-          "instruction": "In Calc, go to cell B3, enter a formula that adds 502 and 1, confirm it, and save the spreadsheet.",
+          "instruction": "In the selected Calc cell A1, enter a formula that adds 502 and 1, confirm it, and save the spreadsheet.",
           "near_miss": {
             "display_value": "502",
             "formula": "of:=SUM(502;0)"
           },
           "parameter_seed": 920112,
           "params": {
-            "cell": "B3",
+            "cell": "A1",
             "file_name": "stage0_writer_multi_c01_02.ods",
-            "initial_value": "0"
+            "initial_value": "0",
+            "stage0_program": "calc_replace_selected_a1"
           },
           "recovery": {
             "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
@@ -558,9 +564,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 4,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "5b5a45711c145d8c2a3af84a433869535150cfd78d1ada830298df44850581a0",
+          "task_sha256": "612c19a85f72192f2f4bf8019f701a1e8334a2401c7baaf4925b18e70dd08a48",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -591,9 +597,8 @@
       "bridge": "multi_app",
       "capabilities": [
         "app_switch",
-        "click",
         "coalesced_type",
-        "drag",
+        "file_rename",
         "hotkey",
         "multi_step_state_change"
       ],
@@ -604,7 +609,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-writer-multi-c02",
-      "instruction": "Complete both parts in order using handoff code “506”. In the open Writer document, replace all text with exactly “Handoff code 506: confirm the clean-room review.” Make the complete replacement bold, then save the document. Then switch applications with Alt+Tab. In Files, move “incoming_506_2.txt” into “archive_506_2”, then rename the moved file to “handoff_506.txt”.",
+      "instruction": "Complete both parts in order using handoff code “506”. In the active Writer document, replace all text with exactly “Handoff code 506: ready for transfer.” and save the document without adding formatting. Then switch applications with Alt+Tab. In Files, rename the selected file “incoming_506_2.txt” to “handoff_506.txt”.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -621,7 +626,14 @@
         }
       ],
       "parameter_seed": 910012,
-      "record_sha256": "7501fdda5cfee1db86ef082e170022777db586ec052d2bcd05e6276173ccd09b",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 18,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 7,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "48163632ae43571a288af6abcebffeca8df41db971eea17ed1f7c515916ed18c",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -630,39 +642,39 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "2c212d27b4aa50bebc05c08e82f8d027fde21bc01a2aa90030486043adf27cb5",
-        "a2fd41c35fc4a095859585042f631575cf9178bd3714b24a85b4c9372a060166"
+        "a92cec2d12bb84d6fb03369b4d5f93f1f1e55b42607d05f5ed2a7667c09ae038",
+        "fbb73d6171c94a1c7f3c4ab77fc7be70059fafc8cf7d983d59a95dad1508b22b"
       ],
       "source_tasks": [
         {
           "app": "writer",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
           "expected": {
-            "bold": true,
-            "text": "Handoff code 506: confirm the clean-room review."
+            "bold": false,
+            "text": "Handoff code 506: ready for transfer."
           },
-          "fixture_sha256": "8693dfc62abc9b5d2f02fef3082aab235e5ba2cc7f8f4dde13ffcb956e15da89",
-          "horizon": 4,
+          "fixture_sha256": "4f883c11cebf4b9914db081b63dc36e29549b4ca169498da30ceb37f8cb801f2",
+          "horizon": 3,
           "id": "cln-s0-src-writer-multi-c02-01",
-          "instruction": "In the open Writer document, replace all text with exactly “Handoff code 506: confirm the clean-room review.” Make the complete replacement bold, then save the document.",
+          "instruction": "In the active Writer document, replace all text with exactly “Handoff code 506: ready for transfer.” and save the document without adding formatting.",
           "near_miss": {
             "bold": false,
-            "text": "Handoff code 506: confirm the clean-room review."
+            "text": "Handoff code 506: pending transfer."
           },
           "parameter_seed": 920121,
           "params": {
             "file_name": "stage0_writer_multi_c02_01.odt",
-            "initial_text": "Temporary Writer draft for code 506"
+            "initial_text": "Temporary Writer draft for code 506",
+            "stage0_program": "writer_replace_active_body"
           },
           "recovery": {
-            "corrective_action": "select the full replacement, apply bold, and save again",
-            "near_miss_class": "correct_text_missing_bold_format"
+            "corrective_action": "replace the complete line with the requested ready status and save again",
+            "near_miss_class": "handoff_status_pending_instead_of_ready"
           },
           "reset": {
             "reproducible_signature_required": true,
@@ -670,9 +682,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "62941de52f0073122ec756e766b5f79d381def5a9694199d25abb5a5c1fd0008",
+          "task_sha256": "002131dbe3817d55caa5ba7441ed19d0d93ddba15f60e4634ffe21e68fe91075",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -685,31 +697,31 @@
         {
           "app": "files",
           "capabilities": [
-            "click",
-            "drag",
             "coalesced_type",
             "hotkey",
+            "file_rename",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
           "expected": {
-            "destination": "archive_506_2",
+            "destination": "root",
             "final_name": "handoff_506.txt"
           },
-          "fixture_sha256": "17383951b83d09558e3bd37c985868b3ea7d7ab426b5a07eef9c58c9f32035f8",
-          "horizon": 8,
+          "fixture_sha256": "553f11aea45d308e874a743e88b7c99b7f9e70436037a7f32aa362c49ad19e7d",
+          "horizon": 3,
           "id": "cln-s0-src-writer-multi-c02-02",
-          "instruction": "In Files, move “incoming_506_2.txt” into “archive_506_2”, then rename the moved file to “handoff_506.txt”.",
+          "instruction": "In Files, rename the selected file “incoming_506_2.txt” to “handoff_506.txt”.",
           "near_miss": {
-            "destination": "review_506_2",
-            "final_name": "handoff_506.txt"
+            "destination": "root",
+            "final_name": "handoff_506_draft.txt"
           },
           "parameter_seed": 920122,
           "params": {
             "content": "Clean-room handoff payload 506.\n",
             "decoy_name": "review_506_2",
             "destination_name": "archive_506_2",
-            "source_name": "incoming_506_2.txt"
+            "source_name": "incoming_506_2.txt",
+            "stage0_program": "files_rename_selected_source"
           },
           "recovery": {
             "corrective_action": "move the renamed file from the review folder into the requested archive folder",
@@ -721,9 +733,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "68672542e119237de3b3923b5568dc5931835fe4849fee62ab13ca75ec9c7023",
+          "task_sha256": "ca95e715c524c506f0982a00a65df3c96babe2fc1f7944bf952f279c6492f1f3",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -757,8 +769,8 @@
         "click",
         "coalesced_type",
         "hotkey",
-        "multi_step_state_change",
-        "signed_vertical_scroll"
+        "local_web_state_change",
+        "multi_step_state_change"
       ],
       "difficulty": "hard",
       "eligibility": {
@@ -767,7 +779,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-writer-multi-c03",
-      "instruction": "Complete both parts in order using handoff code “509”. In the open Writer document, replace all text with exactly “Handoff code 509: confirm the clean-room review.” Make the complete replacement bold, then save the document. Then switch applications with Alt+Tab. On the private local settings page, open “handoff-509”, scroll down to the controls, and enable “Confirm code 509”.",
+      "instruction": "Complete both parts in order using handoff code “509”. In the active Writer document, replace all text with exactly “Handoff code 509: ready for transfer.” and save the document without adding formatting. Then switch applications with Alt+Tab. On the private local settings page, open “handoff-509” and enable “Confirm code 509”. Both controls are visible.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -784,7 +796,14 @@
         }
       ],
       "parameter_seed": 910013,
-      "record_sha256": "62e953bcddda770d5a9a87883fa345b6e0f0133deedd63784f05e911bf47d0f8",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 19,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 6,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "ed4775916856a148f89e7b113040a382b6cecb8644219f421a17c79f1313ace5",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -793,39 +812,39 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "4b1ccbd227ca4093bbfcd1ab8a820ae3bf20e76c27a5adec45bd8facad845102",
-        "6b6c9f82b0ac81fcd0f881c042920b170b879ee3a02f777f8ac1180e5b2889f1"
+        "3958c40dccfc286989a853d72ed8c72e17d7f07321b3b8c4aa1406898b97ffe1",
+        "1a49661181bf1c26ef9a8f49d067f0406dade63c0448eed60d66e420b1654dba"
       ],
       "source_tasks": [
         {
           "app": "writer",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
           ],
           "difficulty": "hard",
           "expected": {
-            "bold": true,
-            "text": "Handoff code 509: confirm the clean-room review."
+            "bold": false,
+            "text": "Handoff code 509: ready for transfer."
           },
-          "fixture_sha256": "48671dd69e4bb744883a934dd3e9f9f988dc93ad3c3b0727dfb2447da41c4501",
-          "horizon": 4,
+          "fixture_sha256": "0a2020bc551e02abbc6005ac332e3625de372ad2affcbad5b7c9690ecbe59a5a",
+          "horizon": 3,
           "id": "cln-s0-src-writer-multi-c03-01",
-          "instruction": "In the open Writer document, replace all text with exactly “Handoff code 509: confirm the clean-room review.” Make the complete replacement bold, then save the document.",
+          "instruction": "In the active Writer document, replace all text with exactly “Handoff code 509: ready for transfer.” and save the document without adding formatting.",
           "near_miss": {
             "bold": false,
-            "text": "Handoff code 509: confirm the clean-room review."
+            "text": "Handoff code 509: pending transfer."
           },
           "parameter_seed": 920131,
           "params": {
             "file_name": "stage0_writer_multi_c03_01.odt",
-            "initial_text": "Temporary Writer draft for code 509"
+            "initial_text": "Temporary Writer draft for code 509",
+            "stage0_program": "writer_replace_active_body"
           },
           "recovery": {
-            "corrective_action": "select the full replacement, apply bold, and save again",
-            "near_miss_class": "correct_text_missing_bold_format"
+            "corrective_action": "replace the complete line with the requested ready status and save again",
+            "near_miss_class": "handoff_status_pending_instead_of_ready"
           },
           "reset": {
             "reproducible_signature_required": true,
@@ -833,9 +852,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "b8db34c015ad7164f29007f01847ab443c007c0186be4e29665ead7c1f9a55e2",
+          "task_sha256": "533f12e025fe8d49b34c14622849c16afafac1912af0bbbaa07302e1004a202c",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -849,7 +868,7 @@
           "app": "chrome",
           "capabilities": [
             "click",
-            "signed_vertical_scroll",
+            "local_web_state_change",
             "multi_step_state_change"
           ],
           "difficulty": "hard",
@@ -857,22 +876,23 @@
             "section": "handoff-509",
             "setting_enabled": true
           },
-          "fixture_sha256": "ee88ca4228b5eb62fc0e073677abc0958d6e8291dce6c2ec5fbb55e98f2c6955",
-          "horizon": 6,
+          "fixture_sha256": "f6c04aea07d9256dc60e5e6803977b8abc9984b43fad3501dc782cb1b5917884",
+          "horizon": 2,
           "id": "cln-s0-src-writer-multi-c03-02",
-          "instruction": "On the private local settings page, open “handoff-509”, scroll down to the controls, and enable “Confirm code 509”.",
+          "instruction": "On the private local settings page, open “handoff-509” and enable “Confirm code 509”. Both controls are visible.",
           "near_miss": {
             "section": "appearance",
             "setting_enabled": false
           },
           "parameter_seed": 920132,
           "params": {
-            "initial_scroll_y": 0,
-            "minimum_scroll_delta": 500,
+            "initial_scroll_y": 900,
+            "minimum_scroll_delta": 0,
             "port": 19132,
             "scroll_direction": "down",
             "section": "handoff-509",
-            "setting": "Confirm code 509"
+            "setting": "Confirm code 509",
+            "stage0_program": "chrome_enable_visible_setting"
           },
           "recovery": {
             "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
@@ -884,9 +904,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "93a2a8b1b697b6591e4cb9395ddda9c1a9054c3df5302cf3f6fb7cc4a2da7df2",
+          "task_sha256": "c3efb29b34cb19d1254c53041c00d54c2c599bc948720a95fb100eeab84f1989",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -917,8 +937,8 @@
       "bridge": "multi_app",
       "capabilities": [
         "app_switch",
-        "click",
         "coalesced_type",
+        "editor_file_save",
         "hotkey",
         "multi_step_state_change"
       ],
@@ -929,7 +949,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-writer-multi-c04",
-      "instruction": "Complete both parts in order using handoff code “512”. In the open Writer document, replace all text with exactly “Handoff code 512: confirm the clean-room review.” Make the complete replacement bold, then save the document. Then switch applications with Alt+Tab. In VS Code, replace all text in the open file with exactly two lines: “handoff=512” and “state=ready”. Save the file.",
+      "instruction": "Complete both parts in order using handoff code “512”. In the active Writer document, replace all text with exactly “Handoff code 512: ready for transfer.” and save the document without adding formatting. Then switch applications with Alt+Tab. In the active VS Code editor, replace all text with exactly two lines: “handoff=512” and “state=ready”. Save the active file.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -946,7 +966,14 @@
         }
       ],
       "parameter_seed": 910014,
-      "record_sha256": "af414387ef1eeb660e8bd9afb14394d091c3f10523f8b5732d16ae563c8d2ddc",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 22,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 7,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "9f4f955130b4d3a2d68450a2b21b37d37aa73ff5d11d2b56b0205bef3edef113",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -955,39 +982,39 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "091f0c946f30fec31f90420557142fbe2783330a119c3a5c193d7f08ee5b1539",
-        "0de74b24bb28a7d6b742f3054c81a4a544263d9c2e9dd77ae8dfa11c8b410e00"
+        "c2ede8df7ad8b834af7c9d7ea8386a4e02a598842c384f42f1d0ae81db46d848",
+        "98ef9809262493e336c3836e20a66edf46ed76b10afd6e7e408b663538e399fd"
       ],
       "source_tasks": [
         {
           "app": "writer",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
           "expected": {
-            "bold": true,
-            "text": "Handoff code 512: confirm the clean-room review."
+            "bold": false,
+            "text": "Handoff code 512: ready for transfer."
           },
-          "fixture_sha256": "ee11a6f3f423e7c1e5fcefb3e4933aa3360ad8b1c09bd53d82789143359bed9a",
-          "horizon": 4,
+          "fixture_sha256": "9d1a4a4e57eca0c3067d0d98b93a833c157585c9ae8020ac182eebb2bc68a7e2",
+          "horizon": 3,
           "id": "cln-s0-src-writer-multi-c04-01",
-          "instruction": "In the open Writer document, replace all text with exactly “Handoff code 512: confirm the clean-room review.” Make the complete replacement bold, then save the document.",
+          "instruction": "In the active Writer document, replace all text with exactly “Handoff code 512: ready for transfer.” and save the document without adding formatting.",
           "near_miss": {
             "bold": false,
-            "text": "Handoff code 512: confirm the clean-room review."
+            "text": "Handoff code 512: pending transfer."
           },
           "parameter_seed": 920141,
           "params": {
             "file_name": "stage0_writer_multi_c04_01.odt",
-            "initial_text": "Temporary Writer draft for code 512"
+            "initial_text": "Temporary Writer draft for code 512",
+            "stage0_program": "writer_replace_active_body"
           },
           "recovery": {
-            "corrective_action": "select the full replacement, apply bold, and save again",
-            "near_miss_class": "correct_text_missing_bold_format"
+            "corrective_action": "replace the complete line with the requested ready status and save again",
+            "near_miss_class": "handoff_status_pending_instead_of_ready"
           },
           "reset": {
             "reproducible_signature_required": true,
@@ -995,9 +1022,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "ed9d5b2f47873ea348d3039bcccc76ae3c72168023703323177f944be5c54ef8",
+          "task_sha256": "aedab103dadf38c47354f3eb1169a0c2a15d8cf6ec6d4159bd05420003043f3d",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -1010,26 +1037,27 @@
         {
           "app": "vscode",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
+            "editor_file_save",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
           "expected": {
             "text": "handoff=512\nstate=ready\n"
           },
-          "fixture_sha256": "c39c94145bfc5868927c1b6aa59200542a65261e5ce15a2ecac2e4c77c86de27",
-          "horizon": 4,
+          "fixture_sha256": "3575a6c0a226488b94876a10f41293f2a9d22a2a25203cde11cc0122c48ff679",
+          "horizon": 3,
           "id": "cln-s0-src-writer-multi-c04-02",
-          "instruction": "In VS Code, replace all text in the open file with exactly two lines: “handoff=512” and “state=ready”. Save the file.",
+          "instruction": "In the active VS Code editor, replace all text with exactly two lines: “handoff=512” and “state=ready”. Save the active file.",
           "near_miss": {
             "text": "handoff=512\nstate=pending\n"
           },
           "parameter_seed": 920142,
           "params": {
             "file_name": "stage0_writer_multi_c04_02.txt",
-            "initial_text": "draft=512\nstate=pending\n"
+            "initial_text": "draft=512\nstate=pending\n",
+            "stage0_program": "vscode_replace_active_file"
           },
           "recovery": {
             "corrective_action": "replace the whole file with the requested two lines and save again",
@@ -1041,9 +1069,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "33dc4dda4795f21952c9683e84325064f3d2ca25f7ed61763f8595c714491b86",
+          "task_sha256": "24d6438ee32a54b501318a2f5b86ca43d2e57d8821323150cdd90fa45fd810ba",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -1470,7 +1498,6 @@
       "bridge": "multi_app",
       "capabilities": [
         "app_switch",
-        "click",
         "coalesced_type",
         "hotkey",
         "multi_step_state_change"
@@ -1482,7 +1509,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-calc-multi-c01",
-      "instruction": "Complete both parts in order using handoff code “553”. In Calc, go to cell B3, enter a formula that adds 552 and 1, confirm it, and save the spreadsheet. Then switch applications with Alt+Tab. In the open Writer document, replace all text with exactly “Handoff code 553: confirm the clean-room review.” Make the complete replacement bold, then save the document.",
+      "instruction": "Complete both parts in order using handoff code “553”. In the selected Calc cell A1, enter a formula that adds 552 and 1, confirm it, and save the spreadsheet. Then switch applications with Alt+Tab. In the active Writer document, replace all text with exactly “Handoff code 553: ready for transfer.” and save the document without adding formatting.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -1499,7 +1526,14 @@
         }
       ],
       "parameter_seed": 910111,
-      "record_sha256": "60b6bf832be6307982191cb7737d3120399eb373c9c8d3373ea5ed99d8edda92",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 20,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 7,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "679d3caf3a05b71acefdab4ea2f553f76d4a44c9ca77d3fb6cc39b284faea4a9",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -1508,14 +1542,13 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "310fd37200615ec457f8cd9eaa3a228ee85f78dfd7cd1b741b740077f8f0176f",
-        "bf1ae905c87fb43decc6804938c0afa1000dc7180e94651942f3eafac66cfe3a"
+        "d991963fda489386a52e0e8fc73c94ebfd9bb671ab4117fac881e8cd344ce3c6",
+        "a17c49860d8dcb9fdcd473333aea5a5ff78ed171376b3c555db3daaeade3744d"
       ],
       "source_tasks": [
         {
           "app": "calc",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
@@ -1525,19 +1558,20 @@
             "display_value": "553",
             "formula": "of:=SUM(552;1)"
           },
-          "fixture_sha256": "c96d19daac5c1e49997726fd4befb6619d3f1023787dcaffe8a77bf1518fa559",
-          "horizon": 6,
+          "fixture_sha256": "2691b44822fef3748ceba54b90385d8ad2f8289c5de984970fd74a319e388417",
+          "horizon": 3,
           "id": "cln-s0-src-calc-multi-c01-01",
-          "instruction": "In Calc, go to cell B3, enter a formula that adds 552 and 1, confirm it, and save the spreadsheet.",
+          "instruction": "In the selected Calc cell A1, enter a formula that adds 552 and 1, confirm it, and save the spreadsheet.",
           "near_miss": {
             "display_value": "552",
             "formula": "of:=SUM(552;0)"
           },
           "parameter_seed": 921111,
           "params": {
-            "cell": "B3",
+            "cell": "A1",
             "file_name": "stage0_calc_multi_c01_01.ods",
-            "initial_value": "0"
+            "initial_value": "0",
+            "stage0_program": "calc_replace_selected_a1"
           },
           "recovery": {
             "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
@@ -1549,9 +1583,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 4,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "cc44cbc8696e93c8ee195757dfceb303708c750b809acf388965cb7c4f61d4b8",
+          "task_sha256": "4905580642b9953b355855e4257d59a0b14e0c8fc32a07f496111986b84eca3c",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -1564,32 +1598,32 @@
         {
           "app": "writer",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
           ],
           "difficulty": "easy",
           "expected": {
-            "bold": true,
-            "text": "Handoff code 553: confirm the clean-room review."
+            "bold": false,
+            "text": "Handoff code 553: ready for transfer."
           },
-          "fixture_sha256": "10aaee120f5e3e66d7bf761bafdc99eb8bd399248fce21456e7a50619d395a32",
-          "horizon": 4,
+          "fixture_sha256": "bc3526702b116467f73718581504e526159687360f76443cadc18eed63a14423",
+          "horizon": 3,
           "id": "cln-s0-src-calc-multi-c01-02",
-          "instruction": "In the open Writer document, replace all text with exactly “Handoff code 553: confirm the clean-room review.” Make the complete replacement bold, then save the document.",
+          "instruction": "In the active Writer document, replace all text with exactly “Handoff code 553: ready for transfer.” and save the document without adding formatting.",
           "near_miss": {
             "bold": false,
-            "text": "Handoff code 553: confirm the clean-room review."
+            "text": "Handoff code 553: pending transfer."
           },
           "parameter_seed": 921112,
           "params": {
             "file_name": "stage0_calc_multi_c01_02.odt",
-            "initial_text": "Temporary Writer draft for code 553"
+            "initial_text": "Temporary Writer draft for code 553",
+            "stage0_program": "writer_replace_active_body"
           },
           "recovery": {
-            "corrective_action": "select the full replacement, apply bold, and save again",
-            "near_miss_class": "correct_text_missing_bold_format"
+            "corrective_action": "replace the complete line with the requested ready status and save again",
+            "near_miss_class": "handoff_status_pending_instead_of_ready"
           },
           "reset": {
             "reproducible_signature_required": true,
@@ -1597,9 +1631,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "5997421213f05c6cac0b3ca16b09937ae63584c09e17528fb3ef251ade298a3b",
+          "task_sha256": "c1273ae6c58902e9fd2bee2e58234afb78a53cbb0d27280ff9078374fd83f103",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -1630,9 +1664,8 @@
       "bridge": "multi_app",
       "capabilities": [
         "app_switch",
-        "click",
         "coalesced_type",
-        "drag",
+        "file_rename",
         "hotkey",
         "multi_step_state_change"
       ],
@@ -1643,7 +1676,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-calc-multi-c02",
-      "instruction": "Complete both parts in order using handoff code “556”. In Calc, go to cell C4, enter a formula that adds 554 and 2, confirm it, and save the spreadsheet. Then switch applications with Alt+Tab. In Files, move “incoming_556_2.txt” into “archive_556_2”, then rename the moved file to “handoff_556.txt”.",
+      "instruction": "Complete both parts in order using handoff code “556”. In the selected Calc cell A1, enter a formula that adds 554 and 2, confirm it, and save the spreadsheet. Then switch applications with Alt+Tab. In Files, rename the selected file “incoming_556_2.txt” to “handoff_556.txt”.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -1660,7 +1693,14 @@
         }
       ],
       "parameter_seed": 910112,
-      "record_sha256": "8c2d3c93419bd75174a5ebdeb15bea76200bb13b85cfdb55dfa22b136223b30c",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 16,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 7,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "9ac45f6be0794398c64af9700adab8a2c4b02aaf2ab9344b11681c4021e74059",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -1669,14 +1709,13 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "cf30f6dbe3cc61d62dbd8a95d841b178d416753132883f6bff00a3d6c7533b00",
-        "2b2df81171a0d94ece4f3faa45929d2ecbac8c2f38ae29f8dfe7319ee206ad04"
+        "72ebf564e108472d6f018ef84e194a4806cec490490017a5483f8d0f72bedd9a",
+        "e4545bfd23ea9cde24a3fd0132aeda8f1964b6cf13c9454ea1fda128ec22d0bd"
       ],
       "source_tasks": [
         {
           "app": "calc",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
@@ -1686,19 +1725,20 @@
             "display_value": "556",
             "formula": "of:=SUM(554;2)"
           },
-          "fixture_sha256": "6a708a889cd67f646ca3458d205235be6c0791426d6c5db970c1abe84e52eb86",
-          "horizon": 6,
+          "fixture_sha256": "1bd80d6ae168a82280aefe5e9c1e74bb36aadb7a151c28449eb75dbdaa2c42ae",
+          "horizon": 3,
           "id": "cln-s0-src-calc-multi-c02-01",
-          "instruction": "In Calc, go to cell C4, enter a formula that adds 554 and 2, confirm it, and save the spreadsheet.",
+          "instruction": "In the selected Calc cell A1, enter a formula that adds 554 and 2, confirm it, and save the spreadsheet.",
           "near_miss": {
             "display_value": "555",
             "formula": "of:=SUM(554;1)"
           },
           "parameter_seed": 921121,
           "params": {
-            "cell": "C4",
+            "cell": "A1",
             "file_name": "stage0_calc_multi_c02_01.ods",
-            "initial_value": "0"
+            "initial_value": "0",
+            "stage0_program": "calc_replace_selected_a1"
           },
           "recovery": {
             "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
@@ -1710,9 +1750,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 4,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "0e9c17c18decfc7cf2fa9902d4b468c0c721465dc414614f680688a3370ed7ba",
+          "task_sha256": "1e21fdba663044779628197d4fd7dea1cb95ebd107b7d97e4677778b07cb876b",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -1725,31 +1765,31 @@
         {
           "app": "files",
           "capabilities": [
-            "click",
-            "drag",
             "coalesced_type",
             "hotkey",
+            "file_rename",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
           "expected": {
-            "destination": "archive_556_2",
+            "destination": "root",
             "final_name": "handoff_556.txt"
           },
-          "fixture_sha256": "2a7f77d98b0f2b67921d37dde64806c7fa5ebea76febb242175dda5d6400594d",
-          "horizon": 8,
+          "fixture_sha256": "de84a6a4f950180a55d59cd02a4364151bb72f715f2b15e5c05faa4883a4fd7e",
+          "horizon": 3,
           "id": "cln-s0-src-calc-multi-c02-02",
-          "instruction": "In Files, move “incoming_556_2.txt” into “archive_556_2”, then rename the moved file to “handoff_556.txt”.",
+          "instruction": "In Files, rename the selected file “incoming_556_2.txt” to “handoff_556.txt”.",
           "near_miss": {
-            "destination": "review_556_2",
-            "final_name": "handoff_556.txt"
+            "destination": "root",
+            "final_name": "handoff_556_draft.txt"
           },
           "parameter_seed": 921122,
           "params": {
             "content": "Clean-room handoff payload 556.\n",
             "decoy_name": "review_556_2",
             "destination_name": "archive_556_2",
-            "source_name": "incoming_556_2.txt"
+            "source_name": "incoming_556_2.txt",
+            "stage0_program": "files_rename_selected_source"
           },
           "recovery": {
             "corrective_action": "move the renamed file from the review folder into the requested archive folder",
@@ -1761,9 +1801,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "914599084dea11fdf0704e9ffbef0481f7333e3d375176c42d51bee3a00ce98f",
+          "task_sha256": "f6ee60acca0513591c7413521c5221c59745a4ad2082624d48df8d54b4a6e03d",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -1797,8 +1837,8 @@
         "click",
         "coalesced_type",
         "hotkey",
-        "multi_step_state_change",
-        "signed_vertical_scroll"
+        "local_web_state_change",
+        "multi_step_state_change"
       ],
       "difficulty": "hard",
       "eligibility": {
@@ -1807,7 +1847,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-calc-multi-c03",
-      "instruction": "Complete both parts in order using handoff code “559”. In Calc, go to cell D5, enter a formula that adds 556 and 3, confirm it, and save the spreadsheet. Then switch applications with Alt+Tab. On the private local settings page, open “handoff-559”, scroll down to the controls, and enable “Confirm code 559”.",
+      "instruction": "Complete both parts in order using handoff code “559”. In the selected Calc cell A1, enter a formula that adds 556 and 3, confirm it, and save the spreadsheet. Then switch applications with Alt+Tab. On the private local settings page, open “handoff-559” and enable “Confirm code 559”. Both controls are visible.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -1824,7 +1864,14 @@
         }
       ],
       "parameter_seed": 910113,
-      "record_sha256": "0e08ea4ce718d5d690ae863fb2b2b4ed76d979704b1c0281a969a986a2a7e00a",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 17,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 6,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "4565183f6f3793d0c57ed2be6cc234c3770eee645cebcfc0ebe4e1b85c9bb62d",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -1833,14 +1880,13 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "0b2194b3f57046847949bcbef5cfa1db8c65dad63c0fd335eb137f6a0f18a1cf",
-        "20eae7be71040519280ceb74b6592819727591441391eed59447fd7d5810a386"
+        "e58574e5ef532ba3dc8f8eb7125ced867866e23a6bb43aaba42f980de636be87",
+        "0467943c26b27a391b9465bbd0a2e3c12adf45b73193d3bc37efbd3f82693c94"
       ],
       "source_tasks": [
         {
           "app": "calc",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
@@ -1850,19 +1896,20 @@
             "display_value": "559",
             "formula": "of:=SUM(556;3)"
           },
-          "fixture_sha256": "3173ea2f612427ba2c93eda2632b01e48e064db42d259a0664a70e4b03a11339",
-          "horizon": 6,
+          "fixture_sha256": "1e4bb5d9591a937d3ebf8c60f9e766499e5811217a0c2e8d5d969a7de98b074b",
+          "horizon": 3,
           "id": "cln-s0-src-calc-multi-c03-01",
-          "instruction": "In Calc, go to cell D5, enter a formula that adds 556 and 3, confirm it, and save the spreadsheet.",
+          "instruction": "In the selected Calc cell A1, enter a formula that adds 556 and 3, confirm it, and save the spreadsheet.",
           "near_miss": {
             "display_value": "558",
             "formula": "of:=SUM(556;2)"
           },
           "parameter_seed": 921131,
           "params": {
-            "cell": "D5",
+            "cell": "A1",
             "file_name": "stage0_calc_multi_c03_01.ods",
-            "initial_value": "0"
+            "initial_value": "0",
+            "stage0_program": "calc_replace_selected_a1"
           },
           "recovery": {
             "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
@@ -1874,9 +1921,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 4,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "94f49708bb2ca505024f6a55678098cfa472e07cd8de7ea91ee18165323ee56a",
+          "task_sha256": "d166e307fd9cb07fb2dc8d4617085b6ee79c83b2a35dae1caad4439540805dd4",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -1890,7 +1937,7 @@
           "app": "chrome",
           "capabilities": [
             "click",
-            "signed_vertical_scroll",
+            "local_web_state_change",
             "multi_step_state_change"
           ],
           "difficulty": "hard",
@@ -1898,22 +1945,23 @@
             "section": "handoff-559",
             "setting_enabled": true
           },
-          "fixture_sha256": "37574f57b7a0fe44a584363da1c6c15d02910a01f30cbdc3f4d1451d0beedfe2",
-          "horizon": 6,
+          "fixture_sha256": "5452860e6c5db36047cbb790eb53c64a85f63b970549fe36c5eab5d7c3f079cf",
+          "horizon": 2,
           "id": "cln-s0-src-calc-multi-c03-02",
-          "instruction": "On the private local settings page, open “handoff-559”, scroll down to the controls, and enable “Confirm code 559”.",
+          "instruction": "On the private local settings page, open “handoff-559” and enable “Confirm code 559”. Both controls are visible.",
           "near_miss": {
             "section": "appearance",
             "setting_enabled": false
           },
           "parameter_seed": 921132,
           "params": {
-            "initial_scroll_y": 0,
-            "minimum_scroll_delta": 500,
+            "initial_scroll_y": 900,
+            "minimum_scroll_delta": 0,
             "port": 20132,
             "scroll_direction": "down",
             "section": "handoff-559",
-            "setting": "Confirm code 559"
+            "setting": "Confirm code 559",
+            "stage0_program": "chrome_enable_visible_setting"
           },
           "recovery": {
             "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
@@ -1925,9 +1973,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "ac85b9747c6a1c872dbd95c36206f89e8c7a76eb645fc4b757204dbdba095027",
+          "task_sha256": "baa426d3120bd696a109e1730030edf135de882f201c8116a0840c82d10d28db",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -1958,8 +2006,8 @@
       "bridge": "multi_app",
       "capabilities": [
         "app_switch",
-        "click",
         "coalesced_type",
+        "editor_file_save",
         "hotkey",
         "multi_step_state_change"
       ],
@@ -1970,7 +2018,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-calc-multi-c04",
-      "instruction": "Complete both parts in order using handoff code “562”. In Calc, go to cell E6, enter a formula that adds 558 and 4, confirm it, and save the spreadsheet. Then switch applications with Alt+Tab. In VS Code, replace all text in the open file with exactly two lines: “handoff=562” and “state=ready”. Save the file.",
+      "instruction": "Complete both parts in order using handoff code “562”. In the selected Calc cell A1, enter a formula that adds 558 and 4, confirm it, and save the spreadsheet. Then switch applications with Alt+Tab. In the active VS Code editor, replace all text with exactly two lines: “handoff=562” and “state=ready”. Save the active file.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -1987,7 +2035,14 @@
         }
       ],
       "parameter_seed": 910114,
-      "record_sha256": "da0c26593f97bf963a6996d1925ae4e5c54d10cd519a0afe7ec7838ea00d43c5",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 20,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 7,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "dd3435109f047a7ee4f97e20efed8e720b04228f6607abcfcc02322cbe77e884",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -1996,14 +2051,13 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "a01b729ceea45880dd91dab36114567826e5233b3765b99c3b538f03153936d6",
-        "d401a682234d62c4d0577f59f1790958eb7facb9232030896634af35b041e732"
+        "96d7ecf8f5e6a2dbf729da2eba2fb33ecc2dc6d7811818c632da9fc44f06ae4c",
+        "8c23b3e5f6d0be364a3d198672977fd660fe157a9cc5c119421a20e3f08a7c47"
       ],
       "source_tasks": [
         {
           "app": "calc",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
@@ -2013,19 +2067,20 @@
             "display_value": "562",
             "formula": "of:=SUM(558;4)"
           },
-          "fixture_sha256": "91323fd3f9553fa21d7cfaad1c538d899d2c2ee637f8beb5a16963cad22faa6e",
-          "horizon": 6,
+          "fixture_sha256": "9a4095eefa65257b4fb35a19427066a211f3cbd59d88d24ae4a626235e94be21",
+          "horizon": 3,
           "id": "cln-s0-src-calc-multi-c04-01",
-          "instruction": "In Calc, go to cell E6, enter a formula that adds 558 and 4, confirm it, and save the spreadsheet.",
+          "instruction": "In the selected Calc cell A1, enter a formula that adds 558 and 4, confirm it, and save the spreadsheet.",
           "near_miss": {
             "display_value": "561",
             "formula": "of:=SUM(558;3)"
           },
           "parameter_seed": 921141,
           "params": {
-            "cell": "E6",
+            "cell": "A1",
             "file_name": "stage0_calc_multi_c04_01.ods",
-            "initial_value": "0"
+            "initial_value": "0",
+            "stage0_program": "calc_replace_selected_a1"
           },
           "recovery": {
             "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
@@ -2037,9 +2092,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 4,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "87548798aa2c40cc8ece25e6780eb8a07e756991f4b00541ab5f28b36607ddfb",
+          "task_sha256": "5e53c4bd4ee0886e30200ca4f402bbc2c3e95986bc3526f8de1b7dface54f224",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -2052,26 +2107,27 @@
         {
           "app": "vscode",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
+            "editor_file_save",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
           "expected": {
             "text": "handoff=562\nstate=ready\n"
           },
-          "fixture_sha256": "25700760f09833b93f960913a3cc2e83a7f263201865b089c1e46b60591008dc",
-          "horizon": 4,
+          "fixture_sha256": "f752652900f3830b1f3a4d128d9bdff5f8bfe23a33b06dbac5ac219d8f02a81c",
+          "horizon": 3,
           "id": "cln-s0-src-calc-multi-c04-02",
-          "instruction": "In VS Code, replace all text in the open file with exactly two lines: “handoff=562” and “state=ready”. Save the file.",
+          "instruction": "In the active VS Code editor, replace all text with exactly two lines: “handoff=562” and “state=ready”. Save the active file.",
           "near_miss": {
             "text": "handoff=562\nstate=pending\n"
           },
           "parameter_seed": 921142,
           "params": {
             "file_name": "stage0_calc_multi_c04_02.txt",
-            "initial_text": "draft=562\nstate=pending\n"
+            "initial_text": "draft=562\nstate=pending\n",
+            "stage0_program": "vscode_replace_active_file"
           },
           "recovery": {
             "corrective_action": "replace the whole file with the requested two lines and save again",
@@ -2083,9 +2139,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "c622dded993df1b5dfe3ae8d00f1bcac749ff0e21247548c9ba1465715cd5020",
+          "task_sha256": "c2a1a33c284f17f423aedaf6f53c179453527ee7163461983ebf85e9949740ca",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -2524,9 +2580,8 @@
       "bridge": "multi_app",
       "capabilities": [
         "app_switch",
-        "click",
         "coalesced_type",
-        "drag",
+        "file_rename",
         "hotkey",
         "multi_step_state_change"
       ],
@@ -2537,7 +2592,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-files-multi-c01",
-      "instruction": "Complete both parts in order using handoff code “603”. In Files, move “incoming_603_1.txt” into “archive_603_1”, then rename the moved file to “handoff_603.txt”. Then switch applications with Alt+Tab. In the open Writer document, replace all text with exactly “Handoff code 603: confirm the clean-room review.” Make the complete replacement bold, then save the document.",
+      "instruction": "Complete both parts in order using handoff code “603”. In Files, rename the selected file “incoming_603_1.txt” to “handoff_603.txt”. Then switch applications with Alt+Tab. In the active Writer document, replace all text with exactly “Handoff code 603: ready for transfer.” and save the document without adding formatting.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -2554,7 +2609,14 @@
         }
       ],
       "parameter_seed": 910211,
-      "record_sha256": "3dc95f4235a1beba4a31a50200484c62c356f4616fa98d8be71c5e5bf19b0cc0",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 18,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 7,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "ef3b14a62a763cda77a293bdd3b0f3e3307f8fe0a49d0b7bbe94c5fe40362ce1",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -2563,38 +2625,38 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "daf13c0bc31dd3504a2bcb62d74001ab1becc7331fb624217f94c75646df9e89",
-        "7e4a0bcbcb6ddd6ae223c9b0bd5e933b0873a3e88d3bcb62ba89e48e81ce0474"
+        "f03078ef1d4403363935f72bb10fc6536e8831e1e8929648fcb8d11c187e9a79",
+        "68fb06f84a9146cd92a1724703c10dd0d79e2aeb6a95f61364872b65db88207b"
       ],
       "source_tasks": [
         {
           "app": "files",
           "capabilities": [
-            "click",
-            "drag",
             "coalesced_type",
             "hotkey",
+            "file_rename",
             "multi_step_state_change"
           ],
           "difficulty": "easy",
           "expected": {
-            "destination": "archive_603_1",
+            "destination": "root",
             "final_name": "handoff_603.txt"
           },
-          "fixture_sha256": "bea07a4868247095f834499c557c2e1a1e9b3dcce597b35ed5cc8afccbcdc2cd",
-          "horizon": 8,
+          "fixture_sha256": "a85ffae4de9814148f9a771e88b82d143a41a4f9288943bfd2d1f1db38725997",
+          "horizon": 3,
           "id": "cln-s0-src-files-multi-c01-01",
-          "instruction": "In Files, move “incoming_603_1.txt” into “archive_603_1”, then rename the moved file to “handoff_603.txt”.",
+          "instruction": "In Files, rename the selected file “incoming_603_1.txt” to “handoff_603.txt”.",
           "near_miss": {
-            "destination": "review_603_1",
-            "final_name": "handoff_603.txt"
+            "destination": "root",
+            "final_name": "handoff_603_draft.txt"
           },
           "parameter_seed": 922111,
           "params": {
             "content": "Clean-room handoff payload 603.\n",
             "decoy_name": "review_603_1",
             "destination_name": "archive_603_1",
-            "source_name": "incoming_603_1.txt"
+            "source_name": "incoming_603_1.txt",
+            "stage0_program": "files_rename_selected_source"
           },
           "recovery": {
             "corrective_action": "move the renamed file from the review folder into the requested archive folder",
@@ -2606,9 +2668,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "257d215ebe86ca4ff97337be58508941ffe4bd24b28a5ef44bc4ce11683c1a3e",
+          "task_sha256": "eeab648fbdee8427dc7bf4e2e76dbda6f621dc8def7b4d92afc28d2772be5d18",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -2621,32 +2683,32 @@
         {
           "app": "writer",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
           ],
           "difficulty": "easy",
           "expected": {
-            "bold": true,
-            "text": "Handoff code 603: confirm the clean-room review."
+            "bold": false,
+            "text": "Handoff code 603: ready for transfer."
           },
-          "fixture_sha256": "d5a6043c73a56b964c22ce61256ca6ec5e7a49698a1463f070269c8147809dc8",
-          "horizon": 4,
+          "fixture_sha256": "a4d5d682ece444b0c5f701efc6f145e4ebc7b02cf999c22265c69387d651e47e",
+          "horizon": 3,
           "id": "cln-s0-src-files-multi-c01-02",
-          "instruction": "In the open Writer document, replace all text with exactly “Handoff code 603: confirm the clean-room review.” Make the complete replacement bold, then save the document.",
+          "instruction": "In the active Writer document, replace all text with exactly “Handoff code 603: ready for transfer.” and save the document without adding formatting.",
           "near_miss": {
             "bold": false,
-            "text": "Handoff code 603: confirm the clean-room review."
+            "text": "Handoff code 603: pending transfer."
           },
           "parameter_seed": 922112,
           "params": {
             "file_name": "stage0_files_multi_c01_02.odt",
-            "initial_text": "Temporary Writer draft for code 603"
+            "initial_text": "Temporary Writer draft for code 603",
+            "stage0_program": "writer_replace_active_body"
           },
           "recovery": {
-            "corrective_action": "select the full replacement, apply bold, and save again",
-            "near_miss_class": "correct_text_missing_bold_format"
+            "corrective_action": "replace the complete line with the requested ready status and save again",
+            "near_miss_class": "handoff_status_pending_instead_of_ready"
           },
           "reset": {
             "reproducible_signature_required": true,
@@ -2654,9 +2716,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "edeed0f0b34700d4346bc6c55767cdf39acab05d7bd4f1f128000c9b2aee0f3a",
+          "task_sha256": "502a740b5f6bdffea98b60b72bfc8dae40642645fcc36f4543c42082e531aa00",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -2687,9 +2749,8 @@
       "bridge": "multi_app",
       "capabilities": [
         "app_switch",
-        "click",
         "coalesced_type",
-        "drag",
+        "file_rename",
         "hotkey",
         "multi_step_state_change"
       ],
@@ -2700,7 +2761,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-files-multi-c02",
-      "instruction": "Complete both parts in order using handoff code “606”. In Files, move “incoming_606_2.txt” into “archive_606_2”, then rename the moved file to “handoff_606.txt”. Then switch applications with Alt+Tab. In Calc, go to cell C4, enter a formula that adds 604 and 2, confirm it, and save the spreadsheet.",
+      "instruction": "Complete both parts in order using handoff code “606”. In Files, rename the selected file “incoming_606_2.txt” to “handoff_606.txt”. Then switch applications with Alt+Tab. In the selected Calc cell A1, enter a formula that adds 604 and 2, confirm it, and save the spreadsheet.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -2717,7 +2778,14 @@
         }
       ],
       "parameter_seed": 910212,
-      "record_sha256": "b3be0325b7c5cc5c0fde9c6c6f7055dbefeff1765d0a526af0a303117c1b70fb",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 16,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 7,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "9585134fcefda532428a0577113ef33b966e7c994ee7c13ddd618c36746139bb",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -2726,38 +2794,38 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "e6468b1528b2605da0c29204a132b10966ff0be7db883505b558fc833e248bf6",
-        "f5d3c8f5e019bdbdc9e4bb1b101bc89ce3b65464efe28023014c61630308d117"
+        "c0b4ca1c968435145add509a041d3a2dcac1af7dc711baf4528b7254dfa9c1e6",
+        "2b9743b49726146208c141a7c35f1b6589d640bd6b5296229634cacba87dc19c"
       ],
       "source_tasks": [
         {
           "app": "files",
           "capabilities": [
-            "click",
-            "drag",
             "coalesced_type",
             "hotkey",
+            "file_rename",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
           "expected": {
-            "destination": "archive_606_2",
+            "destination": "root",
             "final_name": "handoff_606.txt"
           },
-          "fixture_sha256": "8e363fd935c7084175ad4b1fc89187be21f2670be60b67df9d9d287eb606602d",
-          "horizon": 8,
+          "fixture_sha256": "27fe56825486ce5a2e4d731c5852b7fd10faa53f6fd0004bc6b8fbbaccb9d163",
+          "horizon": 3,
           "id": "cln-s0-src-files-multi-c02-01",
-          "instruction": "In Files, move “incoming_606_2.txt” into “archive_606_2”, then rename the moved file to “handoff_606.txt”.",
+          "instruction": "In Files, rename the selected file “incoming_606_2.txt” to “handoff_606.txt”.",
           "near_miss": {
-            "destination": "review_606_2",
-            "final_name": "handoff_606.txt"
+            "destination": "root",
+            "final_name": "handoff_606_draft.txt"
           },
           "parameter_seed": 922121,
           "params": {
             "content": "Clean-room handoff payload 606.\n",
             "decoy_name": "review_606_2",
             "destination_name": "archive_606_2",
-            "source_name": "incoming_606_2.txt"
+            "source_name": "incoming_606_2.txt",
+            "stage0_program": "files_rename_selected_source"
           },
           "recovery": {
             "corrective_action": "move the renamed file from the review folder into the requested archive folder",
@@ -2769,9 +2837,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "bb6b4bd26b4a5638383aa4c5e3123306320f8cc403819541579e0c2082d072f0",
+          "task_sha256": "000a97429a023f8062aa012372485a98d8545daf995c916df24e0b0a1ce8945c",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -2784,7 +2852,6 @@
         {
           "app": "calc",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
@@ -2794,19 +2861,20 @@
             "display_value": "606",
             "formula": "of:=SUM(604;2)"
           },
-          "fixture_sha256": "5f3bbc2782378b61a1ea9344e0e5d4879cd47b3d338a844c2519b5479abbf23a",
-          "horizon": 6,
+          "fixture_sha256": "fe5ab6487b9172411c7abc9ddd79d04aaa675fef9ab2c35af0112b04f75fa4f6",
+          "horizon": 3,
           "id": "cln-s0-src-files-multi-c02-02",
-          "instruction": "In Calc, go to cell C4, enter a formula that adds 604 and 2, confirm it, and save the spreadsheet.",
+          "instruction": "In the selected Calc cell A1, enter a formula that adds 604 and 2, confirm it, and save the spreadsheet.",
           "near_miss": {
             "display_value": "605",
             "formula": "of:=SUM(604;1)"
           },
           "parameter_seed": 922122,
           "params": {
-            "cell": "C4",
+            "cell": "A1",
             "file_name": "stage0_files_multi_c02_02.ods",
-            "initial_value": "0"
+            "initial_value": "0",
+            "stage0_program": "calc_replace_selected_a1"
           },
           "recovery": {
             "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
@@ -2818,9 +2886,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 4,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "70375dca6e60f86d3c89b50cf5d48bcc4e5dc83e9ca07793e4ac39ade95525a3",
+          "task_sha256": "c44b18c247efdffe7ba747445fc76571f0317b36b8f084dcd959e603bf691004",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -2853,10 +2921,10 @@
         "app_switch",
         "click",
         "coalesced_type",
-        "drag",
+        "file_rename",
         "hotkey",
-        "multi_step_state_change",
-        "signed_vertical_scroll"
+        "local_web_state_change",
+        "multi_step_state_change"
       ],
       "difficulty": "hard",
       "eligibility": {
@@ -2865,7 +2933,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-files-multi-c03",
-      "instruction": "Complete both parts in order using handoff code “609”. In Files, move “incoming_609_3.txt” into “archive_609_3”, then rename the moved file to “handoff_609.txt”. Then switch applications with Alt+Tab. On the private local settings page, open “handoff-609”, scroll down to the controls, and enable “Confirm code 609”.",
+      "instruction": "Complete both parts in order using handoff code “609”. In Files, rename the selected file “incoming_609_3.txt” to “handoff_609.txt”. Then switch applications with Alt+Tab. On the private local settings page, open “handoff-609” and enable “Confirm code 609”. Both controls are visible.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -2882,7 +2950,14 @@
         }
       ],
       "parameter_seed": 910213,
-      "record_sha256": "ae8e6994c517c838560a8966cb9f43dc863747a28bac6936d212044b376973f0",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 15,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 6,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "39e9ac3eaed905daba7fe109cec7d29c5c8002188c20aafcb9e0e0c46329911d",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -2891,38 +2966,38 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "7f400e247eb99cb305b20c09435e3cfd68ad591cdb2786798cb4293dfdc26e35",
-        "eecb86339e2c87b5be471f2e88ed3574a5767870061cbfc431fd61d667b4ba47"
+        "ed2b1c06ed91d949dfc9c036805a12b27883a997ef345759569a835d6c0ff114",
+        "a4fc16ee50f728569e8491e61798f6b9dffa28cc73259b4fa1989d2dea59f548"
       ],
       "source_tasks": [
         {
           "app": "files",
           "capabilities": [
-            "click",
-            "drag",
             "coalesced_type",
             "hotkey",
+            "file_rename",
             "multi_step_state_change"
           ],
           "difficulty": "hard",
           "expected": {
-            "destination": "archive_609_3",
+            "destination": "root",
             "final_name": "handoff_609.txt"
           },
-          "fixture_sha256": "42cf795d44942cb56580269eae358e349de577ae26f228270a6ec8b67d4df000",
-          "horizon": 8,
+          "fixture_sha256": "caf903a7ac07a37b80a9b52119b4dda0f92195769f73eb2fa35423525420dbd5",
+          "horizon": 3,
           "id": "cln-s0-src-files-multi-c03-01",
-          "instruction": "In Files, move “incoming_609_3.txt” into “archive_609_3”, then rename the moved file to “handoff_609.txt”.",
+          "instruction": "In Files, rename the selected file “incoming_609_3.txt” to “handoff_609.txt”.",
           "near_miss": {
-            "destination": "review_609_3",
-            "final_name": "handoff_609.txt"
+            "destination": "root",
+            "final_name": "handoff_609_draft.txt"
           },
           "parameter_seed": 922131,
           "params": {
             "content": "Clean-room handoff payload 609.\n",
             "decoy_name": "review_609_3",
             "destination_name": "archive_609_3",
-            "source_name": "incoming_609_3.txt"
+            "source_name": "incoming_609_3.txt",
+            "stage0_program": "files_rename_selected_source"
           },
           "recovery": {
             "corrective_action": "move the renamed file from the review folder into the requested archive folder",
@@ -2934,9 +3009,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "3334c14296955fb4d264c7cc5449d738bc3be064219cb6ef9a4de048d753f9a1",
+          "task_sha256": "85a672125a1aef916b2067511511f7bee5e7a8aeb2eda7b7a38ff047345697b2",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -2950,7 +3025,7 @@
           "app": "chrome",
           "capabilities": [
             "click",
-            "signed_vertical_scroll",
+            "local_web_state_change",
             "multi_step_state_change"
           ],
           "difficulty": "hard",
@@ -2958,22 +3033,23 @@
             "section": "handoff-609",
             "setting_enabled": true
           },
-          "fixture_sha256": "0c00f38fdc52e8959c55bb7c9d314dd403808e5da384808930f263375a9023df",
-          "horizon": 6,
+          "fixture_sha256": "1f67abddd8a3c286ce8ee43f8bc6f1e04d7755fbe9712d27b128c4a5c0eb80b0",
+          "horizon": 2,
           "id": "cln-s0-src-files-multi-c03-02",
-          "instruction": "On the private local settings page, open “handoff-609”, scroll down to the controls, and enable “Confirm code 609”.",
+          "instruction": "On the private local settings page, open “handoff-609” and enable “Confirm code 609”. Both controls are visible.",
           "near_miss": {
             "section": "appearance",
             "setting_enabled": false
           },
           "parameter_seed": 922132,
           "params": {
-            "initial_scroll_y": 0,
-            "minimum_scroll_delta": 500,
+            "initial_scroll_y": 900,
+            "minimum_scroll_delta": 0,
             "port": 21132,
             "scroll_direction": "down",
             "section": "handoff-609",
-            "setting": "Confirm code 609"
+            "setting": "Confirm code 609",
+            "stage0_program": "chrome_enable_visible_setting"
           },
           "recovery": {
             "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
@@ -2985,9 +3061,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "473022f17e0563538d6f82b8f6303e211d6d334c633779e309315f04db730b27",
+          "task_sha256": "6b9fbabde68c16457de5f7643e6a75a6d71cf3d23a3380adbb17aa2bcdee0a63",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -3018,9 +3094,9 @@
       "bridge": "multi_app",
       "capabilities": [
         "app_switch",
-        "click",
         "coalesced_type",
-        "drag",
+        "editor_file_save",
+        "file_rename",
         "hotkey",
         "multi_step_state_change"
       ],
@@ -3031,7 +3107,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-files-multi-c04",
-      "instruction": "Complete both parts in order using handoff code “612”. In Files, move “incoming_612_4.txt” into “archive_612_4”, then rename the moved file to “handoff_612.txt”. Then switch applications with Alt+Tab. In VS Code, replace all text in the open file with exactly two lines: “handoff=612” and “state=ready”. Save the file.",
+      "instruction": "Complete both parts in order using handoff code “612”. In Files, rename the selected file “incoming_612_4.txt” to “handoff_612.txt”. Then switch applications with Alt+Tab. In the active VS Code editor, replace all text with exactly two lines: “handoff=612” and “state=ready”. Save the active file.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -3048,7 +3124,14 @@
         }
       ],
       "parameter_seed": 910214,
-      "record_sha256": "ae885d2e489ec7df319bfb96045f614db6d16d1a624306a993aa211f6809814b",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 18,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 7,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "1dab33fab5d6f652926c41f29895fd868fd5e2cc01aec6040a822b1ab6544bc9",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -3057,38 +3140,38 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "fa8507fc80240fd759988d5db6df7a9e996c8d88de736b138ccd1ada1198f8e1",
-        "8e5c6fcd16d0e2b723a7a839cca307c8d204fd51bba2900c66cd0d7ac80ec49a"
+        "418403d3a1320ad42c9961f714a0eed6446e8afeb881fa362ee487b1667bdcc8",
+        "b4a4bdb069c6d10c81d6bc12e3e9c3a34e18b65baca8a670350c76d3c31a82dc"
       ],
       "source_tasks": [
         {
           "app": "files",
           "capabilities": [
-            "click",
-            "drag",
             "coalesced_type",
             "hotkey",
+            "file_rename",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
           "expected": {
-            "destination": "archive_612_4",
+            "destination": "root",
             "final_name": "handoff_612.txt"
           },
-          "fixture_sha256": "bdf14d5c7f3299f4f2c26ce3c921350d491fa3053cbc01a2d3a26602184820ae",
-          "horizon": 8,
+          "fixture_sha256": "c0880cec8001ebe6c1bbbb3e5ef8d939060e23967f5ffb61a79f5817c05f3612",
+          "horizon": 3,
           "id": "cln-s0-src-files-multi-c04-01",
-          "instruction": "In Files, move “incoming_612_4.txt” into “archive_612_4”, then rename the moved file to “handoff_612.txt”.",
+          "instruction": "In Files, rename the selected file “incoming_612_4.txt” to “handoff_612.txt”.",
           "near_miss": {
-            "destination": "review_612_4",
-            "final_name": "handoff_612.txt"
+            "destination": "root",
+            "final_name": "handoff_612_draft.txt"
           },
           "parameter_seed": 922141,
           "params": {
             "content": "Clean-room handoff payload 612.\n",
             "decoy_name": "review_612_4",
             "destination_name": "archive_612_4",
-            "source_name": "incoming_612_4.txt"
+            "source_name": "incoming_612_4.txt",
+            "stage0_program": "files_rename_selected_source"
           },
           "recovery": {
             "corrective_action": "move the renamed file from the review folder into the requested archive folder",
@@ -3100,9 +3183,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "d65e4d27ce804f6297ac2f202a23f039b4363df444902f1642e9fd1ac2d83e95",
+          "task_sha256": "17e315c666944c1321996b57b400801a44d80e6dfe6ea44f94ee57c98336c123",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -3115,26 +3198,27 @@
         {
           "app": "vscode",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
+            "editor_file_save",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
           "expected": {
             "text": "handoff=612\nstate=ready\n"
           },
-          "fixture_sha256": "d4b0c216119211d17adaeee02f2317dc21e9cc2f8e22eb2dfdb267bd6bd41a2e",
-          "horizon": 4,
+          "fixture_sha256": "2a8a49a836f076508b32c40eb64e590c00f43afab44ddf42b4b8ab7129d3e138",
+          "horizon": 3,
           "id": "cln-s0-src-files-multi-c04-02",
-          "instruction": "In VS Code, replace all text in the open file with exactly two lines: “handoff=612” and “state=ready”. Save the file.",
+          "instruction": "In the active VS Code editor, replace all text with exactly two lines: “handoff=612” and “state=ready”. Save the active file.",
           "near_miss": {
             "text": "handoff=612\nstate=pending\n"
           },
           "parameter_seed": 922142,
           "params": {
             "file_name": "stage0_files_multi_c04_02.txt",
-            "initial_text": "draft=612\nstate=pending\n"
+            "initial_text": "draft=612\nstate=pending\n",
+            "stage0_program": "vscode_replace_active_file"
           },
           "recovery": {
             "corrective_action": "replace the whole file with the requested two lines and save again",
@@ -3146,9 +3230,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "e778161aa2318406fbf7f90da4cc5fc55967b19ec72023b6bc836e4f45b17d50",
+          "task_sha256": "9ac82f88eed309825a2d8f6bcfeccace580ecd4ff07d3678102c62d66b3237c3",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -3582,8 +3666,8 @@
         "click",
         "coalesced_type",
         "hotkey",
-        "multi_step_state_change",
-        "signed_vertical_scroll"
+        "local_web_state_change",
+        "multi_step_state_change"
       ],
       "difficulty": "easy",
       "eligibility": {
@@ -3592,7 +3676,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-chrome-multi-c01",
-      "instruction": "Complete both parts in order using handoff code “653”. On the private local settings page, open “handoff-653”, scroll down to the controls, and enable “Confirm code 653”. Then switch applications with Alt+Tab. In the open Writer document, replace all text with exactly “Handoff code 653: confirm the clean-room review.” Make the complete replacement bold, then save the document.",
+      "instruction": "Complete both parts in order using handoff code “653”. On the private local settings page, open “handoff-653” and enable “Confirm code 653”. Both controls are visible. Then switch applications with Alt+Tab. In the active Writer document, replace all text with exactly “Handoff code 653: ready for transfer.” and save the document without adding formatting.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -3609,7 +3693,14 @@
         }
       ],
       "parameter_seed": 910311,
-      "record_sha256": "827a2907ffb488199c6b52c56ced7f1ae112048e3e375ed443d7909514238a8c",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 19,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 6,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "92ce3b9b9e14285b6e80bb60ce381384da26f1980c0ef82e1d49d2c5fa404d78",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -3618,15 +3709,15 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "b1e55e8a3e96f27838b0f048e128c3acd1d826b10dc8a61a2ffa2a69e746b9e2",
-        "3f896e229b92e14ca0136969ef3cf3c673338721021b5200eb04cc9fca8ce0c9"
+        "774e9f2a4a036dd2e0325a8259f9bec3cafc10672cf4c607a3c4a4bc8defbe0d",
+        "e73b12b3bb5140fd716d3f56155f031abe1abfe8cf2362a6da6943f80840388a"
       ],
       "source_tasks": [
         {
           "app": "chrome",
           "capabilities": [
             "click",
-            "signed_vertical_scroll",
+            "local_web_state_change",
             "multi_step_state_change"
           ],
           "difficulty": "easy",
@@ -3634,22 +3725,23 @@
             "section": "handoff-653",
             "setting_enabled": true
           },
-          "fixture_sha256": "dea2fe61544bc7d150625b866e7a6258b11ee2cfad32cdb32d1802ac72265999",
-          "horizon": 6,
+          "fixture_sha256": "7b16a48a49415cbee929d6838926bea963cdf065d9f6e4df89f3979049233693",
+          "horizon": 2,
           "id": "cln-s0-src-chrome-multi-c01-01",
-          "instruction": "On the private local settings page, open “handoff-653”, scroll down to the controls, and enable “Confirm code 653”.",
+          "instruction": "On the private local settings page, open “handoff-653” and enable “Confirm code 653”. Both controls are visible.",
           "near_miss": {
             "section": "appearance",
             "setting_enabled": false
           },
           "parameter_seed": 923111,
           "params": {
-            "initial_scroll_y": 0,
-            "minimum_scroll_delta": 500,
+            "initial_scroll_y": 900,
+            "minimum_scroll_delta": 0,
             "port": 22111,
             "scroll_direction": "down",
             "section": "handoff-653",
-            "setting": "Confirm code 653"
+            "setting": "Confirm code 653",
+            "stage0_program": "chrome_enable_visible_setting"
           },
           "recovery": {
             "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
@@ -3661,9 +3753,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "feea399fc8bc725848dcbb0b3fe781397c30d5f1a2ea2f5c3ef740c2f0ba1c98",
+          "task_sha256": "94b4842f679f16168528bae5e460d639632e2850c53ba037c8b7330e5c15d01e",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -3676,32 +3768,32 @@
         {
           "app": "writer",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
           ],
           "difficulty": "easy",
           "expected": {
-            "bold": true,
-            "text": "Handoff code 653: confirm the clean-room review."
+            "bold": false,
+            "text": "Handoff code 653: ready for transfer."
           },
-          "fixture_sha256": "69e62e4d9b0edc66cf7cc6288a0293531b1ce697341a8258d279aa8262cc4c94",
-          "horizon": 4,
+          "fixture_sha256": "3ca842e53407f8997e3afa9cc6452c1fd8e193ae1be835dd119e63a28dbae9c2",
+          "horizon": 3,
           "id": "cln-s0-src-chrome-multi-c01-02",
-          "instruction": "In the open Writer document, replace all text with exactly “Handoff code 653: confirm the clean-room review.” Make the complete replacement bold, then save the document.",
+          "instruction": "In the active Writer document, replace all text with exactly “Handoff code 653: ready for transfer.” and save the document without adding formatting.",
           "near_miss": {
             "bold": false,
-            "text": "Handoff code 653: confirm the clean-room review."
+            "text": "Handoff code 653: pending transfer."
           },
           "parameter_seed": 923112,
           "params": {
             "file_name": "stage0_chrome_multi_c01_02.odt",
-            "initial_text": "Temporary Writer draft for code 653"
+            "initial_text": "Temporary Writer draft for code 653",
+            "stage0_program": "writer_replace_active_body"
           },
           "recovery": {
-            "corrective_action": "select the full replacement, apply bold, and save again",
-            "near_miss_class": "correct_text_missing_bold_format"
+            "corrective_action": "replace the complete line with the requested ready status and save again",
+            "near_miss_class": "handoff_status_pending_instead_of_ready"
           },
           "reset": {
             "reproducible_signature_required": true,
@@ -3709,9 +3801,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "576711a7f5ebcb9d0a5e9eaae4fd2931f6ccbe3c99225aa5414b87001723bd75",
+          "task_sha256": "26ebd81a9ba30655d93200f4727d6c62b81c55fd0c90a652f2802c1e57c49481",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -3745,8 +3837,8 @@
         "click",
         "coalesced_type",
         "hotkey",
-        "multi_step_state_change",
-        "signed_vertical_scroll"
+        "local_web_state_change",
+        "multi_step_state_change"
       ],
       "difficulty": "medium",
       "eligibility": {
@@ -3755,7 +3847,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-chrome-multi-c02",
-      "instruction": "Complete both parts in order using handoff code “656”. On the private local settings page, open “handoff-656”, scroll down to the controls, and enable “Confirm code 656”. Then switch applications with Alt+Tab. In Calc, go to cell C4, enter a formula that adds 654 and 2, confirm it, and save the spreadsheet.",
+      "instruction": "Complete both parts in order using handoff code “656”. On the private local settings page, open “handoff-656” and enable “Confirm code 656”. Both controls are visible. Then switch applications with Alt+Tab. In the selected Calc cell A1, enter a formula that adds 654 and 2, confirm it, and save the spreadsheet.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -3772,7 +3864,14 @@
         }
       ],
       "parameter_seed": 910312,
-      "record_sha256": "b4feb76f666adb49981f492008d2de7c69e6011475630ef83f8d796747d7a850",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 17,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 6,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "cca440504e8d22559f6ae5d16eaa795878b6341f3c7421369ae8ad3bf8489bfd",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -3781,15 +3880,15 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "207fb8a3b72e63c2f1cfd7bf30e3ff4384bd20b6627c8f2eb3791fbdd0e1bc4e",
-        "1fe44187c089ed90bb8d3d40d57ae82789f3033bf0803e55a6b8e71ea5135057"
+        "bc4558d990aa49127db556469281309d1d13ac9cea69cd23dc0e91438e8c479b",
+        "082e44ac2e5060e804ba0755e1da831798550b6090e28a31ecf09636e988d09e"
       ],
       "source_tasks": [
         {
           "app": "chrome",
           "capabilities": [
             "click",
-            "signed_vertical_scroll",
+            "local_web_state_change",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
@@ -3797,22 +3896,23 @@
             "section": "handoff-656",
             "setting_enabled": true
           },
-          "fixture_sha256": "faa91c29fe19cdc6df7ac6cfa236125b62410118cc882242fef15b943a779c7d",
-          "horizon": 6,
+          "fixture_sha256": "0a3291884ed2ab13ab652c7db78bbc9d4eb2abd0226fd2be8559057fdc20fc10",
+          "horizon": 2,
           "id": "cln-s0-src-chrome-multi-c02-01",
-          "instruction": "On the private local settings page, open “handoff-656”, scroll down to the controls, and enable “Confirm code 656”.",
+          "instruction": "On the private local settings page, open “handoff-656” and enable “Confirm code 656”. Both controls are visible.",
           "near_miss": {
             "section": "appearance",
             "setting_enabled": false
           },
           "parameter_seed": 923121,
           "params": {
-            "initial_scroll_y": 0,
-            "minimum_scroll_delta": 500,
+            "initial_scroll_y": 900,
+            "minimum_scroll_delta": 0,
             "port": 22121,
             "scroll_direction": "down",
             "section": "handoff-656",
-            "setting": "Confirm code 656"
+            "setting": "Confirm code 656",
+            "stage0_program": "chrome_enable_visible_setting"
           },
           "recovery": {
             "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
@@ -3824,9 +3924,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "a743e44c9973bf9e778e2b23c3742cf89e2e9774767a575e6eaea96b23a6bbde",
+          "task_sha256": "b860c4d78b6c77408d7ef2c138a8beb92e674a417cdce884978cc9ba375a24b2",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -3839,7 +3939,6 @@
         {
           "app": "calc",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
@@ -3849,19 +3948,20 @@
             "display_value": "656",
             "formula": "of:=SUM(654;2)"
           },
-          "fixture_sha256": "d35595364606a8ac61ec3fd84372ccc7dc4390ea1d5f212a97298e9c85d99e7a",
-          "horizon": 6,
+          "fixture_sha256": "2f86dbddcf9fc8bbea05ddcd05225677629af7ed361fd36a4ba0e1e5c1edbd8c",
+          "horizon": 3,
           "id": "cln-s0-src-chrome-multi-c02-02",
-          "instruction": "In Calc, go to cell C4, enter a formula that adds 654 and 2, confirm it, and save the spreadsheet.",
+          "instruction": "In the selected Calc cell A1, enter a formula that adds 654 and 2, confirm it, and save the spreadsheet.",
           "near_miss": {
             "display_value": "655",
             "formula": "of:=SUM(654;1)"
           },
           "parameter_seed": 923122,
           "params": {
-            "cell": "C4",
+            "cell": "A1",
             "file_name": "stage0_chrome_multi_c02_02.ods",
-            "initial_value": "0"
+            "initial_value": "0",
+            "stage0_program": "calc_replace_selected_a1"
           },
           "recovery": {
             "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
@@ -3873,9 +3973,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 4,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "eced2f9f92833c8550d78985c406115e2aad8055f06c3cd838fd8b170c96897e",
+          "task_sha256": "a35c55305e518a7d906d7f5ab058e45570a2ed19481003b18d7e18d6862eca09",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -3908,10 +4008,10 @@
         "app_switch",
         "click",
         "coalesced_type",
-        "drag",
+        "file_rename",
         "hotkey",
-        "multi_step_state_change",
-        "signed_vertical_scroll"
+        "local_web_state_change",
+        "multi_step_state_change"
       ],
       "difficulty": "hard",
       "eligibility": {
@@ -3920,7 +4020,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-chrome-multi-c03",
-      "instruction": "Complete both parts in order using handoff code “659”. On the private local settings page, open “handoff-659”, scroll down to the controls, and enable “Confirm code 659”. Then switch applications with Alt+Tab. In Files, move “incoming_659_3.txt” into “archive_659_3”, then rename the moved file to “handoff_659.txt”.",
+      "instruction": "Complete both parts in order using handoff code “659”. On the private local settings page, open “handoff-659” and enable “Confirm code 659”. Both controls are visible. Then switch applications with Alt+Tab. In Files, rename the selected file “incoming_659_3.txt” to “handoff_659.txt”.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -3937,7 +4037,14 @@
         }
       ],
       "parameter_seed": 910313,
-      "record_sha256": "2595a5a9805d87633c9aa855cd3a72781d2b883e815c50b065b207cd0cca2497",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 15,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 6,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "e400cc054052412f814e0ac80d54926b4279e8c0b5c45411300452488a4eebc7",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -3946,15 +4053,15 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "894b904813dd423aaf8751538a40493930dddbb7203e0017b88e1bbf1544af64",
-        "5b532c265ea59a81b9717e4b4e9ddb458b92a85808557e3cec1e40610f854020"
+        "78f6a92f9bc70119b52739f3bf2869e8510c6dd5813bf6526df82f21057a1219",
+        "931dde77058b5e4dc2e669dc9fbe558ee63d88b9cd2621c597fd0f2257507a40"
       ],
       "source_tasks": [
         {
           "app": "chrome",
           "capabilities": [
             "click",
-            "signed_vertical_scroll",
+            "local_web_state_change",
             "multi_step_state_change"
           ],
           "difficulty": "hard",
@@ -3962,22 +4069,23 @@
             "section": "handoff-659",
             "setting_enabled": true
           },
-          "fixture_sha256": "c6111ac7bdc443f032fabe969965f01a5b53a9974da73e98cf857b088e45888c",
-          "horizon": 6,
+          "fixture_sha256": "c66cb44f3a90f6209f2939f8efc2b236f349395be151dc66124408f0950f2a75",
+          "horizon": 2,
           "id": "cln-s0-src-chrome-multi-c03-01",
-          "instruction": "On the private local settings page, open “handoff-659”, scroll down to the controls, and enable “Confirm code 659”.",
+          "instruction": "On the private local settings page, open “handoff-659” and enable “Confirm code 659”. Both controls are visible.",
           "near_miss": {
             "section": "appearance",
             "setting_enabled": false
           },
           "parameter_seed": 923131,
           "params": {
-            "initial_scroll_y": 0,
-            "minimum_scroll_delta": 500,
+            "initial_scroll_y": 900,
+            "minimum_scroll_delta": 0,
             "port": 22131,
             "scroll_direction": "down",
             "section": "handoff-659",
-            "setting": "Confirm code 659"
+            "setting": "Confirm code 659",
+            "stage0_program": "chrome_enable_visible_setting"
           },
           "recovery": {
             "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
@@ -3989,9 +4097,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "8bf23d019de55b988ddbd15af8412c76cf1a8ab02f329d79b135fb00d93f2350",
+          "task_sha256": "354e5667a3b7e9649a6868138266c11b68cc10a2848750c3c983ed6b1b5a865d",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -4004,31 +4112,31 @@
         {
           "app": "files",
           "capabilities": [
-            "click",
-            "drag",
             "coalesced_type",
             "hotkey",
+            "file_rename",
             "multi_step_state_change"
           ],
           "difficulty": "hard",
           "expected": {
-            "destination": "archive_659_3",
+            "destination": "root",
             "final_name": "handoff_659.txt"
           },
-          "fixture_sha256": "b6790788221f57a17b2b6a09b2a44c948a07f73f2cc7c3f950d43d9836db9078",
-          "horizon": 8,
+          "fixture_sha256": "ab4cf55dc9038b606611a4d0e6ba920587a6926123311679d8a56b5ab5b20865",
+          "horizon": 3,
           "id": "cln-s0-src-chrome-multi-c03-02",
-          "instruction": "In Files, move “incoming_659_3.txt” into “archive_659_3”, then rename the moved file to “handoff_659.txt”.",
+          "instruction": "In Files, rename the selected file “incoming_659_3.txt” to “handoff_659.txt”.",
           "near_miss": {
-            "destination": "review_659_3",
-            "final_name": "handoff_659.txt"
+            "destination": "root",
+            "final_name": "handoff_659_draft.txt"
           },
           "parameter_seed": 923132,
           "params": {
             "content": "Clean-room handoff payload 659.\n",
             "decoy_name": "review_659_3",
             "destination_name": "archive_659_3",
-            "source_name": "incoming_659_3.txt"
+            "source_name": "incoming_659_3.txt",
+            "stage0_program": "files_rename_selected_source"
           },
           "recovery": {
             "corrective_action": "move the renamed file from the review folder into the requested archive folder",
@@ -4040,9 +4148,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "0ce4e0c7c9db2ba439d1c95ead169d6ad5a3b3e3a20d25a8c910078ae90d95de",
+          "task_sha256": "f8742270b6147204506f19cd5651cd996a434e24a1a0b9a103f4d53190d457da",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -4075,9 +4183,10 @@
         "app_switch",
         "click",
         "coalesced_type",
+        "editor_file_save",
         "hotkey",
-        "multi_step_state_change",
-        "signed_vertical_scroll"
+        "local_web_state_change",
+        "multi_step_state_change"
       ],
       "difficulty": "medium",
       "eligibility": {
@@ -4086,7 +4195,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-chrome-multi-c04",
-      "instruction": "Complete both parts in order using handoff code “662”. On the private local settings page, open “handoff-662”, scroll down to the controls, and enable “Confirm code 662”. Then switch applications with Alt+Tab. In VS Code, replace all text in the open file with exactly two lines: “handoff=662” and “state=ready”. Save the file.",
+      "instruction": "Complete both parts in order using handoff code “662”. On the private local settings page, open “handoff-662” and enable “Confirm code 662”. Both controls are visible. Then switch applications with Alt+Tab. In the active VS Code editor, replace all text with exactly two lines: “handoff=662” and “state=ready”. Save the active file.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -4103,7 +4212,14 @@
         }
       ],
       "parameter_seed": 910314,
-      "record_sha256": "8ce6967628f094fe3683234c3284992c8e47ded6d9cf52ffb2cf3614590368da",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 19,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 6,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "20a2dc2134ea2e09996d352926cc0b3eb968cdee6f89a65496d1e87a8da4865e",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -4112,15 +4228,15 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "efcb80df3eba8088686a1a22398b0e83c30b4d1c88c07fb10ded01a61e375723",
-        "84231e9e9f85f6ddebbeda3d71e68e9f1a85c4e9b498217859edb2226911de66"
+        "62a612205998fe05a66d28bf95fd587d2ed051c57460f18eca54213ac71387d7",
+        "ad9961c545b13f14c4b83e6e3c46084cb69aad34aed45156cea5d6f813e88da7"
       ],
       "source_tasks": [
         {
           "app": "chrome",
           "capabilities": [
             "click",
-            "signed_vertical_scroll",
+            "local_web_state_change",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
@@ -4128,22 +4244,23 @@
             "section": "handoff-662",
             "setting_enabled": true
           },
-          "fixture_sha256": "b8f276b98d684e4685c9aadde31ee34bb17c6f2633bd92efd412e1d413b27442",
-          "horizon": 6,
+          "fixture_sha256": "086294dcdeb04f7c8655750c2df963e3e2d3e160273c01cad88342bf2458e96b",
+          "horizon": 2,
           "id": "cln-s0-src-chrome-multi-c04-01",
-          "instruction": "On the private local settings page, open “handoff-662”, scroll down to the controls, and enable “Confirm code 662”.",
+          "instruction": "On the private local settings page, open “handoff-662” and enable “Confirm code 662”. Both controls are visible.",
           "near_miss": {
             "section": "appearance",
             "setting_enabled": false
           },
           "parameter_seed": 923141,
           "params": {
-            "initial_scroll_y": 0,
-            "minimum_scroll_delta": 500,
+            "initial_scroll_y": 900,
+            "minimum_scroll_delta": 0,
             "port": 22141,
             "scroll_direction": "down",
             "section": "handoff-662",
-            "setting": "Confirm code 662"
+            "setting": "Confirm code 662",
+            "stage0_program": "chrome_enable_visible_setting"
           },
           "recovery": {
             "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
@@ -4155,9 +4272,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "b88a9136ee84d6e64951b3abbc3f5adb0d2097250a2543fa515d3a26db937f60",
+          "task_sha256": "911fbc5c1cd1fc90d23f516d9286a3c3f9897842135c507524a575d6f0529931",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -4170,26 +4287,27 @@
         {
           "app": "vscode",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
+            "editor_file_save",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
           "expected": {
             "text": "handoff=662\nstate=ready\n"
           },
-          "fixture_sha256": "f4910b5ef8b625066001aae9ba0d1400f6ee97749fdc1d74b07c54933d203cbb",
-          "horizon": 4,
+          "fixture_sha256": "015952331f498c4a95e37012f56a848b480320c14dc346ca54fcb9cc05172f6d",
+          "horizon": 3,
           "id": "cln-s0-src-chrome-multi-c04-02",
-          "instruction": "In VS Code, replace all text in the open file with exactly two lines: “handoff=662” and “state=ready”. Save the file.",
+          "instruction": "In the active VS Code editor, replace all text with exactly two lines: “handoff=662” and “state=ready”. Save the active file.",
           "near_miss": {
             "text": "handoff=662\nstate=pending\n"
           },
           "parameter_seed": 923142,
           "params": {
             "file_name": "stage0_chrome_multi_c04_02.txt",
-            "initial_text": "draft=662\nstate=pending\n"
+            "initial_text": "draft=662\nstate=pending\n",
+            "stage0_program": "vscode_replace_active_file"
           },
           "recovery": {
             "corrective_action": "replace the whole file with the requested two lines and save again",
@@ -4201,9 +4319,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "0776ae8f2df7b29cb38204c781d27ad691ebe01914e855c7a42d02107272d238",
+          "task_sha256": "e41411c47b67140bef3a55ae69859208a2b298eea85ad2dff2f974796752586f",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -4618,8 +4736,8 @@
       "bridge": "multi_app",
       "capabilities": [
         "app_switch",
-        "click",
         "coalesced_type",
+        "editor_file_save",
         "hotkey",
         "multi_step_state_change"
       ],
@@ -4630,7 +4748,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-vscode-multi-c01",
-      "instruction": "Complete both parts in order using handoff code “703”. In VS Code, replace all text in the open file with exactly two lines: “handoff=703” and “state=ready”. Save the file. Then switch applications with Alt+Tab. In the open Writer document, replace all text with exactly “Handoff code 703: confirm the clean-room review.” Make the complete replacement bold, then save the document.",
+      "instruction": "Complete both parts in order using handoff code “703”. In the active VS Code editor, replace all text with exactly two lines: “handoff=703” and “state=ready”. Save the active file. Then switch applications with Alt+Tab. In the active Writer document, replace all text with exactly “Handoff code 703: ready for transfer.” and save the document without adding formatting.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -4647,7 +4765,14 @@
         }
       ],
       "parameter_seed": 910411,
-      "record_sha256": "f0c2923fd1f800fb80ef8cc8fe3f19e5f0472b037a6af40b98a7c54ed6c6fd18",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 22,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 7,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "df699f4c7ee561568397162e44c6aa523c5bf890277a5c06fcd35eb5cde9e1b6",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -4656,33 +4781,34 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "e673fa532454dc0fe8308a57f2ff6d68e6532d610e117fa733352d71cf9d560c",
-        "8c0b0ec5a2548f3ad021a8024dd53aa23bc6b2abcdcdbad37b089474f5f3b6e7"
+        "e4b0385a442dbf35ffd20be430690ec992c97b5e94ab23cdfc13a0641047222b",
+        "994f5b6d9065078fbc699ef4e4f55a4983dee17c56e2af2d1dd70a994fe4042c"
       ],
       "source_tasks": [
         {
           "app": "vscode",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
+            "editor_file_save",
             "multi_step_state_change"
           ],
           "difficulty": "easy",
           "expected": {
             "text": "handoff=703\nstate=ready\n"
           },
-          "fixture_sha256": "641d6f56f840b54bd3625da902375ff27229ba1d46614106f730781a61134a9b",
-          "horizon": 4,
+          "fixture_sha256": "8590f304b7c2c850bf59da81d5fb84da5d67b353c9cf0cd2f1d94894c954ca18",
+          "horizon": 3,
           "id": "cln-s0-src-vscode-multi-c01-01",
-          "instruction": "In VS Code, replace all text in the open file with exactly two lines: “handoff=703” and “state=ready”. Save the file.",
+          "instruction": "In the active VS Code editor, replace all text with exactly two lines: “handoff=703” and “state=ready”. Save the active file.",
           "near_miss": {
             "text": "handoff=703\nstate=pending\n"
           },
           "parameter_seed": 924111,
           "params": {
             "file_name": "stage0_vscode_multi_c01_01.txt",
-            "initial_text": "draft=703\nstate=pending\n"
+            "initial_text": "draft=703\nstate=pending\n",
+            "stage0_program": "vscode_replace_active_file"
           },
           "recovery": {
             "corrective_action": "replace the whole file with the requested two lines and save again",
@@ -4694,9 +4820,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "7b1e061d000ae986aa232ea71b6dc7c237fff175f89c7ab8f860ed08d8f84758",
+          "task_sha256": "548b3f0e2c18d1d32753aaa9efcb56def2062783269242dbb86d6da6cab455d0",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -4709,32 +4835,32 @@
         {
           "app": "writer",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
           ],
           "difficulty": "easy",
           "expected": {
-            "bold": true,
-            "text": "Handoff code 703: confirm the clean-room review."
+            "bold": false,
+            "text": "Handoff code 703: ready for transfer."
           },
-          "fixture_sha256": "2ab3ecf6d3a9077b4454b4af93471e8115efa71e5afcf16c035fce69586a83a4",
-          "horizon": 4,
+          "fixture_sha256": "82eafd7ad1d8b6297bbf7579ac242364491d126d8359684126587df5391774c5",
+          "horizon": 3,
           "id": "cln-s0-src-vscode-multi-c01-02",
-          "instruction": "In the open Writer document, replace all text with exactly “Handoff code 703: confirm the clean-room review.” Make the complete replacement bold, then save the document.",
+          "instruction": "In the active Writer document, replace all text with exactly “Handoff code 703: ready for transfer.” and save the document without adding formatting.",
           "near_miss": {
             "bold": false,
-            "text": "Handoff code 703: confirm the clean-room review."
+            "text": "Handoff code 703: pending transfer."
           },
           "parameter_seed": 924112,
           "params": {
             "file_name": "stage0_vscode_multi_c01_02.odt",
-            "initial_text": "Temporary Writer draft for code 703"
+            "initial_text": "Temporary Writer draft for code 703",
+            "stage0_program": "writer_replace_active_body"
           },
           "recovery": {
-            "corrective_action": "select the full replacement, apply bold, and save again",
-            "near_miss_class": "correct_text_missing_bold_format"
+            "corrective_action": "replace the complete line with the requested ready status and save again",
+            "near_miss_class": "handoff_status_pending_instead_of_ready"
           },
           "reset": {
             "reproducible_signature_required": true,
@@ -4742,9 +4868,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "0bf1eedcc527c96cac59dbe376b3130d8b704bd0ee9477abb03371a00dfd589d",
+          "task_sha256": "043c514165af28535c295357b2de9153cb07f2152696e9b3479b16ff9035a962",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -4775,8 +4901,8 @@
       "bridge": "multi_app",
       "capabilities": [
         "app_switch",
-        "click",
         "coalesced_type",
+        "editor_file_save",
         "hotkey",
         "multi_step_state_change"
       ],
@@ -4787,7 +4913,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-vscode-multi-c02",
-      "instruction": "Complete both parts in order using handoff code “706”. In VS Code, replace all text in the open file with exactly two lines: “handoff=706” and “state=ready”. Save the file. Then switch applications with Alt+Tab. In Calc, go to cell C4, enter a formula that adds 704 and 2, confirm it, and save the spreadsheet.",
+      "instruction": "Complete both parts in order using handoff code “706”. In the active VS Code editor, replace all text with exactly two lines: “handoff=706” and “state=ready”. Save the active file. Then switch applications with Alt+Tab. In the selected Calc cell A1, enter a formula that adds 704 and 2, confirm it, and save the spreadsheet.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -4804,7 +4930,14 @@
         }
       ],
       "parameter_seed": 910412,
-      "record_sha256": "c03c038d76e34e188295412844a5c3c3651928faec94f1eaba785c8ae8570c8d",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 20,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 7,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "33f3a7964eac2edab791865a72e1f77a2b3a9c77d7d0a459917832aef9c3e610",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -4813,33 +4946,34 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "19838308766e3e3b3467906370531ef0293680eacf1310635e3abf93bf3d3a3c",
-        "41f8a12b763025d9ea869b56aa91d622a38abb2a8e7a055c76b6d8b5ab429757"
+        "0a52e1e67cc4c0471a134c713bd30d1a328df2b94f29fa58cc074d4fd0bca64d",
+        "b3a4a02ecf76d3f81c1a850c9a966bb1478f4464b47a627caf8e17b4f64c02be"
       ],
       "source_tasks": [
         {
           "app": "vscode",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
+            "editor_file_save",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
           "expected": {
             "text": "handoff=706\nstate=ready\n"
           },
-          "fixture_sha256": "749c0f4a6e846fe2a7873ab1654f9cb13ef0bed8dc3981f64220c0240adfef89",
-          "horizon": 4,
+          "fixture_sha256": "3bec3fa39a193c96cca2d05116638b4eb0ddfe2af6b34231d7e38c2ce2d5e4bb",
+          "horizon": 3,
           "id": "cln-s0-src-vscode-multi-c02-01",
-          "instruction": "In VS Code, replace all text in the open file with exactly two lines: “handoff=706” and “state=ready”. Save the file.",
+          "instruction": "In the active VS Code editor, replace all text with exactly two lines: “handoff=706” and “state=ready”. Save the active file.",
           "near_miss": {
             "text": "handoff=706\nstate=pending\n"
           },
           "parameter_seed": 924121,
           "params": {
             "file_name": "stage0_vscode_multi_c02_01.txt",
-            "initial_text": "draft=706\nstate=pending\n"
+            "initial_text": "draft=706\nstate=pending\n",
+            "stage0_program": "vscode_replace_active_file"
           },
           "recovery": {
             "corrective_action": "replace the whole file with the requested two lines and save again",
@@ -4851,9 +4985,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "060f6e8ba83bba429c82a6f7c154cc296b0b82d61f26b36ee65007fed3d93da8",
+          "task_sha256": "f547e3031f64685a551f7ed02061da1d5c65de4de1f4a8e8cd1fc23fbc0a576e",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -4866,7 +5000,6 @@
         {
           "app": "calc",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
             "multi_step_state_change"
@@ -4876,19 +5009,20 @@
             "display_value": "706",
             "formula": "of:=SUM(704;2)"
           },
-          "fixture_sha256": "42d02fcdf9628e1a9a8849fdb351786e687f16e4b6fe9e7615912824b47e08cd",
-          "horizon": 6,
+          "fixture_sha256": "6dc1fa71d1a2c2f9dcc15cc572dabc1990ac6c66eadf468c939a214a95593d01",
+          "horizon": 3,
           "id": "cln-s0-src-vscode-multi-c02-02",
-          "instruction": "In Calc, go to cell C4, enter a formula that adds 704 and 2, confirm it, and save the spreadsheet.",
+          "instruction": "In the selected Calc cell A1, enter a formula that adds 704 and 2, confirm it, and save the spreadsheet.",
           "near_miss": {
             "display_value": "705",
             "formula": "of:=SUM(704;1)"
           },
           "parameter_seed": 924122,
           "params": {
-            "cell": "C4",
+            "cell": "A1",
             "file_name": "stage0_vscode_multi_c02_02.ods",
-            "initial_value": "0"
+            "initial_value": "0",
+            "stage0_program": "calc_replace_selected_a1"
           },
           "recovery": {
             "corrective_action": "return to the named cell, correct the second operand, confirm, and save",
@@ -4900,9 +5034,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 4,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "f95de82dbee95ac26c517705cfbad1de74b3381b47ba240e9652c3fa8023dd5c",
+          "task_sha256": "1ef1430f91554f3573ba5d246d0b3130d9f8c72f14e89979e8f6a0e4a17ad9ab",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -4933,9 +5067,9 @@
       "bridge": "multi_app",
       "capabilities": [
         "app_switch",
-        "click",
         "coalesced_type",
-        "drag",
+        "editor_file_save",
+        "file_rename",
         "hotkey",
         "multi_step_state_change"
       ],
@@ -4946,7 +5080,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-vscode-multi-c03",
-      "instruction": "Complete both parts in order using handoff code “709”. In VS Code, replace all text in the open file with exactly two lines: “handoff=709” and “state=ready”. Save the file. Then switch applications with Alt+Tab. In Files, move “incoming_709_3.txt” into “archive_709_3”, then rename the moved file to “handoff_709.txt”.",
+      "instruction": "Complete both parts in order using handoff code “709”. In the active VS Code editor, replace all text with exactly two lines: “handoff=709” and “state=ready”. Save the active file. Then switch applications with Alt+Tab. In Files, rename the selected file “incoming_709_3.txt” to “handoff_709.txt”.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -4963,7 +5097,14 @@
         }
       ],
       "parameter_seed": 910413,
-      "record_sha256": "c5ba18211f37c17179111f5c4df54a3ff70907665414675c43f37786492acae6",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 18,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 7,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "910083486bb2e93e80683bac9b4229f9b5f4bb9798e85577ef593dccb043141e",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -4972,33 +5113,34 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "3a9b29887e7528baf9d2074a4340738cf8bc6bee843d26473ef6b192d98c0f25",
-        "035f6019516ce76cc47b5e84dbfe0f00d1b6b11a4e16f85d98f4eef1fdd21200"
+        "42a1adc60e6dce538f35a83d71e672a2fc62549cfe014b2e45cd47e8b24ff593",
+        "515da10e9a85c52f2dce3096c9bfb63c9059b068e29c0f2f25d8aeccc908959e"
       ],
       "source_tasks": [
         {
           "app": "vscode",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
+            "editor_file_save",
             "multi_step_state_change"
           ],
           "difficulty": "hard",
           "expected": {
             "text": "handoff=709\nstate=ready\n"
           },
-          "fixture_sha256": "f6d7315d076e22737b3605cbf2f6d79cce29cb97d8c1b1c019b4e59f8f5fbc2a",
-          "horizon": 4,
+          "fixture_sha256": "af9579f7c274dcad7bee509732a5f6f33638de7c19552d09378dc2572915a205",
+          "horizon": 3,
           "id": "cln-s0-src-vscode-multi-c03-01",
-          "instruction": "In VS Code, replace all text in the open file with exactly two lines: “handoff=709” and “state=ready”. Save the file.",
+          "instruction": "In the active VS Code editor, replace all text with exactly two lines: “handoff=709” and “state=ready”. Save the active file.",
           "near_miss": {
             "text": "handoff=709\nstate=pending\n"
           },
           "parameter_seed": 924131,
           "params": {
             "file_name": "stage0_vscode_multi_c03_01.txt",
-            "initial_text": "draft=709\nstate=pending\n"
+            "initial_text": "draft=709\nstate=pending\n",
+            "stage0_program": "vscode_replace_active_file"
           },
           "recovery": {
             "corrective_action": "replace the whole file with the requested two lines and save again",
@@ -5010,9 +5152,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "9c48daa64f18cd953524a72818e927eb4f792afb725b0fef386560123bf89691",
+          "task_sha256": "025e08b5f4e2ee0aba59e261b9ff1e6c6a35aa5dace6ff74fc1eb931c59bbb91",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -5025,31 +5167,31 @@
         {
           "app": "files",
           "capabilities": [
-            "click",
-            "drag",
             "coalesced_type",
             "hotkey",
+            "file_rename",
             "multi_step_state_change"
           ],
           "difficulty": "hard",
           "expected": {
-            "destination": "archive_709_3",
+            "destination": "root",
             "final_name": "handoff_709.txt"
           },
-          "fixture_sha256": "0aec45dd9c660022f86cdd172caab4131bdd575e15d7f81e2d8c9490352958c7",
-          "horizon": 8,
+          "fixture_sha256": "4b3f71e98f2ba2112058d53409283a30f89968cad15b242d3035ebd848568516",
+          "horizon": 3,
           "id": "cln-s0-src-vscode-multi-c03-02",
-          "instruction": "In Files, move “incoming_709_3.txt” into “archive_709_3”, then rename the moved file to “handoff_709.txt”.",
+          "instruction": "In Files, rename the selected file “incoming_709_3.txt” to “handoff_709.txt”.",
           "near_miss": {
-            "destination": "review_709_3",
-            "final_name": "handoff_709.txt"
+            "destination": "root",
+            "final_name": "handoff_709_draft.txt"
           },
           "parameter_seed": 924132,
           "params": {
             "content": "Clean-room handoff payload 709.\n",
             "decoy_name": "review_709_3",
             "destination_name": "archive_709_3",
-            "source_name": "incoming_709_3.txt"
+            "source_name": "incoming_709_3.txt",
+            "stage0_program": "files_rename_selected_source"
           },
           "recovery": {
             "corrective_action": "move the renamed file from the review folder into the requested archive folder",
@@ -5061,9 +5203,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "6a1974dce58464620233a58cbc40b456d6a159999757dfc5954ec118b9b4f629",
+          "task_sha256": "d349a5eb8f96152d4ea65cc7e4cddec48680272e6a214b475e81c18ac575eb19",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -5096,9 +5238,10 @@
         "app_switch",
         "click",
         "coalesced_type",
+        "editor_file_save",
         "hotkey",
-        "multi_step_state_change",
-        "signed_vertical_scroll"
+        "local_web_state_change",
+        "multi_step_state_change"
       ],
       "difficulty": "medium",
       "eligibility": {
@@ -5107,7 +5250,7 @@
         "stage0": true
       },
       "id": "cln-s0-dev-vscode-multi-c04",
-      "instruction": "Complete both parts in order using handoff code “712”. In VS Code, replace all text in the open file with exactly two lines: “handoff=712” and “state=ready”. Save the file. Then switch applications with Alt+Tab. On the private local settings page, open “handoff-712”, scroll down to the controls, and enable “Confirm code 712”.",
+      "instruction": "Complete both parts in order using handoff code “712”. In the active VS Code editor, replace all text with exactly two lines: “handoff=712” and “state=ready”. Save the active file. Then switch applications with Alt+Tab. On the private local settings page, open “handoff-712” and enable “Confirm code 712”. Both controls are visible.",
       "mode": "multi",
       "ordered_components": [
         {
@@ -5124,7 +5267,14 @@
         }
       ],
       "parameter_seed": 910414,
-      "record_sha256": "81ddf894d13d25533b183b456689b3a3284d6a15850f6ebeb9ca2b25171f90db",
+      "program_budget": {
+        "emitted_event_ceiling": 25,
+        "emitted_events": 19,
+        "primitive_action_ceiling": 8,
+        "primitive_actions": 6,
+        "visible_app_switch_included": true
+      },
+      "record_sha256": "60d097a9fe259d751a757a077f75a7d43f437738c7eaa2b3f6242e241c10895d",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -5133,33 +5283,34 @@
       },
       "semantic_steps": 2,
       "source_task_payload_sha256s": [
-        "2def8d78aa372daea3000a79fdb08fe22867dedd00a2883b065024f180673947",
-        "f27e6644a9295a776705bc33b898d37424d248f0ddf41e8fec629411d0e09341"
+        "4a4d50ebff6569640e591b61b13c1566888660bf72a7cdd814a9c9d789bb049b",
+        "c8c855431fe7cf52b7a865f5cc755d956bc63f5efa9bdca0b7c12cef3b9c66ca"
       ],
       "source_tasks": [
         {
           "app": "vscode",
           "capabilities": [
-            "click",
             "coalesced_type",
             "hotkey",
+            "editor_file_save",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
           "expected": {
             "text": "handoff=712\nstate=ready\n"
           },
-          "fixture_sha256": "f8a9ac422f5d4037da89d2e8dacf383e66d30adb46a68be1025030a507c86cda",
-          "horizon": 4,
+          "fixture_sha256": "8edafbe98257905faa0c00ac4c343cd14ef9200dd8d5a5b85635aaf60dff2f45",
+          "horizon": 3,
           "id": "cln-s0-src-vscode-multi-c04-01",
-          "instruction": "In VS Code, replace all text in the open file with exactly two lines: “handoff=712” and “state=ready”. Save the file.",
+          "instruction": "In the active VS Code editor, replace all text with exactly two lines: “handoff=712” and “state=ready”. Save the active file.",
           "near_miss": {
             "text": "handoff=712\nstate=pending\n"
           },
           "parameter_seed": 924141,
           "params": {
             "file_name": "stage0_vscode_multi_c04_01.txt",
-            "initial_text": "draft=712\nstate=pending\n"
+            "initial_text": "draft=712\nstate=pending\n",
+            "stage0_program": "vscode_replace_active_file"
           },
           "recovery": {
             "corrective_action": "replace the whole file with the requested two lines and save again",
@@ -5171,9 +5322,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "fcff6fad8081a68c9ca8b4c347176773882bbd8422b3c207f613a31c703d32af",
+          "task_sha256": "9273c7f0ab00796640c93f03dfccea7e88aef0b897a52d731bc202f31db6343b",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,
@@ -5187,7 +5338,7 @@
           "app": "chrome",
           "capabilities": [
             "click",
-            "signed_vertical_scroll",
+            "local_web_state_change",
             "multi_step_state_change"
           ],
           "difficulty": "medium",
@@ -5195,22 +5346,23 @@
             "section": "handoff-712",
             "setting_enabled": true
           },
-          "fixture_sha256": "5a47a6eb2c140eb54eb1729b95a1ad14aad50f3c8d9785a08e2446d2e322e409",
-          "horizon": 6,
+          "fixture_sha256": "f298c5b112c6cc5e117dc9c2c421f45ce3e1cf815e62f9cf9382acb30bb5ea41",
+          "horizon": 2,
           "id": "cln-s0-src-vscode-multi-c04-02",
-          "instruction": "On the private local settings page, open “handoff-712”, scroll down to the controls, and enable “Confirm code 712”.",
+          "instruction": "On the private local settings page, open “handoff-712” and enable “Confirm code 712”. Both controls are visible.",
           "near_miss": {
             "section": "appearance",
             "setting_enabled": false
           },
           "parameter_seed": 924142,
           "params": {
-            "initial_scroll_y": 0,
-            "minimum_scroll_delta": 500,
+            "initial_scroll_y": 900,
+            "minimum_scroll_delta": 0,
             "port": 23142,
             "scroll_direction": "down",
             "section": "handoff-712",
-            "setting": "Confirm code 712"
+            "setting": "Confirm code 712",
+            "stage0_program": "chrome_enable_visible_setting"
           },
           "recovery": {
             "corrective_action": "return to the requested section, scroll to its control, and enable the requested setting",
@@ -5222,9 +5374,9 @@
             "state_isolation": "unique_guest_root_per_task",
             "strategy": "restore_then_seed_private_fixture"
           },
-          "semantic_steps": 3,
+          "semantic_steps": 1,
           "split": "development",
-          "task_sha256": "178bba7cfa1a2f3a91289ce968614939b4acb404b597a698b049eb60f30df8e9",
+          "task_sha256": "c7836e033c8492f11446346ab1472f813ecf89fc3f6d4f7365beb50d0795c320",
           "verifier": {
             "fresh_process": true,
             "gold_pass": true,

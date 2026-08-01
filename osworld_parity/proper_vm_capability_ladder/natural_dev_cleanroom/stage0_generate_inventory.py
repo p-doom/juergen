@@ -42,7 +42,7 @@ def _seal_source(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _source_task(
-    *, task_id: str, app: str, seed: int, cell: int, code: int
+    *, task_id: str, app: str, seed: int, cell: int, code: int, mode: str
 ) -> dict[str, Any]:
     suffix = task_id.removeprefix("cln-s0-src-").replace("-", "_")
     if app == "writer":
@@ -150,6 +150,64 @@ def _source_task(
         }
     else:  # pragma: no cover - fixed app list
         raise ValueError(f"unsupported app: {app}")
+    if mode == "multi":
+        program = {
+            "writer": "writer_replace_active_body",
+            "calc": "calc_replace_selected_a1",
+            "files": "files_rename_selected_source",
+            "chrome": "chrome_enable_visible_setting",
+            "vscode": "vscode_replace_active_file",
+        }[app]
+        params = {**params, "stage0_program": program}
+        semantic_steps = 1
+        horizon = 2 if app == "chrome" else 3
+        if app == "writer":
+            expected_text = f"Handoff code {code}: ready for transfer."
+            expected = {"text": expected_text, "bold": False}
+            near_miss = {"text": f"Handoff code {code}: pending transfer.", "bold": False}
+            instruction = (
+                f'In the active Writer document, replace all text with exactly “{expected_text}” '
+                "and save the document without adding formatting."
+            )
+            capabilities = ["coalesced_type", "hotkey", "multi_step_state_change"]
+            recovery = {
+                "near_miss_class": "handoff_status_pending_instead_of_ready",
+                "corrective_action": "replace the complete line with the requested ready status and save again",
+            }
+        elif app == "calc":
+            params = {**params, "cell": "A1"}
+            instruction = (
+                f"In the selected Calc cell A1, enter a formula that adds {left} and "
+                f"{right}, confirm it, and save the spreadsheet."
+            )
+            capabilities = ["coalesced_type", "hotkey", "multi_step_state_change"]
+        elif app == "files":
+            expected = {"destination": "root", "final_name": final_name}
+            near_miss = {
+                "destination": "root",
+                "final_name": f"handoff_{code}_draft.txt",
+            }
+            instruction = (
+                f'In Files, rename the selected file “{source}” to “{final_name}”.'
+            )
+            capabilities = ["coalesced_type", "hotkey", "file_rename", "multi_step_state_change"]
+        elif app == "chrome":
+            params = {
+                **params,
+                "initial_scroll_y": 900,
+                "minimum_scroll_delta": 0,
+            }
+            instruction = (
+                f'On the private local settings page, open “{section}” and enable '
+                f'“{setting}”. Both controls are visible.'
+            )
+            capabilities = ["click", "local_web_state_change", "multi_step_state_change"]
+        else:
+            instruction = (
+                "In the active VS Code editor, replace all text with exactly two lines: "
+                f'“handoff={code}” and “state=ready”. Save the active file.'
+            )
+            capabilities = ["coalesced_type", "hotkey", "editor_file_save", "multi_step_state_change"]
     return _seal_source(
         {
             "id": task_id,
@@ -185,6 +243,7 @@ def _record(*, anchor_app: str, mode: str, cell: int, app_index: int) -> dict[st
             seed=920000 + app_index * 1000 + MODES.index(mode) * 100 + cell * 10 + order,
             cell=cell,
             code=code,
+            mode=mode,
         )
         for order, app in enumerate(apps, start=1)
     ]
@@ -242,9 +301,25 @@ def _record(*, anchor_app: str, mode: str, cell: int, app_index: int) -> dict[st
             source_task_payload_sha256=sha256_value(source_tasks[0]),
         )
     else:
+        component_counts = {
+            "writer": (3, 9),
+            "calc": (3, 7),
+            "files": (3, 5),
+            "chrome": (2, 6),
+            "vscode": (3, 9),
+        }
+        primitive_actions = 1 + sum(component_counts[source["app"]][0] for source in source_tasks)
+        emitted_events = 4 + sum(component_counts[source["app"]][1] for source in source_tasks)
         row.update(
             source_tasks=source_tasks,
             source_task_payload_sha256s=[sha256_value(source) for source in source_tasks],
+            program_budget={
+                "primitive_actions": primitive_actions,
+                "primitive_action_ceiling": 8,
+                "emitted_events": emitted_events,
+                "emitted_event_ceiling": 25,
+                "visible_app_switch_included": True,
+            },
         )
     return {**row, "record_sha256": sha256_value(row)}
 

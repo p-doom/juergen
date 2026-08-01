@@ -9,7 +9,9 @@ records balanced as five anchor applications (Writer, Calc, Files, Chrome, and
 VS Code) by two composition modes by four cells. Its twenty multi-app records
 cover every ordered anchor-to-distinct-partner pairing once and require a
 visible Alt+Tab between their two ordered source tasks. Its eligibility is
-fixed to `stage0=true` and `final=false`.
+fixed to `stage0=true` and `final=false`. Every multi-app symbolic program,
+including that switch, is sealed below the frozen limits of eight primitive
+actions and twenty-five emitted input events.
 
 `corpus.json` is an older forty-task, four-application auxiliary inventory. Its
 eligibility is permanently fixed to `stage0=false` and `final=false`; it does

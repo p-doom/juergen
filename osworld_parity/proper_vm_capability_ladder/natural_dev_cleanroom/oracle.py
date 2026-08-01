@@ -162,7 +162,7 @@ def evaluate_state(task: Any, state: dict[str, Any]) -> OracleResult:
             solved = (
                 text == task.expected["text"]
                 and state.get("content_sha256") == _content_sha256(text)
-                and state.get("bold") is True
+                and state.get("bold") is bool(task.expected["bold"])
                 and state.get("saved") is True
             )
         elif task.app == "calc":

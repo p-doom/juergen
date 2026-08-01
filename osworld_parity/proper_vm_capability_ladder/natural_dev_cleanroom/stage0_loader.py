@@ -139,7 +139,14 @@ class Stage0SourceTask:
             raise Stage0InventoryError(f"{self.id}: app/split drift")
         if not 920000 <= self.parameter_seed < 925000:
             raise Stage0InventoryError(f"{self.id}: source parameter seed outside reserved range")
-        if self.semantic_steps not in {3, 4} or self.horizon < self.semantic_steps:
+        is_multi_source = "-multi-" in self.id
+        expected_steps = 1 if is_multi_source else (4 if self.app == "calc" else 3)
+        expected_horizon = (
+            (2 if self.app == "chrome" else 3)
+            if is_multi_source
+            else {"writer": 4, "calc": 6, "files": 8, "chrome": 6, "vscode": 4}[self.app]
+        )
+        if self.semantic_steps != expected_steps or self.horizon != expected_horizon:
             raise Stage0InventoryError(f"{self.id}: semantic-step/horizon drift")
         if self.difficulty not in set(DIFFICULTY_BY_CELL.values()):
             raise Stage0InventoryError(f"{self.id}: invalid difficulty")
@@ -160,13 +167,23 @@ class Stage0SourceTask:
             raise Stage0InventoryError(f"{self.id}: fixture seal mismatch")
         if sha256_value(_without(self.to_dict(), "task_sha256")) != self.task_sha256:
             raise Stage0InventoryError(f"{self.id}: task seal mismatch")
-        required_caps = {
-            "writer": {"click", "coalesced_type", "hotkey"},
-            "calc": {"click", "coalesced_type", "hotkey"},
-            "files": {"click", "drag", "coalesced_type", "hotkey"},
-            "chrome": {"click", "signed_vertical_scroll"},
-            "vscode": {"click", "coalesced_type", "hotkey"},
-        }[self.app]
+        required_caps = (
+            {
+                "writer": {"coalesced_type", "hotkey"},
+                "calc": {"coalesced_type", "hotkey"},
+                "files": {"coalesced_type", "hotkey", "file_rename"},
+                "chrome": {"click", "local_web_state_change"},
+                "vscode": {"coalesced_type", "hotkey", "editor_file_save"},
+            }
+            if is_multi_source
+            else {
+                "writer": {"click", "coalesced_type", "hotkey"},
+                "calc": {"click", "coalesced_type", "hotkey"},
+                "files": {"click", "drag", "coalesced_type", "hotkey"},
+                "chrome": {"click", "signed_vertical_scroll"},
+                "vscode": {"click", "coalesced_type", "hotkey"},
+            }
+        )[self.app]
         if not required_caps <= set(self.capabilities):
             raise Stage0InventoryError(f"{self.id}: app capability drift")
         required_params = {
@@ -176,6 +193,8 @@ class Stage0SourceTask:
             "chrome": {"port", "section", "setting", "initial_scroll_y", "scroll_direction", "minimum_scroll_delta"},
             "vscode": {"file_name", "initial_text"},
         }[self.app]
+        if is_multi_source:
+            required_params = required_params | {"stage0_program"}
         required_expected = {
             "writer": {"text", "bold"},
             "calc": {"formula", "display_value"},
@@ -185,6 +204,14 @@ class Stage0SourceTask:
         }[self.app]
         if set(self.params) != required_params or set(self.expected) != required_expected:
             raise Stage0InventoryError(f"{self.id}: app parameter/expectation drift")
+        if is_multi_source and self.params["stage0_program"] != {
+            "writer": "writer_replace_active_body",
+            "calc": "calc_replace_selected_a1",
+            "files": "files_rename_selected_source",
+            "chrome": "chrome_enable_visible_setting",
+            "vscode": "vscode_replace_active_file",
+        }[self.app]:
+            raise Stage0InventoryError(f"{self.id}: short program identity drift")
         if set(self.near_miss) != required_expected or self.expected == self.near_miss:
             raise Stage0InventoryError(f"{self.id}: near-miss drift")
 
@@ -248,6 +275,7 @@ class Stage0Record:
     source_task_payload_sha256: str | None = None
     source_tasks: tuple[Stage0SourceTask, ...] = ()
     source_task_payload_sha256s: tuple[str, ...] = ()
+    program_budget: dict[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "Stage0Record":
@@ -260,7 +288,7 @@ class Stage0Record:
         variant = (
             {"source_task", "source_task_payload_sha256"}
             if mode == "single"
-            else {"source_tasks", "source_task_payload_sha256s"}
+            else {"source_tasks", "source_task_payload_sha256s", "program_budget"}
         )
         _expect_keys(value, common | variant, "record")
         row = dict(value)
@@ -307,6 +335,7 @@ class Stage0Record:
         else:
             row["source_tasks"] = [task.to_dict() for task in self.source_tasks]
             row["source_task_payload_sha256s"] = list(self.source_task_payload_sha256s)
+            row["program_budget"] = self.program_budget
         return {**row, "record_sha256": self.record_sha256}
 
     def verify(self) -> None:
@@ -378,6 +407,19 @@ class Stage0Record:
                 raise Stage0InventoryError(f"{self.id}: source payload seal mismatch")
         elif tuple(seals) != self.source_task_payload_sha256s:
             raise Stage0InventoryError(f"{self.id}: source payload seals mismatch")
+        if self.mode == "multi":
+            from .stage0_actions import record_program_counts
+
+            counts = record_program_counts(tasks)
+            expected_budget = {
+                "primitive_actions": counts["primitive_actions"],
+                "primitive_action_ceiling": 8,
+                "emitted_events": counts["emitted_events"],
+                "emitted_event_ceiling": 25,
+                "visible_app_switch_included": True,
+            }
+            if self.program_budget != expected_budget:
+                raise Stage0InventoryError(f"{self.id}: compiled program budget drift")
         if sha256_value(_without(self.to_dict(), "record_sha256")) != self.record_sha256:
             raise Stage0InventoryError(f"{self.id}: record seal mismatch")
 
@@ -448,6 +490,8 @@ def load_stage0_inventory(path: Path = STAGE0_INVENTORY_PATH) -> Stage0Inventory
     all_seeds = [task.parameter_seed for task in tasks] + [source.parameter_seed for source in sources]
     if len(all_ids) != len(set(all_ids)) or len(all_seeds) != len(set(all_seeds)):
         raise Stage0InventoryError("record/source IDs or parameter seeds are not globally unique")
+    if len({source.instruction for source in sources}) != len(sources):
+        raise Stage0InventoryError("source-task instructions are not globally distinct")
     balance = {
         (app, mode, cell): sum(
             task.anchor_app == app
