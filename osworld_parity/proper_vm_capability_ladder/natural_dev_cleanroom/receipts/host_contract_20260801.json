@@ -1,16 +1,17 @@
 {
   "eligibility": {
     "final": false,
-    "stage0": true
+    "purpose": "auxiliary_development_only",
+    "stage0": false
   },
   "inventory_role": "stage0_development",
   "model_runs": false,
   "passed_count": 40,
   "qualification": "host_contract",
-  "receipt_sha256": "b1cf9840eeef2344b4e64b2d44a5727cbe54529ca1ba30c78869069d4a190fd6",
+  "receipt_sha256": "fd8f279ad348be75172dc91988a4c54c50580d238e5a0aa253b1fd0157ea2aa0",
   "schema_version": 1,
   "status": "pass",
-  "suite_manifest_sha256": "5a74ef76c88a45436af731e38543552cb52237272f86516f47e96643cef62e1e",
+  "suite_manifest_sha256": "0db3997cae3f5e3f92ab34290afdc392024198488fd5588cfc0f8a669c955839",
   "task_count": 40,
   "tasks": [
     {
@@ -18,8 +19,8 @@
       "difficulty": "easy",
       "fixture_sha256": "939ddc1b476e96b41b6b8131008725da5374944b06fa93b348ed00b66228e4e5",
       "fresh_oracle_pids": [
-        1892173,
-        1892181
+        1919236,
+        1919237
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -34,8 +35,8 @@
       "difficulty": "medium",
       "fixture_sha256": "148e31229eb649a7a8e37e288e82a24e9be193baaed6470acf71bbad19a65480",
       "fresh_oracle_pids": [
-        1892189,
-        1892194
+        1919238,
+        1919241
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -50,8 +51,8 @@
       "difficulty": "hard",
       "fixture_sha256": "5dbe27a48ae6e9ab2b5eb6a1aaf12a2d8847a34145ef8c2c73cd0f5d44d0ef02",
       "fresh_oracle_pids": [
-        1892202,
-        1892209
+        1919243,
+        1919244
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -66,8 +67,8 @@
       "difficulty": "medium",
       "fixture_sha256": "d549bdc14f17791ea785ff619c62854e064aca937137725f62130bb1c5f646d8",
       "fresh_oracle_pids": [
-        1892212,
-        1892217
+        1919248,
+        1919254
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -82,8 +83,8 @@
       "difficulty": "hard",
       "fixture_sha256": "c4a4ae5183420f08d581169661f719656465aab65221758cbb322ac5e4762310",
       "fresh_oracle_pids": [
-        1892224,
-        1892292
+        1919255,
+        1919256
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -98,8 +99,8 @@
       "difficulty": "easy",
       "fixture_sha256": "66a9dea733a61304843e632c5a358a2f826ebf155ac3710e124f7f14298e4ea6",
       "fresh_oracle_pids": [
-        1892297,
-        1892306
+        1919258,
+        1919259
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -114,8 +115,8 @@
       "difficulty": "medium",
       "fixture_sha256": "e25daf1c772e0fb3385bd850d427cceb6195eeb66b27e845ed7d9ef485f5c26e",
       "fresh_oracle_pids": [
-        1892312,
-        1892316
+        1919260,
+        1919261
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -130,8 +131,8 @@
       "difficulty": "hard",
       "fixture_sha256": "0fd6cc7822df3b1fe96cb3a7cd0fbc398f231f465a4f4dcd5823c2a29e88f77e",
       "fresh_oracle_pids": [
-        1892322,
-        1892340
+        1919262,
+        1919264
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -146,8 +147,8 @@
       "difficulty": "easy",
       "fixture_sha256": "1054e0adea65d465bf9463009fc0c40ea705c4f27257d7eed9bd0d1f31db2563",
       "fresh_oracle_pids": [
-        1892347,
-        1892351
+        1919265,
+        1919273
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -162,8 +163,8 @@
       "difficulty": "medium",
       "fixture_sha256": "6bc7e2129509e57143f619291c89a9873be5f990b69fb79827b3cbcf0c22a416",
       "fresh_oracle_pids": [
-        1892354,
-        1892358
+        1919276,
+        1919277
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -178,8 +179,8 @@
       "difficulty": "easy",
       "fixture_sha256": "db8da3880bfe9e866f05d86160cd39e44f9f5f6d46e184971a0cfdccd1b666ae",
       "fresh_oracle_pids": [
-        1892365,
-        1892377
+        1919278,
+        1919279
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -194,8 +195,8 @@
       "difficulty": "medium",
       "fixture_sha256": "b3413736103ccf67d5de845a678b31f646eaa92e2a609d20d18534307ef60f2d",
       "fresh_oracle_pids": [
-        1892387,
-        1892397
+        1919280,
+        1919283
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -210,8 +211,8 @@
       "difficulty": "hard",
       "fixture_sha256": "905e5c53ed5c54f7eebab8341caed9193f08687d69bd15ad6abb83e4bf5c3049",
       "fresh_oracle_pids": [
-        1892406,
-        1892409
+        1919285,
+        1919288
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -226,8 +227,8 @@
       "difficulty": "medium",
       "fixture_sha256": "248a9cd550edf57f04769383d1be7f55c1cb78df9f10efd289d4aa0f555d48bd",
       "fresh_oracle_pids": [
-        1892416,
-        1892420
+        1919289,
+        1919290
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -242,8 +243,8 @@
       "difficulty": "hard",
       "fixture_sha256": "983698c2121b4366a22153b65134dbd70557fd81ff58f9ae1024804ca036dd0d",
       "fresh_oracle_pids": [
-        1892424,
-        1892433
+        1919291,
+        1919294
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -258,8 +259,8 @@
       "difficulty": "easy",
       "fixture_sha256": "85a9db256b050df6dce73d4a6ffedfcafde3ebc4bdfac853311b6bb7aab88c97",
       "fresh_oracle_pids": [
-        1892443,
-        1892450
+        1919295,
+        1919296
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -274,8 +275,8 @@
       "difficulty": "medium",
       "fixture_sha256": "10cccb2820c6ab3a906222f4a6f84a05661f89df1a0a66ec863b433669a49476",
       "fresh_oracle_pids": [
-        1892462,
-        1892471
+        1919298,
+        1919299
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -290,8 +291,8 @@
       "difficulty": "hard",
       "fixture_sha256": "c96d28fa836b5f37d1feb499f54b049f05177103b140631e7c84b68f8bc14b6c",
       "fresh_oracle_pids": [
-        1892474,
-        1892481
+        1919300,
+        1919302
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -306,8 +307,8 @@
       "difficulty": "easy",
       "fixture_sha256": "d4b2062ea592016228f68a2836c521e38c4a9e33799ead508b42e70a9246af0a",
       "fresh_oracle_pids": [
-        1892487,
-        1892496
+        1919305,
+        1919306
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -322,8 +323,8 @@
       "difficulty": "medium",
       "fixture_sha256": "da49af32fbfadbf3c61724009e15374785cda507ae1f5fdd1f3f2510f8d32feb",
       "fresh_oracle_pids": [
-        1892504,
-        1892517
+        1919307,
+        1919308
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -338,8 +339,8 @@
       "difficulty": "easy",
       "fixture_sha256": "24cc6692159b9ba83834fa2375954ee3c4954f1ec3c0fb0a8af55968a9362a0a",
       "fresh_oracle_pids": [
-        1892521,
-        1892531
+        1919311,
+        1919312
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -354,8 +355,8 @@
       "difficulty": "medium",
       "fixture_sha256": "05c0b6413bf576faf4d4b2b3957ddedbbe828ab6650027b85987fb0ed64c6045",
       "fresh_oracle_pids": [
-        1892541,
-        1892548
+        1919314,
+        1919315
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -370,8 +371,8 @@
       "difficulty": "hard",
       "fixture_sha256": "2d05b9c683b1d643232f92a46b609fb341fc0b9a586ac890c1ce621a78565953",
       "fresh_oracle_pids": [
-        1892556,
-        1892561
+        1919316,
+        1919317
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -386,8 +387,8 @@
       "difficulty": "medium",
       "fixture_sha256": "e56dcb60602fbca5e127b4019a577be876fb52b181e67bb926c8a33e2e392ab4",
       "fresh_oracle_pids": [
-        1892568,
-        1892574
+        1919319,
+        1919322
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -402,8 +403,8 @@
       "difficulty": "hard",
       "fixture_sha256": "853d414ebd87e42ae8e3e156acce86c3300f47eae48a42c1095b471220eb075e",
       "fresh_oracle_pids": [
-        1892580,
-        1892584
+        1919325,
+        1919327
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -418,8 +419,8 @@
       "difficulty": "easy",
       "fixture_sha256": "f1b5cf55236c3014852bd9ed154ca9ab56e1b7cd53ff3aa182d310f666b554c6",
       "fresh_oracle_pids": [
-        1892590,
-        1892603
+        1919332,
+        1919333
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -434,8 +435,8 @@
       "difficulty": "medium",
       "fixture_sha256": "2706b57b5dba94444f551285d504d996fe2c3c6fa566a1c00a934910dc0011d7",
       "fresh_oracle_pids": [
-        1892616,
-        1892618
+        1919335,
+        1919338
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -450,8 +451,8 @@
       "difficulty": "hard",
       "fixture_sha256": "18a40b5c40a50045f60467c33e5dbd74c95fe298c3989cb3e82b68af9e61fa5c",
       "fresh_oracle_pids": [
-        1892621,
-        1892623
+        1919341,
+        1919342
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -466,8 +467,8 @@
       "difficulty": "easy",
       "fixture_sha256": "26ffe3d9a0f13494ad210abeff13b3fcb4e60818b43334db763ea3a85943e538",
       "fresh_oracle_pids": [
-        1892625,
-        1892627
+        1919343,
+        1919344
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -482,8 +483,8 @@
       "difficulty": "medium",
       "fixture_sha256": "01d153d53a1bdc1e3573144b784c16a035c19cf32eee57d93016cfe5d551d5fc",
       "fresh_oracle_pids": [
-        1892634,
-        1892637
+        1919346,
+        1919347
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -498,8 +499,8 @@
       "difficulty": "easy",
       "fixture_sha256": "9fb4470984ae49f53841b14d3093486692e10ed592aaddc03d4b73a9b7b24df5",
       "fresh_oracle_pids": [
-        1892646,
-        1892653
+        1919348,
+        1919350
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -514,8 +515,8 @@
       "difficulty": "medium",
       "fixture_sha256": "d496661109080235ca5d89eabb4eb89ab8e467af2ca05384ea22d9799fe93d36",
       "fresh_oracle_pids": [
-        1892662,
-        1892677
+        1919359,
+        1919361
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -530,8 +531,8 @@
       "difficulty": "hard",
       "fixture_sha256": "7059e4e7f9a7d14cd8a6097401c2f3f7477c04ed0fa1746997ed0275cad42dd4",
       "fresh_oracle_pids": [
-        1892690,
-        1892695
+        1919362,
+        1919363
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -546,8 +547,8 @@
       "difficulty": "medium",
       "fixture_sha256": "84fddeb60b3f159e93f0b67365e4413996afb7e555c12134a957be4e988d3267",
       "fresh_oracle_pids": [
-        1892708,
-        1892712
+        1919364,
+        1919366
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -562,8 +563,8 @@
       "difficulty": "hard",
       "fixture_sha256": "7fe7e2d86d98effda442f9d2b454820661819bb3920257b5b3f4f7331f5a312e",
       "fresh_oracle_pids": [
-        1892717,
-        1892729
+        1919367,
+        1919368
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -578,8 +579,8 @@
       "difficulty": "easy",
       "fixture_sha256": "2ad147f195acc9da996052dfb93fab1a29aa7e582f4eeaab9b5ee9d1c0726ef4",
       "fresh_oracle_pids": [
-        1892781,
-        1892911
+        1919369,
+        1919370
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -594,8 +595,8 @@
       "difficulty": "medium",
       "fixture_sha256": "4faffe0312045e286a7339a527f388b546cbfdb64eae32183f6d2caec9d4e720",
       "fresh_oracle_pids": [
-        1893010,
-        1893021
+        1919371,
+        1919372
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -610,8 +611,8 @@
       "difficulty": "hard",
       "fixture_sha256": "1ae0cc014b063bfddd171cb1566ae2b7f1c8b37b6a3e215d7a739bedc6399ad4",
       "fresh_oracle_pids": [
-        1893028,
-        1893036
+        1919373,
+        1919374
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -626,8 +627,8 @@
       "difficulty": "easy",
       "fixture_sha256": "86d5771451a90535632107c680fadf23446079bb20c3b4db78114b03d3b8d083",
       "fresh_oracle_pids": [
-        1893045,
-        1893070
+        1919375,
+        1919377
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -642,8 +643,8 @@
       "difficulty": "medium",
       "fixture_sha256": "3d6759c28f405c0326847015d5adc1017f41fdf3f30a2c595aa3b3bb6d98d5ee",
       "fresh_oracle_pids": [
-        1893081,
-        1893091
+        1919378,
+        1919379
       ],
       "gold_pass": true,
       "near_miss_reject": true,

@@ -20,6 +20,7 @@ REQUIRED_CAPABILITIES = {
     "coalesced_type",
     "signed_vertical_scroll",
     "drag",
+    "hotkey",
     "multi_step_state_change",
 }
 
@@ -148,6 +149,7 @@ class Corpus:
     tasks: tuple[Task, ...]
     manifest_payload_sha256: str
     provenance: dict[str, Any]
+    eligibility: dict[str, Any]
 
     def by_id(self, task_id: str) -> Task:
         matches = [task for task in self.tasks if task.id == task_id]
@@ -184,6 +186,13 @@ def load_corpus(path: Path = CORPUS_PATH) -> Corpus:
         "test_derived": False,
     }:
         raise CorpusError("clean-room provenance contract drift")
+    eligibility = raw.get("eligibility")
+    if eligibility != {
+        "purpose": "auxiliary_development_only",
+        "stage0": False,
+        "final": False,
+    }:
+        raise CorpusError("auxiliary-corpus eligibility contract drift")
     values = raw.get("tasks")
     if not isinstance(values, list):
         raise CorpusError("tasks must be a list")
@@ -211,4 +220,4 @@ def load_corpus(path: Path = CORPUS_PATH) -> Corpus:
     }
     if min(difficulty_counts.values()) < 10:
         raise CorpusError(f"difficulty balance drift: {difficulty_counts}")
-    return Corpus(tasks, seal, dict(provenance))
+    return Corpus(tasks, seal, dict(provenance), dict(eligibility))

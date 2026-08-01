@@ -23,8 +23,11 @@ def _load(name: str) -> dict[str, object]:
 def test_labctl_args_render_as_supported_cli_flags() -> None:
     full = _load("natural_dev_cleanroom_cpu_kvm.toml")
     smoke = _load("natural_dev_cleanroom_plumbing_smoke_cpu_kvm.toml")
-    supported = {"output", "work-dir", "qcow", "qemu", "provider", "shard-index"}
-    for recipe in (full, smoke):
+    calc = _load("natural_dev_cleanroom_calc_smoke_cpu_kvm.toml")
+    supported = {
+        "output", "work-dir", "qcow", "qemu", "provider", "shard-index", "task-id"
+    }
+    for recipe in (full, smoke, calc):
         args = recipe["args"]
         assert isinstance(args, dict)
         assert set(args) <= supported
@@ -50,5 +53,9 @@ def test_calc_does_not_rebind_while_formula_edit_is_unconfirmed() -> None:
     )
     assert actions
     assert runtime_bindings == []
+    step_two_classes = [
+        row["action_class"] for row in actions if row["semantic_step"] == 2
+    ]
+    assert step_two_classes == ["key_chord", "coalesced_type"]
     assert transport.audit.held_buttons == set()
     assert transport.audit.held_keys == set()

@@ -8,7 +8,7 @@
   "model_runs": false,
   "passed_count": 5,
   "qualification": "host_contract",
-  "receipt_sha256": "2a70f180cc9375734fea42847406ef004258c014497464733f4a2f99fc0aecbc",
+  "receipt_sha256": "aa79e1a61742e6f3c5e2b8e9de99b436619be0b406d5e40124554a68cb71adf6",
   "schema_version": 1,
   "status": "pass",
   "suite_manifest_sha256": "c052fbdc3bd606470aaf821c6bcb56e877d56292e7c718ca29bef77eca6575aa",
@@ -19,8 +19,8 @@
       "difficulty": "easy",
       "fixture_sha256": "f258b7b6ce1b640420d9498090bcda8f41ba788767b1eed495e5f1c42cd0ebfb",
       "fresh_oracle_pids": [
-        1892058,
-        1892066
+        1919381,
+        1919382
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -35,8 +35,8 @@
       "difficulty": "medium",
       "fixture_sha256": "3b7e9586bdd7ae3af73386ff5dd0a48ab3022b6e4a62d651ec98420150b4b0d7",
       "fresh_oracle_pids": [
-        1892085,
-        1892090
+        1919383,
+        1919384
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -51,8 +51,8 @@
       "difficulty": "hard",
       "fixture_sha256": "5bd54a39c84a79a6c81ff2291da4ffa4d1987b67b557ff1624d1e4872ae2a798",
       "fresh_oracle_pids": [
-        1892100,
-        1892107
+        1919386,
+        1919387
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -67,8 +67,8 @@
       "difficulty": "medium",
       "fixture_sha256": "432b3cb1694a46daf36c442ce9cbbb4a32f6f899324b75caf20b769ba11b56a1",
       "fresh_oracle_pids": [
-        1892116,
-        1892129
+        1919391,
+        1919398
       ],
       "gold_pass": true,
       "near_miss_reject": true,
@@ -83,8 +83,8 @@
       "difficulty": "hard",
       "fixture_sha256": "3bf8fd01ebc3ccf193ac825990f99d18c2468353f5e156b40bce912c4b4725d9",
       "fresh_oracle_pids": [
-        1892146,
-        1892151
+        1919399,
+        1919401
       ],
       "gold_pass": true,
       "near_miss_reject": true,

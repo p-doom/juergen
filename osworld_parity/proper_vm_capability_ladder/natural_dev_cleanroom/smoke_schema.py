@@ -126,6 +126,16 @@ class SmokeTask:
         if self.app == "vscode":
             if self.split != "development" or self.semantic_steps != 3 or self.horizon != 4:
                 raise CorpusError(f"{self.id}: VS Code smoke task contract drift")
+            if self.difficulty not in {"easy", "medium", "hard"}:
+                raise CorpusError(f"{self.id}: VS Code difficulty drift")
+            if not {
+                "click", "coalesced_type", "hotkey", "multi_step_state_change"
+            } <= set(self.capabilities):
+                raise CorpusError(f"{self.id}: VS Code capability contract drift")
+            if set(self.source_task.get("recovery", {})) != {
+                "near_miss_class", "corrective_action"
+            }:
+                raise CorpusError(f"{self.id}: VS Code recovery contract drift")
             if self.source_task.get("reset") != {
                 "snapshot": "osworld_ready",
                 "strategy": "restore_then_seed_private_fixture",
@@ -133,6 +143,15 @@ class SmokeTask:
                 "state_isolation": "unique_guest_root_per_task",
             }:
                 raise CorpusError(f"{self.id}: VS Code reset contract drift")
+            if self.source_task.get("verifier") != {
+                "module": "osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.oracle",
+                "fresh_process": True,
+                "machine_readable": True,
+                "reset_reject": True,
+                "near_miss_reject": True,
+                "gold_pass": True,
+            }:
+                raise CorpusError(f"{self.id}: VS Code verifier contract drift")
             if sha256_value(
                 {
                     key: self.source_task[key]
@@ -143,6 +162,10 @@ class SmokeTask:
                 }
             ) != self.fixture_sha256:
                 raise CorpusError(f"{self.id}: VS Code fixture seal mismatch")
+            unsigned = dict(self.source_task)
+            task_seal = unsigned.pop("task_sha256", None)
+            if not isinstance(task_seal, str) or sha256_value(unsigned) != task_seal:
+                raise CorpusError(f"{self.id}: VS Code task seal mismatch")
         else:
             Task.from_dict(self.source_task).verify()
 

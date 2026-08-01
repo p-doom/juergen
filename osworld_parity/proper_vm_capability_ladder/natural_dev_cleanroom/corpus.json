@@ -1,5 +1,10 @@
 {
-  "manifest_payload_sha256": "5a74ef76c88a45436af731e38543552cb52237272f86516f47e96643cef62e1e",
+  "eligibility": {
+    "final": false,
+    "purpose": "auxiliary_development_only",
+    "stage0": false
+  },
+  "manifest_payload_sha256": "0db3997cae3f5e3f92ab34290afdc392024198488fd5588cfc0f8a669c955839",
   "model_runs": false,
   "observation_contract": "instruction_and_screenshot_only",
   "oracle_visibility": "fresh_host_process_only",

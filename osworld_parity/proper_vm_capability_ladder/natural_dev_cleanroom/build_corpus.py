@@ -259,6 +259,11 @@ def build() -> dict[str, Any]:
         "observation_contract": "instruction_and_screenshot_only",
         "oracle_visibility": "fresh_host_process_only",
         "model_runs": False,
+        "eligibility": {
+            "purpose": "auxiliary_development_only",
+            "stage0": False,
+            "final": False,
+        },
         "provenance": {
             "construction": "first_principles_parameterized_local_app_primitives",
             "source_scope": "explicit_safe_development_fixture_apis_only",

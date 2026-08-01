@@ -82,7 +82,7 @@ def qualify_static(corpus: Corpus | SmokeInventory) -> dict[str, Any]:
         "schema_version": 1,
         "qualification": "host_contract",
         "inventory_role": "plumbing_smoke_only" if plumbing_smoke else "stage0_development",
-        "eligibility": corpus.eligibility if plumbing_smoke else {"stage0": True, "final": False},
+        "eligibility": corpus.eligibility,
         "suite_manifest_sha256": corpus.manifest_payload_sha256,
         "model_runs": False,
         "task_count": len(rows),
@@ -141,6 +141,16 @@ def _dispatch_gold(
     ):
         for turn_index, turn in grouped:
             payload = compile_native(turn, geometry)
+            # The production coalesced-type primitive deliberately reasserts
+            # Ctrl-A immediately before its clipboard paste.  With a merely
+            # selected Calc cell, that shortcut selects the entire sheet and
+            # sends the formula to A1.  F2 first enters the requested cell's
+            # edit mode, where the same Ctrl-A correctly selects only its
+            # existing value before replacement.
+            if task.app == "calc" and turn.semantic_step == 2:
+                payload["operations"].insert(
+                    0, {"action": "key_chord", "keys": ["F2"]}
+                )
             for operation_index, operation in enumerate(payload["operations"]):
                 action = dict(operation)
                 action["action"] = {"click": "left_click", "key_chord": "key"}.get(
@@ -265,12 +275,19 @@ def qualify_vm(
     per_app: int,
     plumbing_smoke: bool,
     shard_index: int | None,
+    task_id: str | None,
     qcow: Path,
     qemu: Path,
     provider: Path,
     work_dir: Path,
 ) -> dict[str, Any]:
-    if plumbing_smoke:
+    if not 1 <= per_app <= 10:
+        raise ValueError("per-app qualification count must be in [1, 10]")
+    if task_id is not None:
+        if shard_index is not None:
+            raise ValueError("task-id and shard-index are mutually exclusive")
+        selected = tuple(task for task in corpus.tasks if task.id == task_id)
+    elif plumbing_smoke:
         if shard_index is not None:
             raise ValueError("the five-task plumbing smoke is not shardable")
         selected = corpus.tasks
@@ -281,6 +298,8 @@ def qualify_vm(
             raise ValueError(f"shard index must be in [0, {len(APPS) - 1}]")
         app = APPS[shard_index]
         selected = tuple(task for task in corpus.tasks if task.app == app)[:per_app]
+    if not selected:
+        raise ValueError("qualification selection is empty")
     work_dir.mkdir(parents=True, exist_ok=False)
     rows: list[dict[str, Any]] = []
     session = KvmFixtureSession(
@@ -291,8 +310,10 @@ def qualify_vm(
         vm_log_dir=work_dir / "vm_logs",
         scratch_root=work_dir / "scratch",
     )
-    session.start()
+    session_start_failure: dict[str, Any] | None = None
+    cleanup_error: str | None = None
     try:
+        session.start()
         for task in selected:
             attempt_failures: list[dict[str, Any]] = []
             for attempt_index in range(1, 3):
@@ -322,20 +343,42 @@ def qualify_vm(
                         break
             rows.append(row)
             print(json.dumps({"task_id": task.id, "status": row["status"]}, sort_keys=True), flush=True)
+    except Exception as exc:
+        session_start_failure = {
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+        rows = [
+            {
+                "task_id": task.id,
+                "app": task.app,
+                "difficulty": task.difficulty,
+                "fixture_sha256": task.fixture_sha256,
+                "status": "fail",
+                "failure_phase": "session_start",
+                **session_start_failure,
+            }
+            for task in selected
+        ]
     finally:
-        session.close()
+        try:
+            session.close()
+        except Exception as exc:
+            cleanup_error = f"{type(exc).__name__}: {exc}"
     metadata_path = work_dir / "vm_metadata.json"
     payload = {
         "schema_version": 1,
         "qualification": "cpu_kvm_native_absolute_gold",
         "shard_index": shard_index,
+        "task_id_filter": task_id,
         "suite_manifest_sha256": corpus.manifest_payload_sha256,
         "model_runs": False,
         "task_count": len(rows),
         "passed_count": sum(row["status"] == "pass" for row in rows),
         "status": "pass" if all(row["status"] == "pass" for row in rows) else "fail",
         "inventory_role": "plumbing_smoke_only" if plumbing_smoke else "stage0_development",
-        "eligibility": corpus.eligibility if plumbing_smoke else {"stage0": True, "final": False},
+        "eligibility": corpus.eligibility,
         "application_counts": {
             app: sum(row["app"] == app for row in rows)
             for app in sorted({row["app"] for row in rows})
@@ -349,10 +392,14 @@ def qualify_vm(
             "provider_path": str(provider.resolve()),
             "provider_sha256": sha256_file(provider),
             "qemu_path": str(qemu.resolve()),
+            "qemu_sha256": sha256_file(qemu),
             "qcow_path": str(qcow.resolve()),
+            "qcow_sha256": sha256_file(qcow),
         },
+        "session_start_failure": session_start_failure,
+        "cleanup_error": cleanup_error,
         "vm_metadata_path": str(metadata_path),
-        "vm_metadata_sha256": sha256_file(metadata_path),
+        "vm_metadata_sha256": sha256_file(metadata_path) if metadata_path.is_file() else None,
         "tasks": rows,
     }
     return _seal(payload)
@@ -365,6 +412,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--per-app", type=int, default=10)
     parser.add_argument("--shard-index", type=int)
+    parser.add_argument("--task-id")
     parser.add_argument("--qcow", type=Path, default=DEFAULT_QCOW)
     parser.add_argument("--qemu", type=Path, default=DEFAULT_QEMU)
     parser.add_argument("--provider", type=Path, default=DEFAULT_PROVIDER)
@@ -380,6 +428,7 @@ def main(argv: list[str] | None = None) -> int:
             per_app=args.per_app,
             plumbing_smoke=args.inventory == "plumbing-smoke",
             shard_index=args.shard_index,
+            task_id=args.task_id,
             qcow=args.qcow,
             qemu=args.qemu,
             provider=args.provider,
