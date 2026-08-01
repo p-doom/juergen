@@ -56,6 +56,11 @@ def test_calc_does_not_rebind_while_formula_edit_is_unconfirmed() -> None:
     step_two_classes = [
         row["action_class"] for row in actions if row["semantic_step"] == 2
     ]
-    assert step_two_classes == ["key_chord", "coalesced_type"]
+    assert step_two_classes == [
+        "key_chord",
+        "key_chord",
+        "key_chord",
+        "coalesced_type",
+    ]
     assert transport.audit.held_buttons == set()
     assert transport.audit.held_keys == set()
