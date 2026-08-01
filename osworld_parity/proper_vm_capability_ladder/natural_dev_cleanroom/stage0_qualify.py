@@ -36,6 +36,7 @@ from .stage0_loader import (
     Stage0SourceTask,
     canonical_json,
     load_stage0_inventory,
+    sha256_value,
 )
 from .stage0_oracle import evaluate_composed_in_fresh_process
 
@@ -266,11 +267,14 @@ def _probe_source(transport: Any, task: Stage0SourceTask, fixture: Any) -> dict[
 
         root = resolve_guest_root(transport) / task.id
         source = root / str(task.params["source_name"])
-        final = root / str(task.expected["final_name"])
+        gold = root / str(task.expected["final_name"])
+        near = root / str(task.near_miss["final_name"])
         code = f"""
 import hashlib,json,pathlib
-source=pathlib.Path({str(source)!r}); final=pathlib.Path({str(final)!r})
-path=final if final.is_file() else source
+source=pathlib.Path({str(source)!r}); gold=pathlib.Path({str(gold)!r}); near=pathlib.Path({str(near)!r})
+present=[path for path in (gold,near,source) if path.is_file()]
+assert len(present)==1, 'short Files state is ambiguous'
+path=present[0]; renamed=path in (gold,near)
 data=path.read_bytes() if path.is_file() else b''
 value={{
  'schema_version':1,
@@ -278,10 +282,10 @@ value={{
  'fixture_sha256':{task.fixture_sha256!r},
  'app':'files',
  'source_exists':source.is_file(),
- 'destination':'root' if final.is_file() else None,
+ 'destination':'root' if renamed else None,
  'final_name':path.name,
  'content_sha256':hashlib.sha256(data).hexdigest(),
- 'saved':final.is_file(),
+ 'saved':renamed,
 }}
 print('STAGE0_STATE='+json.dumps(value,sort_keys=True))
 """.strip()
@@ -295,18 +299,242 @@ print('STAGE0_STATE='+json.dumps(value,sort_keys=True))
     return state
 
 
-def _rebind_active_geometry(
+def _active_window_frame(transport: Any) -> dict[str, Any]:
+    code = """
+import json,subprocess
+active=subprocess.run(['xprop','-root','_NET_ACTIVE_WINDOW'],capture_output=True,text=True,check=True).stdout.strip().split()[-1]
+active_value=int(active,16)
+lines=subprocess.run(['wmctrl','-lGx'],capture_output=True,text=True,check=True).stdout.splitlines()
+matches=[]
+for line in lines:
+ parts=line.split(None,8)
+ if len(parts)==9 and int(parts[0],16)==active_value:
+  x,y,w,h=map(int,parts[2:6]); matches.append({'window_id':parts[0],'x':x,'y':y,'width':w,'height':h,'window_class':parts[6],'window_line':line})
+assert len(matches)==1, 'active window frame missing or ambiguous'
+print('STAGE0_ACTIVE_FRAME='+json.dumps(matches[0],sort_keys=True))
+""".strip()
+    output = str(transport.execute_argv(["python3", "-c", code]).get("output", ""))
+    rows = [
+        line
+        for line in output.splitlines()
+        if line.startswith("STAGE0_ACTIVE_FRAME=")
+    ]
+    if len(rows) != 1:
+        raise RuntimeError("active-window frame evidence missing")
+    return json.loads(rows[0].removeprefix("STAGE0_ACTIVE_FRAME="))
+
+
+def _passive_rebind_active_geometry(
     transport: Any,
     task: Stage0SourceTask,
     fixture: Any,
-) -> dict[str, tuple[int, int]]:
-    if task.app == "vscode":
-        from ..rung1b_realapps.vm import probe_geometry as probe_vscode_geometry
+) -> tuple[dict[str, tuple[int, int]], dict[str, Any]]:
+    before = _active_window_frame(transport)
+    token = _window_token(task)
+    if token not in before["window_line"]:
+        raise RuntimeError(f"passive geometry target mismatch for {task.id}: {before}")
+    x, y, width, height = (
+        int(before["x"]),
+        int(before["y"]),
+        int(before["width"]),
+        int(before["height"]),
+    )
+    if x < 0 or y < 0 or width <= 500 or height <= 400:
+        raise RuntimeError(f"active partner is not visibly mapped: {before}")
+    if task.app == "writer":
+        geometry = {"editor": (x + width // 2, y + int(height * 0.58))}
+    elif task.app == "calc":
+        if width <= 1000 or height <= 600:
+            raise RuntimeError(f"active Calc geometry is not normalized: {before}")
+        geometry = {"cell": (x + 55, y + 84)}
+    elif task.app == "files":
+        if width <= 700 or height <= 450:
+            raise RuntimeError(f"active Files geometry is not normalized: {before}")
+        geometry = {
+            "decoy": (x + 250, y + 15),
+            "destination": (x + 250, y + 63),
+            "source": (x + 250, y + 131),
+            "moved": (x + 250, y + 15),
+        }
+    elif task.app == "chrome":
+        state = probe_state(transport, fixture)
+        raw = state.get("_geometry")
+        required = {"nav", "decoy_nav", "toggle", "decoy_toggle", "scroll_surface"}
+        if not isinstance(raw, dict) or not required.issubset(raw):
+            raise RuntimeError(f"passive Chrome geometry is incomplete: {raw}")
+        geometry = {
+            name: (int(point[0]), int(point[1]))
+            for name, point in raw.items()
+            if name in required
+        }
+    elif task.app == "vscode":
+        geometry = {"editor": (x + width // 2, y + height // 2)}
+    else:  # pragma: no cover - loader fixes the app set
+        raise RuntimeError(f"unsupported passive geometry app: {task.app}")
+    after = _active_window_frame(transport)
+    if before["window_id"].lower() != after["window_id"].lower():
+        raise RuntimeError(
+            f"passive geometry probe changed the active window: {before} -> {after}"
+        )
+    return geometry, {
+        "probe": "active_window_geometry_read_only_v1",
+        "activation_commands": 0,
+        "active_before": before,
+        "active_after": after,
+    }
 
-        value = probe_vscode_geometry(transport, fixture)
-        return {"editor": value.editor}
-    state = probe_state(transport, fixture)
-    return probe_geometry(transport, fixture, state)
+
+_EXPECTED_SWITCH_EVENTS = [
+    {"kind": "key_down", "args": ["AltLeft"]},
+    {"kind": "key_down", "args": ["Tab"]},
+    {"kind": "key_up", "args": ["Tab"]},
+    {"kind": "key_up", "args": ["AltLeft"]},
+]
+_SWITCH_REBIND_RECEIPT_FIELDS = {
+    "schema_version",
+    "receipt_type",
+    "record_id",
+    "task_id",
+    "fixture_sha256",
+    "record_semantic_step",
+    "app",
+    "arm",
+    "policy_visible",
+    "input",
+    "symbolic_switch_payload_sha256",
+    "exact_dispatched_events",
+    "exact_dispatched_event_sha256",
+    "action_class",
+    "dispatch_status",
+    "atomic_ok",
+    "active_before",
+    "active_after",
+    "target_token",
+    "partner_geometry_binding",
+    "partner_geometry_sha256",
+    "geometry_binding_phase",
+    "geometry_binding_source",
+    "geometry_probe_evidence",
+    "switch_rebind_receipt_sha256",
+}
+
+
+def _verify_switch_rebind_receipt(
+    receipt: dict[str, Any], record: Stage0Record, task: Stage0SourceTask
+) -> None:
+    if set(receipt) != _SWITCH_REBIND_RECEIPT_FIELDS:
+        raise RuntimeError("switch/rebind receipt schema mismatch")
+    unsigned = dict(receipt)
+    seal = unsigned.pop("switch_rebind_receipt_sha256")
+    if seal != sha256_value(unsigned):
+        raise RuntimeError("switch/rebind receipt seal mismatch")
+    if (
+        receipt["schema_version"] != 1
+        or receipt["receipt_type"] != "stage0_visible_switch_passive_rebind_v1"
+        or receipt["record_id"] != record.id
+        or receipt["task_id"] != task.id
+        or receipt["fixture_sha256"] != task.fixture_sha256
+        or receipt["record_semantic_step"] != 2
+        or receipt["app"] != task.app
+        or receipt["arm"] != "native_absolute_control"
+    ):
+        raise RuntimeError("switch/rebind receipt identity binding mismatch")
+    if (
+        receipt["exact_dispatched_events"] != _EXPECTED_SWITCH_EVENTS
+        or receipt["exact_dispatched_event_sha256"]
+        != sha256_value(_EXPECTED_SWITCH_EVENTS)
+        or receipt["symbolic_switch_payload_sha256"]
+        != sha256_value(compile_visible_app_switch_native())
+    ):
+        raise RuntimeError("switch/rebind exact-event binding mismatch")
+    if (
+        receipt["policy_visible"] is not True
+        or receipt["input"] != {"action": "key", "keys": ["AltLeft", "Tab"]}
+        or receipt["action_class"] != "key_chord"
+        or receipt["dispatch_status"] != "ok"
+        or receipt["atomic_ok"] is not True
+        or receipt["geometry_binding_phase"]
+        != "after_partner_active_attestation"
+        or receipt["geometry_binding_source"]
+        != "fresh_passive_post_switch_probe"
+    ):
+        raise RuntimeError("switch/rebind execution contract mismatch")
+    if receipt["partner_geometry_sha256"] != sha256_value(
+        receipt["partner_geometry_binding"]
+    ):
+        raise RuntimeError("switch/rebind geometry seal mismatch")
+    evidence = receipt["geometry_probe_evidence"]
+    if (
+        evidence.get("probe") != "active_window_geometry_read_only_v1"
+        or evidence.get("activation_commands") != 0
+        or int(receipt["active_after"]["window_id"], 16)
+        != int(evidence["active_before"]["window_id"], 16)
+        or int(evidence["active_before"]["window_id"], 16)
+        != int(evidence["active_after"]["window_id"], 16)
+        or receipt["target_token"] not in receipt["active_after"]["window_line"]
+    ):
+        raise RuntimeError("switch/rebind passive-active evidence mismatch")
+
+
+def _switch_rebind_receipt(
+    record: Stage0Record,
+    task: Stage0SourceTask,
+    switch_payload: dict[str, Any],
+    switch: Any,
+    active_before: dict[str, Any],
+    active_after: dict[str, Any],
+    geometry: dict[str, tuple[int, int]],
+    geometry_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    dispatched_events = [
+        {"kind": operation.kind, "args": list(operation.args)}
+        for operation in switch.operations
+    ]
+    if dispatched_events != _EXPECTED_SWITCH_EVENTS:
+        raise RuntimeError(
+            f"canonical visible-switch event drift: {dispatched_events}"
+        )
+    if int(active_after["window_id"], 16) != int(
+        geometry_evidence["active_before"]["window_id"], 16
+    ):
+        raise RuntimeError("switch attestation and passive binding target disagree")
+    geometry_payload = {
+        name: list(point) for name, point in sorted(geometry.items())
+    }
+    payload = {
+        "schema_version": 1,
+        "receipt_type": "stage0_visible_switch_passive_rebind_v1",
+        "record_id": record.id,
+        "task_id": task.id,
+        "fixture_sha256": task.fixture_sha256,
+        "record_semantic_step": 2,
+        "app": task.app,
+        "arm": switch.adapter,
+        "policy_visible": True,
+        "input": {"action": "key", "keys": ["AltLeft", "Tab"]},
+        "symbolic_switch_payload_sha256": sha256_value(switch_payload),
+        "exact_dispatched_events": dispatched_events,
+        "exact_dispatched_event_sha256": sha256_value(dispatched_events),
+        "action_class": switch.action_class,
+        "dispatch_status": switch.executor_dispatch_status,
+        "atomic_ok": bool(
+            switch.atomic_state and switch.atomic_state.get("ok") is True
+        ),
+        "active_before": active_before,
+        "active_after": active_after,
+        "target_token": _window_token(task),
+        "partner_geometry_binding": geometry_payload,
+        "partner_geometry_sha256": sha256_value(geometry_payload),
+        "geometry_binding_phase": "after_partner_active_attestation",
+        "geometry_binding_source": "fresh_passive_post_switch_probe",
+        "geometry_probe_evidence": geometry_evidence,
+    }
+    receipt = {
+        **payload,
+        "switch_rebind_receipt_sha256": sha256_value(payload),
+    }
+    _verify_switch_rebind_receipt(receipt, record, task)
+    return receipt
 
 
 def _dispatch_multi_program(
@@ -450,33 +678,21 @@ def _vm_repetition(
                 raise RuntimeError(
                     f"visible Alt+Tab did not activate ordered partner {target_token!r}: {after}"
                 )
-            partner_geometry = _rebind_active_geometry(
+            partner_geometry, geometry_evidence = _passive_rebind_active_geometry(
                 transport, task, component["fixture"]
             )
             component["geometry"] = partner_geometry
-            after_binding = _active_window(transport)
-            if target_token not in after_binding["window_line"]:
-                raise RuntimeError(
-                    f"partner geometry bind changed active app {target_token!r}: {after_binding}"
-                )
             switch_rows.append(
-                {
-                    "record_semantic_step": 2,
-                    "policy_visible": True,
-                    "input": {"action": "key", "keys": ["AltLeft", "Tab"]},
-                    "action_class": switch.action_class,
-                    "dispatch_status": switch.executor_dispatch_status,
-                    "atomic_ok": bool(switch.atomic_state and switch.atomic_state.get("ok") is True),
-                    "active_before": before,
-                    "active_after": after,
-                    "active_after_geometry_binding": after_binding,
-                    "target_token": target_token,
-                    "partner_geometry_binding": {
-                        key: list(value) for key, value in partner_geometry.items()
-                    },
-                    "geometry_binding_phase": "after_partner_active_attestation",
-                    "geometry_binding_source": "fresh_post_switch_probe",
-                }
+                _switch_rebind_receipt(
+                    record,
+                    task,
+                    switch_payload,
+                    switch,
+                    before,
+                    after,
+                    partner_geometry,
+                    geometry_evidence,
+                )
             )
         is_near_miss = near_miss_order == order
         if record.mode == "multi":

@@ -11,7 +11,9 @@ cover every ordered anchor-to-distinct-partner pairing once and require a
 visible Alt+Tab between their two ordered source tasks. Its eligibility is
 fixed to `stage0=true` and `final=false`. Every multi-app symbolic program,
 including that switch, is sealed below the frozen limits of eight primitive
-actions and twenty-five emitted input events.
+actions and twenty-five emitted input events. The primitive-action field counts
+the compiled `ActionTurn` payloads (three or four per record), whose cardinality
+must agree between the native and compact adapters.
 
 `corpus.json` is an older forty-task, four-application auxiliary inventory. Its
 eligibility is permanently fixed to `stage0=false` and `final=false`; it does

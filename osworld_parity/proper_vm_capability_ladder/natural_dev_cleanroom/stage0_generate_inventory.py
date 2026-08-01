@@ -301,12 +301,13 @@ def _record(*, anchor_app: str, mode: str, cell: int, app_index: int) -> dict[st
             source_task_payload_sha256=sha256_value(source_tasks[0]),
         )
     else:
+        # (compiled ActionTurn payloads, emitted input events) per component.
         component_counts = {
-            "writer": (3, 9),
-            "calc": (3, 7),
-            "files": (3, 5),
+            "writer": (1, 9),
+            "calc": (1, 7),
+            "files": (1, 5),
             "chrome": (2, 6),
-            "vscode": (3, 9),
+            "vscode": (1, 9),
         }
         primitive_actions = 1 + sum(component_counts[source["app"]][0] for source in source_tasks)
         emitted_events = 4 + sum(component_counts[source["app"]][1] for source in source_tasks)

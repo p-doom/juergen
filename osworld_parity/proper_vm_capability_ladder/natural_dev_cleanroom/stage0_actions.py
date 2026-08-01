@@ -129,9 +129,27 @@ def compile_multi_compact(
 
 
 def component_program_counts(task: Stage0SourceTask) -> dict[str, int]:
+    trajectory = build_multi_component_program(task)
+    # A primitive action is one compiled ActionTurn payload, not each symbolic
+    # operation packed into that atomic payload.  Both adapters must materialize
+    # the same number of payloads; emitted events are counted separately below.
+    geometry = (
+        {
+            "nav": (100, 100),
+            "toggle": (100, 500),
+            "decoy_nav": (200, 100),
+            "decoy_toggle": (200, 500),
+        }
+        if task.app == "chrome"
+        else {}
+    )
+    native_payloads = compile_multi_native(task, geometry)
+    compact_payloads = compile_multi_compact(task, geometry, (50, 50))
+    if len(native_payloads) != len(compact_payloads):
+        raise ValueError(f"{task.id}: native/compact ActionTurn count drift")
     operations = [
         operation
-        for turn in build_multi_component_program(task).turns
+        for turn in trajectory.turns
         for operation in turn.operations
     ]
     events = 0
@@ -142,7 +160,7 @@ def component_program_counts(task: Stage0SourceTask) -> dict[str, int]:
             events += 2 * len(operation.keys)
         else:
             events += 1
-    return {"primitive_actions": len(operations), "emitted_events": events}
+    return {"primitive_actions": len(native_payloads), "emitted_events": events}
 
 
 def record_program_counts(source_tasks: tuple[Stage0SourceTask, ...]) -> dict[str, int]:

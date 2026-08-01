@@ -15,7 +15,7 @@
     "stage0_eligible": true
   },
   "development_only": true,
-  "manifest_payload_sha256": "b96dba335f264a1c2ba8b5c223136f6e2e7b655b755c68fb1019f62d758b75d5",
+  "manifest_payload_sha256": "5fed6ff613a2d95255e098781485b99f49c8c5765918980698692f14c9a2f1d5",
   "modes": [
     "single",
     "multi"
@@ -463,10 +463,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 20,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 7,
+        "primitive_actions": 3,
         "visible_app_switch_included": true
       },
-      "record_sha256": "efab57958f1769e6c8f000d4efcfb8af20383e89855ac9181fdcb48dc72a444d",
+      "record_sha256": "776652f01525a35cdaa6fe005f3533d05f77afefd995999ea11a9347fbdb52d9",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -630,10 +630,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 18,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 7,
+        "primitive_actions": 3,
         "visible_app_switch_included": true
       },
-      "record_sha256": "48163632ae43571a288af6abcebffeca8df41db971eea17ed1f7c515916ed18c",
+      "record_sha256": "3743118cf95b3025b5c26babde7c1df99c94b1e0fc128d997f9befa5f1efaed4",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -800,10 +800,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 19,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 6,
+        "primitive_actions": 4,
         "visible_app_switch_included": true
       },
-      "record_sha256": "ed4775916856a148f89e7b113040a382b6cecb8644219f421a17c79f1313ace5",
+      "record_sha256": "654bd2f30a3cc9a2af923cb30337c01cc54248f34111535094daa03e0511b558",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -970,10 +970,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 22,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 7,
+        "primitive_actions": 3,
         "visible_app_switch_included": true
       },
-      "record_sha256": "9f4f955130b4d3a2d68450a2b21b37d37aa73ff5d11d2b56b0205bef3edef113",
+      "record_sha256": "3802f1eec138b9cb770aad19bb310aa392c6bd35048c01f9e4ebb253fb36ef18",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -1530,10 +1530,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 20,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 7,
+        "primitive_actions": 3,
         "visible_app_switch_included": true
       },
-      "record_sha256": "679d3caf3a05b71acefdab4ea2f553f76d4a44c9ca77d3fb6cc39b284faea4a9",
+      "record_sha256": "0e6cf310eed29422d8b37b387c9439c0d3ba2004acf415831367b07bdc8c52e7",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -1697,10 +1697,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 16,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 7,
+        "primitive_actions": 3,
         "visible_app_switch_included": true
       },
-      "record_sha256": "9ac45f6be0794398c64af9700adab8a2c4b02aaf2ab9344b11681c4021e74059",
+      "record_sha256": "6c77f9559da7503705c183ce8bd4670047f1a10400fdfd852aed6c27266f841e",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -1868,10 +1868,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 17,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 6,
+        "primitive_actions": 4,
         "visible_app_switch_included": true
       },
-      "record_sha256": "4565183f6f3793d0c57ed2be6cc234c3770eee645cebcfc0ebe4e1b85c9bb62d",
+      "record_sha256": "428047f6eaefa6b77b76687aae6289c6d616e268c016466a75d62404dcdf6eb3",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -2039,10 +2039,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 20,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 7,
+        "primitive_actions": 3,
         "visible_app_switch_included": true
       },
-      "record_sha256": "dd3435109f047a7ee4f97e20efed8e720b04228f6607abcfcc02322cbe77e884",
+      "record_sha256": "b079ac715babbc181974adb8a76d6a484481add6d7ae03f710e00227d48ee25c",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -2613,10 +2613,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 18,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 7,
+        "primitive_actions": 3,
         "visible_app_switch_included": true
       },
-      "record_sha256": "ef3b14a62a763cda77a293bdd3b0f3e3307f8fe0a49d0b7bbe94c5fe40362ce1",
+      "record_sha256": "0c45a050e76375b91c461a94e842fbb73f6aab718943fdf0d24403b64571fca6",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -2782,10 +2782,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 16,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 7,
+        "primitive_actions": 3,
         "visible_app_switch_included": true
       },
-      "record_sha256": "9585134fcefda532428a0577113ef33b966e7c994ee7c13ddd618c36746139bb",
+      "record_sha256": "c58867197b36411fb67e0bb03b94a9916c26b7c9e0349bdeeb8dc32a1a8757bd",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -2954,10 +2954,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 15,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 6,
+        "primitive_actions": 4,
         "visible_app_switch_included": true
       },
-      "record_sha256": "39e9ac3eaed905daba7fe109cec7d29c5c8002188c20aafcb9e0e0c46329911d",
+      "record_sha256": "04620d8d58caa785768a0553c00c9514259acb29257add9492bc1783d904030d",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -3128,10 +3128,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 18,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 7,
+        "primitive_actions": 3,
         "visible_app_switch_included": true
       },
-      "record_sha256": "1dab33fab5d6f652926c41f29895fd868fd5e2cc01aec6040a822b1ab6544bc9",
+      "record_sha256": "a64ea3ce15c43d4b145fea09d4642997a4aa0f1abd928ee7084f68ace1f2059e",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -3697,10 +3697,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 19,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 6,
+        "primitive_actions": 4,
         "visible_app_switch_included": true
       },
-      "record_sha256": "92ce3b9b9e14285b6e80bb60ce381384da26f1980c0ef82e1d49d2c5fa404d78",
+      "record_sha256": "31d8ad5dc7fe2f3dc12021984770ec930294618c9e5c5e9be8228b15570268de",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -3868,10 +3868,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 17,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 6,
+        "primitive_actions": 4,
         "visible_app_switch_included": true
       },
-      "record_sha256": "cca440504e8d22559f6ae5d16eaa795878b6341f3c7421369ae8ad3bf8489bfd",
+      "record_sha256": "d02e263183f64ce5087f3ba53d8b1646eafd7da30a032a2dc61c82df6b64f11c",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -4041,10 +4041,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 15,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 6,
+        "primitive_actions": 4,
         "visible_app_switch_included": true
       },
-      "record_sha256": "e400cc054052412f814e0ac80d54926b4279e8c0b5c45411300452488a4eebc7",
+      "record_sha256": "f987b2b00624d7e7cbfb55a05db6e4e5f314e80117254b4ead5795f94a7fe189",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -4216,10 +4216,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 19,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 6,
+        "primitive_actions": 4,
         "visible_app_switch_included": true
       },
-      "record_sha256": "20a2dc2134ea2e09996d352926cc0b3eb968cdee6f89a65496d1e87a8da4865e",
+      "record_sha256": "11231929c7445cdf851ad64494173becdfd3c1c97932e6ccc3c381320f44031b",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -4769,10 +4769,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 22,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 7,
+        "primitive_actions": 3,
         "visible_app_switch_included": true
       },
-      "record_sha256": "df699f4c7ee561568397162e44c6aa523c5bf890277a5c06fcd35eb5cde9e1b6",
+      "record_sha256": "5cae2025aa0d86c1bb6607d48dbb1e2695d7797b186d08d892f714b95a393f5a",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -4934,10 +4934,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 20,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 7,
+        "primitive_actions": 3,
         "visible_app_switch_included": true
       },
-      "record_sha256": "33f3a7964eac2edab791865a72e1f77a2b3a9c77d7d0a459917832aef9c3e610",
+      "record_sha256": "98a773dc28e4efe3518f1a1eef20f0cb70ad7248350ccfa264709628b2719c43",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -5101,10 +5101,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 18,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 7,
+        "primitive_actions": 3,
         "visible_app_switch_included": true
       },
-      "record_sha256": "910083486bb2e93e80683bac9b4229f9b5f4bb9798e85577ef593dccb043141e",
+      "record_sha256": "4c60fa4c410576df17728fe0d16212cc7facfce0ebadbf104128fcbd82bde71c",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
@@ -5271,10 +5271,10 @@
         "emitted_event_ceiling": 25,
         "emitted_events": 19,
         "primitive_action_ceiling": 8,
-        "primitive_actions": 6,
+        "primitive_actions": 4,
         "visible_app_switch_included": true
       },
-      "record_sha256": "60d097a9fe259d751a757a077f75a7d43f437738c7eaa2b3f6242e241c10895d",
+      "record_sha256": "f463c9a4e16991e16c441f74c772421e21fe1533f4df1d7f45560004c26b299a",
       "reset": {
         "reproducible_signature_required": true,
         "snapshot": "osworld_ready",
