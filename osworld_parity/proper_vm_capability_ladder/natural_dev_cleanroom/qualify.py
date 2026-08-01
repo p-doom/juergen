@@ -160,7 +160,12 @@ def _dispatch_gold(
                 )
                 transport.wait(0.5)
         transport.wait(1.0)
-        if semantic_step < task.semantic_steps:
+        # Calc's formula text is deliberately unconfirmed between semantic
+        # steps 2 and 3.  Host-side state/geometry probing at that boundary
+        # activates the window and can cancel the in-progress cell edit.  Only
+        # Files (folder transition) and Chrome (scroll-relative controls) have
+        # geometry that genuinely changes between steps.
+        if semantic_step < task.semantic_steps and task.app in {"files", "chrome"}:
             rebound_state = probe_state(transport, fixture)
             geometry = probe_geometry(transport, fixture, rebound_state)
             bindings.append(
