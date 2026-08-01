@@ -210,7 +210,13 @@ def evaluate_in_fresh_process(task: Any, state: dict[str, Any], *, timeout_s: fl
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(state, handle, ensure_ascii=False, sort_keys=True)
-        inventory = "plumbing-smoke" if task.id.startswith("cln-smoke-") else "corpus"
+        inventory = (
+            "plumbing-smoke"
+            if task.id.startswith("cln-smoke-")
+            else "stage0"
+            if task.id.startswith("cln-s0-src-")
+            else "corpus"
+        )
         completed = subprocess.run(
             [
                 sys.executable,
@@ -240,7 +246,9 @@ def evaluate_in_fresh_process(task: Any, state: dict[str, Any], *, timeout_s: fl
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--inventory", choices=("corpus", "plumbing-smoke"), default="corpus")
+    parser.add_argument(
+        "--inventory", choices=("corpus", "plumbing-smoke", "stage0"), default="corpus"
+    )
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--state", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -248,6 +256,10 @@ def main(argv: list[str] | None = None) -> int:
         from .smoke_schema import load_smoke
 
         task = load_smoke().by_id(args.task_id)
+    elif args.inventory == "stage0":
+        from .stage0_loader import load_stage0_inventory
+
+        task = load_stage0_inventory().source_by_id(args.task_id)
     else:
         task = load_corpus().by_id(args.task_id)
     state = json.loads(args.state.read_text(encoding="utf-8"))

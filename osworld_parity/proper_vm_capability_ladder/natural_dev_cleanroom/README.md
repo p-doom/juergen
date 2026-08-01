@@ -1,19 +1,45 @@
 # Clean-room natural VM development corpus
 
-This package contains forty novel, deterministic, development-only GUI tasks:
-ten each for Writer, Calc, Files, and Chrome. The tasks were parameterized from
-local application primitives and safe development harness APIs. They were not
-derived from benchmark task text, tests, evaluation splits, model rollouts, or
-mixed corpora.
+This package contains three disjoint clean-room development inventories. None
+was derived from benchmark task text, tests, evaluation splits, model rollouts,
+or mixed corpora.
 
-Each task has a unique human-readable ID, a sealed fixture payload, an exact
+`stage0_inventory.json` is the Stage0 inventory. It contains exactly forty
+records balanced as five anchor applications (Writer, Calc, Files, Chrome, and
+VS Code) by two composition modes by four cells. Its twenty multi-app records
+cover every ordered anchor-to-distinct-partner pairing once and require a
+visible Alt+Tab between their two ordered source tasks. Its eligibility is
+fixed to `stage0=true` and `final=false`.
+
+`corpus.json` is an older forty-task, four-application auxiliary inventory. Its
+eligibility is permanently fixed to `stage0=false` and `final=false`; it does
+not satisfy the Stage0 balance contract and must not be relabeled or promoted.
+
+Each source task has a unique human-readable ID, a sealed fixture payload, an exact
 snapshot-and-seed reset contract, a private guest root, a fresh-process hidden
 state verifier, a scripted near miss, a documented recovery opportunity, and a
-difficulty tag. The corpus is balanced across applications. Its aggregate
+difficulty tag. The inventories' aggregate
 capabilities include clicking, coalesced typing, signed vertical scrolling,
 dragging, hotkeys, and multi-step state changes.
 
-Regenerate and validate the sealed corpus:
+Regenerate and validate the sealed Stage0 inventory:
+
+```bash
+python3 -m osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.stage0_generate_inventory
+python3 -m osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.stage0_loader
+python3 -m osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.stage0_qualify \
+  --mode static --output /tmp/cleanroom-stage0-static.json
+```
+
+Run its CPU/KVM native-gold qualification through
+`osworld_parity/labctl/recipes/natural_dev_cleanroom_stage0_cpu_kvm.toml`. Each
+record executes twice from distinct provider-attested resets. A multi-app run
+sets up both private components, executes both in order, uses one policy-visible
+Alt+Tab, and passes the ordered states to one fresh-process composed verifier.
+This native scripted qualification is not a paired-adapter receipt and does not
+substitute for one.
+
+Regenerate and validate the sealed auxiliary corpus:
 
 ```bash
 python3 -m osworld_parity.proper_vm_capability_ladder.natural_dev_cleanroom.build_corpus
