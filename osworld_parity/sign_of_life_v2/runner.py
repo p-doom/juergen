@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import socket
@@ -21,6 +22,14 @@ from ..proper_vm_capability_ladder.rung1.vm import (
     sha256_file,
 )
 from .actions import execute_native_absolute
+from .compact_relative import (
+    CompactRelativeError,
+    SYSTEM_PROMPT_SHA256,
+    call_phaseb_model,
+    execute_compact_relative,
+    parse_compact_relative,
+    verify_sealed_contract,
+)
 from .guest import capture_screenshot, probe_task, setup_task
 from .oracle import as_json, evaluate
 from .suite import DevelopmentTask, load_suite
@@ -38,7 +47,92 @@ OFFSHELF_MODEL = Path(
     "ebb281ec70b05090aa6165b016eac8ec08e71b17"
 )
 SERVED_MODEL = "qwen3-vl-4b-native-absolute"
+PHASEB_SERVED_MODEL = "qwen3-vl-8b-phaseb-raw-deltatype-v2-s900"
 SYSTEM_PROMPT_ID = "computer_use_v1"
+PHASEB_MODEL = Path(
+    "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/checkpoints/"
+    "franz.srambical/phaseb_raw_deltatype_v2_A_to_B_r256_s900_continuation_hf_v4_"
+    "run_019fba52e90778e0b8ae170058c814e7/hf"
+)
+PHASEB_ARTIFACT_ID = "artifact_896c1de00b60c27c"
+PHASEB_PRODUCER_RUN_ID = "run_019fba52e90778e0b8ae170058c814e7"
+PHASEB_EXPORT_MANIFEST_SHA256 = "9c141897dec6b468c35d9eb522907b32cde34d925d8771e49dd018943cf5530c"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _phaseb_model_provenance(model_path: Path) -> dict[str, Any]:
+    root = model_path.parent
+    metadata_path = root / ".meta.json"
+    manifest_path = root / "export_manifest.json"
+    if not metadata_path.is_file() or not manifest_path.is_file():
+        raise RuntimeError("Phase-B checkpoint registration metadata is missing")
+    metadata = json.loads(metadata_path.read_text())
+    manifest = json.loads(manifest_path.read_text())
+    manifest_sha = _sha256(manifest_path)
+    expected = {
+        "arm": "raw_v2",
+        "step": 900,
+        "lora_rank": 256,
+        "lora_alpha": 256,
+        "model_id": "Qwen/Qwen3-VL-8B-Instruct",
+        "status": "complete",
+    }
+    mismatches = {
+        key: {"expected": value, "observed": manifest.get(key)}
+        for key, value in expected.items()
+        if manifest.get(key) != value
+    }
+    if metadata.get("id") != PHASEB_ARTIFACT_ID:
+        mismatches["artifact_id"] = {
+            "expected": PHASEB_ARTIFACT_ID,
+            "observed": metadata.get("id"),
+        }
+    if metadata.get("producer_run_id") != PHASEB_PRODUCER_RUN_ID:
+        mismatches["producer_run_id"] = {
+            "expected": PHASEB_PRODUCER_RUN_ID,
+            "observed": metadata.get("producer_run_id"),
+        }
+    if manifest_sha != PHASEB_EXPORT_MANIFEST_SHA256:
+        mismatches["export_manifest_sha256"] = {
+            "expected": PHASEB_EXPORT_MANIFEST_SHA256,
+            "observed": manifest_sha,
+        }
+    weights = manifest.get("weights")
+    weight_path = model_path / "model.safetensors"
+    if (
+        not isinstance(weights, list)
+        or len(weights) != 1
+        or weights[0].get("name") != "model.safetensors"
+        or not weight_path.is_file()
+        or weight_path.stat().st_size != weights[0].get("size")
+    ):
+        mismatches["weights"] = {
+            "expected": weights,
+            "observed_size": weight_path.stat().st_size if weight_path.is_file() else None,
+        }
+    if mismatches:
+        raise RuntimeError(f"Phase-B checkpoint provenance mismatch: {mismatches}")
+    return {
+        "artifact_id": metadata["id"],
+        "producer_run_id": metadata["producer_run_id"],
+        "export_manifest": str(manifest_path),
+        "export_manifest_sha256": manifest_sha,
+        "config_sha256": _sha256(model_path / "config.json"),
+        "weight_sha256": weights[0]["sha256"],
+        "weight_bytes": weights[0]["size"],
+        "arm": manifest["arm"],
+        "step": manifest["step"],
+        "lora_rank": manifest["lora_rank"],
+        "lora_alpha": manifest["lora_alpha"],
+        "contract": verify_sealed_contract(),
+    }
 
 
 def _select_tasks(tasks: Sequence[DevelopmentTask], task_index: int | None) -> tuple[DevelopmentTask, ...]:
@@ -109,6 +203,54 @@ def _scripted_actions(task: DevelopmentTask, setup: dict[str, Any], *, negative:
     raise ValueError(task.kind)
 
 
+def _compact_type(text: str) -> str:
+    return "0 0 0 ; type(" + json.dumps(text, ensure_ascii=False) + ")"
+
+
+def _compact_click(
+    transport: HttpVmTransport, coordinate: Sequence[int]
+) -> str:
+    cursor = transport.cursor_position()
+    return (
+        f"{int(coordinate[0]) - cursor[0]} {int(coordinate[1]) - cursor[1]} 0 ; "
+        "+LMB -LMB"
+    )
+
+
+def _scripted_compact_actions(
+    task: DevelopmentTask,
+    setup: dict[str, Any],
+    transport: HttpVmTransport,
+    *,
+    negative: bool,
+) -> list[str]:
+    if task.kind == "terminal_command":
+        return [
+            _compact_type("pwd" if negative else str(task.expected["command"])),
+            "0 0 0 ; +Return -Return",
+        ]
+    if task.kind == "terminal_exact_text":
+        return [
+            _compact_type("wrong text" if negative else str(task.expected["text"])),
+            "0 0 0 ; +Return -Return",
+        ]
+    if task.kind == "open_chrome":
+        target = transport.cursor_position() if negative else setup["dock_chrome_coordinate"]
+        return [_compact_click(transport, target)]
+    if task.kind == "focus_terminal_and_type":
+        rows: list[str] = []
+        if not negative:
+            rows.append(_compact_click(transport, setup["terminal_click_coordinate"]))
+        rows.extend(
+            [
+                _compact_type(str(task.expected["command"])),
+                "0 0 0 ; +Return -Return",
+            ]
+        )
+        return rows
+    raise ValueError(task.kind)
+
+
 def _run_scripted_task(
     task: DevelopmentTask,
     transport: HttpVmTransport,
@@ -149,6 +291,67 @@ def _run_scripted_task(
         "instruction": task.instruction,
         "mode": "negative_control" if negative else "scripted_native_absolute_oracle",
         "success": success,
+        "stop_reason": stop_reason,
+        "model_termination": None,
+        "steps": steps,
+        "n_steps": len(steps),
+        "parse_errors": [],
+        "action_errors": [],
+        "executor_errors": [],
+        "setup": setup,
+        "initial_postcondition": initial["postcondition"],
+        "final_postcondition": final["postcondition"],
+        "final_state": final["state"],
+        "screenshots": {"before": before, "after": after},
+    }
+
+
+def _run_scripted_compact_task(
+    task: DevelopmentTask,
+    transport: HttpVmTransport,
+    task_dir: Path,
+    *,
+    negative: bool,
+) -> dict[str, Any]:
+    setup = setup_task(transport, task)
+    initial = _state_check(task, transport)
+    if initial["postcondition"]["oracle_status"] != "ok" or initial["postcondition"]["success"]:
+        raise RuntimeError("task reset/setup did not begin in a valid unsolved state")
+    before = capture_screenshot(transport, task_dir / "before.png")
+    steps: list[dict[str, Any]] = []
+    stop_reason = "script_exhausted"
+    actions = _scripted_compact_actions(
+        task, setup, transport, negative=negative
+    )
+    for index, action_text in enumerate(actions, start=1):
+        receipt = execute_compact_relative(transport, action_text)
+        time.sleep(2.0 if task.kind == "open_chrome" else 0.75)
+        screenshot = capture_screenshot(transport, task_dir / f"step_{index:02d}.png")
+        check = _state_check(task, transport)
+        steps.append(
+            {
+                "step": index,
+                "requested_compact_relative_action": action_text,
+                "execution": receipt,
+                "screenshot_after": screenshot,
+                **check,
+            }
+        )
+        if check["postcondition"]["success"]:
+            stop_reason = "postcondition_reached"
+            break
+    final = _state_check(task, transport)
+    after = capture_screenshot(transport, task_dir / "after.png")
+    return {
+        "task_id": task.id,
+        "kind": task.kind,
+        "instruction": task.instruction,
+        "mode": (
+            "compact_relative_negative_control"
+            if negative
+            else "scripted_compact_relative_oracle"
+        ),
+        "success": bool(final["postcondition"]["success"]),
         "stop_reason": stop_reason,
         "model_termination": None,
         "steps": steps,
@@ -290,6 +493,135 @@ def _run_model_task(
     }
 
 
+def _run_compact_model_task(
+    task: DevelopmentTask,
+    transport: HttpVmTransport,
+    task_dir: Path,
+    *,
+    model_url: str,
+    api_key: str,
+) -> dict[str, Any]:
+    setup = setup_task(transport, task)
+    initial = _state_check(task, transport)
+    if initial["postcondition"]["oracle_status"] != "ok" or initial["postcondition"]["success"]:
+        raise RuntimeError("task reset/setup did not begin in a valid unsolved state")
+    frame = _model_frame(transport, task_dir / "before.png")
+    frames = [frame]
+    actions: list[str] = []
+    steps: list[dict[str, Any]] = []
+    parse_errors: list[dict[str, Any]] = []
+    action_errors: list[dict[str, Any]] = []
+    executor_errors: list[dict[str, Any]] = []
+    model_termination: dict[str, Any] | None = None
+    stop_reason = "max_steps"
+    for index in range(1, task.max_steps + 1):
+        raw = call_phaseb_model(
+            model_url=model_url,
+            api_key=api_key,
+            model=PHASEB_SERVED_MODEL,
+            instruction=task.instruction,
+            frames=frames,
+            actions=actions,
+        )
+        row: dict[str, Any] = {
+            "step": index,
+            "raw_model_output": raw,
+            "parsed_action": None,
+            "execution": None,
+            "parse_error": None,
+            "action_error": None,
+            "executor_error": None,
+            "prompt_contract": {
+                "system_prompt_sha256": SYSTEM_PROMPT_SHA256,
+                "history_frames": min(5, len(frames)),
+                "earlier_action_summaries": max(0, len(actions) - 4),
+                "assistant_prose_preserved": True,
+            },
+        }
+        try:
+            parsed = parse_compact_relative(raw)
+            row["parsed_action"] = {
+                "dx": parsed.dx,
+                "dy": parsed.dy,
+                "scroll": parsed.scroll,
+                "elements": list(parsed.elements),
+                "no_op": parsed.no_op,
+                "terminate": parsed.terminate,
+                "fail": parsed.fail,
+            }
+        except (TypeError, CompactRelativeError) as exc:
+            error = {"step": index, "type": type(exc).__name__, "message": str(exc)}
+            row["parse_error"] = error
+            parse_errors.append(error)
+            parsed = None
+        if parsed is not None:
+            if parsed.terminate or parsed.fail:
+                model_termination = {
+                    "step": index,
+                    "status": "failure" if parsed.fail else "success",
+                    "raw": raw,
+                }
+            else:
+                try:
+                    row["execution"] = execute_compact_relative(transport, raw)
+                except (TypeError, ValueError) as exc:
+                    error = {
+                        "step": index,
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                    row["action_error"] = error
+                    action_errors.append(error)
+                except Exception as exc:  # transport failures remain distinct
+                    error = {
+                        "step": index,
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                    row["executor_error"] = error
+                    executor_errors.append(error)
+        time.sleep(2.0 if task.kind == "open_chrome" else 0.75)
+        next_frame = _model_frame(transport, task_dir / f"step_{index:02d}.png")
+        check = _state_check(task, transport)
+        row.update({"screenshot_after": str(task_dir / f"step_{index:02d}.png"), **check})
+        steps.append(row)
+        actions.append(raw)
+        frames.append(next_frame)
+        if check["postcondition"]["success"]:
+            stop_reason = "postcondition_reached"
+            break
+        if executor_errors:
+            stop_reason = "executor_error"
+            break
+        if model_termination is not None:
+            stop_reason = f"model_terminate_{model_termination['status']}_without_postcondition"
+            break
+    final = _state_check(task, transport)
+    after = capture_screenshot(transport, task_dir / "after.png")
+    return {
+        "task_id": task.id,
+        "kind": task.kind,
+        "instruction": task.instruction,
+        "mode": "phaseb_s900_compact_raw_relative",
+        "success": bool(final["postcondition"]["success"]),
+        "stop_reason": stop_reason,
+        "model_termination": model_termination,
+        "steps": steps,
+        "n_steps": len(steps),
+        "parse_errors": parse_errors,
+        "action_errors": action_errors,
+        "executor_errors": executor_errors,
+        "setup": setup,
+        "initial_postcondition": initial["postcondition"],
+        "final_postcondition": final["postcondition"],
+        "final_state": final["state"],
+        "screenshots": {
+            "before": {"path": str(task_dir / "before.png")},
+            "after": after,
+        },
+    }
+
+
 def run_suite(
     *,
     mode: str,
@@ -323,6 +655,23 @@ def run_suite(
                         if model_url is None:
                             raise RuntimeError("model URL is missing")
                         row = _run_model_task(task, transport, task_dir, model_url=model_url, api_key=api_key)
+                    elif mode == "compact-model":
+                        if model_url is None:
+                            raise RuntimeError("model URL is missing")
+                        row = _run_compact_model_task(
+                            task,
+                            transport,
+                            task_dir,
+                            model_url=model_url,
+                            api_key=api_key,
+                        )
+                    elif mode in {"compact-oracle", "compact-negative"}:
+                        row = _run_scripted_compact_task(
+                            task,
+                            transport,
+                            task_dir,
+                            negative=mode == "compact-negative",
+                        )
                     else:
                         row = _run_scripted_task(task, transport, task_dir, negative=mode == "negative")
                 except Exception as exc:
@@ -350,7 +699,7 @@ def run_suite(
                 rows.append(row)
                 _atomic_json(task_dir / "result.json", row)
     passed = sum(bool(row["success"]) for row in rows)
-    expected_passed = 0 if mode == "negative" else len(rows)
+    expected_passed = 0 if mode in {"negative", "compact-negative"} else len(rows)
     controls_ok = passed == expected_passed and not infrastructure_errors
     return {
         "schema_version": 2,
@@ -380,6 +729,21 @@ def run_suite(
             if mode == "model"
             else None
         ),
+        "phaseb_model": (
+            {
+                "path": str(model_path),
+                "served_model": PHASEB_SERVED_MODEL,
+                "system_prompt_sha256": SYSTEM_PROMPT_SHA256,
+                "temperature": 0.0,
+                "max_tokens": 256,
+                "action_format": "compact_raw_relative_deltatype_v2",
+                "assistant_prose_preserved": True,
+                "training_shaped_history_frames": 5,
+                "provenance": _phaseb_model_provenance(model_path),
+            }
+            if mode == "compact-model"
+            else None
+        ),
         "vm": {
             "qcow": str(qcow),
             "qemu": str(qemu),
@@ -401,7 +765,18 @@ def run_suite(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Crowd-Cast sign-of-life v2 VM gate")
-    parser.add_argument("--mode", choices=("oracle", "negative", "model"), required=True)
+    parser.add_argument(
+        "--mode",
+        choices=(
+            "oracle",
+            "negative",
+            "model",
+            "compact-oracle",
+            "compact-negative",
+            "compact-model",
+        ),
+        required=True,
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model-path", type=Path, default=OFFSHELF_MODEL)
     parser.add_argument("--qcow", type=Path, default=DEFAULT_QCOW)
@@ -416,11 +791,13 @@ def main(argv: list[str] | None = None) -> int:
         help="run one zero-based suite cell (used only for reset-isolated parallel execution)",
     )
     args = parser.parse_args(argv)
-    if args.mode == "model" and not args.model_path.joinpath("config.json").is_file():
+    if args.mode in {"model", "compact-model"} and not args.model_path.joinpath("config.json").is_file():
         raise SystemExit(f"model path is incomplete: {args.model_path}")
+    if args.mode == "compact-model":
+        _phaseb_model_provenance(args.model_path)
     server_context = (
         _model_server(args)
-        if args.mode == "model"
+        if args.mode in {"model", "compact-model"}
         else nullcontext(None)
     )
     with server_context as model_url:
@@ -437,7 +814,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     _atomic_json(args.output / "result.json", result)
     print(json.dumps(result["aggregate"], sort_keys=True), flush=True)
-    if args.mode in {"oracle", "negative"} and not result["controls_ok"]:
+    if args.mode in {"oracle", "negative", "compact-oracle", "compact-negative"} and not result["controls_ok"]:
         return 2
     return 3 if result["infrastructure_errors"] else 0
 
@@ -453,7 +830,9 @@ def _model_server(args: argparse.Namespace) -> Any:
         mem_fraction_static=0.65,
         chunked_prefill_size=2048,
         ready_timeout_s=1500,
-        served_model_name=SERVED_MODEL,
+        served_model_name=(
+            PHASEB_SERVED_MODEL if args.mode == "compact-model" else SERVED_MODEL
+        ),
     )
 
 

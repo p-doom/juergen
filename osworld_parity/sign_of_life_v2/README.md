@@ -17,7 +17,7 @@ termination separately. Every task stores before/after and per-step screenshots,
 raw model output, parsed actions, atomic executor receipts, state evidence, and
 errors. Missing or ambiguous evidence fails closed.
 
-Three labctl recipes exercise the same suite:
+The native-absolute recipes exercise the same suite:
 
 - `sign_of_life_v2_oracle_cpu_kvm.toml`: scripted native-absolute gold actions;
 - `sign_of_life_v2_negative_cpu_kvm.toml`: wrong text/no-op/wrong-click controls;
@@ -29,3 +29,18 @@ Three labctl recipes exercise the same suite:
 The scripted and model arms both compile into the same `Operation` stream and
 execute through `HttpVmTransport.execute_atomic`; transport acknowledgement is
 never used as task success.
+
+The Phase-B compact-relative arm adds two CPU controls and four explicit GPU
+cells without changing the suite or success oracles:
+
+- `sign_of_life_v2_compact_oracle_cpu_kvm.toml`: scripted raw-relative
+  deltatype-v2 actions, expected 4/4;
+- `sign_of_life_v2_compact_negative_cpu_kvm.toml`: wrong actions through that
+  same parser/executor, expected 0/4;
+- `sign_of_life_v2_phaseb_compact_t{0,1,2,3}_gpu_kvm.toml`: one reset-isolated
+  model cell per recipe, for four concurrent one-GPU labctl runs.
+
+The compact contract is recovered from the registered step-900 checkpoint's
+sealed provenance. It uses raw pixel deltas, coalesced `type("...")`, preserved
+assistant prose followed by a final bare action line, and a training-shaped
+five-image history. No normalized scaling or tool-call wrapper is accepted.
