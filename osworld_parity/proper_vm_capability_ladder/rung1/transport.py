@@ -629,6 +629,21 @@ def compile_atomic_guest_program(
                     f"{indent}_r1a_trace.append({{'kind':'coalesced_type','args':[{text!r}]}})",
                 ]
             )
+        elif kind == "ascii_type":
+            text = str(args[0])
+            try:
+                text.encode("ascii")
+            except UnicodeEncodeError as exc:
+                raise TransportError("ascii_type received non-ASCII text") from exc
+            if "\n" in text or "\r" in text:
+                raise TransportError("ascii_type cannot embed Enter; emit a key event")
+            lines.extend(
+                [
+                    f"{indent}pyautogui.write({text!r},interval=0)",
+                    f"{indent}_r1a_backend_primitives.append({{'kind':'ascii_type','call':'pyautogui.write','ascii_bytes':{len(text)}}})",
+                    f"{indent}_r1a_trace.append({{'kind':'ascii_type','args':[{text!r}]}})",
+                ]
+            )
         elif kind == "wait":
             seconds = max(0.0, min(10.0, float(args[0])))
             lines.extend(
@@ -1672,7 +1687,7 @@ class HttpVmTransport:
         for operation in traced:
             if operation.kind == "scroll":
                 self.audit.scroll_total += int(operation.args[0])
-            elif operation.kind == "coalesced_type":
+            elif operation.kind in {"coalesced_type", "ascii_type"}:
                 self.audit.typed_texts.append(str(operation.args[0]))
         return atomic_result
 
@@ -1923,6 +1938,21 @@ class RecordingTransport:
                     self.coalesced_type(str(args[0]))
                     backend_primitives.append(
                         {"kind": kind, "call": "recording.coalesced_type"}
+                    )
+                elif kind == "ascii_type":
+                    text = str(args[0])
+                    try:
+                        text.encode("ascii")
+                    except UnicodeEncodeError as exc:
+                        raise TransportError("ascii_type received non-ASCII text") from exc
+                    if "\n" in text or "\r" in text:
+                        raise TransportError(
+                            "ascii_type cannot embed Enter; emit a key event"
+                        )
+                    self.audit.typed_texts.append(text)
+                    self.audit.operations.append(Operation("ascii_type", (text,)))
+                    backend_primitives.append(
+                        {"kind": kind, "call": "recording.pyautogui.write"}
                     )
                 elif kind == "wait":
                     self.wait(float(args[0]))

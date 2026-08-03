@@ -60,7 +60,7 @@ def test_compound_requires_focus_history_and_exact_file() -> None:
 def test_native_absolute_model_and_gold_share_atomic_primitives() -> None:
     type_args = {"action": "type", "text": "ls"}
     click_args = {"action": "left_click", "coordinate": [35, 60]}
-    assert [op.kind for op in compile_native_absolute(type_args, (1920, 1080))] == ["coalesced_type"]
+    assert [op.kind for op in compile_native_absolute(type_args, (1920, 1080))] == ["ascii_type"]
     assert [op.kind for op in compile_native_absolute(click_args, (1920, 1080))] == ["move_to", "mouse_down", "mouse_up"]
     transport = RecordingTransport(screen=(1920, 1080))
     receipt = execute_native_absolute(transport, click_args)

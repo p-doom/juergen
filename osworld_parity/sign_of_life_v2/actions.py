@@ -84,7 +84,15 @@ def compile_native_absolute(arguments: dict[str, Any], screen: tuple[int, int]) 
         text = arguments.get("text")
         if not isinstance(text, str) or not text:
             raise ValueError("type action requires non-empty text")
-        rows.append(Operation("coalesced_type", (text,)))
+        # These development cells deliberately contain printable ASCII only.
+        # Terminal readline interprets Ctrl-V as quoted-insert, so the shared
+        # editor clipboard primitive is not valid here. One atomic
+        # pyautogui.write keeps typing coalesced without changing guest focus.
+        try:
+            text.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise ValueError("sign-of-life terminal type must be ASCII") from exc
+        rows.append(Operation("ascii_type", (text,)))
     elif action in {"scroll", "hscroll"}:
         try:
             clicks = int(round(float(arguments.get("pixels", 0))))
