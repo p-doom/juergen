@@ -1,5 +1,5 @@
 name = "sign_of_life_v2_phaseb_compact_t3_gpu_kvm"
-repo = "juergen_sign_of_life_v2"
+repo = "juergen_sign_of_life_phaseb_compact"
 command = ["bash", "-c", '''
 set -euo pipefail
 SOURCE="$(jq -er '.provenance.repo_path // .source_path' "$LABCTL_CONTEXT")"
@@ -17,7 +17,7 @@ time = "01:00:00"
 qos = "normal"
 account = "hfmi_synergyunit"
 partition = "standard"
-sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001,hai002", "--nodelist=hai005"]
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001,hai005", "--nodelist=hai002"]
 
 [inputs.model]
 type = "artifact"

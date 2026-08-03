@@ -1,5 +1,5 @@
 name = "sign_of_life_v2_compact_negative_cpu_kvm"
-repo = "juergen_sign_of_life_v2"
+repo = "juergen_sign_of_life_phaseb_compact"
 command = ["bash", "-c", '''
 set -euo pipefail
 SOURCE="$(jq -er '.provenance.repo_path // .source_path' "$LABCTL_CONTEXT")"
