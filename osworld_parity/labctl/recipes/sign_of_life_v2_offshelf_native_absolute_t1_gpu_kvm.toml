@@ -14,7 +14,7 @@ gpus = 1
 cpus = 8
 mem = "40GB"
 time = "01:00:00"
-qos = "low"
+qos = "normal"
 account = "hfmi_synergyunit"
 partition = "standard"
 sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001,hai005", "--nodelist=hai002"]
