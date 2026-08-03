@@ -10,7 +10,7 @@ import time
 import traceback
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
 
 from ..proper_vm_capability_ladder.rung1.transport import HttpVmTransport
 from ..proper_vm_capability_ladder.rung1.vm import (
@@ -39,6 +39,15 @@ OFFSHELF_MODEL = Path(
 )
 SERVED_MODEL = "qwen3-vl-4b-native-absolute"
 SYSTEM_PROMPT_ID = "computer_use_v1"
+
+
+def _select_tasks(tasks: Sequence[DevelopmentTask], task_index: int | None) -> tuple[DevelopmentTask, ...]:
+    """Select one reset-isolated suite cell without redefining the suite."""
+    if task_index is None:
+        return tuple(tasks)
+    if task_index < 0 or task_index >= len(tasks):
+        raise ValueError(f"task index {task_index} is outside [0, {len(tasks) - 1}]")
+    return (tasks[task_index],)
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -291,8 +300,10 @@ def run_suite(
     provider: Path,
     model_url: str | None = None,
     api_key: str = "sign-of-life",
+    task_index: int | None = None,
 ) -> dict[str, Any]:
     suite = load_suite()
+    selected_tasks = _select_tasks(suite.tasks, task_index)
     output_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
     infrastructure_errors: list[dict[str, Any]] = []
@@ -303,7 +314,7 @@ def run_suite(
             provider_path=provider,
             vm_log_dir=output_dir / "vm_logs",
         ) as session:
-            for task in suite.tasks:
+            for task in selected_tasks:
                 task_dir = output_dir / task.id
                 task_dir.mkdir(parents=True, exist_ok=True)
                 try:
@@ -347,6 +358,11 @@ def run_suite(
         "suite_role": suite.role,
         "final_benchmark": suite.final_benchmark,
         "suite_manifest_sha256": suite.manifest_sha256,
+        "selection": {
+            "task_index": task_index,
+            "task_ids": [task.id for task in selected_tasks],
+            "full_suite_task_count": len(suite.tasks),
+        },
         "mode": mode,
         "status": "complete" if not infrastructure_errors else "infrastructure_failure",
         "controls_ok": controls_ok,
@@ -393,6 +409,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--provider", type=Path, default=DEFAULT_PROVIDER)
     parser.add_argument("--api-key", default="sign-of-life")
     parser.add_argument("--sglang-port", type=int, default=0)
+    parser.add_argument(
+        "--task-index",
+        type=int,
+        default=None,
+        help="run one zero-based suite cell (used only for reset-isolated parallel execution)",
+    )
     args = parser.parse_args(argv)
     if args.mode == "model" and not args.model_path.joinpath("config.json").is_file():
         raise SystemExit(f"model path is incomplete: {args.model_path}")
@@ -411,6 +433,7 @@ def main(argv: list[str] | None = None) -> int:
             provider=args.provider,
             model_url=model_url,
             api_key=args.api_key,
+            task_index=args.task_index,
         )
     _atomic_json(args.output / "result.json", result)
     print(json.dumps(result["aggregate"], sort_keys=True), flush=True)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from osworld_parity.proper_vm_capability_ladder.rung1.transport import RecordingTransport
 from osworld_parity.sign_of_life_v2.actions import compile_native_absolute, execute_native_absolute
 from osworld_parity.sign_of_life_v2.oracle import evaluate
+from osworld_parity.sign_of_life_v2.runner import _select_tasks
 from osworld_parity.sign_of_life_v2.suite import load_suite
 
 
@@ -16,6 +17,19 @@ def test_single_fixed_suite_contract() -> None:
     assert suite.final_benchmark is False
     assert len(suite.tasks) == 4
     assert len(suite.manifest_sha256) == 64
+
+
+def test_task_index_is_only_an_execution_selector() -> None:
+    suite = load_suite()
+    assert [task.id for task in _select_tasks(suite.tasks, None)] == [task.id for task in suite.tasks]
+    assert [task.id for task in _select_tasks(suite.tasks, 2)] == ["desktop_open_chrome"]
+    for invalid in (-1, len(suite.tasks)):
+        try:
+            _select_tasks(suite.tasks, invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"task index {invalid} should have failed")
 
 
 def test_ls_requires_command_and_real_output() -> None:

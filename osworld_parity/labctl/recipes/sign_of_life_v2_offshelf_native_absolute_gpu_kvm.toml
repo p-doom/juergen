@@ -38,7 +38,7 @@ path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_fastreset"
 [outputs.result]
 type = "eval_result"
 marker = "result.json"
-alias = "sign_of_life_v2_offshelf_native_absolute_{run.id}"
+alias = "sign_of_life_v2_offshelf_native_absolute_t{args.task-index}_{run.id}"
 
 [args]
 mode = "model"
@@ -48,6 +48,13 @@ qcow = "{inputs.vm.path}/Ubuntu.qcow2"
 qemu = "{inputs.qemu.path}/bin/qemu-system-x86_64-wrapped"
 provider = "{inputs.provider.path}/qemu_fast_reset.py"
 sglang-port = "0"
+task-index = "0"
+
+[sweep]
+arg = "task-index"
+start = 0
+end = 3
+throttle = 4
 
 [env]
 PYTHONUNBUFFERED = "1"
