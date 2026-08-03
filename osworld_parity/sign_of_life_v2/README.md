@@ -21,10 +21,10 @@ Three labctl recipes exercise the same suite:
 
 - `sign_of_life_v2_oracle_cpu_kvm.toml`: scripted native-absolute gold actions;
 - `sign_of_life_v2_negative_cpu_kvm.toml`: wrong text/no-op/wrong-click controls;
-- `sign_of_life_v2_offshelf_native_absolute_gpu_kvm.toml`: off-the-shelf
-  Qwen3-VL-4B-Instruct using the native absolute computer-use tool format. Run
-  this recipe with `labctl run-sweep`; its four jobs each own one GPU and one
-  reset-isolated VM while preserving the single fixed suite definition.
+- `sign_of_life_v2_offshelf_native_absolute*_gpu_kvm.toml`: four explicit
+  off-the-shelf Qwen3-VL-4B-Instruct cells using the native absolute
+  computer-use tool format. Each run owns one GPU, one reset-isolated VM, and a
+  distinct labctl output envelope while preserving the single fixed suite.
 
 The scripted and model arms both compile into the same `Operation` stream and
 execute through `HttpVmTransport.execute_atomic`; transport acknowledgement is
