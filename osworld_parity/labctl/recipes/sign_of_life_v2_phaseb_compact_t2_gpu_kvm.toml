@@ -6,7 +6,13 @@ SOURCE="$(jq -er '.provenance.repo_path // .source_path' "$LABCTL_CONTEXT")"
 cd "$SOURCE"
 [[ -r /dev/kvm && -w /dev/kvm ]] || { echo "FATAL /dev/kvm unavailable" >&2; exit 2; }
 [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]] || { echo "FATAL model GPU allocation missing" >&2; exit 2; }
-exec uv run --project="$SOURCE/eval" python -m osworld_parity.sign_of_life_v2.runner "$@"
+[[ -x "$CUDA_HOME/bin/nvcc" ]] || { echo "FATAL CUDA compiler missing at $CUDA_HOME/bin/nvcc" >&2; exit 2; }
+RUNTIME="$(jq -er '.inputs[] | select(.role == "runtime") | .resolved_path' "$LABCTL_CONTEXT")"
+CACHE="$LABCTL_RUN_DIR/.cache"
+mkdir -p "$CACHE/inductor" "$CACHE/triton"
+export XDG_CACHE_HOME="$CACHE" FLASHINFER_WORKSPACE_BASE="$CACHE"
+export TORCHINDUCTOR_CACHE_DIR="$CACHE/inductor" TRITON_CACHE_DIR="$CACHE/triton"
+exec "$RUNTIME/bin/python" -m osworld_parity.sign_of_life_v2.runner "$@"
 ''', "--"]
 
 [resources]
@@ -34,6 +40,10 @@ path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu"
 [inputs.provider]
 type = "external"
 path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_fastreset"
+
+[inputs.runtime]
+type = "external"
+path = "/fast/home/franz.srambical/.tmp_suite/juergen-sign-of-life-eval-v2/.venv"
 
 [outputs.result]
 type = "eval_result"

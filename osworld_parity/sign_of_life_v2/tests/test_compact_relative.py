@@ -124,7 +124,12 @@ def test_four_gpu_cells_select_the_one_fixed_suite_without_alias_collisions() ->
         assert recipe["args"]["mode"] == "compact-model"
         assert recipe["args"]["task-index"] == str(index)
         assert recipe["inputs"]["model"]["artifact"] == expected_artifact
+        assert recipe["inputs"]["runtime"]["path"].endswith(
+            "/juergen-sign-of-life-eval-v2/.venv"
+        )
         assert recipe["env"]["CUDA_HOME"] == "/fast/service/apps/software/CUDA/12.6.0"
+        assert '[[ -x "$CUDA_HOME/bin/nvcc" ]]' in recipe["command"][2]
+        assert '"$RUNTIME/bin/python"' in recipe["command"][2]
         alias = recipe["outputs"]["result"]["alias"]
         assert alias not in aliases
         aliases.add(alias)
