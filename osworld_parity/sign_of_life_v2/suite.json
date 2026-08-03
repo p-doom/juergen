@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "suite_id": "crowdcast_sign_of_life_v2",
+  "role": "single_fixed_development_gate",
+  "final_benchmark": false,
+  "tasks": [
+    {
+      "id": "terminal_ls",
+      "kind": "terminal_command",
+      "instruction": "In the already-open terminal, type exactly `ls` and press Enter.",
+      "expected": {
+        "command": "ls",
+        "listing_marker": "solv2_listing_anchor_7c39.txt"
+      },
+      "max_steps": 6
+    },
+    {
+      "id": "terminal_exact_text",
+      "kind": "terminal_exact_text",
+      "instruction": "In the already-open terminal, type exactly `Transformers map token sequences with attention; exact actions keep the interface reliable.` and press Enter.",
+      "expected": {
+        "text": "Transformers map token sequences with attention; exact actions keep the interface reliable."
+      },
+      "max_steps": 6
+    },
+    {
+      "id": "desktop_open_chrome",
+      "kind": "open_chrome",
+      "instruction": "Open Google Chrome by clicking its icon in the left-side desktop dock.",
+      "expected": {
+        "active_window_class_any": ["google-chrome", "chromium", "chrome"]
+      },
+      "max_steps": 8
+    },
+    {
+      "id": "focus_terminal_and_type",
+      "kind": "focus_terminal_and_type",
+      "instruction": "Click inside the visible terminal, type exactly `printf SOLV2_COMPOUND_OK > /tmp/solv2_compound.txt`, and press Enter.",
+      "expected": {
+        "command": "printf SOLV2_COMPOUND_OK > /tmp/solv2_compound.txt",
+        "file": "/tmp/solv2_compound.txt",
+        "content": "SOLV2_COMPOUND_OK"
+      },
+      "max_steps": 8
+    }
+  ]
+}
