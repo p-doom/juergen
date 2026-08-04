@@ -1,0 +1,51 @@
+name = "synthetic_multistep_phasea_build_episodes_v1"
+repo = "juergen_phaseb_deltatype_v2"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+declare -A A
+for arg in "$@"; do
+  case "$arg" in --*=*) key="${arg%%=*}"; key="${key#--}"; A[$key]="${arg#*=}";;
+    *) echo "FATAL unexpected argument: $arg" >&2; exit 2;; esac
+done
+for key in runtime_python audit_dir out; do
+  [[ -n "${A[$key]:-}" ]] || { echo "FATAL missing --$key" >&2; exit 2; }
+done
+[[ "${A[runtime_python]}" = /* && -x "${A[runtime_python]}" ]] || {
+  echo "FATAL runtime_python must be an absolute executable: ${A[runtime_python]}" >&2
+  exit 3
+}
+exec "${A[runtime_python]}" "$REPO/osworld_parity/synthetic_multistep/build_episodes.py" \\
+  --audit-dir "${A[audit_dir]}" --out "${A[out]}"
+''', "--"]
+
+[resources]
+cpus = 4
+mem = "16GB"
+time = "00:20:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.audit]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand"
+
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+
+[outputs.episodes]
+type = "dataset"
+marker = "build_manifest.json"
+alias = "synthetic_multistep_phasea_episodes_v1_{run.id}"
+
+[args]
+runtime_python = "{inputs.runtime.path}/.venv/bin/python"
+audit_dir = "{inputs.audit.path}"
+out = "{outputs.episodes.path}"
+
+[env]
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"

@@ -1,0 +1,52 @@
+name = "synthetic_multistep_train_curriculum_A_to_B_r256_pinned_v1"
+repo = "juergen_phaseb_deltatype_v2"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+bash "$REPO/osworld_parity/synthetic_multistep/curriculum_train_export.sh" "$@"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 12
+mem = "150GB"
+time = "03:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--signal=USR1@600", "--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.dataset]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_stage2_raw_pre_v1_run_019fb52cca1e7d72987b79842d2d7b08"
+[inputs.source_model]
+type = "artifact"
+artifact = "relative_factorial_reltool_pre_r256_s750_capacity_v1_run_019fb4beda3472b289ae60fc612c1cea"
+# The trainer is a separate repo. Bind your own checkout once, then every
+# recipe here resolves it by alias:
+#   labctl register-external --alias omegalax_trainer --path <your-omegalax>
+# Phase A and Phase B both ran at omegalax b3f32c002998a1134c78845847a53ca9cc17fb10.
+[inputs.omegalax]
+type = "artifact"
+artifact = "omegalax_trainer"
+
+[outputs.model]
+type = "checkpoint"
+marker = "curriculum_train_export_manifest.json"
+alias = "synthetic_multistep_curriculum_A_to_B_raw_pre_r256_s750_v1_{run.id}"
+
+[args]
+omegalax_repo = "{inputs.omegalax.path}"
+dataset = "{inputs.dataset.path}"
+source_model = "{inputs.source_model.path}"
+output = "{outputs.model.path}"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+WANDB_MODE = "offline"
+PYTHONUNBUFFERED = "1"
+XLA_PYTHON_CLIENT_ALLOCATOR = "cuda_async"
+XLA_PYTHON_CLIENT_MEM_FRACTION = "0.8"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

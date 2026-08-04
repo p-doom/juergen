@@ -1,0 +1,108 @@
+name = "synthetic_multistep_build_curriculum_stage2_pinned_v1"
+repo = "juergen_phaseb_deltatype_v2"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+declare -A A
+for arg in "$@"; do
+  case "$arg" in --*=*) key="${arg%%=*}"; key="${key#--}"; A[$key]="${arg#*=}";;
+    *) echo "FATAL unexpected argument: $arg" >&2; exit 2;; esac
+done
+OUT="${A[out]}"
+PY="${A[runtime]}/.venv/bin/python"
+"$PY" "$REPO/osworld_parity/synthetic_multistep/build_curriculum_stage2.py" \
+  --out="$OUT" --audit-dir="${A[audit]}" --stage1-root="${A[stage1]}" \
+  --single-eval-scenes="${A[single_eval]}" --episode-root="${A[episodes]}"
+
+for split in train val; do
+  uv run --project="${A[omegalax]}" -- \
+    python "${A[omegalax]}/scripts/build_sft_records_from_chat.py" \
+    --data_path "$OUT/deltatype_raw_pre/_normalized/$split/chat.jsonl" \
+    --out_dir "$OUT/deltatype_raw_pre/$split" \
+    --model_id Qwen/Qwen3-VL-2B-Instruct \
+    --tokenizer Qwen/Qwen3-VL-2B-Instruct \
+    --processor Qwen/Qwen3-VL-2B-Instruct \
+    --max_length 4096 --overflow_mode truncate \
+    --records_per_shard 8000 --num_workers 8 --overwrite
+done
+
+OMX_SHA="$(git -C "${A[omegalax]}" rev-parse HEAD)"
+OMX_DIFF_SHA="$(git -C "${A[omegalax]}" diff --binary | sha256sum | awk '{print $1}')"
+python3 - "$OUT" "$OMX_SHA" "$OMX_DIFF_SHA" <<'PY'
+import json, sys
+from pathlib import Path
+out = Path(sys.argv[1])
+source = json.loads((out / "curriculum_source_manifest.json").read_text())
+report = json.loads((out / source["overlap_report"]).read_text())
+if report.get("status") != "pass":
+    raise SystemExit(f"FATAL overlap gate did not pass: {report}")
+for split, expected in (("train", 2000), ("val", 200)):
+    meta = json.loads((out / "deltatype_raw_pre" / split / "metadata.json").read_text())
+    if meta.get("num_records") != expected or meta.get("max_length") != 4096:
+        raise SystemExit(f"FATAL tokenization invariant {split}: {meta}")
+manifest = dict(source)
+manifest.update({
+    "artifact_type": "synthetic_multistep_curriculum_stage2_tokenized",
+    "status": "complete",
+    "max_length": 4096,
+    "omegalax_commit": sys.argv[2],
+    "omegalax_tracked_diff_sha256": sys.argv[3],
+})
+(out / "curriculum_dataset_manifest.json").write_text(
+    json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+)
+PY
+''', "--"]
+
+[resources]
+cpus = 16
+mem = "96GB"
+time = "01:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.stage1]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand/r3data_2k"
+[inputs.audit]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand"
+[inputs.single_eval]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand/runs/rung2_offshelf/px/scenes.jsonl"
+[inputs.episodes]
+type = "artifact"
+artifact = "synthetic_multistep_phasea_episodes_v1_run_019fb4f69ebe76a3aef087cbaafb92fa"
+# The trainer is a separate repo. Bind your own checkout once, then every
+# recipe here resolves it by alias:
+#   labctl register-external --alias omegalax_trainer --path <your-omegalax>
+# Phase A and Phase B both ran at omegalax b3f32c002998a1134c78845847a53ca9cc17fb10.
+[inputs.omegalax]
+type = "artifact"
+artifact = "omegalax_trainer"
+[inputs.runtime]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/reinforcement-learning/prime-rl"
+
+[outputs.dataset]
+type = "dataset"
+marker = "curriculum_dataset_manifest.json"
+alias = "synthetic_multistep_curriculum_stage2_raw_pre_v1_{run.id}"
+
+[args]
+out = "{outputs.dataset.path}"
+stage1 = "{inputs.stage1.path}"
+audit = "{inputs.audit.path}"
+single_eval = "{inputs.single_eval.path}"
+episodes = "{inputs.episodes.path}"
+omegalax = "{inputs.omegalax.path}"
+runtime = "{inputs.runtime.path}"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"
