@@ -20,6 +20,7 @@ import requests
 from PIL import Image
 
 from sampling import SamplingParams
+from shortgoal_grammar import FRAME_JPEG_QUALITY, IMAGE_PLACEHOLDER, K_IMAGES, KEEP_IMAGES
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -157,6 +158,193 @@ def build_loggable_messages(
     return _interleave_messages(system_prompt, instruction, parts, recent_actions)
 
 
+def keep_text_eviction_points(
+    n_frames: int,
+    k: int = K_IMAGES,
+    keep: int = KEEP_IMAGES,
+) -> list[int]:
+    """Frame indices whose arrival makes keep-text block eviction fire.
+
+    Pure and deterministic. Appending frame ``j`` makes it the ``j+1``-th live
+    image, so the first eviction is at ``j == k`` (live *would* be ``k+1``); it
+    drops the oldest live images in one block down to ``keep``, hence the next
+    eviction lands ``k + 1 - keep`` frames later. Exposed because the training
+    record builder cuts one record per eviction point — a record's context is
+    the window as it stands right after an eviction — so runtime window and
+    record boundaries come from this single function.
+    """
+    if not isinstance(n_frames, int) or n_frames < 1:
+        raise ValueError(f"n_frames must be a positive int, got {n_frames!r}")
+    _check_keep_text_window(k, keep)
+    step = k + 1 - keep
+    return [j for j in range(k, n_frames) if (j - k) % step == 0]
+
+
+def _check_keep_text_window(k: int, keep: int) -> None:
+    if not isinstance(k, int) or not isinstance(keep, int) or not 1 <= keep < k:
+        raise ValueError(f"keep-text window needs 1 <= keep < k, got k={k!r} keep={keep!r}")
+
+
+def _require_live_frame(frame: Image.Image) -> Image.Image:
+    if frame is None:
+        raise ValueError("a keep-text turn needs a live frame (None marks an evicted one)")
+    return frame
+
+
+class KeepTextWindow:
+    """Keep-all-text context window: every action line stays, only pixels expire.
+
+    ``append_turn``'s rolling window drops old text together with old frames;
+    this sibling keeps the whole episode's action history and expires images
+    only. ``frames[i] is None`` marks an evicted frame: its user turn keeps its
+    position and renders the fixed ``IMAGE_PLACEHOLDER`` text instead of an
+    image, so assistant turns never move and the prompt is append-only between
+    evictions (RadixAttention prefix reuse, exactly the reason eviction is a
+    block drop to ``keep`` rather than a slide-by-one).
+    """
+
+    def __init__(
+        self,
+        frame: Image.Image,
+        *,
+        k: int = K_IMAGES,
+        keep: int = KEEP_IMAGES,
+    ) -> None:
+        _check_keep_text_window(k, keep)
+        self.k = k
+        self.keep = keep
+        self.frames: list[Image.Image | None] = [_require_live_frame(frame)]
+        self.actions: list[str] = []
+        self.evicted_at: list[int] = []
+
+    def live_count(self) -> int:
+        """How many user turns still carry an image."""
+        return sum(f is not None for f in self.frames)
+
+    def liveness(self) -> list[bool]:
+        """Per-frame liveness, positionally aligned with ``frames``."""
+        return [f is not None for f in self.frames]
+
+    def frame_labels(self) -> list[str]:
+        """The PNG filename of every frame, evicted ones included."""
+        return keep_text_frame_labels(len(self.frames))
+
+    def append_turn(self, action_text: str, frame: Image.Image) -> None:
+        """Record the action produced from the current frame, plus the frame it led to."""
+        if not isinstance(action_text, str) or not action_text:
+            raise ValueError(f"action text must be a non-empty str, got {action_text!r}")
+        _require_live_frame(frame)
+        self.actions.append(action_text)
+        self.frames.append(frame)
+        if self.live_count() > self.k:
+            live = [i for i, f in enumerate(self.frames) if f is not None]
+            for i in live[:-self.keep]:
+                self.frames[i] = None
+            self.evicted_at.append(len(self.frames) - 1)
+
+
+def keep_text_frame_labels(n_frames: int) -> list[str]:
+    """PNG filenames of a keep-text window — always the whole episode from frame 0.
+
+    Unlike ``window_frame_labels`` (a contiguous tail), a keep-text window keeps
+    every turn's position for the whole episode, so the ids are ``[0 .. n-1]``.
+    """
+    if not isinstance(n_frames, int) or n_frames < 1:
+        raise ValueError(f"n_frames must be a positive int, got {n_frames!r}")
+    return [f"step_{i:03d}.png" for i in range(n_frames)]
+
+
+def keep_text_messages(
+    system_prompt: str,
+    goal: str | None,
+    frame_parts: list[dict[str, Any] | None],
+    actions: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Assemble the keep-text message list; ``frame_parts[i] is None`` == evicted.
+
+    Shape: system, then one user turn per frame carrying that frame's image part
+    — or the ``IMAGE_PLACEHOLDER`` text part once evicted — with the GOAL text
+    pinned to the FIRST user turn only, and ``actions[i]`` as the assistant turn
+    following frame ``i``. The last frame is the current screen and has no
+    action yet, so ``len(actions) == len(frame_parts) - 1``::
+
+        [ system,
+          user[goal? + frame_0 | placeholder], assistant[action_0],
+          user[frame_1 | placeholder],         assistant[action_1],
+          ...
+          user[frame_{N-1}] ]                  # current screen, always live
+
+    A training record instead ends on its own final assistant turn (the
+    ``TERMINATE`` that follows the last frame), so ``len(actions) ==
+    len(frame_parts)`` is accepted too — those are the only two legal shapes.
+
+    Public because the training-record builder assembles the same list from
+    file-path image refs: same structure, same text, same placement — which is
+    what makes a record and the runtime prompt for that step byte-identical.
+    """
+    actions = actions or []
+    if not frame_parts or len(actions) not in (len(frame_parts) - 1, len(frame_parts)):
+        raise ValueError(
+            "keep-text needs len(actions) == len(frame_parts) - 1 (runtime) or "
+            f"len(frame_parts) (trailing TERMINATE), got {len(actions)} actions "
+            f"and {len(frame_parts)} frames"
+        )
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    for i, part in enumerate(frame_parts):
+        content: list[Any] = []
+        if i == 0 and goal:
+            content.append({"type": "text", "text": goal})
+        content.append(part if part is not None else {"type": "text", "text": IMAGE_PLACEHOLDER})
+        messages.append({"role": "user", "content": content})
+        if i < len(actions):
+            messages.append({"role": "assistant", "content": actions[i]})
+    return messages
+
+
+def build_keep_text_messages(
+    *,
+    system_prompt: str,
+    goal: str | None,
+    frames: list[Image.Image | None],
+    actions: list[str] | None,
+    quality: int = FRAME_JPEG_QUALITY,
+) -> list[dict[str, Any]]:
+    """The keep-text message list as sent: live frames as base64 JPEG data URLs.
+
+    ``quality`` defaults to the training frame quality, NOT ``_pil_to_data_url``'s
+    legacy 85 (which stays as it is for ``append_turn``'s callers): a closed-loop
+    prompt must carry the same JPEG bytes as the training record for that step,
+    or rung 1(b) fails on pixels the checkpoint never saw.
+    """
+    parts = [
+        None if f is None
+        else {"type": "image_url", "image_url": {"url": _pil_to_data_url(f, quality=quality)}}
+        for f in frames
+    ]
+    return keep_text_messages(system_prompt, goal, parts, actions)
+
+
+def build_loggable_keep_text_messages(
+    *,
+    system_prompt: str,
+    goal: str | None,
+    actions: list[str] | None,
+    frame_labels: list[str],
+    liveness: list[bool],
+) -> list[dict[str, Any]]:
+    """The keep-text list as sent, with each live image replaced by ``<image name>``.
+
+    Evicted turns keep their placeholder text verbatim, so the persisted
+    ``prompt_NNN.json`` sidecar shows exactly which turns went blind and when,
+    without duplicating image bytes (see ``build_loggable_messages``).
+    """
+    parts = [
+        {"type": "image", "image": f"<image {lbl}>"} if live else None
+        for lbl, live in zip(frame_labels, liveness, strict=True)
+    ]
+    return keep_text_messages(system_prompt, goal, parts, actions)
+
+
 def _call_model(
     *,
     sglang_url: str,
@@ -168,6 +356,7 @@ def _call_model(
     recent_actions: list[str] | None = None,
     fresh_visual_context: bool = False,
     sampling: SamplingParams,
+    seed: int | None = None,
     request_timeout_s: float = 120.0,
 ) -> tuple[str, str | None]:
     """One chat-completion call, interleaving frames and the model's prior actions.
@@ -199,6 +388,9 @@ def _call_model(
     not just temperature — so the checkpoint's partial ``generation_config`` can
     no longer silently fill in the rest (top_p/top_k) or drop presence_penalty.
 
+    ``seed``, when given, rides along in the request so a sampled rollout is
+    reproducible run to run; greedy passes leave it ``None``.
+
     Returns ``(content, finish_reason)``. ``finish_reason == "length"``
     means the reply was truncated at ``max_tokens`` — callers MUST NOT
     dispatch a truncated action (a half-emitted ``down(...)`` would leave a
@@ -213,14 +405,53 @@ def _call_model(
         if fresh_visual_context
         else _interleave_messages(system_prompt, instruction, image_parts, recent_actions)
     )
+    request_json = {
+        "model": model,
+        "messages": messages,
+        **sampling.as_request_json(),
+    }
+    if seed is not None:
+        request_json["seed"] = int(seed)
     r = requests.post(
         sglang_url.rstrip("/") + "/chat/completions",
         headers={"Authorization": f"Bearer {api_key}"},
-        json={
-            "model": model,
-            "messages": messages,
-            **sampling.as_request_json(),
-        },
+        json=request_json,
+        timeout=request_timeout_s,
+    )
+    r.raise_for_status()
+    choice = r.json()["choices"][0]
+    return choice["message"]["content"] or "", choice.get("finish_reason")
+
+
+def call_model_messages(
+    *,
+    sglang_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    sampling: SamplingParams,
+    seed: int | None = None,
+    request_timeout_s: float = 120.0,
+) -> tuple[str, str | None]:
+    """One chat-completion call for an already-assembled message list.
+
+    The keep-text path assembles its own messages (``build_keep_text_messages``),
+    so it needs the request half of ``_call_model`` without the frame/action
+    interleaving. Decoding parameters, seed handling and the
+    ``(content, finish_reason)`` contract are identical — including the rule that
+    a ``finish_reason == "length"`` reply MUST NOT be dispatched.
+    """
+    request_json = {
+        "model": model,
+        "messages": messages,
+        **sampling.as_request_json(),
+    }
+    if seed is not None:
+        request_json["seed"] = int(seed)
+    r = requests.post(
+        sglang_url.rstrip("/") + "/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json=request_json,
         timeout=request_timeout_s,
     )
     r.raise_for_status()

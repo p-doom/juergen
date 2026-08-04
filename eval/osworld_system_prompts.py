@@ -336,3 +336,19 @@ _CUA_OEV2_THINKING_FILE = (
     / "data_pipeline/realigned_pipeline/system_prompts/cua_oev2_thinking.txt"
 )
 SYSTEM_PROMPTS["cua_oev2_thinking"] = _CUA_OEV2_THINKING_FILE.read_text().strip()
+
+_SHORTGOAL_OEV4_REL_V1_FILE = (
+    _Path(__file__).resolve().parents[1]
+    / "data_pipeline/realigned_pipeline/system_prompts/shortgoal_oev4_rel_v1.txt"
+)
+SYSTEM_PROMPTS["shortgoal_oev4_rel_v1"] = (
+    _SHORTGOAL_OEV4_REL_V1_FILE.read_text().strip()
+)
+
+_SHORTGOAL_OEV4_ABS_V1_FILE = (
+    _Path(__file__).resolve().parents[1]
+    / "data_pipeline/realigned_pipeline/system_prompts/shortgoal_oev4_abs_v1.txt"
+)
+SYSTEM_PROMPTS["shortgoal_oev4_abs_v1"] = (
+    _SHORTGOAL_OEV4_ABS_V1_FILE.read_text().strip()
+)

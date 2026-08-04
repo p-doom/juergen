@@ -280,6 +280,31 @@ class OSWorldClient:
         "import pyautogui; import time; pyautogui.FAILSAFE = False; pyautogui.PAUSE = 0; "
     )
 
+    def run_command(self, command: list[str] | str, *, shell: bool = False) -> dict:
+        """Run a command in the VM and return the agent's structured result.
+
+        Unlike :meth:`execute`, this is not limited to pyautogui expressions.
+        Short-goal task setup and state-based verification use it (for example,
+        reading an instrumented fixture's JSON state or running ``test -f`` in
+        the guest). A non-zero guest return code is surfaced as
+        ``RuntimeError`` so a broken verifier cannot silently turn into a model
+        failure.
+        """
+        r = self._sess.post(
+            f"{self.base_url}/execute",
+            json={"command": command, "shell": shell},
+            timeout=self.timeout,
+        )
+        r.raise_for_status()
+        result = r.json()
+        if result.get("status") != "success" or int(result.get("returncode", 0)) != 0:
+            raise RuntimeError(
+                "VM command failed: "
+                f"status={result.get('status')!r} rc={result.get('returncode')!r} "
+                f"stderr={result.get('error', result.get('message', ''))!r}"
+            )
+        return result
+
     def execute(self, command: str) -> None:
         """Run a pyautogui expression in the VM via /execute.
 
@@ -391,6 +416,14 @@ class OSWorldClient:
         - ``type("text")``  -> one ``pyautogui.write`` call (the same
           typing path ``dispatch_computer_use`` uses); no cursor effect.
 
+        ``ordered_events_v4_abs`` adds one kind — pixels in, like every other
+        kind, so callers denormalize the 0-1000 grid first
+        (``shortgoal_grammar.denorm_v4``):
+
+        - ``move_to(x,y)`` -> absolute ``moveTo`` at the clipped pixel,
+          advancing the same locally tracked cursor as ``move`` so a following
+          click lands there.
+
         ``computer_use_rel_v1`` kinds (mouse_move_rel arrives as ``move``,
         scroll/hscroll as ``scroll``, type as ``type`` — shared with above):
 
@@ -432,6 +465,18 @@ class OSWorldClient:
                 total_dy += p.dy
                 ntx = max(0, min(sw - 1, tx + p.dx))
                 nty = max(0, min(sh - 1, ty + p.dy))
+                if (ntx, nty) != (tx, ty):
+                    cmd = f"pyautogui.moveTo({ntx}, {nty})"
+                    self.execute(cmd)
+                    executed.append(cmd)
+                tx, ty = ntx, nty
+            elif p.kind == "move_to":
+                if p.x is None or p.y is None:
+                    raise ValueError(f"move_to needs both pixel coordinates: {p!r}")
+                ntx = max(0, min(sw - 1, p.x))
+                nty = max(0, min(sh - 1, p.y))
+                total_dx += ntx - tx
+                total_dy += nty - ty
                 if (ntx, nty) != (tx, ty):
                     cmd = f"pyautogui.moveTo({ntx}, {nty})"
                     self.execute(cmd)

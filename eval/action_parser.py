@@ -24,6 +24,13 @@ Inside ``type("...")`` the only escapes are ``\\\\`` (backslash) and ``\\"``
 splitting into primitives must be quote-aware (see
 ``_split_ordered_primitives``).
 
+Short-goal ordered grammar (``ordered_events_v4_rel`` / ``ordered_events_v4_abs``;
+binding contract: ``ORDERED_EVENTS_V4_GRAMMAR`` in eval/shortgoal_grammar.py) —
+the v3 line grammar with a single-int ``scroll(<notches>)`` and one
+arm-divergent mouse primitive, ``move(dx,dy)`` in per-axis thousandths of the
+screen (rel) or ``move_to(x,y)`` on the 0-1000 grid (abs); see
+``parse_ordered_v4_action``.
+
 Native tool-call grammar (``computer_use_rel_v1``; binding contract:
 data_pipeline/realigned_pipeline/system_prompts/cua_v4_thinking.txt):
 
@@ -235,6 +242,10 @@ class OrderedPrimitive:
     - ``"wait"``         no fields; NEVER dispatched (behaves like NO_OP)
     - ``"terminate"``    ``status`` in success/failure; NEVER dispatched
                          (the rollout loop's stop condition)
+
+    ``ordered_events_v4_abs`` adds ``"move_to"`` with ``x``/``y`` — a 0-1000
+    grid point as parsed, VM pixels after ``shortgoal_grammar.denorm_v4``.
+    Every other kind is shared, so ``x``/``y`` are None everywhere else.
     """
     kind: str
     dx: int | None = None
@@ -245,6 +256,8 @@ class OrderedPrimitive:
     keys: tuple[str, ...] | None = None  # key_combo only
     count: int | None = None  # click only: 1/2/3
     status: str | None = None  # terminate only: "success" | "failure"
+    x: int | None = None
+    y: int | None = None
 
 
 @dataclass(frozen=True)
@@ -425,6 +438,115 @@ def parse_ordered_action_tolerant(text: str) -> OrderedAction:
     if not lines:
         raise ValueError(f"empty response in tolerant parse of {text!r}")
     return parse_ordered_action(lines[-1])
+
+
+ORDERED_V4_ARM_REL = "ordered_events_v4_rel"
+ORDERED_V4_ARM_ABS = "ordered_events_v4_abs"
+ORDERED_V4_ARMS = frozenset({ORDERED_V4_ARM_REL, ORDERED_V4_ARM_ABS})
+ORDERED_V4_SCALE = 1000
+
+_ORDERED_V4_MOVE_RE = re.compile(r"^move\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)$")
+_ORDERED_V4_MOVE_TO_RE = re.compile(r"^move_to\(\s*(\d+)\s*,\s*(\d+)\s*\)$")
+_ORDERED_V4_SCROLL_RE = re.compile(r"^scroll\(\s*(-?\d+)\s*\)$")
+
+
+def _parse_ordered_v4_primitive(prim: str, *, arm: str) -> OrderedPrimitive:
+    if m := _ORDERED_V4_MOVE_RE.match(prim):
+        if arm != ORDERED_V4_ARM_REL:
+            raise ValueError(f"move() is only legal in {ORDERED_V4_ARM_REL}: {prim!r}")
+        dx, dy = int(m.group(1)), int(m.group(2))
+        if abs(dx) > ORDERED_V4_SCALE or abs(dy) > ORDERED_V4_SCALE:
+            raise ValueError(f"move() delta outside +-{ORDERED_V4_SCALE}: {prim!r}")
+        if dx == 0 and dy == 0:
+            raise ValueError(f"move(0,0) is never emitted: {prim!r}")
+        return OrderedPrimitive(kind="move", dx=dx, dy=dy)
+    if m := _ORDERED_V4_MOVE_TO_RE.match(prim):
+        if arm != ORDERED_V4_ARM_ABS:
+            raise ValueError(f"move_to() is only legal in {ORDERED_V4_ARM_ABS}: {prim!r}")
+        x, y = int(m.group(1)), int(m.group(2))
+        if x > ORDERED_V4_SCALE or y > ORDERED_V4_SCALE:
+            raise ValueError(f"move_to() outside the 0-{ORDERED_V4_SCALE} grid: {prim!r}")
+        return OrderedPrimitive(kind="move_to", x=x, y=y)
+    if m := _ORDERED_V4_SCROLL_RE.match(prim):
+        notches = int(m.group(1))
+        if notches == 0:
+            raise ValueError(f"scroll(0) is never emitted: {prim!r}")
+        return OrderedPrimitive(kind="scroll", dx=0, dy=notches)
+    if m := _ORDERED_KEY_RE.match(prim):
+        name = m.group(2)
+        return OrderedPrimitive(
+            kind=m.group(1), name=name, mouse_button=_MOUSE_BUTTON_CODES.get(name)
+        )
+    if prim.startswith("type("):
+        return OrderedPrimitive(kind="type", text=_parse_type_primitive(prim))
+    raise ValueError(f"malformed ordered_events_v4 primitive: {prim!r}")
+
+
+def parse_ordered_v4_action(text: str, *, arm: str) -> OrderedAction:
+    """Parse one ``ordered_events_v4`` action line for ``arm``.
+
+    Args:
+        text: the assistant's response. Trailing whitespace is stripped;
+              everything after the first ``\\n`` is ignored (as in v3 — the
+              type() payload grammar admits no newline).
+        arm: ``ordered_events_v4_rel`` or ``ordered_events_v4_abs``. The other
+             arm's mouse primitive is a parse error, never a silent accept.
+
+    Returns:
+        An ``OrderedAction`` whose primitives are ``move`` (normalized deltas
+        in dx/dy), ``move_to`` (grid coordinates in x/y), ``scroll`` (dx=0,
+        dy=notches), ``down``, ``up``, ``type``.
+
+    Raises:
+        ValueError on anything outside the grammar: the wrong arm's mouse
+        primitive, out-of-range coordinates, ``scroll(0)``, ``move(0,0)``,
+        two-argument v3 ``scroll(dx,dy)``, an empty line, trailing garbage, a
+        truncated primitive, or ``TERMINATE`` (a whole-line reply the caller
+        recognises before parsing, exactly as with v3).
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"parse_ordered_v4_action expects str, got {type(text)!r}")
+    if arm not in ORDERED_V4_ARMS:
+        raise ValueError(f"unknown ordered_events_v4 arm: {arm!r}")
+    text = text.strip()
+    if "\n" in text:
+        text = text.split("\n", 1)[0].strip()
+    if not text:
+        raise ValueError("empty action text")
+
+    if text == "NO_OP":
+        return OrderedAction(primitives=(), no_op=True)
+
+    parts = _split_ordered_primitives(text)
+    if any(not p for p in parts):
+        raise ValueError(f"empty primitive in ordered action: {text!r}")
+    return OrderedAction(
+        primitives=tuple(_parse_ordered_v4_primitive(p, arm=arm) for p in parts),
+        no_op=False,
+    )
+
+
+def parse_ordered_v4_action_tolerant(text: str, *, arm: str) -> OrderedAction:
+    """Like ``parse_ordered_v4_action`` but tolerates prose preceding the line.
+
+    Mirrors ``parse_ordered_action_tolerant``: strict parse of the full text
+    first (which already cuts to the first line), then strict parse of the last
+    non-blank line. The body is ALWAYS routed through the strict parser.
+    """
+    if not isinstance(text, str):
+        raise TypeError(
+            f"parse_ordered_v4_action_tolerant expects str, got {type(text)!r}"
+        )
+    if arm not in ORDERED_V4_ARMS:
+        raise ValueError(f"unknown ordered_events_v4 arm: {arm!r}")
+    try:
+        return parse_ordered_v4_action(text, arm=arm)
+    except ValueError:
+        pass
+    lines = [ln for ln in (s.strip() for s in text.splitlines()) if ln]
+    if not lines:
+        raise ValueError(f"empty response in tolerant parse of {text!r}")
+    return parse_ordered_v4_action(lines[-1], arm=arm)
 
 
 _TOOL_CALL_RE = re.compile(

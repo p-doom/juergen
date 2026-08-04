@@ -38,7 +38,7 @@ if _JUERGEN_EVAL not in sys.path:
 from action_parser import (  # noqa: E402
     OrderedAction, parse_action_tolerant, parse_computer_use_action_tolerant,
     parse_computer_use_rel_step_action, parse_computer_use_tool_call,
-    parse_ordered_action_tolerant,
+    parse_ordered_action_tolerant, parse_ordered_v4_action_tolerant,
 )
 from osworld_vm_client import OSWorldClient  # noqa: E402
 from osworld_system_prompts import SYSTEM_PROMPTS  # noqa: E402
@@ -48,6 +48,7 @@ from osworld_runtime import (  # noqa: E402
     build_loggable_messages, window_frame_labels,
 )
 import sampling as sampling_mod  # noqa: E402
+import shortgoal_grammar  # noqa: E402
 from sampling import SamplingParams  # noqa: E402
 
 _LOGGER = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ _TERMINATE = "TERMINATE"
 _ACTION_FORMATS = (
     "canonical", "ordered_events_v2", "ordered_events_v3", "computer_use_rel_v1",
     "computer_use_rel_norm_v1", "computer_use_rel_step_v1",
+    shortgoal_grammar.ARM_REL, shortgoal_grammar.ARM_ABS,
 )
 _ORDERED_FORMATS = frozenset({"ordered_events_v2", "ordered_events_v3"})
 _NATIVE_FORMAT = "computer_use_rel_v1"
@@ -81,6 +83,7 @@ _NATIVE_FORMATS = frozenset({_NATIVE_FORMAT, _NATIVE_NORM_FORMAT, _NATIVE_STEP_F
 # VM pixels before dispatch.
 _NORMALIZED_FORMATS = frozenset({_NATIVE_NORM_FORMAT, _NATIVE_STEP_FORMAT})
 _NORMALIZED_SCALE = 1000.0
+_V4_FORMATS = frozenset(shortgoal_grammar.ARMS)
 # Default action format per system prompt; anything unlisted is canonical.
 _PROMPT_ACTION_FORMATS = {
     "cua_v3_thinking": "ordered_events_v3",
@@ -89,6 +92,8 @@ _PROMPT_ACTION_FORMATS = {
     "cua_v4_thinking_norm": _NATIVE_NORM_FORMAT,
     "cua_rel_step_v1_thinking": _NATIVE_STEP_FORMAT,
     "cua_oev2_thinking": "ordered_events_v2",
+    shortgoal_grammar.PROMPT_IDS[shortgoal_grammar.ARM_REL]: shortgoal_grammar.ARM_REL,
+    shortgoal_grammar.PROMPT_IDS[shortgoal_grammar.ARM_ABS]: shortgoal_grammar.ARM_ABS,
 }
 # Prompts whose training data conditions on "GOAL: {goal}" as the first
 # user-turn text (stage_04t goal conditioning).
@@ -99,6 +104,8 @@ _GOAL_CONDITIONED_PROMPT_IDS = frozenset({
     "cua_v4_thinking_norm",
     "cua_oev2_thinking",
     "cua_rel_step_v1_thinking",
+    shortgoal_grammar.PROMPT_IDS[shortgoal_grammar.ARM_REL],
+    shortgoal_grammar.PROMPT_IDS[shortgoal_grammar.ARM_ABS],
 })
 
 
@@ -361,6 +368,10 @@ def _run_rollout(
     use_ordered = action_format in _ORDERED_FORMATS
     use_native = action_format in _NATIVE_FORMATS
     use_rel_step = action_format == _NATIVE_STEP_FORMAT
+    use_v4 = action_format in _V4_FORMATS
+    if use_v4:
+        _LOGGER.info("%s: denormalizing the 0-1000 grid to VM %dx%d via denorm_v4",
+                     action_format, sw, sh)
     # Rel-step training examples are independent decision records containing
     # the goal and at most four chronological screenshots in one user turn.
     # Keep deployment exactly in-distribution and never replay model actions.
@@ -545,7 +556,25 @@ def _run_rollout(
             else:
                 try:
                     sr = None
-                    if use_native or use_ordered:
+                    if use_v4:
+                        action = parse_ordered_v4_action_tolerant(
+                            clean_text, arm=action_format,
+                        )
+                        parsed = {
+                            "no_op": action.no_op,
+                            "primitives": [
+                                {
+                                    "kind": p.kind, "dx": p.dx, "dy": p.dy,
+                                    "x": p.x, "y": p.y,
+                                    "name": p.name, "text": p.text,
+                                }
+                                for p in action.primitives
+                            ],
+                        }
+                        sr = client.dispatch_ordered_action(
+                            shortgoal_grammar.denorm_v4(action, (sw, sh)),
+                        )
+                    elif use_native or use_ordered:
                         if use_native:
                             action = (
                                 parse_computer_use_rel_step_action(clean_text)
