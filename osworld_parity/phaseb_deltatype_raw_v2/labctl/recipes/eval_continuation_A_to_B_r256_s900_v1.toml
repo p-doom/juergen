@@ -1,0 +1,139 @@
+# Held-out (val) cell of the teacher-forced evaluator against the Phase-B s900
+# merged HF export. Estimand is oracle-history single-turn greedy generation:
+# TEACHER-FORCED, NOT rollouts.
+#
+# The sha256 gates below pin the measurement code so this cell and the
+# train-split cells (eval_train_*_shard{0..3} + aggregate) are byte-comparable.
+# The inline block verifies the checkpoint being scored against its own
+# export_manifest.json before a single token is generated.
+name = "phaseb_raw_deltatype_v2_eval_continuation_A_to_B_r256_s900_v1"
+repo = "juergen_phaseb_deltatype_v2"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+test "$REPO" = "$PWD"
+case "$REPO" in "$LABCTL_RUN_DIR"/source/juergen_phaseb_deltatype_v2) ;; *) exit 90;; esac
+test "$(sha256sum "$REPO/osworld_parity/phaseb_deltatype_raw_v2/eval.sh" | awk '{print $1}')" = "d333444be552d47404243319d2a098f5a01f6127eb0fbf90ae6263f2c3177558"
+test "$(sha256sum "$REPO/osworld_parity/phaseb_oracle_eval.py" | awk '{print $1}')" = "984459496871d5baf3434c81fdcc1190c25ba4916c2fb565faba6fc3c3203092"
+test "$(sha256sum "$REPO/osworld_parity/phaseb_canonical_eval.py" | awk '{print $1}')" = "48fd808b872a5b2460459c40b78958ff38947ad595408993c188aae89a7bdf34"
+test "$(sha256sum "$REPO/osworld_parity/phaseb_relative/relative_eval.py" | awk '{print $1}')" = "006bddca38ad7304adbe50c9956b03fe2feb3ae8bcb34e89412825842f38000f"
+test "$(sha256sum "$REPO/osworld_parity/phaseb_deltatype_raw_v2/action_v2.py" | awk '{print $1}')" = "1ded3d5a7e51da71cf3082049fbdd404971ebf72a95d93f333ebb3ee3075ccb7"
+MODEL="$(jq -r '.inputs[] | select(.role == "model") | .resolved_path' "$LABCTL_CONTEXT")"
+RUNTIME="$(jq -r '.inputs[] | select(.role == "runtime") | .resolved_path' "$LABCTL_CONTEXT")"
+DATASET="$(jq -r '.inputs[] | select(.role == "dataset") | .resolved_path' "$LABCTL_CONTEXT")"
+NORMALIZED="$(jq -r '.inputs[] | select(.role == "normalized_gold") | .resolved_path' "$LABCTL_CONTEXT")"
+M="$MODEL/export_manifest.json"
+test -f "$M"
+test "$(sha256sum "$M" | awk '{print $1}')" = "9c141897dec6b468c35d9eb522907b32cde34d925d8771e49dd018943cf5530c"
+test "$(sha256sum "$RUNTIME/runtime_manifest.json" | awk '{print $1}')" = "3428288982e1f4b1d621817fdc0c3637e1b66056c1a7e27325097db1669cecd0"
+test "$(sha256sum "$RUNTIME/runtime_inventory.jsonl" | awk '{print $1}')" = "bf445d7397ef20a28d0603587264abf7be428c6ac516a899506d0f7dd31bd85d"
+test "$(sha256sum "$DATASET/dataset_manifest.json" | awk '{print $1}')" = "77085ee3c2ea7d780e96ade76efbffc0746139c0c619a5d9cbcec8562a1a25d5"
+test "$(jq -r '.record_counts.val' "$DATASET/dataset_manifest.json")" = "233"
+test "$(jq -r '.heldout_intersection_count' "$DATASET/dataset_manifest.json")" = "0"
+test "$(sha256sum "$DATASET/val/chat.jsonl" | awk '{print $1}')" = "a819011d5f8524cad1980d720fcdbc98a838a37b33de499c46eb4c13c94acadd"
+test "$(sha256sum "$NORMALIZED/build_manifest.json" | awk '{print $1}')" = "fbf9169219baabbeb582dc1e1abc6f7c2c1e71fa3a1e4060ecddd5de6025987e"
+test "$(sha256sum "$NORMALIZED/_normalized/val/chat.jsonl" | awk '{print $1}')" = "b51221df5f044f21092fec6a973c6d8164a7119f2b4971841fc5926df6e9ef7c"
+EVAL_PY="$RUNTIME/payload/eval_venv/bin/python"
+test -x "$EVAL_PY"
+case "$(realpath "$EVAL_PY")" in "$RUNTIME"/payload/*) ;; *) exit 92;; esac
+unset HF_HOME UV_CACHE_DIR
+export HF_HOME="$LABCTL_RUN_DIR/cache/huggingface" HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+mkdir -p "$HF_HOME"
+test "$(sha256sum "$RUNTIME/payload/native/libnccl.so.2" | awk '{print $1}')" = "$(jq -r '.native_runtime.nccl_sha256' "$RUNTIME/runtime_manifest.json")"
+export LD_PRELOAD="$RUNTIME/payload/native/libnccl.so.2"
+test "$(jq -r '.artifact_type' "$M")" = "phaseb_raw_deltatype_v2_A_to_B_hf_checkpoint"
+test "$(jq -r '.status' "$M")" = "complete"
+test "$(jq -r '.step' "$M")" = "900"
+test "$(jq -r '.lora_rank' "$M")" = "256"
+test "$(jq -r '.source_artifact_type' "$M")" = "phaseb_raw_deltatype_v2_production_orbax_exact_timeout_continuation"
+test -f "$MODEL/hf/config.json"
+test "$(sha256sum "$MODEL/hf/config.json" | awk '{print $1}')" = "$(jq -r '.config_sha256' "$M")"
+jq -e '.weights | length > 0 and all(.[]; (.name | type == "string") and (.size | type == "number") and (.sha256 | test("^[0-9a-f]{64}$")))' "$M" >/dev/null
+"$EVAL_PY" - "$MODEL/hf" "$M" <<'PY'
+import json, sys
+from pathlib import Path
+root, manifest_path = Path(sys.argv[1]), Path(sys.argv[2])
+manifest = json.loads(manifest_path.read_text())
+declared = sorted(row["name"] for row in manifest["weights"])
+actual = sorted(path.relative_to(root).as_posix() for path in root.rglob("*.safetensors") if path.is_file())
+if actual != declared:
+    raise SystemExit(f"FATAL recursive safetensor set mismatch: actual={actual} declared={declared}")
+index_path = root / "model.safetensors.index.json"
+expected_index = manifest.get("weight_index_sha256")
+if expected_index is None:
+    if index_path.exists():
+        raise SystemExit("FATAL undeclared weight index")
+else:
+    index = json.loads(index_path.read_text())
+    weight_map = index.get("weight_map")
+    if (not isinstance(weight_map, dict)
+            or any(not isinstance(k, str) or not isinstance(v, str) for k, v in weight_map.items())
+            or sorted(set(weight_map.values())) != declared):
+        raise SystemExit("FATAL weight index map does not exactly cover declared safetensors")
+PY
+while IFS=$'\t' read -r name size digest; do
+  case "$name" in /*|../*|*/../*|*/..|"") exit 91;; esac
+  weight="$MODEL/hf/$name"
+  test -f "$weight"
+  test "$(stat -c %s "$weight")" = "$size"
+  test "$(sha256sum "$weight" | awk '{print $1}')" = "$digest"
+done < <(jq -r '.weights[] | [.name, (.size|tostring), .sha256] | @tsv' "$M")
+INDEX="$MODEL/hf/model.safetensors.index.json"
+EXPECTED_INDEX="$(jq -r '.weight_index_sha256 // empty' "$M")"
+if [[ -n "$EXPECTED_INDEX" ]]; then
+  test -f "$INDEX"
+  test "$(sha256sum "$INDEX" | awk '{print $1}')" = "$EXPECTED_INDEX"
+else
+  test ! -e "$INDEX"
+fi
+bash "$REPO/osworld_parity/phaseb_deltatype_raw_v2/eval.sh" "$@" \
+  "--experiment_dir=$REPO/osworld_parity/phaseb_deltatype_raw_v2"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 16
+mem = "150GB"
+time = "00:20:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.model]
+type = "artifact"
+artifact = "phaseb_raw_deltatype_v2_A_to_B_r256_s900_continuation_hf_v4_run_019fba52e90778e0b8ae170058c814e7"
+[inputs.dataset]
+type = "artifact"
+artifact = "phaseb_raw_deltatype_v2_build_audit_v1_run_019fb5a5564e7a71b3ad6e55426af463"
+[inputs.normalized_gold]
+type = "artifact"
+artifact = "phaseb_normalized_v2_fullcall_A_to_A_r256_v1"
+[inputs.runtime]
+type = "artifact"
+artifact = "phaseb_raw_s900_posttrain_runtime_v2_fresh_rebuild_run_019fb9d0bbda7bc2b51f60fe924687df"
+
+[outputs.result]
+type = "eval_result"
+marker = "eval_manifest.json"
+alias = "phaseb_raw_deltatype_v2_eval_continuation_A_to_B_r256_s900_v1_{run.id}"
+
+[args]
+model = "{inputs.model.path}"
+model_manifest = "{inputs.model.path}/export_manifest.json"
+model_stage = "phaseb_final"
+dataset = "{inputs.dataset.path}"
+normalized_gold = "{inputs.normalized_gold.path}"
+out = "{outputs.result.path}"
+runtime_dir = "{inputs.runtime.path}/payload/eval_venv"
+# The surviving evaluator revision requires these three explicitly; the held-out
+# cell is the whole 233-row val split, unsharded.
+dataset_kind = "val"
+shard_count = "1"
+shard_index = "0"
+
+[env]
+HF_HUB_OFFLINE = "1"
+TRANSFORMERS_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"

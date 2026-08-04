@@ -1,0 +1,74 @@
+# Train-split cell 3 of 4 for the teacher-forced evaluator. Identical to
+# its three siblings and to the held-out cell except for --shard-index; the four
+# shard results are combined by aggregate_train_A_to_B_r256_s900_v1.toml.
+name = "phaseb_raw_s900_train_tf_shard3_v1"
+repo = "juergen_phaseb_deltatype_v2"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+test "$REPO" = "$PWD"
+case "$REPO" in "$LABCTL_RUN_DIR"/source/juergen_phaseb_deltatype_v2) ;; *) exit 90;; esac
+test "$(sha256sum "$REPO/osworld_parity/phaseb_deltatype_raw_v2/eval.sh" | awk '{print $1}')" = "d333444be552d47404243319d2a098f5a01f6127eb0fbf90ae6263f2c3177558"
+test "$(sha256sum "$REPO/osworld_parity/phaseb_oracle_eval.py" | awk '{print $1}')" = "984459496871d5baf3434c81fdcc1190c25ba4916c2fb565faba6fc3c3203092"
+test "$(sha256sum "$REPO/osworld_parity/phaseb_canonical_eval.py" | awk '{print $1}')" = "48fd808b872a5b2460459c40b78958ff38947ad595408993c188aae89a7bdf34"
+test "$(sha256sum "$REPO/osworld_parity/phaseb_relative/relative_eval.py" | awk '{print $1}')" = "006bddca38ad7304adbe50c9956b03fe2feb3ae8bcb34e89412825842f38000f"
+test "$(sha256sum "$REPO/osworld_parity/phaseb_deltatype_raw_v2/action_v2.py" | awk '{print $1}')" = "1ded3d5a7e51da71cf3082049fbdd404971ebf72a95d93f333ebb3ee3075ccb7"
+MODEL="$(jq -r '.inputs[] | select(.role == "model") | .resolved_path' "$LABCTL_CONTEXT")"
+RUNTIME="$(jq -r '.inputs[] | select(.role == "runtime") | .resolved_path' "$LABCTL_CONTEXT")"
+test "$(sha256sum "$MODEL/export_manifest.json" | awk '{print $1}')" = "9c141897dec6b468c35d9eb522907b32cde34d925d8771e49dd018943cf5530c"
+test "$(sha256sum "$RUNTIME/runtime_manifest.json" | awk '{print $1}')" = "23bf50c519f81365ac1fcb2d57db6d2e5ad34385d6e421a18e8880b276bf87d9"
+# The shard runs originally preloaded NCCL 2.28.3 from a personal scratch dir.
+# Take the runtime artifact's own copy instead (what the held-out recipe already
+# did); override with NCCL_PRELOAD if a different one is needed.
+export LD_PRELOAD="${NCCL_PRELOAD:-$RUNTIME/payload/native/libnccl.so.2}"
+test -f "$LD_PRELOAD"
+bash "$REPO/osworld_parity/phaseb_deltatype_raw_v2/eval.sh" "$@" \
+  "--experiment_dir=$REPO/osworld_parity/phaseb_deltatype_raw_v2"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 8
+mem = "40GB"
+time = "01:30:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.model]
+type = "artifact"
+artifact = "artifact_896c1de00b60c27c"
+[inputs.dataset]
+type = "artifact"
+artifact = "phaseb_raw_deltatype_v2_build_audit_v1_run_019fb5a5564e7a71b3ad6e55426af463"
+[inputs.normalized_gold]
+type = "artifact"
+artifact = "phaseb_normalized_v2_fullcall_A_to_A_r256_v1"
+[inputs.runtime]
+type = "artifact"
+artifact = "artifact_866218c1d704e6f8"
+
+[outputs.result]
+type = "eval_result"
+marker = "eval_manifest.json"
+alias = "phaseb_raw_s900_train_tf_shard3_v1_{run.id}"
+
+[args]
+model = "{inputs.model.path}"
+model_manifest = "{inputs.model.path}/export_manifest.json"
+model_stage = "phaseb_final"
+dataset = "{inputs.dataset.path}"
+normalized_gold = "{inputs.normalized_gold.path}"
+out = "{outputs.result.path}"
+runtime_dir = "{inputs.runtime.path}/payload/eval_venv"
+dataset_kind = "train"
+shard_count = "4"
+shard_index = "3"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

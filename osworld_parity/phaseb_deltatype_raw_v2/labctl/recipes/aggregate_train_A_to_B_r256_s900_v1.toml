@@ -1,0 +1,70 @@
+name = "phaseb_raw_s900_train_tf_aggregate_v1"
+repo = "juergen_phaseb_deltatype_v2"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+test "$REPO" = "$PWD"
+test "$(sha256sum "$REPO/osworld_parity/phaseb_deltatype_raw_v2/aggregate_train_eval.py" | awk '{print $1}')" = "6fb76b70aa89b05dfc94d284dddbd05672f60c918f944e03fa7cd9758bb05405"
+test "$(sha256sum "$REPO/osworld_parity/phaseb_oracle_eval.py" | awk '{print $1}')" = "984459496871d5baf3434c81fdcc1190c25ba4916c2fb565faba6fc3c3203092"
+test "$(sha256sum "$REPO/osworld_parity/phaseb_canonical_eval.py" | awk '{print $1}')" = "48fd808b872a5b2460459c40b78958ff38947ad595408993c188aae89a7bdf34"
+RUNTIME="$(jq -r '.inputs[] | select(.role == "runtime") | .resolved_path' "$LABCTL_CONTEXT")"
+"$RUNTIME/payload/eval_venv/bin/python" \
+  "$REPO/osworld_parity/phaseb_deltatype_raw_v2/aggregate_train_eval.py" "$@"
+''', "--"]
+
+[resources]
+gpus = 0
+cpus = 4
+mem = "24GB"
+time = "00:30:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1"]
+
+[inputs.shard0]
+type = "artifact"
+artifact = "phaseb_raw_s900_train_tf_shard0_v1_run_019fc73cf99d7ce095e22b55a22d32b1"
+[inputs.shard1]
+type = "artifact"
+artifact = "phaseb_raw_s900_train_tf_shard1_v1_run_019fc73d44df7c83aaa506e710be61de"
+[inputs.shard2]
+type = "artifact"
+artifact = "phaseb_raw_s900_train_tf_shard2_v1_run_019fc73d4c4270e0bc5bc29cb47adea4"
+[inputs.shard3]
+type = "artifact"
+artifact = "phaseb_raw_s900_train_tf_shard3_v1_run_019fc73d534f7871a8315e27b200150d"
+[inputs.dataset]
+type = "artifact"
+artifact = "phaseb_raw_deltatype_v2_build_audit_v1_run_019fb5a5564e7a71b3ad6e55426af463"
+[inputs.normalized_gold]
+type = "artifact"
+artifact = "phaseb_normalized_v2_fullcall_A_to_A_r256_v1"
+[inputs.val_result]
+type = "artifact"
+artifact = "artifact_1c4b088e9c471ef7"
+[inputs.model]
+type = "artifact"
+artifact = "artifact_896c1de00b60c27c"
+[inputs.runtime]
+type = "artifact"
+artifact = "artifact_866218c1d704e6f8"
+
+[outputs.result]
+type = "eval_result"
+marker = "eval_manifest.json"
+alias = "phaseb_raw_s900_train_tf_aggregate_v1_{run.id}"
+
+[args]
+shard0 = "{inputs.shard0.path}"
+shard1 = "{inputs.shard1.path}"
+shard2 = "{inputs.shard2.path}"
+shard3 = "{inputs.shard3.path}"
+raw-train = "{inputs.dataset.path}/train/chat.jsonl"
+normalized-train = "{inputs.normalized_gold.path}/_normalized/train/chat.jsonl"
+val-result = "{inputs.val_result.path}"
+model-manifest = "{inputs.model.path}/export_manifest.json"
+out = "{outputs.result.path}"
+
+[env]
+PYTHONUNBUFFERED = "1"
