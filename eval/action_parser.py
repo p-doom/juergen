@@ -249,3 +249,174 @@ def parse_computer_use_tool_call(text: str) -> ComputerUseCall:
         suffix = f": {'; '.join(errors)}" if errors else ""
         raise ValueError(f"no valid computer_use tool call found{suffix}")
     return parsed
+
+
+def parse_computer_use_tool_calls(text: str) -> list[ComputerUseCall]:
+    """Parse ALL computer_use `<tool_call>` blocks in order.
+
+    The native-relative format may emit several tool calls per turn (e.g.
+    mouse_down then mouse_move then mouse_up for a drag). Unlike the singular
+    ``parse_computer_use_tool_call`` (which returns only the last), this returns
+    every valid computer_use call, in emission order.
+    """
+    if not isinstance(text, str):
+        raise TypeError(
+            f"parse_computer_use_tool_calls expects str, got {type(text)!r}"
+        )
+    calls: list[ComputerUseCall] = []
+    for candidate in _json_candidates(text):
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or payload.get("name") != "computer_use":
+            continue
+        arguments = payload.get("arguments")
+        if not isinstance(arguments, dict):
+            continue
+        action = arguments.get("action")
+        if not isinstance(action, str) or not action:
+            continue
+        calls.append(ComputerUseCall(name="computer_use", arguments=arguments))
+    if not calls:
+        raise ValueError("no valid computer_use tool call found")
+    return calls
+
+
+# ---------------------------------------------------------------------------
+# deltatype grammar: the crowd-cast-native bare-token diffabs grammar
+# (`dx dy scroll ; +K -K ...`) PLUS a coalesced `type("...")` element and
+# first-class TERMINATE / FAIL / NO_OP control tokens. Fully isolated from
+# parse_action above so the existing diffabs / crowd-cast parsing is untouched.
+#
+#   action := "NO_OP" | "TERMINATE" | "FAIL" | mouse | mouse " ; " elems
+#   mouse  := dx " " dy " " scroll                (three ints)
+#   elems  := elem (" " elem)*
+#   elem   := "+" name | "-" name | 'type(' JSONSTRING ')'
+#
+# A `type("...")` element carries literal printable text (JSON-escaped so the
+# text may contain spaces, ';', '+', quotes). Elements are returned in emission
+# order, interleaved, as ("event", KeyEvent) or ("type", str) tuples.
+
+
+@dataclass(frozen=True)
+class DeltaTypeAction:
+    """Parsed deltatype action: mouse delta + scroll + ordered elements + control flags."""
+    dx: int
+    dy: int
+    scroll: int
+    elements: tuple  # ordered ("event", KeyEvent) | ("type", str)
+    no_op: bool
+    terminate: bool
+    fail: bool
+
+    @property
+    def events(self) -> tuple:
+        return tuple(e for kind, e in self.elements if kind == "event")
+
+    @property
+    def type_texts(self) -> tuple:
+        return tuple(e for kind, e in self.elements if kind == "type")
+
+
+def _scan_deltatype_elements(seg: str) -> list:
+    """Scan the post-';' element segment into ordered elements.
+
+    Whitespace-separates `+name` / `-name` tokens but treats `type("...")`
+    specially (its JSON string may contain spaces/';'/'+'/quotes).
+    """
+    elements: list = []
+    i = 0
+    n = len(seg)
+    decoder = json.JSONDecoder()
+    while i < n:
+        if seg[i].isspace():
+            i += 1
+            continue
+        if seg.startswith("type(", i):
+            j = i + len("type(")
+            while j < n and seg[j].isspace():
+                j += 1
+            if j >= n or seg[j] != '"':
+                raise ValueError(f"type(...) must wrap a JSON string: {seg[i:i+30]!r}")
+            try:
+                text, end = decoder.raw_decode(seg, j)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"bad type() JSON string: {e}") from e
+            k = end
+            while k < n and seg[k].isspace():
+                k += 1
+            if k >= n or seg[k] != ")":
+                raise ValueError(f"type(...) missing closing ')': {seg[i:i+30]!r}")
+            elements.append(("type", text))
+            i = k + 1
+        else:
+            j = i
+            while j < n and not seg[j].isspace():
+                j += 1
+            tok = seg[i:j]
+            m = _EVENT_RE.match(tok)
+            if not m:
+                raise ValueError(f"malformed deltatype element: {tok!r}")
+            sign, name = m.group(1), m.group(2)
+            kind = "press" if sign == "+" else "release"
+            elements.append(("event", KeyEvent(kind=kind, what=name,
+                                                mouse_button=_MOUSE_BUTTON_CODES.get(name))))
+            i = j
+    return elements
+
+
+def parse_deltatype(text: str) -> DeltaTypeAction:
+    """Parse the final non-blank deltatype action line.
+
+    Assistant reasoning may precede the bare action. Training conversion preserves
+    that prose symmetrically across formats, so eval must select the same final-line
+    action span instead of assuming the action is the first line.
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"parse_deltatype expects str, got {type(text)!r}")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("empty action text")
+    text = lines[-1]
+    if text == "NO_OP":
+        return DeltaTypeAction(0, 0, 0, (), True, False, False)
+    if text == "TERMINATE":
+        return DeltaTypeAction(0, 0, 0, (), False, True, False)
+    if text == "FAIL":
+        return DeltaTypeAction(0, 0, 0, (), False, False, True)
+
+    if ";" in text:
+        mouse_part, elem_part = text.split(";", 1)
+    else:
+        mouse_part, elem_part = text, ""
+    mouse_tokens = mouse_part.strip().split()
+    if len(mouse_tokens) != 3:
+        raise ValueError(f"expected 3 mouse tokens (dx dy scroll), got "
+                         f"{len(mouse_tokens)}: {mouse_part!r}")
+    try:
+        dx, dy, scroll = (int(t) for t in mouse_tokens)
+    except ValueError as e:
+        raise ValueError(f"mouse tokens not int-parseable: {mouse_tokens!r}") from e
+    elements = tuple(_scan_deltatype_elements(elem_part)) if elem_part.strip() else ()
+    return DeltaTypeAction(dx, dy, scroll, elements, False, False, False)
+
+
+def format_deltatype(a: "DeltaTypeAction") -> str:
+    """Serialize a DeltaTypeAction back to its canonical line (round-trip inverse)."""
+    if a.no_op:
+        return "NO_OP"
+    if a.terminate:
+        return "TERMINATE"
+    if a.fail:
+        return "FAIL"
+    label = f"{a.dx} {a.dy} {a.scroll}"
+    toks = []
+    for kind, e in a.elements:
+        if kind == "event":
+            toks.append(("+" if e.kind == "press" else "-") + e.what)
+        else:
+            toks.append("type(" + json.dumps(e, ensure_ascii=False) + ")")
+    if toks:
+        label += " ; " + " ".join(toks)
+    return label
