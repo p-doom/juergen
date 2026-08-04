@@ -495,3 +495,23 @@ and stop treating the rel/abs comparison as meaningful.
    `.kind_confusion` / `.golden_kind_totals` (offline) or `tolerant_rescue_rate` (closed) and
    re-run `test_shortgoal_grammar.py`; a strict-parse failure that the tolerant twin rescues
    is a formatting drift the model learned from the data, not a parser bug.
+
+## Appendix — cluster migration checklist (written for HoreKA, generalizes)
+
+1. Workspace layout: `$WS/{repos,datasets,runs/logs,huggingface}`; rsync in
+   `shortgoal_golden_stage_03_recordings_v1/` (322M, includes splits.json) and, if absent
+   on the target, `osworld_vm/` + `qemu/` (34G; the Nix-wrapped qemu may not run off-host —
+   fall back to the system `qemu-system-x86_64` via `--qemu_bin`).
+2. Clone juergen (branch `yll/shortgoal-golden-ladder`), slurm (recipes as templates),
+   omegalax; `uv sync` in juergen/eval, juergen/data_pipeline, omegalax; prefetch
+   `Qwen/Qwen3-VL-4B-Instruct` into `$WS/huggingface` (`HF_HOME`).
+3. Discover SLURM facts: partition/qos names, gres syntax, and CRITICALLY whether GPU
+   nodes expose `/dev/kvm` (closed-loop eval needs GPU+KVM on one node; if not, the eval
+   needs a split sglang/VM design).
+4. Gates in order, each blocking the next: unit tests (eval ~363 pass; data_pipeline
+   legacy identity suites) -> single-task VM replay smoke (drift 0) -> dataset rebuild
+   from recordings (NEVER rsync built datasets: chat.jsonl/records embed absolute image
+   paths) with `--replicas=4` for overfit1, zero-overflow gate -> 3-step train smoke
+   (keep --ntasks=4 geometry + required-flags list; adjust partition, peak_tflops, and
+   possibly text_attn_backend on non-Hopper GPUs) -> rung-1 retrain + both eval gates.
+5. Only after rung-1 re-passes is the new cluster equivalent; continue at the next rung.
