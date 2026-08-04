@@ -1,0 +1,57 @@
+name = "phaseb_raw_deltatype_v2_train_production_A_to_B_r256_s900_v1"
+repo = "juergen_phaseb_deltatype_v2"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+test "$REPO" = "$PWD"
+case "$REPO" in "$LABCTL_RUN_DIR"/source/juergen_phaseb_deltatype_v2) ;; *) exit 90;; esac
+bash "$REPO/osworld_parity/phaseb_deltatype_raw_v2/train_production_r256.sh" "$@" \
+  "--experiment_dir=$REPO/osworld_parity/phaseb_deltatype_raw_v2"
+''', "--"]
+
+[resources]
+gpus = 1
+cpus = 12
+mem = "150GB"
+time = "05:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--signal=USR1@600", "--requeue", "--ntasks=1", "--ntasks-per-node=1", "--exclude=hai001"]
+
+[inputs.dataset]
+type = "artifact"
+artifact = "phaseb_raw_deltatype_v2_tokenized_authorized_r256_v1"
+
+[inputs.source_model]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_A_to_B_raw_pre_r256_s750_recovered_v1_run_019fb56fb2f471118f1a9ed683def8b0"
+
+# The trainer is a separate repo. Bind your own checkout once, then every
+# recipe here resolves it by alias:
+#   labctl register-external --alias omegalax_trainer --path <your-omegalax>
+# Phase A and Phase B both ran at omegalax b3f32c002998a1134c78845847a53ca9cc17fb10.
+[inputs.omegalax]
+type = "artifact"
+artifact = "omegalax_trainer"
+
+[outputs.model]
+type = "checkpoint"
+marker = "train_manifest.json"
+alias = "phaseb_raw_deltatype_v2_A_to_B_r256_s900_production_v1_{run.id}"
+
+[args]
+dataset = "{inputs.dataset.path}"
+source_model = "{inputs.source_model.path}"
+omegalax_repo = "{inputs.omegalax.path}"
+output = "{outputs.model.path}"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+WANDB_MODE = "offline"
+PYTHONUNBUFFERED = "1"
+XLA_PYTHON_CLIENT_ALLOCATOR = "cuda_async"
+XLA_PYTHON_CLIENT_MEM_FRACTION = "0.8"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

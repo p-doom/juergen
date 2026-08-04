@@ -1,0 +1,53 @@
+name = "phaseb_raw_deltatype_v2_tokenize_authorize_production_r256_v1"
+repo = "juergen_phaseb_deltatype_v2"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+test "$REPO" = "$PWD"
+case "$REPO" in "$LABCTL_RUN_DIR"/source/juergen_phaseb_deltatype_v2) ;; *) exit 90;; esac
+bash "$REPO/osworld_parity/phaseb_deltatype_raw_v2/tokenize_authorize.sh" "$@" \
+  "--experiment_dir=$REPO/osworld_parity/phaseb_deltatype_raw_v2"
+''', "--"]
+
+[resources]
+cpus = 16
+mem = "96GB"
+time = "00:45:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--no-requeue", "--signal=B:TERM@120"]
+
+[inputs.dataset]
+type = "artifact"
+artifact = "phaseb_raw_deltatype_v2_build_audit_v1_run_019fb5a5564e7a71b3ad6e55426af463"
+
+[inputs.source_model]
+type = "artifact"
+artifact = "synthetic_multistep_curriculum_A_to_B_raw_pre_r256_s750_recovered_v1_run_019fb56fb2f471118f1a9ed683def8b0"
+
+# The trainer is a separate repo. Bind your own checkout once, then every
+# recipe here resolves it by alias:
+#   labctl register-external --alias omegalax_trainer --path <your-omegalax>
+# Phase A and Phase B both ran at omegalax b3f32c002998a1134c78845847a53ca9cc17fb10.
+[inputs.omegalax]
+type = "artifact"
+artifact = "omegalax_trainer"
+
+[outputs.dataset]
+type = "dataset"
+marker = "tokenization_manifest.json"
+alias = "phaseb_raw_deltatype_v2_tokenized_authorized_r256_v1"
+
+[args]
+dataset = "{inputs.dataset.path}"
+source_model = "{inputs.source_model.path}"
+omegalax_repo = "{inputs.omegalax.path}"
+output = "{outputs.dataset.path}"
+
+[env]
+HF_HOME = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface"
+HF_HUB_OFFLINE = "1"
+PYTHONUNBUFFERED = "1"
+TMPDIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/tmp"
+UV_CACHE_DIR = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/uv_cache"

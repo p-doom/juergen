@@ -1,0 +1,100 @@
+name = "phaseb_raw_deltatype_v2_build_audit_v1"
+repo = "juergen_phaseb_deltatype_v2"
+command = ["bash", "-c", '''
+set -euo pipefail
+REPO="$(jq -r '.source_path' "$LABCTL_CONTEXT")"
+V2="$REPO/osworld_parity/phaseb_deltatype_raw_v2"
+PYTHON="/opt/miniforge3/bin/python"
+EXPECTED_PYTHON_SHA256="77f4fced0204779fe0d004881c1c38c08b808eea8516660d2db971007d791cc2"
+
+test -x "$PYTHON"
+test "$(sha256sum "$PYTHON" | awk '{print $1}')" = "$EXPECTED_PYTHON_SHA256"
+"$PYTHON" - <<'PY'
+import importlib.metadata
+import sys
+
+assert sys.version == (
+    "3.12.9 | packaged by conda-forge | (main, Mar  4 2025, 22:48:41) "
+    "[GCC 13.3.0]"
+)
+assert importlib.metadata.version("pytest") == "9.0.2"
+PY
+"$PYTHON" "$V2/readiness.py"
+"$PYTHON" -m pytest -q "$V2/tests"
+
+OUTPUT=""
+for arg in "$@"; do
+  case "$arg" in --output=*) OUTPUT="${arg#*=}";; esac
+done
+test -n "$OUTPUT"
+"$PYTHON" "$V2/build.py" "$@" \
+  "--audit-dir=$V2/vendor" \
+  "--production-parser=$REPO/eval/action_parser.py" \
+  "--train-split=$REPO/osworld_parity/split/osworld_train.json" \
+  "--heldout-split=$REPO/osworld_parity/split/osworld_eval_heldout.json"
+
+"$PYTHON" - "$OUTPUT/dataset_manifest.json" <<'PY'
+import hashlib
+import json
+import sys
+
+path = sys.argv[1]
+manifest = json.load(open(path, encoding="utf-8"))
+seal = manifest.pop("payload_sha256")
+canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+assert hashlib.sha256(canonical.encode()).hexdigest() == seal
+assert manifest["status"] == "complete"
+assert manifest["records"] == 2616
+assert manifest["assistant_spans"] == 10721
+assert manifest["tool_calls"] == 11471
+assert manifest["drag_spans"] == 444
+assert manifest["exact_command_plans"] == 10721
+assert manifest["heldout_intersection_count"] == 0
+assert manifest["production_gpu_training_authorized"] is False
+assert manifest["runtime_environment"] == {
+    "python_executable": "/opt/miniforge3/bin/python3.12",
+    "python_sha256": "77f4fced0204779fe0d004881c1c38c08b808eea8516660d2db971007d791cc2",
+    "python_version": (
+        "3.12.9 | packaged by conda-forge | (main, Mar  4 2025, 22:48:41) "
+        "[GCC 13.3.0]"
+    ),
+    "pytest_version": "9.0.2",
+}
+print(f"raw deltatype-v2 artifact audit PASS: payload_sha256={seal}")
+PY
+''', "--"]
+
+[resources]
+cpus = 4
+mem = "16GB"
+time = "00:15:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+sbatch_extra = ["--ntasks=1", "--ntasks-per-node=1", "--no-requeue", "--signal=B:TERM@60"]
+
+[inputs.source]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/audit_operand/phaseb"
+
+[inputs.trajectories]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/rollouts/teacher_8b_osworld_train_v1"
+
+[inputs.onpolicy_scripts]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/onpolicy_distill/scripts"
+
+[outputs.dataset]
+type = "dataset"
+marker = "dataset_manifest.json"
+alias = "phaseb_raw_deltatype_v2_build_audit_v1_{run.id}"
+
+[args]
+source-root = "{inputs.source.path}"
+collected-root = "{inputs.trajectories.path}"
+onpolicy-scripts = "{inputs.onpolicy_scripts.path}"
+output = "{outputs.dataset.path}"
+
+[env]
+PYTHONUNBUFFERED = "1"
