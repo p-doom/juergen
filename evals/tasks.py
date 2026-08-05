@@ -392,6 +392,15 @@ def cursor_start(
     corner fallback itself returned an in-box start. This is the same caution
     `rl/geometry.py:37-41` records for `BOX_EDGE_INCLUSIVE`: do not compare a
     far-regime reach number across this commit.
+
+    MEASURED BLAST RADIUS, though: on the grounding set actually shipped —
+    `/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_grounding_eval_v0/
+    bboxes.jsonl`, 29 targets, of which only 2 exceed 600 px — **zero** far starts were
+    degenerate under the old code, zero move under the new one, and nothing raises. So
+    the 42.90% figure is a property of large-window synthetic distributions, not of
+    that eval set, and the published far-regime numbers *on those 29 targets* need no
+    re-baseline. Re-check this whenever the target set grows toward window-sized
+    targets, which is where the defect lived.
     """
     import hashlib
 
