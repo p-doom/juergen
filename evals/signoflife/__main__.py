@@ -439,22 +439,33 @@ def main(argv: list[str] | None = None) -> int:
     output.mkdir(parents=True, exist_ok=True)
     os.environ[API_KEY_VAR] = args.api_key
 
+    # Omit unset knobs rather than passing None. `session_kwargs` is a plain
+    # `dict[str, Any]`, and pydantic's `exclude_none` does not recurse into one, so
+    # a None inside it reaches `tomli_w.dumps` when verifiers saves the run's
+    # config.toml and kills the run before the first episode with
+    # "Object of type 'NoneType' is not TOML serializable". `kvm_desktop_pool`
+    # treats absent and None identically, so this loses nothing.
+    session_kwargs: dict[str, Any] = {
+        "image": str(args.qcow),
+        "root_dir": str(output / "vm"),
+        "accelerator": "kvm",
+        "max_rollouts_per_session": args.vm_rollouts_per_session,
+        "max_sessions": args.vm_slots,
+    }
+    for key, value in (
+        ("qemu_binary", args.qemu),
+        ("qemu_img_binary", args.qemu_img),
+        ("smp", args.vm_smp),
+        ("memory", args.vm_mem),
+    ):
+        if value is not None:
+            session_kwargs[key] = str(value) if isinstance(value, Path) else value
     pool = {
         "key": f"signoflife-{args.arm}",
         "max_node_slots": args.vm_slots,
         "slot_dir": str(output / "vm_slots"),
         "pool_target": "evals.vm:kvm_desktop_pool",
-        "session_kwargs": {
-            "image": str(args.qcow),
-            "root_dir": str(output / "vm"),
-            "qemu_binary": str(args.qemu) if args.qemu else None,
-            "qemu_img_binary": str(args.qemu_img) if args.qemu_img else None,
-            "smp": args.vm_smp,
-            "memory": args.vm_mem,
-            "accelerator": "kvm",
-            "max_rollouts_per_session": args.vm_rollouts_per_session,
-            "max_sessions": args.vm_slots,
-        },
+        "session_kwargs": session_kwargs,
     }
 
     rows: list[dict[str, Any]] = []
