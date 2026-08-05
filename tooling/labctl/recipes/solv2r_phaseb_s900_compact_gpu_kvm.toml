@@ -94,7 +94,11 @@ sglang-mem-fraction = "0.65"
 temperature = "0.0"
 top-p = "1.0"
 max-tokens = "256"
-verify-phaseb = ""
+# --verify-phaseb is deliberately NOT passed: labctl `[args]` render as
+# `--key value`, and a store_true flag given "" is a parse error. The identity
+# is pinned more strongly anyway -- `[inputs.model]` is an artifact reference by
+# exact alias, and the runner embeds .meta.json + export_manifest.json and their
+# sha256s in result.json.
 
 [env]
 PYTHONUNBUFFERED = "1"
