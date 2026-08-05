@@ -358,11 +358,11 @@ def cursor_start(
     regime: str,
     key: str,
 ) -> tuple[int, int]:
-    """Deterministic start position by distance regime.
+    """Deterministic start position by distance regime, guaranteed OUTSIDE the bbox.
 
-      near:   >= 200 px from bbox centre at a seeded angle, always outside bbox
+      near:   >= 200 px from bbox centre at a seeded angle
       medium: >= 500 px
-      far:    screen-mirrored, (sw-cx, sh-cy)
+      far:    the screen mirror (sw-cx, sh-cy), when that lands outside the bbox
 
     Seeded from an md5 of `(key, regime)` rather than `hash()`, which is
     PYTHONHASHSEED-randomised and silently made the old runs unreproducible across
@@ -370,30 +370,75 @@ def cursor_start(
     unclipped sample is outside the box at any angle; eight deterministic angles
     are tried before falling back to the far screen corner, which handles targets
     against a screen edge whose clipped samples land back inside.
+
+    Every regime — `far` included — goes through that containment ladder, and a bbox
+    that admits no on-screen point outside itself raises rather than returning a
+    start inside the target. The runtime caller is `_GroundingPreparation.prepare`,
+    so the raise fails the episode loudly instead of scoring a degenerate
+    reach-at-step-0: `in_bbox` true at step 0, `reach_frame` 1, reward 1.0 before the
+    model has acted. Same ladder-then-raise shape as `rl.target_box.geometry.
+    sample_cursor_start`.
+
+    ⚠️ RE-BASELINES EVERY PUBLISHED FAR-REGIME REACH NUMBER. `far` used to return the
+    bare mirror with no containment check at all, so for a target whose centre sits
+    near the screen centre the start landed inside the target and the cell was already
+    solved at step 0. Grounding runs with `require_unsolved_start=False`
+    (`rl/grounding/harness.py:77`), so those episodes WERE scored. Measured incidence
+    at 1920x1080 — 20-60 px elements 0.02%, 60-200 px widgets 0.11%, 200-600 px panels
+    2.10%, 600-1400 px windows 42.90% (the defect is analytic; the rates are
+    Monte-Carlo over synthetic target distributions). Correcting it moves the `far`
+    start for exactly those targets. Far starts whose mirror was already outside the
+    box are byte-unchanged, and `near`/`medium` are byte-unchanged except where the old
+    corner fallback itself returned an in-box start. This is the same caution
+    `rl/geometry.py:37-41` records for `BOX_EDGE_INCLUSIVE`: do not compare a
+    far-regime reach number across this commit.
     """
     import hashlib
 
     cx = (bbox[0] + bbox[2]) // 2
     cy = (bbox[1] + bbox[3]) // 2
+
+    def _on_screen(x: int, y: int) -> tuple[int, int]:
+        return max(0, min(screen_w - 1, x)), max(0, min(screen_h - 1, y))
+
     if regime == "far":
-        return (
-            max(0, min(screen_w - 1, screen_w - cx)),
-            max(0, min(screen_h - 1, screen_h - cy)),
-        )
+        mirror = _on_screen(screen_w - cx, screen_h - cy)
+        if not in_bbox(mirror, bbox):
+            return mirror
     seed = int.from_bytes(
         hashlib.md5(f"{key}:{regime}:v0".encode()).digest()[:4], "big"
     )
     rng = random.Random(seed)
-    base = {"near": 200, "medium": 500}.get(regime, 200)
+    # `far` overshoots both screen dimensions so the clamp parks the sample on the
+    # furthest edge; near/medium keep their published radii.
+    base = {"near": 200, "medium": 500, "far": max(screen_w, screen_h)}.get(regime, 200)
     span = math.hypot(bbox[2] - bbox[0], bbox[3] - bbox[1])
     dist = max(base, int(span / 2) + 30)
     for _ in range(8):
         angle = rng.uniform(0.0, 2.0 * math.pi)
-        sx = max(0, min(screen_w - 1, cx + int(round(dist * math.cos(angle)))))
-        sy = max(0, min(screen_h - 1, cy + int(round(dist * math.sin(angle)))))
+        sx, sy = _on_screen(
+            cx + int(round(dist * math.cos(angle))), cy + int(round(dist * math.sin(angle)))
+        )
         if not in_bbox((sx, sy), bbox):
             return sx, sy
-    return (0 if cx > screen_w // 2 else screen_w - 1, 0 if cy > screen_h // 2 else screen_h - 1)
+    corners = [(0, 0), (screen_w - 1, 0), (0, screen_h - 1), (screen_w - 1, screen_h - 1)]
+    outside = [c for c in corners if not in_bbox(c, bbox)]
+    if not outside:
+        raise ValueError(
+            f"no on-screen cursor start lies outside bbox {bbox} on a {screen_w}x{screen_h} "
+            f"screen (regime {regime!r}, key {key!r}): every screen corner is inside the "
+            "target, so any start would score a reach at step 0"
+        )
+    # The per-axis furthest screen extreme maximises both legs of the distance at
+    # once, so this is the furthest corner; it is preferred verbatim to keep the
+    # pre-fix near/medium fallback byte-identical wherever it was already admissible.
+    furthest = (
+        0 if cx > screen_w // 2 else screen_w - 1,
+        0 if cy > screen_h // 2 else screen_h - 1,
+    )
+    if furthest in outside:
+        return furthest
+    return max(outside, key=lambda c: distance_to_box(c, bbox))
 
 
 # --------------------------------------------------------------------------- #

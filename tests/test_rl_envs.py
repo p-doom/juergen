@@ -415,87 +415,119 @@ def test_cursor_start_varies_with_the_key_and_the_regime() -> None:
     assert cursor_start(box, 1920, 1080, "medium", "app/task_a") != a
 
 
-def test_the_far_regime_is_the_screen_mirror() -> None:
-    box = (900, 500, 1000, 600)
-    cx, cy = (900 + 1000) // 2, (500 + 600) // 2
-    assert cursor_start(box, 1920, 1080, "far", "k") == (1920 - cx, 1080 - cy)
+def test_the_far_regime_is_the_screen_mirror_when_the_mirror_is_admissible() -> None:
+    """The mirror is still `far`'s primary, and it is key-independent."""
+    box = (100, 100, 200, 200)
+    cx, cy = (100 + 200) // 2, (100 + 200) // 2
+    mirror = (1920 - cx, 1080 - cy)
+    assert not in_bbox(mirror, box), "precondition: this mirror is outside the target"
+    for key in ("a", "b", "c"):
+        assert cursor_start(box, 1920, 1080, "far", key) == mirror
 
 
 BOXES = [
     (900, 500, 1000, 600),
-    (0, 0, 1920, 1080),  # a full-window target
+    (0, 0, 1920, 1080),  # a full-window target: NO on-screen start is outside it
     (0, 0, 40, 40),  # hard against the top-left edge
     (1880, 1040, 1920, 1080),  # hard against the bottom-right edge
 ]
+UNSATISFIABLE = (0, 0, 1920, 1080)
 
 
 @pytest.mark.parametrize("regime", ["near", "medium"])
 def test_a_near_or_medium_start_is_outside_the_box_and_on_screen(regime: str) -> None:
     for box in BOXES:
         for key in ("a", "b", "c", "d", "e"):
+            if box == UNSATISFIABLE:
+                with pytest.raises(ValueError, match="no on-screen cursor start"):
+                    cursor_start(box, 1920, 1080, regime, key)
+                continue
             start = cursor_start(box, 1920, 1080, regime, key)
             assert 0 <= start[0] < 1920 and 0 <= start[1] < 1080, (regime, box, start)
-            if box != (0, 0, 1920, 1080):
-                assert not in_bbox(start, box), (regime, box, key, start)
+            assert not in_bbox(start, box), (regime, box, key, start)
 
 
 def test_every_regime_start_is_on_screen() -> None:
     for regime in REGIMES:
         for box in BOXES:
             for key in ("a", "b", "c"):
+                if box == UNSATISFIABLE:
+                    with pytest.raises(ValueError, match="no on-screen cursor start"):
+                        cursor_start(box, 1920, 1080, regime, key)
+                    continue
                 start = cursor_start(box, 1920, 1080, regime, key)
                 assert 0 <= start[0] < 1920 and 0 <= start[1] < 1080, (regime, box, start)
 
 
-def test_the_far_regime_can_start_INSIDE_the_box_a_degenerate_reach() -> None:
-    """DEFECT — NEEDS A DECISION (`evals/tasks.py:378-382`).
+def test_the_far_regime_can_no_longer_start_INSIDE_the_box() -> None:
+    """★ FIXED — was the inverse of this test (`evals/tasks.py`, the `far` branch).
 
-    `near` and `medium` retry over eight deterministic angles until the sample is
-    outside the box; `far` returns the bare screen mirror `(sw-cx, sh-cy)` with **no
-    containment check at all**. For any target whose centre is near the screen centre
-    the mirror lands inside the target, so the cell starts already solved: `in_bbox`
-    is true at step 0, `reach_frame` is 1, and the reward is 1.0 before the model has
-    acted. That is exactly the "degenerate reach-at-step-0" the docstring says the
-    minimum radius exists to prevent — the guard is simply not applied to `far`.
+    `near` and `medium` always retried over eight deterministic angles until the
+    sample was outside the box; `far` used to return the bare screen mirror
+    `(sw-cx, sh-cy)` with **no containment check at all**. For any target whose centre
+    sits near the screen centre the mirror landed inside the target, so the cell
+    started already solved: `in_bbox` true at step 0, `reach_frame` 1, reward 1.0
+    before the model had acted — exactly the "degenerate reach-at-step-0" the minimum
+    radius exists to prevent, with the guard simply not applied to `far`. Grounding's
+    `require_unsolved_start` is False (`rl/grounding/harness.py:77`, because refusing
+    edge cells "would silently drop the hardest targets"), so those episodes WERE
+    scored.
 
-    Measured incidence over random targets at 1920x1080:
+    Measured incidence of the old defect over random targets at 1920x1080:
         20-60 px elements     0.02%
         60-200 px widgets     0.11%
         200-600 px panels     2.10%
         600-1400 px windows  42.90%
 
-    Not fixed here, deliberately. Grounding's `require_unsolved_start` is False (its
-    config says refusing edge cells "would silently drop the hardest targets"), so
-    these episodes were scored, and correcting the sampler moves the far-regime start
-    for affected targets — i.e. it re-baselines every published far-regime reach
-    number. That is the same caution `rl/geometry.py:37-41` records for
-    `BOX_EDGE_INCLUSIVE`. This test pins the current behaviour so the day someone
-    fixes it, the re-baseline is a conscious decision rather than a silent drift.
+    `far` now tries the mirror first and falls through to the shared angle ladder when
+    the mirror is inside the box, so the far start MOVES for exactly those targets:
+    this RE-BASELINES every published far-regime reach number, the same caution
+    `rl/geometry.py:37-41` records for `BOX_EDGE_INCLUSIVE`. Starts that were already
+    admissible are byte-unchanged in all three regimes, so the re-baseline is confined
+    to the previously-degenerate cells.
     """
     centred = (1920 // 2 - 100, 1080 // 2 - 100, 1920 // 2 + 100, 1080 // 2 + 100)
-    start = cursor_start(centred, 1920, 1080, "far", "any-key")
-    assert start == (960, 540)
-    assert in_bbox(start, centred), "the far mirror lands inside a screen-centred target"
-    # near/medium do guard the same box, which is what makes this a `far`-only gap.
-    for regime in ("near", "medium"):
-        assert not in_bbox(cursor_start(centred, 1920, 1080, regime, "any-key"), centred)
+    assert in_bbox((960, 540), centred), "precondition: the bare mirror WOULD land inside"
+    for regime in REGIMES:
+        start = cursor_start(centred, 1920, 1080, regime, "any-key")
+        assert not in_bbox(start, centred), (regime, start)
+    assert cursor_start(centred, 1920, 1080, "far", "any-key") != (960, 540)
 
 
-def test_the_far_regime_degenerate_rate_is_negligible_for_small_targets() -> None:
-    """Bounding the defect above: it is a large-window problem, not a general one."""
+def test_no_regime_can_return_an_in_box_start_at_any_target_size() -> None:
+    """★ The invariant the `far` fix buys: not one regime, every regime.
+
+    Sweeps the four size bands whose old far-mirror degeneracy rates were 0.02% /
+    0.11% / 2.10% / 42.90%. Any in-box start here is a silently-scored reward-1.0
+    episode, so this asserts zero, not "negligible".
+    """
     import random
 
     rng = random.Random(0)
-    bad = 0
-    for _ in range(4000):
-        w = rng.randint(20, 60)
-        h = rng.randint(20, 60)
-        x = rng.randint(0, 1920 - w)
-        y = rng.randint(0, 1080 - h)
-        box = (x, y, x + w, y + h)
-        if in_bbox(cursor_start(box, 1920, 1080, "far", "k"), box):
-            bad += 1
-    assert bad / 4000 < 0.01, bad / 4000
+    for lo, hi in ((20, 60), (60, 200), (200, 600), (600, 1400)):
+        for i in range(1500):
+            w = rng.randint(lo, min(hi, 1920))
+            h = rng.randint(lo, min(hi, 1080))
+            x = rng.randint(0, 1920 - w)
+            y = rng.randint(0, 1080 - h)
+            box = (x, y, x + w, y + h)
+            for regime in REGIMES:
+                start = cursor_start(box, 1920, 1080, regime, f"k{i}")
+                assert not in_bbox(start, box), (regime, box, start)
+                assert 0 <= start[0] < 1920 and 0 <= start[1] < 1080, (regime, box, start)
+
+
+def test_a_bbox_with_no_admissible_start_raises_instead_of_scoring_a_free_reach() -> None:
+    """A full-screen target admits no on-screen start outside itself.
+
+    Returning anything at all would be a reward-1.0 episode the model never played,
+    and `_GroundingPreparation.prepare` is the runtime caller, so the raise fails the
+    episode loudly. Same ladder-then-raise contract as
+    `rl.target_box.geometry.sample_cursor_start`.
+    """
+    for regime in REGIMES:
+        with pytest.raises(ValueError, match="no on-screen cursor start"):
+            cursor_start((0, 0, 1920, 1080), 1920, 1080, regime, "k")
 
 
 def test_the_minimum_radius_rises_with_the_bbox_half_diagonal() -> None:
