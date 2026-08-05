@@ -12,6 +12,20 @@ dependencies = [
     # first import.
     "desktop-env",
     "av>=16.1.0",
+    # `verifiers.v1` is the framework this repo's agent/, evals/ and rl/ are
+    # written against: fifteen modules do `import verifiers.v1 as vf`, every
+    # Taskset/Harness/Task/Config base comes from it, and `evals/signoflife`
+    # is a verifiers *plugin package* (its `__all__` contract is verifiers').
+    # It was imported everywhere and declared nowhere -- absent from this file
+    # AND from `uv.lock` -- so a clean resolve produced a tree that cannot
+    # import itself. Pinned exactly, not floored: `loaders._plugin_class`,
+    # `narrow_plugin_field` and the `Harness.launch(endpoint, secret, ...)`
+    # signature are all unversioned internal API we call directly.
+    #
+    # Bare, deliberately: the `harbor` extra pulls `harbor==0.14.0`, which we
+    # do not want anywhere near this resolve (see project_harbor_migration --
+    # that integration is audit-only and must stay opt-in).
+    "verifiers==0.2.1",
 ]
 
 [project.optional-dependencies]
