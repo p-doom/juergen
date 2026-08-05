@@ -12,7 +12,7 @@ from pathlib import Path
 
 import msgpack
 
-from realigned_pipeline.stage_03_filter import (
+from pipeline.stage_03_filter import (
     REASON_BLACK,
     REASON_IDLE,
     REASON_KEPT,
@@ -80,14 +80,14 @@ class IdleLegacyEquivalenceTest(unittest.TestCase):
         # 2 s ends kept) must reproduce the pre-rewrite sampler's DEFAULT
         # (noop head/tail = 1/1 @ 0.5 fps) — including bins that are NO_OP
         # only through rounding (sub-pixel drift), which raw judgment keeps.
-        from realigned_pipeline.lib.common import aggregate_actions, format_action
-        from realigned_pipeline.lib.config import (
+        from pipeline.lib.common import aggregate_actions, format_action
+        from pipeline.lib.config import (
             DEFAULT_IDLE_JUDGMENT_BIN_S,
             DEFAULT_IDLE_KEEP_HEAD_S,
             DEFAULT_IDLE_KEEP_TAIL_S,
             DEFAULT_IDLE_MIN_DURATION_S,
         )
-        from realigned_pipeline.stage_03_filter import _rounded_activity_mask
+        from pipeline.stage_03_filter import _rounded_activity_mask
 
         n_bins, bin_ticks = 30, int(DEFAULT_IDLE_JUDGMENT_BIN_S * MASTER_FPS)  # 2s bins
         n_ticks = n_bins * bin_ticks

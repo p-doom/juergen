@@ -33,6 +33,7 @@ from annotation_pipeline.stage_04_build_canonical_sft import build_canonical_sft
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 DATA_PIPELINE_DIR = PIPELINE_DIR.parent
+REPO_ROOT = DATA_PIPELINE_DIR.parent
 
 # Keys copied from the stage-00 manifest row onto every sample for traceback.
 PROVENANCE_KEYS = ("user_id", "version", "recording_id", "video_path")
@@ -56,7 +57,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--val-frac", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--buckets", action="store_true",
-                   help="Also run stage 05 length-bucketing (needs trainee tokenizer; compute node).")
+                   help="Also measure per-message token lengths (needs trainee tokenizer; compute "
+                        "node). Delegates to pipeline/stage_05_measure_lengths.py -> omegalax's "
+                        "measure_message_lengths_from_chat.py, which is what training actually "
+                        "consumes; requires --omegalax-repo / --bucket-model-id.")
+    p.add_argument("--omegalax-repo", default=None,
+                   help="omegalax repo root, used as `uv run --project` for --buckets.")
+    p.add_argument("--bucket-model-id", default=None,
+                   help="Model id resolving the tokenizer for --buckets.")
+    p.add_argument("--bucket-processor", default=None,
+                   help="HF repo for the image-processor config for --buckets (default: model id).")
+    p.add_argument("--bucket-workers", type=int, default=8,
+                   help="Parallel workers for --buckets length measurement (>=2).")
     p.add_argument("--assemble-only", action="store_true",
                    help="Stop after writing stage_03_assemble/ (the aggregated trajectories.jsonl); "
                         "skip stage 04 canonicalization. Lets a downstream step run stage 04 "
@@ -151,15 +163,26 @@ def main() -> None:
     print(f"[build_sft] per-split chat.jsonl -> {out}/<split>/chat.jsonl "
           f"{ {s: len(v) for s, v in sorted(by_split.items())} }", flush=True)
 
-    # Stage 05 (optional): exact length buckets via the trainee tokenizer.
+    # Stage 05 (optional): exact per-message token lengths via the trainee
+    # tokenizer. ``annotation_pipeline/stage_05_length_buckets.py`` (which
+    # vendored a copy of omegalax's qwen3_encoding) is gone; the measurement now
+    # runs through pipeline/stage_05_measure_lengths.py -> omegalax's
+    # measure_message_lengths_from_chat.py, i.e. the exact code path training
+    # uses, so bucket boundaries cannot drift from the chunk indexer again.
     if args.buckets:
+        if not (args.omegalax_repo and args.bucket_model_id):
+            raise SystemExit("--buckets requires --omegalax-repo and --bucket-model-id")
         env = dict(os.environ)
-        env["PYTHONPATH"] = str(DATA_PIPELINE_DIR) + (os.pathsep + env.get("PYTHONPATH", ""))
-        subprocess.run([sys.executable, "-m", "annotation_pipeline.stage_05_length_buckets",
-                        "--samples", str(canonical / "chat.jsonl"),
-                        "--output-dir", str(out / "buckets")],
-                       check=True, cwd=str(DATA_PIPELINE_DIR), env=env)
-        print(f"[build_sft] stage_05 -> {out / 'buckets'}", flush=True)
+        env["PYTHONPATH"] = str(REPO_ROOT) + (os.pathsep + env.get("PYTHONPATH", ""))
+        subprocess.run([sys.executable, str(REPO_ROOT / "pipeline" / "stage_05_measure_lengths.py"),
+                        f"--source_path={canonical}",
+                        f"--output_dir={out / 'buckets'}",
+                        f"--omegalax_repo={args.omegalax_repo}",
+                        f"--model_id={args.bucket_model_id}",
+                        f"--processor={args.bucket_processor or args.bucket_model_id}",
+                        f"--num_workers={args.bucket_workers}"],
+                       check=True, cwd=str(REPO_ROOT), env=env)
+        print(f"[build_sft] message lengths -> {out / 'buckets'}", flush=True)
 
 
 if __name__ == "__main__":

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import unittest
 
-from realigned_pipeline.lib.action_format import get_formatter
-from realigned_pipeline.lib.events import (
+from pipeline.lib.action_format import get_formatter
+from pipeline.lib.events import (
     DeadZone,
     RawEvent,
     Window,

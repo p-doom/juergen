@@ -1,0 +1,1665 @@
+#!/usr/bin/env python3
+"""Viewer for stage 01b (frame-records) datasets — frames + binned actions.
+
+The spiritual successor to ``ylli_visualizer`` (the realignment inspector), but
+pointed at the **01b sampler output** instead of raw mp4 + keylogs. 01b has
+already done the work the old inspector re-derived on the fly: target-fps
+sampling, NO_OP head/tail thinning, and per-bin action strings, with each kept
+frame referenced as an ``ar:///…/images.array_record#idx`` URI into the stage
+01a frames-master store. So this viewer is *much* thinner: no ffmpeg, no video
+transcode, no raw-vs-realigned dual clock — just browse the trajectory 01b
+produced, one frame + one action per step.
+
+Input contract (one JSON object per line, the ``frame_records.jsonl`` schema
+that stage 01 emits and 01b is expected to reproduce)::
+
+    {
+      "recording_id":    str,
+      "segment_id":      str,          # trajectory / grouping key
+      "segment_idx":     int,
+      "local_bin_idx":   int,          # bin index within the segment
+      "local_time_s":    float,        # seconds from segment start
+      "source_frame_idx": int,         # provenance: frame in the original video
+      "image_path":      "ar:///…/images.array_record#idx",   # or "image"
+      "action":          "NO_OP" | "<dx> <dy> <scroll>"
+                         | "<dx> <dy> <scroll> ; +KeyW -KeyW +LMB"   # format_action
+    }
+
+The ``action`` grammar (``pipeline.lib.common.format_action``): ``NO_OP``,
+or ``"<dx> <dy> <scroll>"`` (summed pixel deltas + scroll), optionally followed
+by ``" ; "`` and space-separated ``+Name``/``-Name`` press/release tokens in
+temporal order. Names are rdev keys (``KeyA``, ``Num1``, ``Space``, ``Backspace``,
+``ShiftLeft`` …) and mouse buttons (``LMB``, ``RMB``, ``MMB``). The front-end
+parses this to light a keyboard, draw a mouse arrow, and reconstruct typed text.
+
+Records for one segment must be contiguous and in trajectory order (both stage
+01 and 01b stream ``chat.jsonl``/segments in order, so this holds). Any extra
+top-level keys are ignored, so the viewer keeps working if 01b enriches rows.
+
+Frames are resolved through ``pipeline.lib.image_store`` (the same
+``ar://`` resolver stage 02 uses), so it also renders plain image-file paths.
+The browser only ever asks for ``(segment, frame_index)``; the server maps that
+to the image ref held in its own index, so there is no client-supplied path.
+
+Run::
+
+    cd .../data_pipeline
+    uv run python tooling/visualize_frame_records.py \
+        --dataset <dir_or_file> [<dir_or_file> ...] \
+        --port 8770
+    # then SSH-forward the port and open http://127.0.0.1:8770/
+    #   ssh -L 8770:127.0.0.1:8770 <host>
+
+Pass several datasets and switch between them in the UI's "dataset" dropdown;
+each is built lazily on first selection (a build failure — e.g. an empty or
+not-yet-generated dir — is reported inline, the others keep working).
+
+``--dataset`` may point at the 01b output directory (a ``frame_records.jsonl``
+at its root or one level down is discovered), or directly at a
+``frame_records.jsonl`` file.
+
+It also opens a stage-01a **frames-master** store directly (auto-detected by its
+``segment_index.jsonl`` + ``frames/`` layout / ``juergen_annotation_frames_master``
+marker): the raw decoded frames are browsable with no sampler run, but since 01a
+is keylog-free the action HUD stays empty — run 01b to get actions.
+
+And it opens a stage-04 **conversations** dataset (auto-detected by a
+``conversations.jsonl`` / ``juergen_annotation_conversations`` marker): each
+segment's interleaved screenshot→action chat is browsed as a trajectory — the
+user-turn screenshots are the frames, the following assistant turn is that frame's
+action — so the same frame/action/HUD/timeline UI applies, plus a banner with the
+system prompt and (if goal-conditioned) the instruction. The images are ``ar://``
+refs into the same stage-01a master, so frames and the black-frame flag resolve
+just as in the 01b view.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections import OrderedDict
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, urlparse
+
+# Make the ``pipeline`` package importable when run directly
+# (mirrors build_frames_master.py's PYTHONPATH setup).
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from pipeline.lib import config  # noqa: E402
+from pipeline.lib import realign as R  # noqa: E402  (keylog_to_video)
+from pipeline.lib.common import (  # noqa: E402
+    aggregate_actions,
+    format_action,
+    load_keylog_entries,
+    resolve_button_name,
+    resolve_key_name,
+)
+from pipeline.lib.image_store import (  # noqa: E402
+    is_arrayrecord_image_uri,
+    parse_arrayrecord_image_uri,
+    read_jpeg_bytes,
+)
+
+# Image ref field, tried in order (stage 01 rewrites ``image_path`` to ar://;
+# the grain manifests / stage 02 use ``image``).
+_IMAGE_KEYS = ("image_path", "image", "image_uri")
+
+# Dataset registry: display-name -> {"path": Path, "mode": str, "obj": built|None}.
+# Datasets are built lazily on first access — a frames-master build is cheap, but a
+# frame_records build eager-loads every row, so we defer it until the dataset is
+# actually selected in the UI.
+DATASETS: OrderedDict[str, dict[str, Any]] = OrderedDict()
+
+# Fallback keylog source for overlaying raw actions on frames-master datasets (a
+# stage-00 clips_manifest.jsonl mapping segment_id -> keylog_path). Normally each
+# master is auto-linked via its manifest.json "source_clips_manifest"; this only
+# covers masters that don't record it.
+CLIPS_MANIFEST_OVERRIDE: str | None = None
+
+# Optional stage-00 alignment source (an alignment.jsonl file or the realign
+# clip-manifest dir containing it). When set/discovered, master datasets get the
+# dual-clock event table + the "aligned + trims" timeline. Applies to master only.
+ALIGNMENT_OVERRIDE: str | None = None
+
+_COALESCE_MOVES = 4
+
+
+def _resolve_alignment_path(clips_manifest: str | Path | None) -> Path | None:
+    """Locate an ``alignment.jsonl``: ``--alignment`` (a file or a dir holding one),
+    else a ``*realign*`` sibling of the (raw) clips_manifest dir that belongs to the
+    SAME dataset family (matched by the manifest dir's distinctive prefix, so e.g. an
+    ``eval`` master never picks up a ``subset100`` alignment)."""
+    if ALIGNMENT_OVERRIDE:
+        p = Path(ALIGNMENT_OVERRIDE).expanduser()
+        if p.is_dir():
+            p = p / "alignment.jsonl"
+        return p if p.exists() else None
+    if not clips_manifest:
+        return None
+    manifest_dir = Path(clips_manifest).expanduser().resolve().parent
+    prefix = manifest_dir.name
+    for tok in ("_rerun_clip_manifest", "_clip_manifest_rerun", "_clip_manifest", "_manifest"):
+        if prefix.endswith(tok):
+            prefix = prefix[: -len(tok)]
+            break
+    for sibling in sorted(manifest_dir.parent.glob(f"{prefix}*realign*")):
+        candidate = sibling / "alignment.jsonl"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _raw_events(
+    keylog_path: Path,
+    splices: list[dict] | None = None,
+    video_end: float | None = None,
+) -> list[list[Any]]:
+    """Keylog events as table rows.
+
+    Without ``splices``: ``[t_raw, type, detail]`` on the raw keylog clock.
+    With ``splices`` (the stage-00 alignment map): **dual-clock**
+    ``[t_raw, t_aln, type, detail, trimmed]`` where ``t_aln = keylog_to_video`` and
+    ``trimmed`` marks events inside a collapsed span (kept content folded to one
+    instant) or past ``video_end`` (overhang dropped off the video).
+
+    Individual events (not per-frame bins); consecutive MouseMoves are coalesced
+    into one row (summed dx/dy + count). Times are seconds."""
+    dual = splices is not None
+    rows: list[list[Any]] = []
+    mm_n = 0
+    mm_dx = mm_dy = 0.0
+    mm_t0: float | None = None
+
+    def emit(t_raw: float, etype: str, detail: str) -> None:
+        if dual:
+            t_aln = R.keylog_to_video(t_raw, splices)
+            trimmed = (video_end is not None and t_aln >= video_end) or any(
+                s["kp"] <= t_raw < s["kp"] + s["collapse"] for s in splices
+            )
+            rows.append([round(t_raw, 3), round(t_aln, 3), etype, detail, trimmed])
+        else:
+            rows.append([round(t_raw, 3), etype, detail])
+
+    def flush_mm() -> None:
+        nonlocal mm_n, mm_dx, mm_dy, mm_t0
+        if mm_n:
+            emit(mm_t0, "MouseMove", f"{round(mm_dx)} {round(mm_dy)} (x{mm_n})")
+            mm_n, mm_dx, mm_dy, mm_t0 = 0, 0.0, 0.0, None
+
+    for entry in load_keylog_entries(keylog_path):
+        if not isinstance(entry, list) or len(entry) < 2:
+            continue
+        ts, event = entry[0], entry[1]
+        if not isinstance(event, list) or not event:
+            continue
+        try:
+            t = int(ts) / 1e6
+        except (TypeError, ValueError):
+            continue
+        et = str(event[0])
+        payload = event[1] if len(event) > 1 else None
+        if et == "ContextChanged":
+            continue
+        if et == "MouseMove":
+            if isinstance(payload, list) and len(payload) >= 2:
+                if mm_n == 0:
+                    mm_t0 = t
+                mm_dx += float(payload[0])
+                mm_dy += float(payload[1])
+                mm_n += 1
+                if mm_n >= _COALESCE_MOVES:
+                    flush_mm()
+            continue
+        flush_mm()
+        if et in ("KeyPress", "KeyRelease"):
+            detail = resolve_key_name(payload) or "?"
+        elif et in ("MousePress", "MouseRelease"):
+            detail = resolve_button_name(payload) or "?"
+        elif et == "MouseScroll":
+            detail = " ".join(str(x) for x in payload[:2]) if isinstance(payload, list) else "?"
+        else:
+            detail = ""
+        emit(t, et, detail)
+    flush_mm()
+    # Dual: order by the aligned clock (what the viewer navigates by); raw: by t_raw.
+    rows.sort(key=(lambda r: (r[1], r[0])) if dual else (lambda r: r[0]))
+    return rows
+
+
+def _image_ref(rec: dict[str, Any]) -> str | None:
+    for k in _IMAGE_KEYS:
+        v = rec.get(k)
+        if isinstance(v, str) and v:
+            return v
+    return None
+
+
+def _is_noop(action: Any) -> bool:
+    return not action or str(action).strip().upper() == "NO_OP"
+
+
+def _is_black(mean_luma: Any, frac_dark: Any) -> bool:
+    """Black-frame flag from the stage-01a luma metrics, using the sampler's
+    default thresholds (``pipeline.lib.config``). Mirrors
+    ``sample_frames_actions._is_black`` so both views flag exactly the frames 01b
+    would drop under default settings — the master reads its own manifest, the
+    01b sample cross-references the master's. Frames without metrics (older
+    masters, decode failures) are never flagged (absence of evidence != black)."""
+    return (mean_luma is not None and mean_luma <= config.DEFAULT_BLACK_LUMA_MAX) or (
+        frac_dark is not None and frac_dark >= config.DEFAULT_BLACK_DARK_FRAC_MIN
+    )
+
+
+class Segment:
+    """One trajectory: the ordered kept frames of a single ``segment_id``."""
+
+    def __init__(self, segment_id: str, recording_id: str | None) -> None:
+        self.segment_id = segment_id
+        self.recording_id = recording_id
+        self.frames: list[dict[str, Any]] = []  # normalized per-frame rows
+
+    def summary(self) -> dict[str, Any]:
+        n = len(self.frames)
+        n_non_noop = sum(1 for f in self.frames if not f["is_noop"])
+        dur = self.frames[-1]["t"] if self.frames else 0.0
+        return {
+            "segment_id": self.segment_id,
+            "recording_id": self.recording_id,
+            "n_frames": n,
+            "n_non_noop": n_non_noop,
+            "duration_s": round(dur, 2),
+        }
+
+    def detail(self) -> dict[str, Any]:
+        return {
+            "segment_id": self.segment_id,
+            "recording_id": self.recording_id,
+            "n_frames": len(self.frames),
+            "n_non_noop": sum(1 for f in self.frames if not f["is_noop"]),
+            # ``is_black`` is filled in lazily by the dataset (cross-referenced
+            # from the master frame_manifest); absent -> 0.
+            "n_black": sum(1 for f in self.frames if f.get("is_black")),
+            "n_black_act": sum(1 for f in self.frames if f.get("is_black") and not f["is_noop"]),
+            # Drop the internal image ref from the payload; the client fetches
+            # frames by (segment, index) via /frame instead.
+            "frames": [{k: v for k, v in f.items() if k != "ref"} for f in self.frames],
+        }
+
+
+class FrameRecordsDataset:
+    """All segments loaded from one or more ``frame_records.jsonl`` files."""
+
+    def __init__(self, jsonl_paths: list[Path]) -> None:
+        self.segments: OrderedDict[str, Segment] = OrderedDict()
+        self._missing_ref = 0
+        # Per-master-shard {record_index -> is_black}, read lazily from the shard's
+        # sibling frame_manifest.jsonl the first time a segment on it is viewed.
+        self._black_luts: dict[str, dict[int, bool]] = {}
+        total = 0
+        for p in jsonl_paths:
+            total += self._load_file(p)
+        if not self.segments:
+            raise SystemExit(
+                f"No frame records found in {', '.join(str(p) for p in jsonl_paths)}"
+            )
+        print(
+            f"loaded {total} frame records across {len(self.segments)} segments"
+            + (f" ({self._missing_ref} without an image ref)" if self._missing_ref else ""),
+            flush=True,
+        )
+
+    def _load_file(self, path: Path) -> int:
+        n = 0
+        with path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                sid = str(rec.get("segment_id") or rec.get("clip_id") or "unknown")
+                seg = self.segments.get(sid)
+                if seg is None:
+                    seg = Segment(sid, rec.get("recording_id"))
+                    self.segments[sid] = seg
+                ref = _image_ref(rec)
+                if ref is None:
+                    self._missing_ref += 1
+                t = rec.get("local_time_s")
+                if not isinstance(t, (int, float)):
+                    t = seg.frames[-1]["t"] if seg.frames else 0.0
+                action = rec.get("action", "")
+                seg.frames.append(
+                    {
+                        "i": len(seg.frames),
+                        "bin": rec.get("local_bin_idx"),
+                        "t": round(float(t), 3),
+                        "src": rec.get("source_frame_idx"),
+                        "action": "" if action is None else str(action),
+                        "is_noop": _is_noop(action),
+                        "ref": ref,  # internal; stripped before it hits the client
+                    }
+                )
+                n += 1
+        return n
+
+    def frame_ref(self, segment_id: str, index: int) -> str | None:
+        seg = self.segments.get(segment_id)
+        if seg is None or index < 0 or index >= len(seg.frames):
+            return None
+        return seg.frames[index]["ref"]
+
+    def _black_lut(self, shard: Path) -> dict[int, bool]:
+        """``{record_index -> is_black}`` for one master shard, read once from its
+        sibling ``frame_manifest.jsonl`` (same dir as the ``images.array_record``)
+        and cached. A missing/unreadable manifest yields an empty map — nothing is
+        flagged rather than crashing the segment view."""
+        key = str(shard)
+        lut = self._black_luts.get(key)
+        if lut is not None:
+            return lut
+        lut = {}
+        manifest = shard.with_name("frame_manifest.jsonl")
+        try:
+            with manifest.open() as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    r = json.loads(line)
+                    ri = r.get("record_index")
+                    if ri is not None:
+                        lut[int(ri)] = _is_black(r.get("mean_luma"), r.get("frac_dark"))
+        except (OSError, json.JSONDecodeError):
+            lut = {}
+        self._black_luts[key] = lut
+        return lut
+
+    def _black_flag(self, ref: str | None) -> bool:
+        """Whether one kept frame is (near-)black, cross-referenced from the master
+        frame_manifest via the frame's ``ar://…#idx`` shard URI. Plain-file refs
+        (no master manifest) and non-ar refs are treated as not-black."""
+        if not ref or not is_arrayrecord_image_uri(str(ref)):
+            return False
+        try:
+            shard, idx = parse_arrayrecord_image_uri(str(ref))
+        except ValueError:
+            return False
+        return self._black_lut(shard).get(idx, False)
+
+    def _ensure_black(self, seg: Segment) -> None:
+        """Tag ``seg``'s frames with ``is_black`` once (idempotent)."""
+        if getattr(seg, "_black_done", False):
+            return
+        for f in seg.frames:
+            f["is_black"] = self._black_flag(f.get("ref"))
+        seg._black_done = True  # type: ignore[attr-defined]
+
+    def segment_detail(self, segment_id: str) -> dict[str, Any] | None:
+        seg = self.segments.get(segment_id)
+        if seg is None:
+            return None
+        self._ensure_black(seg)
+        return seg.detail()
+
+    def info(self) -> dict[str, Any]:
+        return {
+            "n_segments": len(self.segments),
+            "mode": "frame_records",
+            "segments": [s.summary() for s in self.segments.values()],
+        }
+
+
+def _first_text(content: Any) -> str | None:
+    """First ``{"type":"text","text":...}`` block's text in a message ``content`` list."""
+    if isinstance(content, list):
+        for c in content:
+            if isinstance(c, dict) and c.get("type") == "text" and isinstance(c.get("text"), str):
+                return c["text"]
+    return None
+
+
+def _first_image(content: Any) -> str | None:
+    """First image ref in a message ``content`` list (``image``/``image_url``/``url``)."""
+    if isinstance(content, list):
+        for c in content:
+            if isinstance(c, dict) and c.get("type") == "image":
+                v = c.get("image") or c.get("image_url") or c.get("url")
+                if isinstance(v, str) and v:
+                    return v
+    return None
+
+
+class ConversationsDataset(FrameRecordsDataset):
+    """A stage-04 ``conversations.jsonl`` browsed as trajectories.
+
+    Each conversation (one segment's interleaved screenshot->action chat) is one
+    Segment: every ``user`` turn's screenshot is a frame, and the ``assistant``
+    turn that follows carries that frame's action string. The images are ``ar://``
+    refs into the SAME stage-01a master store the 01b sample used, so frame
+    fetching and the black-frame cross-reference are inherited unchanged from
+    ``FrameRecordsDataset``. Conversation-level context (system prompt, per-segment
+    instruction, target fps, alignment) is surfaced in the segment detail.
+
+    No per-turn timestamps exist in the chat, so each frame's time is synthesized
+    from its turn index and the conversation's ``target_fps`` (t = i / fps)."""
+
+    mode = "conversations"
+
+    def __init__(self, conversations_path: Path) -> None:
+        self.segments: OrderedDict[str, Segment] = OrderedDict()
+        self._missing_ref = 0
+        self._black_luts: dict[str, dict[int, bool]] = {}
+        n = self._load_file(conversations_path)
+        if not self.segments:
+            raise SystemExit(f"No conversations found in {conversations_path}")
+        print(
+            f"loaded {n} conversations across {len(self.segments)} segments"
+            + (f" ({self._missing_ref} turns without an image)" if self._missing_ref else ""),
+            flush=True,
+        )
+
+    def _load_file(self, path: Path) -> int:  # type: ignore[override]
+        n = 0
+        with path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                seg = self._parse_conversation(json.loads(line))
+                if seg is not None:
+                    self.segments[seg.segment_id] = seg
+                    n += 1
+        return n
+
+    def _parse_conversation(self, rec: dict[str, Any]) -> Segment | None:
+        sid = str(rec.get("segment_id") or rec.get("conversation_id") or f"conv{len(self.segments)}")
+        seg = Segment(sid, rec.get("recording_id"))
+        # Conversation-level metadata, read back in segment_detail()/info().
+        seg.conversation_id = rec.get("conversation_id")  # type: ignore[attr-defined]
+        seg.instruction = rec.get("instruction")  # type: ignore[attr-defined]
+        seg.goal_conditioned = bool(rec.get("goal_conditioned"))  # type: ignore[attr-defined]
+        seg.target_fps = rec.get("target_fps")  # type: ignore[attr-defined]
+        seg.alignment_status = rec.get("alignment_status")  # type: ignore[attr-defined]
+        seg.split = rec.get("split")  # type: ignore[attr-defined]
+        seg.system_prompt = None  # type: ignore[attr-defined]
+        fps = float(rec.get("target_fps") or 0.0)
+        pending_ref: str | None = None
+        for m in rec.get("messages") or []:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            content = m.get("content")
+            if role == "system":
+                seg.system_prompt = _first_text(content)  # type: ignore[attr-defined]
+            elif role == "user":
+                # A goal-conditioned first turn puts the instruction text before the
+                # image; we take the image (top-level ``instruction`` already has the text).
+                pending_ref = _first_image(content)
+                if pending_ref is None:
+                    self._missing_ref += 1
+            elif role == "assistant":
+                action = _first_text(content) or ""
+                i = len(seg.frames)
+                t = (i / fps) if fps > 0 else float(i)
+                seg.frames.append({
+                    "i": i,
+                    "bin": i,
+                    "t": round(t, 3),
+                    "src": None,  # source_frame_idx isn't carried into the conversation
+                    "action": action,
+                    "is_noop": _is_noop(action),
+                    "ref": pending_ref,  # internal; stripped before it hits the client
+                })
+                pending_ref = None
+        return seg
+
+    def segment_detail(self, segment_id: str) -> dict[str, Any] | None:
+        d = super().segment_detail(segment_id)  # runs _ensure_black + Segment.detail()
+        if d is None:
+            return None
+        seg = self.segments[segment_id]
+        d.update({
+            "mode": "conversations",
+            "conversation_id": getattr(seg, "conversation_id", None),
+            "instruction": getattr(seg, "instruction", None),
+            "goal_conditioned": getattr(seg, "goal_conditioned", False),
+            "system_prompt": getattr(seg, "system_prompt", None),
+            "target_fps": getattr(seg, "target_fps", None),
+            "alignment_status": getattr(seg, "alignment_status", None),
+            "split": getattr(seg, "split", None),
+            "n_turns": len(seg.frames),
+        })
+        return d
+
+    def info(self) -> dict[str, Any]:
+        segs = list(self.segments.values())
+        return {
+            "n_segments": len(segs),
+            "mode": "conversations",
+            "goal_conditioned": any(getattr(s, "goal_conditioned", False) for s in segs),
+            "has_system_prompt": any(getattr(s, "system_prompt", None) for s in segs),
+            "target_fps": next(
+                (getattr(s, "target_fps", None) for s in segs if getattr(s, "target_fps", None)), None
+            ),
+            "segments": [
+                {**s.summary(), "instruction": getattr(s, "instruction", None)} for s in segs
+            ],
+        }
+
+
+class FramesMasterDataset:
+    """A stage-01a *frames-master* store browsed directly — raw frames, no actions.
+
+    The frames-master is keylog-free by design: it holds decoded JPEG frames at
+    ``master_fps`` and nothing about the keylog (actions are added later by the
+    01b sampler). So this view shows frames + timing only; the action HUD stays
+    empty. Segments are listed from ``segment_index.jsonl`` up front (cheap), and
+    each segment's per-frame rows are read lazily from its ``frame_manifest.jsonl``
+    on first access — the store can be hundreds of thousands of frames, so nothing
+    is loaded eagerly. A small LRU keeps the last few browsed segments in memory.
+    """
+
+    mode = "frames_master"
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.master_fps: float | None = None
+        self.segments: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        index_path = root / "segment_index.jsonl"
+        with index_path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                if not row.get("num_records"):
+                    continue  # skip empty/failed segments (no usable frame store)
+                sid = str(row.get("segment_id"))
+                self.master_fps = row.get("master_fps", self.master_fps)
+                self.segments[sid] = {
+                    "recording_id": row.get("recording_id"),
+                    "num_records": int(row["num_records"]),
+                    "duration_s": float(row.get("video_duration_s") or 0.0),
+                    "manifest": row.get("frame_manifest"),
+                }
+        if not self.segments:
+            raise SystemExit(f"no usable segments in {index_path}")
+        # Optional keylog overlay: raw events placed by timestamp onto the master
+        # frames. Discovered from this master's manifest ("source_clips_manifest",
+        # a stage-00 clips_manifest mapping segment_id -> keylog_path), falling back
+        # to --clips-manifest. The frames-master store itself is keylog-free.
+        self.keylogs: dict[str, str] = {}
+        cm = None
+        manifest_json = root / "manifest.json"
+        if manifest_json.exists():
+            try:
+                cm = json.loads(manifest_json.read_text()).get("source_clips_manifest")
+            except (OSError, json.JSONDecodeError):
+                cm = None
+        if cm is None:
+            cm = CLIPS_MANIFEST_OVERRIDE
+        if cm and Path(cm).exists():
+            with Path(cm).open() as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    row = json.loads(line)
+                    sid = str(row.get("segment_id") or "")
+                    kp = row.get("keylog_path")
+                    if sid and kp and row.get("keylog_exists", True):
+                        self.keylogs[sid] = kp
+            print(f"  keylog overlay: {len(self.keylogs)} segments (from {cm})", flush=True)
+        # Optional stage-00 alignment overlay (raw<->video time map): enables the
+        # dual-clock event table + the "aligned + trims" timeline. Keyed by segment_id.
+        self.align: dict[str, dict[str, Any]] = {}
+        align_path = _resolve_alignment_path(cm)
+        if align_path is not None:
+            with align_path.open() as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    row = json.loads(line)
+                    sid = str(row.get("segment_id") or "")
+                    if sid:
+                        self.align[sid] = {
+                            "status": row.get("status"),
+                            "total_collapse_s": float(row.get("total_collapse_s") or 0.0),
+                            "residual_s": float(row.get("residual_s") or 0.0),
+                            "overhang_s": float(row.get("overhang_s") or 0.0),
+                            "video_dur_s": float(row.get("video_dur_s") or 0.0),
+                            "splices": row.get("splices") or [],
+                        }
+            print(f"  alignment overlay: {len(self.align)} segments (from {align_path})", flush=True)
+        self._cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._cache_cap = 6
+        print(
+            f"frames-master: {len(self.segments)} segments, master_fps={self.master_fps}",
+            flush=True,
+        )
+
+    def _load(self, segment_id: str) -> dict[str, Any] | None:
+        """Frames (+ optional keylog-derived per-frame actions and a raw event
+        list), read and cached on first access."""
+        meta = self.segments.get(segment_id)
+        if meta is None:
+            return None
+        cached = self._cache.get(segment_id)
+        if cached is not None:
+            self._cache.move_to_end(segment_id)
+            return cached
+        manifest = Path(meta["manifest"]) if meta.get("manifest") else (
+            self.root / "frames" / segment_id / "frame_manifest.jsonl"
+        )
+        frames: list[dict[str, Any]] = []
+        with manifest.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                r = json.loads(line)
+                frames.append({
+                    "i": len(frames),
+                    "bin": r.get("record_index", len(frames)),
+                    "t": round(float(r.get("source_time_s") or 0.0), 3),
+                    "src": r.get("source_frame_idx"),
+                    "action": "",          # filled from the keylog overlay if present
+                    "is_noop": True,
+                    # (near-)black per stage-01a luma metrics + default thresholds;
+                    # what the 01b sampler drops with --drop-black-frames on.
+                    "is_black": _is_black(r.get("mean_luma"), r.get("frac_dark")),
+                    "ref": r.get("image") or r.get("image_path"),
+                })
+        events: list[list[Any]] = []
+        align_info: dict[str, Any] | None = None
+        keylog = self.keylogs.get(segment_id)
+        if keylog and frames:
+            fps = float(meta.get("master_fps") or self.master_fps or 1.0)
+            try:
+                # Per-frame actions: bin the raw keylog at master_fps (bin i == the
+                # master frame at [i/fps, (i+1)/fps)) so the HUD lights up. Raw,
+                # un-realigned — the frames are on the raw video clock too.
+                bins, _ = aggregate_actions(Path(keylog), len(frames), fps)
+                for i, b in enumerate(bins):
+                    action = format_action(b)
+                    frames[i]["action"] = action
+                    frames[i]["is_noop"] = action == "NO_OP"
+                al = self.align.get(segment_id)
+                if al is not None:
+                    # Dual-clock events + the "aligned + trims" overlay. video_end is
+                    # the end of the last master frame window (≈ video duration).
+                    splices = al["splices"]
+                    video_end = len(frames) / fps
+                    events = _raw_events(Path(keylog), splices=splices, video_end=video_end)
+                    # Per-frame actions on the ALIGNED clock (the raw/aligned HUD
+                    # toggle), binned with the same keylog_to_video map used above.
+                    abins, _ = aggregate_actions(
+                        Path(keylog), len(frames), fps,
+                        timemap=lambda t: R.keylog_to_video(t, splices),
+                    )
+                    active: list[int] = []
+                    for i, b in enumerate(abins):
+                        a = format_action(b)
+                        frames[i]["action_aln"] = a
+                        if a != "NO_OP":
+                            active.append(i)
+                    # Frames "cut" by each collapse: the raw-keylog span [kp, kp+collapse]
+                    # (in frame units) that realignment folds to the single frame at vp.
+                    n = len(frames)
+                    cut_ranges: list[list[int]] = []
+                    for sp in splices:
+                        lo = max(0, int(sp["kp"] * fps))
+                        hi = min(n, int((sp["kp"] + sp["collapse"]) * fps) + 1)
+                        if hi > lo:
+                            cut_ranges.append([lo, hi])
+                    align_info = {
+                        "status": al["status"],
+                        "total_collapse_s": round(al["total_collapse_s"], 2),
+                        "residual_s": round(al["residual_s"], 2),
+                        "overhang_s": round(al["overhang_s"], 2),
+                        "video_dur_s": al["video_dur_s"],
+                        "aligned_active": active,
+                        "collapse_frames": [
+                            {"frame": int(sp["vp"] * fps),
+                             "collapse": round(sp["collapse"], 2),
+                             "kp": round(sp["kp"], 2)}
+                            for sp in splices
+                        ],
+                        "cut_ranges": cut_ranges,
+                        "n_overhang_events": sum(1 for e in events if e[1] >= video_end),
+                    }
+                else:
+                    events = _raw_events(Path(keylog))
+            except Exception as exc:
+                print(f"  keylog read failed for {segment_id}: {exc}", flush=True)
+                keylog = None
+        entry = {"frames": frames, "events": events, "has_keylog": bool(keylog),
+                 "align": align_info}
+        self._cache[segment_id] = entry
+        self._cache.move_to_end(segment_id)
+        while len(self._cache) > self._cache_cap:
+            self._cache.popitem(last=False)
+        return entry
+
+    def _frames(self, segment_id: str) -> list[dict[str, Any]] | None:
+        entry = self._load(segment_id)
+        return entry["frames"] if entry else None
+
+    def segment_detail(self, segment_id: str) -> dict[str, Any] | None:
+        entry = self._load(segment_id)
+        if entry is None:
+            return None
+        frames = entry["frames"]
+        meta = self.segments[segment_id]
+        return {
+            "segment_id": segment_id,
+            "recording_id": meta.get("recording_id"),
+            "n_frames": len(frames),
+            "n_non_noop": sum(1 for f in frames if not f["is_noop"]),
+            "n_black": sum(1 for f in frames if f.get("is_black")),
+            "n_black_act": sum(1 for f in frames if f.get("is_black") and not f["is_noop"]),
+            "has_actions": entry["has_keylog"] and any(not f["is_noop"] for f in frames),
+            "master_fps": self.master_fps,
+            "has_alignment": entry.get("align") is not None,
+            "dual_clock": entry.get("align") is not None,
+            "align": entry.get("align"),
+            "events": entry["events"],
+            "frames": [{k: v for k, v in fr.items() if k != "ref"} for fr in frames],
+        }
+
+    def frame_ref(self, segment_id: str, index: int) -> str | None:
+        frames = self._frames(segment_id)
+        if frames is None or index < 0 or index >= len(frames):
+            return None
+        return frames[index]["ref"]
+
+    def info(self) -> dict[str, Any]:
+        return {
+            "n_segments": len(self.segments),
+            "mode": self.mode,
+            "master_fps": self.master_fps,
+            "has_keylog": bool(self.keylogs),
+            "has_alignment": bool(self.align),
+            "segments": [
+                {
+                    "segment_id": sid,
+                    "recording_id": m.get("recording_id"),
+                    "n_frames": m.get("num_records"),
+                    "n_non_noop": 0,
+                    "duration_s": round(m.get("duration_s", 0.0), 2),
+                    "align_status": (self.align.get(sid) or {}).get("status"),
+                }
+                for sid, m in self.segments.items()
+            ],
+        }
+
+
+# --------------------------------------------------------------------------- #
+# HTTP
+# --------------------------------------------------------------------------- #
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *a: Any) -> None:  # quiet
+        pass
+
+    def _send(self, code: int, body: bytes, ctype: str, cache: bool = False) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        if cache:
+            self.send_header("Cache-Control", "private, max-age=3600")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _send_json(self, obj: Any, code: int = 200) -> None:
+        self._send(code, json.dumps(obj).encode(), "application/json")
+
+    def _dsname(self, q: dict[str, list[str]]) -> str:
+        """The requested dataset name, defaulting to the first registered one."""
+        vals = q.get("ds")
+        if vals and vals[0]:
+            return vals[0]
+        return next(iter(DATASETS), "")
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        route = parsed.path
+        q = parse_qs(parsed.query)
+        try:
+            if route == "/":
+                self._send(200, INDEX_HTML.encode(), "text/html; charset=utf-8")
+            elif route == "/api/datasets":
+                names = list(DATASETS.keys())
+                self._send_json({
+                    "datasets": [{"name": n, "mode": DATASETS[n]["mode"]} for n in names],
+                    "default": names[0] if names else None,
+                })
+            elif route == "/api/segments":
+                name = self._dsname(q)
+                if name not in DATASETS:
+                    self._send_json({"error": f"unknown dataset {name!r}"}, 404)
+                else:
+                    try:
+                        self._send_json(get_dataset(name).info())
+                    except Exception as exc:
+                        self._send_json({"error": f"failed to load {name!r}: {exc}"}, 500)
+            elif route == "/api/segment":
+                name = self._dsname(q)
+                sid = (q.get("id") or [""])[0]
+                ds = get_dataset(name) if name in DATASETS else None
+                detail = ds.segment_detail(sid) if ds is not None else None
+                if detail is None:
+                    self._send_json({"error": f"unknown segment {sid!r}"}, 404)
+                else:
+                    self._send_json(detail)
+            elif route == "/frame":
+                self._serve_frame(q)
+            else:
+                self._send(404, b"not found", "text/plain")
+        except BrokenPipeError:
+            pass
+        except Exception as exc:
+            self._send(500, f"{type(exc).__name__}: {exc}".encode(), "text/plain")
+
+    def _serve_frame(self, q: dict[str, list[str]]) -> None:
+        name = self._dsname(q)
+        if name not in DATASETS:
+            self._send(404, b"unknown dataset", "text/plain")
+            return
+        sid = (q.get("seg") or [""])[0]
+        try:
+            idx = int((q.get("i") or ["-1"])[0])
+        except ValueError:
+            idx = -1
+        ds = get_dataset(name)
+        ref = ds.frame_ref(sid, idx) if ds is not None else None
+        if ref is None:
+            self._send(404, b"no such frame", "text/plain")
+            return
+        try:
+            jpeg = read_jpeg_bytes(ref)
+        except Exception as exc:
+            self._send(502, f"frame read failed: {exc}".encode(), "text/plain")
+            return
+        self._send(200, jpeg, "image/jpeg", cache=True)
+
+
+INDEX_HTML = r"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>frame-records viewer — stage 01b</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:13px/1.45 ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+         background:#14161a; color:#d7dae0; height:100vh; display:flex; flex-direction:column; }
+  header { padding:7px 12px; border-bottom:1px solid #2a2e36; display:flex; gap:10px;
+           align-items:center; flex-wrap:wrap; background:#191c21; }
+  select,button { background:#22262e; color:#d7dae0; border:1px solid #343a44;
+                  border-radius:4px; padding:3px 8px; font:inherit; cursor:pointer; }
+  button:hover { border-color:#5b9dd9; }
+  button.on { background:#2d4a75; border-color:#5b9dd9; }
+  .hint { margin-left:auto; color:#6b7280; font-size:12px; }
+  kbd { background:#22262e; border:1px solid #343a44; border-radius:3px; padding:0 4px; }
+  main { flex:1; display:flex; min-height:0; }
+  #resizer { width:6px; flex:none; cursor:col-resize; background:#20242b;
+             border-left:1px solid #2a2e36; border-right:1px solid #2a2e36; }
+  #resizer:hover, #resizer.drag { background:#5b9dd9; }
+  #screen { flex:1; min-width:0; padding:10px; display:flex; flex-direction:column; gap:6px; overflow:hidden; }
+  #frameimg { flex:1 1 auto; min-height:0; width:100%; object-fit:contain;
+              background:#000; border-radius:4px; }
+  #status { display:flex; gap:14px; color:#aeb6c2; flex-wrap:wrap; align-items:center; }
+  #status b { color:#fff; }
+  #rawaction { color:#6b7280; font-size:11px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .badge { display:inline-block; padding:0 6px; border-radius:3px; font-size:11px; }
+  .badge.noop { background:#26292f; color:#8b93a1; }
+  .badge.act  { background:#1e3a2a; color:#7fd6a2; }
+  .badge.black { background:#2b2440; color:#c3b3f5; }
+
+  /* HUD: mouse radar + keyboard (top of the right sidebar) */
+  #hud { display:flex; flex-wrap:wrap; gap:12px 14px; align-items:flex-start; justify-content:center;
+         flex:none; padding:8px 10px; border-bottom:1px solid #2a2e36; }
+  #mousebox { width:150px; flex:none; display:flex; flex-direction:column; align-items:center; gap:3px; }
+  #radar { width:150px; height:150px; }
+  #radar .ring { fill:#181b20; stroke:#343a44; stroke-width:1.5; }
+  #radar .hub  { fill:#5b6270; }
+  #radar .mvline { stroke:#5b9dd9; stroke-width:3; stroke-linecap:round; }
+  #radar .mvhead { fill:#8fc4f2; }
+  #btns { display:flex; gap:6px; }
+  .btn { width:24px; height:20px; border-radius:4px; background:#22262e; border:1px solid #343a44;
+         display:flex; align-items:center; justify-content:center; font-size:11px; color:#8b93a1; }
+  .btn.press { background:#2d6a45; border-color:#7fd6a2; color:#eafff2; }
+  .btn.held  { background:#274536; border-color:#4f8f6b; color:#bfe8cf; }
+  #scrollind { height:14px; color:#c9a227; font-size:11px; }
+  #dxy { color:#8b93a1; font-size:11px; }
+
+  #kbwrap { flex:1 1 360px; min-width:0; overflow-x:auto; }
+  #kbd { display:inline-flex; flex-direction:column; gap:3px; }
+  .krow { display:flex; gap:3px; }
+  .krow.arrows { justify-content:flex-start; }
+  .key { height:26px; border-radius:4px; background:#20242b; border:1px solid #30353f;
+         display:flex; align-items:center; justify-content:center; font-size:11px; color:#9aa2af; flex:none; }
+  .key.press { background:#2d6a45; border-color:#7fd6a2; color:#eafff2; box-shadow:0 0 7px rgba(127,214,162,.5); }
+  .key.held  { background:#274536; border-color:#4f8f6b; color:#cdeeda; }
+  #otherkeys { margin-top:4px; display:flex; gap:4px; flex-wrap:wrap; }
+  .chip { padding:1px 6px; border-radius:3px; font-size:11px; background:#274536; color:#cdeeda; }
+  .chip.press { background:#2d6a45; color:#eafff2; }
+  .kbcap { color:#6b7280; font-size:10px; margin-top:3px; }
+
+  #strip { display:flex; gap:2px; overflow-x:auto; padding:4px 0 1px; flex:none; }
+  .cell { flex:none; width:9px; height:24px; border-radius:2px; background:#2a2e36; cursor:pointer; }
+  .cell.act { background:#3f7d5b; }
+  .cell.cut { background:#6e4a1c; box-shadow:inset 0 0 0 1px rgba(233,200,119,.55); }
+  /* black-frame flag wins the fill (defined after act/cut) — the action string stays in the tooltip. */
+  .cell.black { background:#3b2f5e; box-shadow:inset 0 0 0 1px rgba(167,139,250,.7); }
+  /* black frame that ALSO has an action: keep the violet fill, swap the border to a green glow. */
+  .cell.black.act { box-shadow:inset 0 0 0 1.5px rgba(127,214,162,.95), 0 0 5px rgba(127,214,162,.5); }
+  .cell.cur { outline:2px solid #5b9dd9; outline-offset:1px; }
+  #strip2wrap { flex:none; }
+  #striplabels { display:flex; justify-content:space-between; align-items:baseline; }
+  .striplab { color:#6b7280; font-size:10px; }
+  #alignstat { color:#c9a227; font-size:11px; }
+  #strip2 { display:flex; gap:2px; overflow-x:auto; padding:1px 0 4px; flex:none; }
+  #strip2 .cell { height:16px; }
+  .cell.col { background:#7a2633; box-shadow:0 0 5px rgba(255,120,140,.55); }
+
+  #panel { width:430px; flex:none; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+  #modenote { display:none; padding:6px 10px; background:#3a2f14; color:#e8c877;
+              font-size:11px; border-bottom:1px solid #2a2e36; }
+  #modenote.show { display:block; }
+  #modenote .cnote-goal { color:#7fd6a2; font-weight:600; }
+  #modenote .cnote-sys { color:#b9a06a; }
+  .phead { padding:6px 12px; border-bottom:1px solid #2a2e36; border-top:1px solid #2a2e36;
+           color:#8b93a1; font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+  #typed { flex:1 1 40%; min-height:70px; overflow-y:auto; padding:10px 12px; white-space:pre-wrap; word-break:break-word;
+           font-size:14px; line-height:1.5; color:#c4b58a; }
+  #typed .now { background:#2d6a45; color:#eafff2; border-radius:2px; }
+  #typed .empty { color:#5b6270; }
+  #typed .caret { border-left:2px solid #5b9dd9; margin-left:1px; animation:blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity:0; } }
+  #rows { overflow-y:auto; flex:1 1 45%; min-height:80px; }
+  .row { display:grid; grid-template-columns:46px 54px 1fr; gap:8px; padding:2px 12px; cursor:pointer; border-left:2px solid transparent; }
+  .row:hover { background:#1c2027; }
+  .row.cur { background:#232a35; border-left-color:#5b9dd9; }
+  .row.noop { color:#6b7280; }
+  .row .t { color:#8b93a1; }
+  .row .a { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .erow { display:grid; grid-template-columns:58px 92px 1fr; gap:8px; padding:2px 12px; cursor:pointer; border-left:2px solid transparent; }
+  .erow:hover { background:#1c2027; }
+  .erow.now { background:#243a2c; border-left-color:#7fd6a2; }
+  .erow .t { color:#8b93a1; }
+  .erow .ty { color:#8fb0d0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .erow .a { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .erow.dual { grid-template-columns:48px 48px 78px 1fr; }
+  .erow .raw { color:#8b93a1; }
+  .erow .aln { color:#c4b58a; }
+  .erow.trim { color:#ff9db0; }
+  .erow.trim .a { text-decoration:line-through; }
+  .seginfo { color:#8b93a1; }
+</style></head><body>
+<header>
+  <label>dataset <select id="ds"></select></label>
+  <label>segment <select id="seg"></select></label>
+  <button id="prev" title="←">◀</button>
+  <button id="play">▶ play</button>
+  <button id="next" title="→">▶</button>
+  <button id="clocktoggle" title="raw vs realigned keylog for the HUD" style="display:none">keys: raw</button>
+  <span id="seginfo" class="seginfo"></span>
+  <span class="hint"><kbd>←</kbd>/<kbd>→</kbd> step · <kbd>space</kbd> play · <kbd>a</kbd>/<kbd>d</kbd> prev/next active · <kbd>,</kbd>/<kbd>.</kbd> prev/next black · <kbd>⇧,</kbd>/<kbd>⇧.</kbd> black w/ action</span>
+</header>
+<main>
+  <div id="screen">
+    <img id="frameimg" alt="frame">
+    <div id="status">
+      <span>frame <b id="fi">–</b>/<b id="fn">–</b></span>
+      <span>t=<b id="ft">–</b>s</span>
+      <span>bin <b id="fbin">–</b></span>
+      <span>src <b id="fsrc">–</b></span>
+      <span id="fbadge"></span>
+      <span id="rawaction"></span>
+    </div>
+    <div id="strip"></div>
+    <div id="strip2wrap" style="display:none">
+      <div id="striplabels">
+        <span class="striplab">aligned keys + trims (■ = collapsed idle)</span>
+        <span id="alignstat"></span>
+      </div>
+      <div id="strip2"></div>
+    </div>
+  </div>
+  <div id="resizer" title="drag to resize the sidebar"></div>
+  <div id="panel">
+    <div id="modenote"></div>
+    <div id="hud">
+      <div id="mousebox">
+        <svg id="radar" viewBox="0 0 100 100">
+          <circle class="ring" cx="50" cy="50" r="45"/>
+          <line id="mvline" class="mvline" x1="50" y1="50" x2="50" y2="50"/>
+          <polygon id="mvhead" class="mvhead" points="0,0 -8,-4.5 -8,4.5"/>
+          <circle class="hub" cx="50" cy="50" r="3"/>
+        </svg>
+        <div id="btns">
+          <span class="btn" data-b="LMB">L</span>
+          <span class="btn" data-b="MMB">M</span>
+          <span class="btn" data-b="RMB">R</span>
+        </div>
+        <div id="scrollind"></div>
+        <div id="dxy">Δ 0, 0</div>
+      </div>
+      <div id="kbwrap">
+        <div id="kbd"></div>
+        <div id="otherkeys"></div>
+        <div class="kbcap">bright = pressed this bin · dim = held from earlier</div>
+      </div>
+    </div>
+    <div class="phead">typed text <span id="typedcap" style="text-transform:none;letter-spacing:0"></span></div>
+    <div id="typed"></div>
+    <div class="phead" id="rowshead">actions</div>
+    <div id="rows"></div>
+  </div>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+let DS=null, SEG=null, FR=[], PARSED=[], cur=0, playing=false, timer=null;
+let MODE='frame_records'; const EMPTYSET=new Set(); let _lastCell=null, _lastRow=null, _lastCell2=null;
+let MASTER_FPS=15, EV=null, EVT=[], HAS_ACTIONS=false, _evLo=-1, _evHi=-1;
+let ALN=null, DUAL=false, ALNACT=null;   // alignment overlay (master + --alignment)
+let CLOCK='raw';                         // which keylog drives the HUD: 'raw' | 'aligned'
+// Per-frame action for the HUD on the selected clock (falls back to raw).
+function curActions(){ return FR.map(f => (CLOCK==='aligned' && f.action_aln!=null) ? f.action_aln : f.action); }
+function lb(a,x){ let lo=0,hi=a.length; while(lo<hi){ const m=(lo+hi)>>1; if(a[m]<x) lo=m+1; else hi=m; } return lo; }
+// Keep `el` horizontally centered in scroll container `c` (browser clamps at the ends).
+function centerX(c, el){ if(!c||!el) return; const cr=c.getBoundingClientRect(), er=el.getBoundingClientRect(); c.scrollLeft += (er.left - cr.left) - (c.clientWidth - er.width)/2; }
+// Page vertically: only when `el` leaves the viewport, jump to the page grid holding it.
+function pageY(c, el){ if(!c||!el) return; const cr=c.getBoundingClientRect(), er=el.getBoundingClientRect(); if(er.top < cr.top || er.bottom > cr.bottom){ const rel=(er.top - cr.top) + c.scrollTop; c.scrollTop = Math.floor(rel / Math.max(1,c.clientHeight)) * c.clientHeight; } }
+
+// ---- action parsing --------------------------------------------------------
+function parseAction(s){
+  if(!s || s.trim()==='NO_OP') return {noop:true,dx:0,dy:0,scroll:0,events:[]};
+  const parts=s.split(' ; ');
+  const mv=(parts[0]||'').trim().split(/\s+/).map(Number);
+  const events=[];
+  if(parts[1]){
+    for(const tok of parts[1].trim().split(/\s+/)){
+      if(!tok) continue;
+      const sign=tok[0], name=tok.slice(1);
+      if((sign==='+'||sign==='-') && name) events.push({sign,name});
+    }
+  }
+  return {noop:false, dx:mv[0]||0, dy:mv[1]||0, scroll:mv[2]||0, events};
+}
+
+// ---- typed-text reconstruction --------------------------------------------
+const BACK='\b';
+const PUNCT={ BackQuote:['`','~'],Minus:['-','_'],Equal:['=','+'],
+  BracketLeft:['[','{'],BracketRight:[']','}'],BackSlash:['\\','|'],
+  SemiColon:[';',':'],Quote:["'",'"'],Comma:[',','<'],Dot:['.','>'],Slash:['/','?'] };
+const SHIFTNUM={Num1:'!',Num2:'@',Num3:'#',Num4:'$',Num5:'%',Num6:'^',Num7:'&',Num8:'*',Num9:'(',Num0:')'};
+function keyToChar(name, shift){
+  if(/^Key[A-Z]$/.test(name)){ const c=name.slice(3); return shift?c:c.toLowerCase(); }
+  if(/^Num[0-9]$/.test(name)){ const d=name.slice(3); return shift?(SHIFTNUM[name]||d):d; }
+  if(name==='Space') return ' ';
+  if(name==='Return'||name==='Enter'||name==='NumpadEnter'||name==='Numpad Enter') return '\n';
+  if(name==='Tab') return '\t';
+  if(name==='Backspace') return BACK;
+  if(PUNCT[name]) return PUNCT[name][shift?1:0];
+  return null;  // modifiers, arrows, F-keys, etc.
+}
+function isBtn(n){ return n==='LMB'||n==='RMB'||n==='MMB'; }
+
+// Replay events 0..cur -> materialized text (with per-char frame provenance)
+// plus the set of keys/buttons still held at the end of `cur`.
+function stateAt(cur){
+  const chars=[]; const down=new Set();
+  for(let i=0;i<=cur;i++){
+    for(const ev of PARSED[i].events){
+      if(ev.sign==='+'){
+        down.add(ev.name);
+        const shift=down.has('ShiftLeft')||down.has('ShiftRight');
+        const ch=keyToChar(ev.name, shift);
+        if(ch===BACK){ if(chars.length) chars.pop(); }
+        else if(ch!==null){ chars.push({ch, frame:i}); }
+      } else { down.delete(ev.name); }
+    }
+  }
+  const pressed=new Set(PARSED[cur].events.filter(e=>e.sign==='+').map(e=>e.name));
+  return {chars, held:down, pressed};
+}
+
+// ---- keyboard --------------------------------------------------------------
+const KEY_ROWS = [
+  [{n:'Escape',l:'esc',w:1.5},{n:'BackQuote',l:'`'},{n:'Num1',l:'1'},{n:'Num2',l:'2'},{n:'Num3',l:'3'},
+   {n:'Num4',l:'4'},{n:'Num5',l:'5'},{n:'Num6',l:'6'},{n:'Num7',l:'7'},{n:'Num8',l:'8'},{n:'Num9',l:'9'},
+   {n:'Num0',l:'0'},{n:'Minus',l:'-'},{n:'Equal',l:'='},{n:'Backspace',l:'⌫',w:2}],
+  [{n:'Tab',l:'tab',w:1.7},{n:'KeyQ',l:'Q'},{n:'KeyW',l:'W'},{n:'KeyE',l:'E'},{n:'KeyR',l:'R'},{n:'KeyT',l:'T'},
+   {n:'KeyY',l:'Y'},{n:'KeyU',l:'U'},{n:'KeyI',l:'I'},{n:'KeyO',l:'O'},{n:'KeyP',l:'P'},
+   {n:'BracketLeft',l:'['},{n:'BracketRight',l:']'},{n:'BackSlash',l:'\\',w:1.4}],
+  [{n:'CapsLock',l:'caps',w:2},{n:'KeyA',l:'A'},{n:'KeyS',l:'S'},{n:'KeyD',l:'D'},{n:'KeyF',l:'F'},{n:'KeyG',l:'G'},
+   {n:'KeyH',l:'H'},{n:'KeyJ',l:'J'},{n:'KeyK',l:'K'},{n:'KeyL',l:'L'},{n:'SemiColon',l:';'},{n:'Quote',l:"'"},
+   {n:'Return',l:'⏎',w:2.1}],
+  [{n:'ShiftLeft',l:'shift',w:2.5},{n:'KeyZ',l:'Z'},{n:'KeyX',l:'X'},{n:'KeyC',l:'C'},{n:'KeyV',l:'V'},{n:'KeyB',l:'B'},
+   {n:'KeyN',l:'N'},{n:'KeyM',l:'M'},{n:'Comma',l:','},{n:'Dot',l:'.'},{n:'Slash',l:'/'},{n:'ShiftRight',l:'shift',w:2.6}],
+  [{n:['ControlLeft','Control'],l:'ctrl',w:1.7},{n:['MetaLeft','Meta','MetaGr'],l:'meta',w:1.4},{n:'Alt',l:'alt',w:1.4},
+   {n:'Space',l:'space',w:6.7},{n:['AltGr','AltRight'],l:'alt',w:1.4},{n:'MetaRight',l:'meta',w:1.4},
+   {n:'ControlRight',l:'ctrl',w:1.7}],
+];
+const ARROWS=[{n:'LeftArrow',l:'←'},{n:'UpArrow',l:'↑'},{n:'DownArrow',l:'↓'},{n:'RightArrow',l:'→'}];
+let UNIT=26;  // key size in px; auto-fitted to the sidebar width (see fitKeyboard)
+let keyEls=[]; const allKeyNames=new Set();
+function buildKeyboard(){
+  const kbd=$('#kbd'); kbd.innerHTML=''; keyEls=[]; allKeyNames.clear();
+  const addKey=(row,k)=>{
+    const el=document.createElement('div'); el.className='key';
+    el.style.width=((k.w||1)*UNIT)+'px'; el.textContent=k.l;
+    const names=Array.isArray(k.n)?k.n:[k.n];
+    names.forEach(n=>allKeyNames.add(n));
+    keyEls.push({names:new Set(names), el}); row.appendChild(el);
+  };
+  for(const row of KEY_ROWS){ const r=document.createElement('div'); r.className='krow'; for(const k of row) addKey(r,k); kbd.appendChild(r); }
+  const ar=document.createElement('div'); ar.className='krow arrows'; for(const k of ARROWS) addKey(ar,k); kbd.appendChild(ar);
+}
+function lightKeyboard(pressed, held){
+  for(const {names,el} of keyEls){
+    let p=false,h=false;
+    for(const n of names){ if(pressed.has(n)) p=true; else if(held.has(n)) h=true; }
+    el.classList.toggle('press', p);
+    el.classList.toggle('held', !p && h);
+  }
+  const others=[];
+  for(const n of pressed) if(!allKeyNames.has(n) && !isBtn(n)) others.push([n,'press']);
+  for(const n of held) if(!pressed.has(n) && !allKeyNames.has(n) && !isBtn(n)) others.push([n,'held']);
+  $('#otherkeys').innerHTML = others.map(([n,c])=>`<span class="chip ${c}">${esc(n)}</span>`).join('');
+}
+
+// ---- mouse radar -----------------------------------------------------------
+const btnEls={};
+function initRadar(){ document.querySelectorAll('.btn').forEach(b=>btnEls[b.dataset.b]=b); }
+function updateRadar(p, pressed, held){
+  const R=42, cx=50, cy=50;
+  const mag=Math.hypot(p.dx,p.dy);
+  const len = mag>0 ? R*Math.tanh(mag/250) : 0;
+  const ang = Math.atan2(p.dy,p.dx);       // screen coords: +y is down
+  const x2 = cx+len*Math.cos(ang), y2 = cy+len*Math.sin(ang);
+  const line=$('#mvline'), head=$('#mvhead');
+  line.setAttribute('x2',x2.toFixed(2)); line.setAttribute('y2',y2.toFixed(2));
+  head.setAttribute('transform',`translate(${x2.toFixed(2)},${y2.toFixed(2)}) rotate(${(ang*180/Math.PI).toFixed(1)})`);
+  const vis = mag>0 ? 1 : 0; line.style.opacity=vis; head.style.opacity=vis;
+  for(const [b,el] of Object.entries(btnEls)){
+    el.classList.toggle('press', pressed.has(b));
+    el.classList.toggle('held', !pressed.has(b) && held.has(b));
+  }
+  $('#scrollind').textContent = p.scroll ? (p.scroll>0 ? `▲ scroll ${p.scroll}` : `▼ scroll ${Math.abs(p.scroll)}`) : '';
+  $('#dxy').textContent = `Δ ${p.dx}, ${p.dy}`;
+}
+
+// ---- typed text render -----------------------------------------------------
+function esc(s){ return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function renderTyped(chars, cur){
+  const el=$('#typed');
+  if(!chars.length){ el.innerHTML='<span class="empty">— no text typed yet —</span>'; return; }
+  let html=''; let i=0;
+  while(i<chars.length){
+    const hi = chars[i].frame===cur;
+    let j=i, run='';
+    while(j<chars.length && (chars[j].frame===cur)===hi){ run+=chars[j].ch; j++; }
+    html += hi ? `<span class="now">${esc(run)}</span>` : esc(run);
+    i=j;
+  }
+  html+='<span class="caret"></span>';
+  el.innerHTML=html;
+  const now=el.querySelector('.now');
+  if(now) now.scrollIntoView({block:'nearest'}); else el.scrollTop=el.scrollHeight;
+}
+
+// ---- data loading ----------------------------------------------------------
+async function jget(u){ const r=await fetch(u); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+
+async function loadDatasets(){
+  const info=await jget('/api/datasets');
+  const sel=$('#ds'); sel.innerHTML='';
+  for(const d of info.datasets){
+    const o=document.createElement('option'); o.value=d.name;
+    const ml = d.mode==='frames_master'?'master/raw':d.mode==='conversations'?'conversation':'sample';
+    o.textContent=`${d.name}  (${ml})`;
+    sel.appendChild(o);
+  }
+  DS = info.default || (info.datasets[0] && info.datasets[0].name) || null;
+  if(DS){ sel.value=DS; await loadSegments(); }
+}
+async function loadSegments(){
+  const info=await jget('/api/segments?ds='+encodeURIComponent(DS));
+  if(info.error){ $('#seginfo').textContent='⚠ '+info.error; $('#seg').innerHTML=''; $('#strip').innerHTML=''; $('#rows').innerHTML=''; return; }
+  MODE=info.mode||'frame_records';
+  MASTER_FPS=info.master_fps||MASTER_FPS;
+  const note=$('#modenote');
+  if(MODE==='frames_master' && info.has_alignment){
+    note.textContent=`master + realignment overlay — event table is dual-clock (raw vs aligned); the lower "aligned + trims" timeline shows collapsed idle spans. The frames themselves are raw (unrealigned).`;
+    note.classList.add('show');
+  } else if(MODE==='frames_master' && info.has_keylog){
+    note.textContent=`raw frames-master (01a) + keylog overlay — raw events by timestamp at master_fps=${info.master_fps||'?'} (no realignment). Pass --alignment for the dual-clock/trims view.`;
+    note.classList.add('show');
+  } else if(MODE==='frames_master'){
+    note.textContent=`raw frames-master (01a), master_fps=${info.master_fps||'?'} — no keylog linked, so no actions. Pass --clips-manifest, or run the 01b sampler.`;
+    note.classList.add('show');
+  } else if(MODE==='conversations'){
+    note.textContent=`stage-04 conversations · ${info.goal_conditioned?'goal-conditioned':'goal-free'}${info.target_fps?` · ${info.target_fps} fps`:''} — each step is one screenshot→action turn (assistant reply = the frame's action). Frames resolve from the linked stage-01a master.`;
+    note.classList.add('show');
+  } else note.classList.remove('show');
+  const sel=$('#seg'); sel.innerHTML='';
+  for(const s of info.segments){
+    const o=document.createElement('option'); o.value=s.segment_id;
+    o.textContent = MODE==='frames_master'
+      ? `${s.segment_id}  (${s.n_frames} frames, ${s.duration_s}s${s.align_status?', '+s.align_status:''})`
+      : `${s.segment_id}  (${s.n_non_noop}/${s.n_frames} act, ${s.duration_s}s)`;
+    sel.appendChild(o);
+  }
+  if(info.segments.length) await loadSegment(info.segments[0].segment_id);
+}
+async function loadSegment(id){
+  SEG=await jget('/api/segment?ds='+encodeURIComponent(DS)+'&id='+encodeURIComponent(id));
+  FR=SEG.frames;
+  DUAL = !!SEG.dual_clock;
+  ALN = SEG.align || null;
+  ALNACT = ALN ? new Set(ALN.aligned_active) : null;
+  EV = (SEG.events && SEG.events.length) ? SEG.events : null;
+  // Sync/highlight by the aligned clock when dual (frames are video-clock), else raw.
+  EVT = EV ? EV.map(e=> DUAL ? e[1] : e[0]) : [];
+  HAS_ACTIONS = !!SEG.has_actions || FR.some(f=>!f.is_noop);
+  MASTER_FPS = SEG.master_fps || MASTER_FPS;
+  _evLo=_evHi=-1; _lastCell=_lastCell2=_lastRow=null;
+  const canAlign = FR.some(f=>f.action_aln!=null);
+  if(!canAlign) CLOCK='raw';
+  const tg=$('#clocktoggle');
+  tg.style.display = canAlign ? '' : 'none';
+  tg.textContent = 'keys: '+CLOCK; tg.classList.toggle('on', CLOCK==='aligned');
+  PARSED=curActions().map(parseAction);
+  $('#seginfo').textContent = ((MODE==='frames_master' && !HAS_ACTIONS)
+    ? `${SEG.recording_id||'?'} · ${SEG.n_frames} raw frames`
+    : `${SEG.recording_id||'?'} · ${SEG.n_non_noop}/${SEG.n_frames} active frames`)
+    + (SEG.n_black ? ` · ${SEG.n_black} black${SEG.n_black_act?` (${SEG.n_black_act} w/ action)`:''}` : '');
+  if(MODE==='conversations'){
+    // Per-segment banner: the system prompt + (optional) goal instruction that
+    // frame this conversation, plus its turn count / fps / alignment.
+    const note=$('#modenote');
+    let h=`<b>stage-04 conversation</b> · ${SEG.goal_conditioned?'goal-conditioned':'goal-free'}`;
+    if(SEG.target_fps) h+=` · ${SEG.target_fps} fps`;
+    if(SEG.alignment_status) h+=` · ${esc(String(SEG.alignment_status))}`;
+    h+=` · ${SEG.n_turns||FR.length} turns`;
+    if(SEG.instruction) h+=`<br><span class="cnote-goal">goal:</span> ${esc(String(SEG.instruction))}`;
+    if(SEG.system_prompt) h+=`<br><span class="cnote-sys">system:</span> ${esc(String(SEG.system_prompt))}`;
+    note.innerHTML=h; note.classList.add('show');
+  }
+  $('#fn').textContent=FR.length;
+  buildStrip(); buildStrip2(); buildRows(); show(0);
+}
+// Built via innerHTML (+ delegated click) so multi-thousand-frame segments
+// (e.g. a 15fps frames-master: ~6k frames) render fast.
+function buildStrip(){
+  const cuts=(ALN&&ALN.cut_ranges)?ALN.cut_ranges:[];
+  const inCut=i=>{ for(const r of cuts) if(i>=r[0]&&i<r[1]) return true; return false; };
+  let h='';
+  for(let i=0;i<FR.length;i++){ const f=FR[i]; const cut=inCut(i); const blk=!!f.is_black; const blkAct=blk&&!f.is_noop;
+    h+=`<div class="cell${f.is_noop?'':' act'}${cut?' cut':''}${blk?' black':''}" data-i="${i}" title="#${i} t=${f.t}s ${blkAct?'[black + action] ':(blk?'[black frame] ':'')}${cut?'[cut — collapsed idle] ':''}${esc(f.action||'NO_OP')}"></div>`; }
+  $('#strip').innerHTML=h;
+}
+// Second timeline (master + alignment only): aligned keys on the video clock,
+// with collapse markers where realignment folded idle spans.
+function buildStrip2(){
+  const wrap=$('#strip2wrap');
+  if(!ALN){ wrap.style.display='none'; $('#strip2').innerHTML=''; return; }
+  wrap.style.display='';
+  const col=new Map(); for(const c of (ALN.collapse_frames||[])) col.set(c.frame, c);
+  let h='';
+  for(let i=0;i<FR.length;i++){
+    const c=col.get(i);
+    const cls='cell'+(ALNACT&&ALNACT.has(i)?' act':'')+(c?' col':'');
+    const title=c ? `${c.collapse}s of idle collapsed here (keylog ${c.kp}s → video ${(i/MASTER_FPS).toFixed(1)}s)`
+                  : `aligned #${i} t=${(i/MASTER_FPS).toFixed(2)}s`;
+    h+=`<div class="${cls}" data-i="${i}" title="${title}"></div>`;
+  }
+  $('#strip2').innerHTML=h;
+  const ov=ALN.n_overhang_events||0;
+  $('#alignstat').textContent =
+    `${ALN.status||'?'} · collapse ${(ALN.total_collapse_s||0).toFixed(1)}s · residual ${(ALN.residual_s||0).toFixed(1)}s`
+    + (ov?` · ${ov} events trimmed past video`:'');
+}
+function buildRows(){
+  const head=$('#rowshead');
+  if(EV && DUAL){                             // dual-clock events (raw vs aligned)
+    if(head) head.textContent=`events — raw ▸ aligned (${EV.length})`;
+    let h='';
+    for(let k=0;k<EV.length;k++){ const e=EV[k];   // [t_raw, t_aln, type, detail, trimmed]
+      const fi=Math.floor(e[1]*MASTER_FPS);
+      h+=`<div class="erow dual${e[4]?' trim':''}" id="ev${k}" data-fi="${fi}"><span class="raw">${e[0].toFixed(2)}</span><span class="aln">${e[1].toFixed(2)}</span><span class="ty">${esc(String(e[2]))}</span><span class="a">${esc(String(e[3]))}</span></div>`; }
+    $('#rows').innerHTML=h;
+  } else if(EV){                              // single-clock raw events
+    if(head) head.textContent=`raw events (${EV.length})`;
+    let h='';
+    for(let k=0;k<EV.length;k++){ const e=EV[k];
+      h+=`<div class="erow" id="ev${k}" data-fi="${Math.floor(e[0]*MASTER_FPS)}"><span class="t">${e[0].toFixed(2)}s</span><span class="ty">${esc(String(e[1]))}</span><span class="a">${esc(String(e[2]))}</span></div>`; }
+    $('#rows').innerHTML=h;
+  } else {                                    // per-frame binned actions
+    if(head) head.textContent='actions';
+    let h='';
+    for(let i=0;i<FR.length;i++){ const f=FR[i];
+      h+=`<div class="row${f.is_noop?' noop':''}" id="row${i}" data-i="${i}"><span class="t">#${i}</span><span class="t">${f.t}s</span><span class="a">${esc(f.action||'NO_OP')}</span></div>`; }
+    $('#rows').innerHTML=h;
+  }
+}
+
+// ---- main render -----------------------------------------------------------
+function show(i){
+  if(!FR.length) return;
+  cur=Math.max(0,Math.min(FR.length-1,i));
+  const f=FR[cur], p=PARSED[cur];
+  $('#frameimg').src=`/frame?ds=${encodeURIComponent(DS)}&seg=${encodeURIComponent(SEG.segment_id)}&i=${cur}`;
+  $('#fi').textContent=cur; $('#ft').textContent=f.t;
+  $('#fbin').textContent=(f.bin??'–'); $('#fsrc').textContent=(f.src??'–');
+  const act=(CLOCK==='aligned'&&f.action_aln!=null)?f.action_aln:f.action;
+  const noop=!act||act==='NO_OP';
+  $('#fbadge').innerHTML=(noop?'<span class="badge noop">NO_OP</span>':'<span class="badge act">ACTION</span>')
+    + (f.is_black?' <span class="badge black">BLACK</span>':'');
+  $('#rawaction').textContent=act||'NO_OP';
+  if(HAS_ACTIONS){
+    const st=stateAt(cur);
+    lightKeyboard(st.pressed, st.held); updateRadar(p, st.pressed, st.held); renderTyped(st.chars, cur);
+  } else {
+    lightKeyboard(EMPTYSET, EMPTYSET); updateRadar(p, EMPTYSET, EMPTYSET);
+    $('#typed').innerHTML='<span class="empty">no actions — run 01b, or link a keylog via --clips-manifest</span>';
+  }
+  if(_lastCell) _lastCell.classList.remove('cur');
+  _lastCell=$('#strip').children[cur];
+  if(_lastCell){ _lastCell.classList.add('cur'); centerX($('#strip'), _lastCell); }
+  if(_lastCell2) _lastCell2.classList.remove('cur');
+  if(ALN){ _lastCell2=$('#strip2').children[cur];
+    if(_lastCell2){ _lastCell2.classList.add('cur'); centerX($('#strip2'), _lastCell2); } }
+  if(EV){                       // highlight the events inside this frame's time window
+    const t0=f.t, t1=t0+1/MASTER_FPS, lo=lb(EVT,t0), hi=lb(EVT,t1);
+    if(lo!==_evLo || hi!==_evHi){
+      for(let k=_evLo;k>=0 && k<_evHi;k++){ const el=document.getElementById('ev'+k); if(el) el.classList.remove('now'); }
+      for(let k=lo;k<hi;k++){ const el=document.getElementById('ev'+k); if(el) el.classList.add('now'); }
+      pageY($('#rows'), document.getElementById('ev'+Math.min(lo,EV.length-1)));
+      _evLo=lo; _evHi=hi;
+    }
+  } else {
+    if(_lastRow) _lastRow.classList.remove('cur');
+    _lastRow=document.getElementById('row'+cur);
+    if(_lastRow){ _lastRow.classList.add('cur'); pageY($('#rows'), _lastRow); }
+  }
+}
+function step(d){ show(cur+d); }
+// Active on the currently-selected clock: aligned action when the HUD toggle is
+// on 'aligned' (and aligned actions exist), else the raw binning.
+function frameActive(f){ return (CLOCK==='aligned' && f.action_aln!=null) ? f.action_aln!=='NO_OP' : !f.is_noop; }
+function nextActive(d){ let i=cur+d; while(i>=0&&i<FR.length){ if(frameActive(FR[i])){show(i);return;} i+=d; } }
+// Jump to the prev/next (near-)black frame. Both modes carry is_black (master:
+// from its own luma metrics; 01b sample: cross-referenced from the master).
+function nextBlack(d){ let i=cur+d; while(i>=0&&i<FR.length){ if(FR[i].is_black){show(i);return;} i+=d; } }
+// Prev/next black frame that ALSO has an action (is_noop matches the strip's
+// action marking — raw binning). No-op when nothing black carries an action.
+function nextBlackAct(d){ let i=cur+d; while(i>=0&&i<FR.length){ if(FR[i].is_black&&!FR[i].is_noop){show(i);return;} i+=d; } }
+function togglePlay(){
+  playing=!playing;
+  $('#play').textContent=playing?'⏸ pause':'▶ play';
+  $('#play').classList.toggle('on',playing);
+  if(playing) timer=setInterval(()=>{ if(cur>=FR.length-1){togglePlay();return;} step(1); },150);
+  else clearInterval(timer);
+}
+
+$('#ds').onchange=e=>{ DS=e.target.value; loadSegments(); };
+$('#seg').onchange=e=>loadSegment(e.target.value);
+$('#prev').onclick=()=>step(-1);
+$('#next').onclick=()=>step(1);
+$('#play').onclick=togglePlay;
+$('#strip').onclick=e=>{ const c=e.target.closest('.cell'); if(c) show(+c.dataset.i); };
+$('#strip2').onclick=e=>{ const c=e.target.closest('.cell'); if(c) show(+c.dataset.i); };
+$('#clocktoggle').onclick=()=>{
+  CLOCK = (CLOCK==='aligned') ? 'raw' : 'aligned';
+  const tg=$('#clocktoggle'); tg.textContent='keys: '+CLOCK; tg.classList.toggle('on', CLOCK==='aligned');
+  PARSED=curActions().map(parseAction); show(cur);
+};
+$('#rows').onclick=e=>{ const er=e.target.closest('.erow'); if(er){ show(+er.dataset.fi); return; } const r=e.target.closest('.row'); if(r) show(+r.dataset.i); };
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='SELECT') return;
+  if(e.key==='ArrowLeft'){step(-1);e.preventDefault();}
+  else if(e.key==='ArrowRight'){step(1);e.preventDefault();}
+  else if(e.key===' '){togglePlay();e.preventDefault();}
+  else if(e.key==='a'){nextActive(-1);}
+  else if(e.key==='d'){nextActive(1);}
+  else if(e.key===','){nextBlack(-1);}
+  else if(e.key==='.'){nextBlack(1);}
+  else if(e.key==='<'){nextBlackAct(-1);}   // shift+,
+  else if(e.key==='>'){nextBlackAct(1);}    // shift+.
+  else if(e.key==='Home'){show(0);}
+  else if(e.key==='End'){show(FR.length-1);}
+});
+// --- resizable sidebar + keyboard autofit ---
+const panel=$('#panel'), resizer=$('#resizer');
+function setPanelWidth(w){ w=Math.max(280, Math.min(window.innerWidth-320, w)); panel.style.width=w+'px'; }
+function fitKeyboard(){
+  const wrap=$('#kbwrap'); if(!wrap) return;
+  const w=wrap.clientWidth||400;
+  const u=Math.max(15, Math.min(34, Math.floor((w-20)/16.8)));  // widest row ~16.8 units
+  if(u!==UNIT){ UNIT=u; buildKeyboard(); if(FR.length) show(cur); }
+}
+let rdrag=false;
+resizer.addEventListener('mousedown', e=>{ rdrag=true; resizer.classList.add('drag');
+  document.body.style.userSelect='none'; e.preventDefault(); });
+document.addEventListener('mousemove', e=>{ if(rdrag) setPanelWidth(window.innerWidth - e.clientX); });
+document.addEventListener('mouseup', ()=>{ if(!rdrag) return; rdrag=false; resizer.classList.remove('drag');
+  document.body.style.userSelect=''; localStorage.setItem('fr_panelw', parseInt(panel.style.width)||430); fitKeyboard(); });
+window.addEventListener('resize', ()=>{ setPanelWidth(parseInt(panel.style.width)||430); fitKeyboard(); });
+(function(){ const s=parseInt(localStorage.getItem('fr_panelw')); if(s) setPanelWidth(s); })();
+
+buildKeyboard(); initRadar();
+setTimeout(fitKeyboard, 0);
+loadDatasets().catch(err=>{ document.body.innerHTML='<pre style="padding:20px;color:#ff9db0">'+err+'</pre>'; });
+</script>
+</body></html>
+"""
+
+
+# --------------------------------------------------------------------------- #
+def resolve_jsonl_paths(dataset: Path) -> list[Path]:
+    """Find the ``frame_records.jsonl`` file(s) under ``dataset``.
+
+    Handles both shapes:
+      * a single combined file (stage-01 style: ``<dir>/frame_records.jsonl``),
+      * the stage-01b annotate layout — one file per segment at
+        ``<dir>/clips/<segment_id>/stage_01/frame_records.jsonl`` (a
+        ``run_dataset --phase annotate`` drop-in).
+    A path pointing straight at a ``frame_records.jsonl`` is used as-is.
+    """
+    dataset = dataset.expanduser().resolve()
+    if dataset.is_file():
+        return [dataset]
+    if not dataset.is_dir():
+        raise SystemExit(f"--dataset not found: {dataset}")
+    # A single combined file at the root wins if present.
+    root = dataset / "frame_records.jsonl"
+    if root.exists():
+        return [root]
+    # A stage-03 filter artifact's QC view (qc_view/<segment_id>.jsonl, written
+    # with --qc-view-fps): per-segment sampled frames + derived canonical
+    # actions in frame_records field names — browse it like any 01b sample.
+    qc = sorted((dataset / "qc_view").glob("*.jsonl"))
+    if qc:
+        return qc
+    # Otherwise gather per-segment files: shallow layout, then the 01b annotate
+    # layout, then a bounded recursive sweep. First non-empty match wins.
+    for pattern in (
+        "*/frame_records.jsonl",
+        "clips/*/stage_01/frame_records.jsonl",
+        "**/frame_records.jsonl",
+    ):
+        found = sorted(dataset.glob(pattern))
+        if found:
+            return found
+    raise SystemExit(
+        f"no frame_records.jsonl (or qc_view/*.jsonl) found under {dataset} "
+        f"(looked at the root, qc_view/, */, clips/*/stage_01/, and recursively); "
+        f"pass the file directly with --dataset <path>/frame_records.jsonl. "
+        f"For a stage-03 filter artifact, re-run stage_03_filter with --qc-view-fps."
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--dataset", required=True, nargs="+", metavar="PATH",
+        help="one or more datasets, each a frame-records dir (or frame_records.jsonl "
+             "file), a stage-03 filter artifact with a qc_view/ (run with "
+             "--qc-view-fps), a stage-01 frames-master store dir (segment_index.jsonl "
+             "+ frames/), or a stage-04 conversations dir (or conversations.jsonl "
+             "file) — auto-detected; choose between them in the UI",
+    )
+    p.add_argument(
+        "--clips-manifest", default=None,
+        help="fallback stage-00 clips_manifest.jsonl (segment_id -> keylog_path) for "
+             "overlaying raw actions on frames-master datasets whose manifest.json "
+             "doesn't already record source_clips_manifest",
+    )
+    p.add_argument(
+        "--alignment", default=None,
+        help="stage-00 alignment.jsonl (or the realign clip-manifest dir holding it) "
+             "for the master dual-clock event table + 'aligned + trims' timeline; "
+             "auto-discovered from a *realign* sibling of the clips_manifest if omitted",
+    )
+    p.add_argument("--port", type=int, default=8770, help="HTTP port (default 8770)")
+    p.add_argument("--host", default="127.0.0.1", help="bind host (default 127.0.0.1)")
+    return p.parse_args()
+
+
+def looks_like_frames_master(root: Path) -> bool:
+    """A stage-01a store: segment_index.jsonl + frames/ (or a frames_master marker)."""
+    root = root.expanduser()
+    if not root.is_dir():
+        return False
+    if (root / "segment_index.jsonl").exists() and (root / "frames").is_dir():
+        return True
+    manifest = root / "manifest.json"
+    if manifest.exists():
+        try:
+            return "frames_master" in json.loads(manifest.read_text()).get("artifact_type", "")
+        except (OSError, json.JSONDecodeError):
+            return False
+    return False
+
+
+def looks_like_conversations(root: Path) -> bool:
+    """A stage-04 conversations artifact: a ``conversations.jsonl`` file, a dir
+    holding one, or a dir whose ``manifest.json`` marks it as a conversations store."""
+    root = root.expanduser()
+    if root.is_file():
+        return root.name.endswith(".jsonl") and "conversation" in root.name.lower()
+    if not root.is_dir():
+        return False
+    if (root / "conversations.jsonl").exists():
+        return True
+    manifest = root / "manifest.json"
+    if manifest.exists():
+        try:
+            return "conversations" in json.loads(manifest.read_text()).get("artifact_type", "")
+        except (OSError, json.JSONDecodeError):
+            return False
+    return False
+
+
+def resolve_conversations_path(dataset: Path) -> Path:
+    """Locate the ``conversations.jsonl`` for a stage-04 dataset (the file itself,
+    or ``<dir>/conversations.jsonl``)."""
+    dataset = dataset.expanduser().resolve()
+    if dataset.is_file():
+        return dataset
+    candidate = dataset / "conversations.jsonl"
+    if candidate.exists():
+        return candidate
+    raise SystemExit(f"no conversations.jsonl found under {dataset}")
+
+
+def detect_mode(path: Path) -> str:
+    """Cheap mode detection shared by registration and building (no full load).
+    Frames-master and conversations are checked before the frame_records default."""
+    if looks_like_frames_master(path):
+        return "frames_master"
+    if looks_like_conversations(path):
+        return "conversations"
+    return "frame_records"
+
+
+def _build_dataset(path: Path):
+    """Build the right dataset object for a path (frames-master / conversations /
+    frame_records)."""
+    mode = detect_mode(path)
+    if mode == "frames_master":
+        return FramesMasterDataset(path.expanduser().resolve())
+    if mode == "conversations":
+        return ConversationsDataset(resolve_conversations_path(path))
+    return FrameRecordsDataset(resolve_jsonl_paths(path))
+
+
+def get_dataset(name: str):
+    """Return the built dataset for a registered name (build + cache on first use).
+
+    Build failures (e.g. an empty / not-yet-generated dataset dir) are re-raised as
+    RuntimeError so the request handler reports them as JSON instead of a bare
+    SystemExit tearing down the handler thread. The failure isn't cached, so
+    re-selecting the dataset retries the build."""
+    entry = DATASETS.get(name)
+    if entry is None:
+        return None
+    if entry["obj"] is None:
+        try:
+            entry["obj"] = _build_dataset(entry["path"])
+        except SystemExit as exc:
+            raise RuntimeError(str(exc)) from exc
+    return entry["obj"]
+
+
+def register_datasets(paths: list[str]) -> None:
+    """Register each path under its basename (disambiguating collisions); detect the
+    mode cheaply (no full load) so the UI can label master vs sample up front."""
+    for raw in paths:
+        p = Path(raw).expanduser()
+        name = p.name or str(p)
+        base, k = name, 2
+        while name in DATASETS:
+            name, k = f"{base}#{k}", k + 1
+        DATASETS[name] = {"path": p, "mode": detect_mode(p), "obj": None}
+
+
+def main() -> None:
+    global CLIPS_MANIFEST_OVERRIDE, ALIGNMENT_OVERRIDE
+    args = parse_args()
+    CLIPS_MANIFEST_OVERRIDE = args.clips_manifest
+    ALIGNMENT_OVERRIDE = args.alignment
+    register_datasets(args.dataset)
+    if not DATASETS:
+        raise SystemExit("no datasets given")
+    print(f"registered {len(DATASETS)} dataset(s):", flush=True)
+    for name, entry in DATASETS.items():
+        print(f"  {name}  [{entry['mode']}]  {entry['path']}", flush=True)
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    print(
+        f"serving on http://{args.host}:{args.port}/  "
+        f"(datasets build on first selection; Ctrl-C to stop)",
+        flush=True,
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nbye", flush=True)
+
+
+if __name__ == "__main__":
+    main()

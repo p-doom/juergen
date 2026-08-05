@@ -1,0 +1,706 @@
+{
+  "grammar": "compact_raw",
+  "geometry": {
+    "desktop_width": 1920,
+    "desktop_height": 1080
+  },
+  "default_cursor": [
+    960,
+    540
+  ],
+  "note": "cases pin all three directions: parse(text) == action, format(action) == canonical, compile(text, geometry, cursor) == operations.",
+  "cases": [
+    {
+      "name": "prose_sentence_then_action_line",
+      "text": "Click the Files icon in the dock.\n-40 220 0 ; +LMB -LMB",
+      "canonical": "-40 220 0 ; +LMB -LMB",
+      "action": {
+        "dx": -40,
+        "dy": 220,
+        "scroll": 0,
+        "elements": [
+          {
+            "kind": "event",
+            "name": "LMB",
+            "pressed": true
+          },
+          {
+            "kind": "event",
+            "name": "LMB",
+            "pressed": false
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            920,
+            760
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "the LAST non-empty line is the action. parse_compact_raw read the FIRST line, which resolved this same completion to the prose sentence and raised."
+    },
+    {
+      "name": "more_than_two_lines_is_not_a_format_error",
+      "text": "I need the Files window.\nIt is below the cursor.\n0 100 0 ; +LMB -LMB",
+      "canonical": "0 100 0 ; +LMB -LMB",
+      "action": {
+        "dx": 0,
+        "dy": 100,
+        "scroll": 0,
+        "elements": [
+          {
+            "kind": "event",
+            "name": "LMB",
+            "pressed": true
+          },
+          {
+            "kind": "event",
+            "name": "LMB",
+            "pressed": false
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            960,
+            640
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "_action_line rejected more than two non-empty lines; extra reasoning is not a format error."
+    },
+    {
+      "name": "move_only",
+      "text": "150 -75 0",
+      "canonical": "150 -75 0",
+      "action": {
+        "dx": 150,
+        "dy": -75,
+        "scroll": 0,
+        "elements": []
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            1110,
+            465
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "idle_is_spelled_as_zeros",
+      "text": "0 0 0",
+      "canonical": "0 0 0",
+      "action": {
+        "dx": 0,
+        "dy": 0,
+        "scroll": 0,
+        "elements": []
+      },
+      "operations": [],
+      "documents": "this arm has no NO_OP token; the all-zero action is the idle action."
+    },
+    {
+      "name": "scroll_only",
+      "text": "0 0 -5",
+      "canonical": "0 0 -5",
+      "action": {
+        "dx": 0,
+        "dy": 0,
+        "scroll": -5,
+        "elements": []
+      },
+      "operations": [
+        [
+          "scroll",
+          [
+            0,
+            -5
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "coalesced_type",
+      "text": "0 0 0 ; type(\"ls -la\")",
+      "canonical": "0 0 0 ; type(\"ls -la\")",
+      "action": {
+        "dx": 0,
+        "dy": 0,
+        "scroll": 0,
+        "elements": [
+          {
+            "kind": "type",
+            "text": "ls -la"
+          }
+        ]
+      },
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "ls -la"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "type_then_return_is_an_event",
+      "text": "0 0 0 ; type(\"pwd\") +Return -Return",
+      "canonical": "0 0 0 ; type(\"pwd\") +Return -Return",
+      "action": {
+        "dx": 0,
+        "dy": 0,
+        "scroll": 0,
+        "elements": [
+          {
+            "kind": "type",
+            "text": "pwd"
+          },
+          {
+            "kind": "event",
+            "name": "Return",
+            "pressed": true
+          },
+          {
+            "kind": "event",
+            "name": "Return",
+            "pressed": false
+          }
+        ]
+      },
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "pwd"
+          ]
+        ],
+        [
+          "key_down",
+          [
+            "Return"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "Return"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "rung2_separator_is_accepted_and_canonicalised",
+      "text": "12 34 0; +LMB -LMB",
+      "canonical": "12 34 0 ; +LMB -LMB",
+      "action": {
+        "dx": 12,
+        "dy": 34,
+        "scroll": 0,
+        "elements": [
+          {
+            "kind": "event",
+            "name": "LMB",
+            "pressed": true
+          },
+          {
+            "kind": "event",
+            "name": "LMB",
+            "pressed": false
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            972,
+            574
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "compile_compact wrote \"; \" without the leading space; both parse, \" ; \" is written."
+    },
+    {
+      "name": "right_click",
+      "text": "0 0 0 ; +RMB -RMB",
+      "canonical": "0 0 0 ; +RMB -RMB",
+      "action": {
+        "dx": 0,
+        "dy": 0,
+        "scroll": 0,
+        "elements": [
+          {
+            "kind": "event",
+            "name": "RMB",
+            "pressed": true
+          },
+          {
+            "kind": "event",
+            "name": "RMB",
+            "pressed": false
+          }
+        ]
+      },
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "right"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "right"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "button_held_across_turns",
+      "text": "0 0 0 ; +LMB",
+      "canonical": "0 0 0 ; +LMB",
+      "action": {
+        "dx": 0,
+        "dy": 0,
+        "scroll": 0,
+        "elements": [
+          {
+            "kind": "event",
+            "name": "LMB",
+            "pressed": true
+          }
+        ]
+      },
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "clamped_to_bottom_right",
+      "cursor": [
+        1910,
+        1075
+      ],
+      "text": "50 50 0",
+      "canonical": "50 50 0",
+      "action": {
+        "dx": 50,
+        "dy": 50,
+        "scroll": 0,
+        "elements": []
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            1919,
+            1079
+          ]
+        ]
+      ]
+    }
+  ],
+  "format_only": [
+    {
+      "name": "bare_triple",
+      "action": {
+        "dx": 7,
+        "dy": -8,
+        "scroll": 0,
+        "elements": []
+      },
+      "canonical": "7 -8 0"
+    },
+    {
+      "name": "chord",
+      "action": {
+        "dx": 0,
+        "dy": 0,
+        "scroll": 0,
+        "elements": [
+          {
+            "kind": "event",
+            "name": "ControlLeft",
+            "pressed": true
+          },
+          {
+            "kind": "event",
+            "name": "KeyA",
+            "pressed": true
+          },
+          {
+            "kind": "event",
+            "name": "KeyA",
+            "pressed": false
+          },
+          {
+            "kind": "event",
+            "name": "ControlLeft",
+            "pressed": false
+          }
+        ]
+      },
+      "canonical": "0 0 0 ; +ControlLeft +KeyA -KeyA -ControlLeft"
+    }
+  ],
+  "from_target": [
+    {
+      "name": "click_a_known_element",
+      "cursor": [
+        100,
+        100
+      ],
+      "target": [
+        420,
+        380
+      ],
+      "elements": [
+        {
+          "kind": "event",
+          "name": "LMB",
+          "pressed": true
+        },
+        {
+          "kind": "event",
+          "name": "LMB",
+          "pressed": false
+        }
+      ],
+      "canonical": "320 280 0 ; +LMB -LMB",
+      "documents": "rung2_sameapp.compile_compact's direction: absolute element geometry plus one cursor read becomes the training label."
+    }
+  ],
+  "invalid_parse": [
+    {
+      "name": "no_control_tokens",
+      "text": "NO_OP",
+      "error": "three mouse integers"
+    },
+    {
+      "name": "terminate_is_not_in_this_grammar",
+      "text": "TERMINATE",
+      "error": "three mouse integers"
+    },
+    {
+      "name": "move_element_is_not_in_this_grammar",
+      "text": "0 0 0 ; MOVE(5,5)",
+      "error": "malformed element"
+    },
+    {
+      "name": "two_mouse_tokens",
+      "text": "1 2",
+      "error": "three mouse integers"
+    },
+    {
+      "name": "bare_button_token",
+      "text": "0 0 0 ; LMB",
+      "error": "malformed element"
+    },
+    {
+      "name": "empty",
+      "text": "  ",
+      "error": "empty action text"
+    }
+  ],
+  "invalid_compile": [
+    {
+      "name": "embedded_newline_in_type",
+      "text": "0 0 0 ; type(\"a\\nb\")",
+      "error": "cannot embed a newline"
+    }
+  ],
+  "lift": [
+    {
+      "name": "move_and_click",
+      "operations": [
+        [
+          "move_to",
+          [
+            920,
+            760
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "action": {
+        "dx": -40,
+        "dy": 220,
+        "scroll": 0,
+        "elements": [
+          {
+            "kind": "event",
+            "name": "LMB",
+            "pressed": true
+          },
+          {
+            "kind": "event",
+            "name": "LMB",
+            "pressed": false
+          }
+        ]
+      },
+      "canonical": "-40 220 0 ; +LMB -LMB",
+      "recompiled": [
+        [
+          "move_to",
+          [
+            920,
+            760
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "empty_stream_is_the_idle_action",
+      "operations": [],
+      "action": {
+        "dx": 0,
+        "dy": 0,
+        "scroll": 0,
+        "elements": []
+      },
+      "canonical": "0 0 0",
+      "recompiled": [],
+      "documents": "contrast native_absolute_control, where the same empty stream lifts to `960 540 0` because 0 0 is the top-left corner there."
+    },
+    {
+      "name": "type_then_return",
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "pwd"
+          ]
+        ],
+        [
+          "key_down",
+          [
+            "Return"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "Return"
+          ]
+        ]
+      ],
+      "action": {
+        "dx": 0,
+        "dy": 0,
+        "scroll": 0,
+        "elements": [
+          {
+            "kind": "type",
+            "text": "pwd"
+          },
+          {
+            "kind": "event",
+            "name": "Return",
+            "pressed": true
+          },
+          {
+            "kind": "event",
+            "name": "Return",
+            "pressed": false
+          }
+        ]
+      },
+      "canonical": "0 0 0 ; type(\"pwd\") +Return -Return",
+      "recompiled": [
+        [
+          "coalesced_type",
+          [
+            "pwd"
+          ]
+        ],
+        [
+          "key_down",
+          [
+            "Return"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "Return"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "scroll",
+      "operations": [
+        [
+          "scroll",
+          [
+            0,
+            -5
+          ]
+        ]
+      ],
+      "action": {
+        "dx": 0,
+        "dy": 0,
+        "scroll": -5,
+        "elements": []
+      },
+      "canonical": "0 0 -5",
+      "recompiled": [
+        [
+          "scroll",
+          [
+            0,
+            -5
+          ]
+        ]
+      ]
+    }
+  ],
+  "lift_invalid": [
+    {
+      "name": "drag_stroke_is_a_visible_limit",
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "glide_to",
+          [
+            1000,
+            540,
+            0.5
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "error": "drag stroke cannot be expressed",
+      "documents": "THE finding: the converters this replaces degraded exactly this into a stationary `+LMB -LMB` and discarded the stroke. It is now a visible expressiveness limit."
+    },
+    {
+      "name": "termination",
+      "operations": [],
+      "terminate": "success",
+      "error": "no control tokens"
+    },
+    {
+      "name": "two_separate_moves",
+      "operations": [
+        [
+          "move_to",
+          [
+            100,
+            100
+          ]
+        ],
+        [
+          "move_to",
+          [
+            200,
+            200
+          ]
+        ]
+      ],
+      "error": "two separate moves"
+    },
+    {
+      "name": "drag_operation_is_a_visible_limit",
+      "operations": [
+        [
+          "drag",
+          [
+            1100,
+            640,
+            1240,
+            700
+          ]
+        ]
+      ],
+      "error": "a drag stroke cannot be expressed",
+      "documents": "desktop-env's `drag` kind decomposes into a stroke, and this grammar has no MOVE primitive. It raises for the same reason a glide_to does, and for the same reason it must: the converters this replaces degraded exactly this into a stationary `+LMB -LMB`."
+    }
+  ],
+  "lift_note": "lift pins operations -> action -> text, and `recompiled` closes the triangle back to operations. Where `recompiled` differs from `operations` the case says why; that difference is the grammar's expressiveness ceiling, never a silent flattening."
+}

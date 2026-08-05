@@ -38,48 +38,74 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from action_parser import Action, parse_action, parse_action_tolerant
+import grammars
 from result import write_result
 
 # Action-type taxonomy, in priority order: a step that both moves and clicks is
 # a "click" (the click is the salient intent; the move is just the approach).
 ACTION_TYPES = ("terminate", "click", "key", "scroll", "move", "no_op")
-_TERMINATE = "TERMINATE"
+
+GRAMMAR = "diffabs"
+"""The grammar these BC checkpoints were trained on.
+
+Was `eval/action_parser.py`'s `parse_action` / `parse_action_tolerant`, now one
+codec. Two behaviour changes ride along and both matter here:
+
+  * **Action-line extraction changed.** `parse_action` cut the text at the FIRST
+    newline; the codec reads the LAST non-empty line (honouring a trailing
+    `Action:` if present, which is what `parse_action_tolerant` did). A prediction
+    that emitted reasoning *before* its action used to score as a format failure
+    and now parses. So `format_validity_rate` is not comparable across this
+    boundary — it can only rise.
+  * **TERMINATE is in the grammar.** It used to be sniffed out-of-band before
+    parsing; `DiffabsAction.terminate` is now a parsed flag, so the special case
+    is gone rather than duplicated.
+
+`tolerant` is therefore no longer a distinction the parser makes; it is accepted
+and ignored so existing call sites and result schemas keep working.
+"""
+
+_CODEC = grammars.load(GRAMMAR)
 
 
-def classify(act: Action | None, *, is_terminate: bool) -> str:
+def _is_left_click(act: object) -> bool:
+    return any(
+        item.kind == "event" and item.name == "LMB" for item in getattr(act, "elements", ())
+    )
+
+
+def classify(act: object | None, *, is_terminate: bool) -> str:
     """Map a parsed action to its salient type. ``None`` act + terminate flag."""
-    if is_terminate:
+    if is_terminate or (act is not None and getattr(act, "terminate", False)):
         return "terminate"
     assert act is not None
     if act.no_op:
         return "no_op"
-    if any(e.mouse_button == 1 for e in act.events):  # LMB press or release
+    if _is_left_click(act):
         return "click"
-    if act.events:  # keyboard or other mouse-button transitions
+    if act.elements:  # keyboard or other mouse-button transitions
         return "key"
     if act.scroll != 0 and act.dx == 0 and act.dy == 0:
         return "scroll"
     return "move" if (act.dx or act.dy) else "no_op"
 
 
-def parse_any(text: str, *, tolerant: bool) -> tuple[Action | None, bool, bool]:
-    """Parse one action string.
+def parse_any(text: str, *, tolerant: bool = True) -> tuple[object | None, bool, bool]:
+    """Parse one action string. Returns ``(action, is_terminate, ok)``.
 
-    Returns ``(action, is_terminate, ok)``. ``TERMINATE`` is handled out-of-band
-    because it is not part of the mouse/key grammar the parser accepts.
+    `tolerant` is vestigial: the codec has exactly one extraction rule, so there is
+    no strict/tolerant pair to choose between any more.
     """
-    if text is not None and text.strip().split("\n", 1)[0].strip() == _TERMINATE:
-        return None, True, True
+    del tolerant
     try:
-        act = parse_action_tolerant(text) if tolerant else parse_action(text)
-        return act, False, True
+        act = _CODEC.parse(text)
     except (ValueError, TypeError):
         return None, False, False
+    return (None, True, True) if act.terminate else (act, False, True)
 
 
-def _has_left_click(act: Action | None) -> bool:
-    return act is not None and (act.has_left_click_press or act.has_left_click_release)
+def _has_left_click(act: object | None) -> bool:
+    return act is not None and _is_left_click(act)
 
 
 def score_pairs(pairs: list[tuple[str, str]]) -> dict:

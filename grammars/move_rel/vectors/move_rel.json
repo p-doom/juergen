@@ -1,0 +1,781 @@
+{
+  "grammar": "move_rel",
+  "geometry": {
+    "desktop_width": 1920,
+    "desktop_height": 1080
+  },
+  "default_cursor": [
+    960,
+    540
+  ],
+  "grid": 1000,
+  "note": "cases pin all three directions: parse(text) == action, format(action) == canonical, compile(text, geometry, cursor) == operations. Pixels: px = round(norm * dim / 1000).",
+  "cases": [
+    {
+      "name": "move_then_coordinate_less_click",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [12, -8]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [12, -8]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "move_rel",
+            "coordinate": [
+              12,
+              -8
+            ]
+          },
+          {
+            "action": "left_click"
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            983,
+            531
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "12/1000 of 1920 = 23 px right, -8/1000 of 1080 = -9 px up, folded onto (960, 540)."
+    },
+    {
+      "name": "negative_normalized_delta",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-100, -50]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-100, -50]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "move_rel",
+            "coordinate": [
+              -100,
+              -50
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            768,
+            486
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "zero_delta_emits_nothing",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [0, 0]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [0, 0]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "move_rel",
+            "coordinate": [
+              0,
+              0
+            ]
+          }
+        ]
+      },
+      "operations": []
+    },
+    {
+      "name": "out_of_range_delta_is_accepted_and_clamped_at_resolution",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [500, 0]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [500, 0]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "move_rel",
+            "coordinate": [
+              500,
+              0
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            1919,
+            540
+          ]
+        ]
+      ],
+      "documents": "500/1000 of 1920 = 960 px, so 960 + 960 = 1920 clamps to 1919. The [-999, 999] range is prompt guidance, not a parse gate."
+    },
+    {
+      "name": "drag_folds_each_move_onto_the_cursor",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [10, 0]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_down\", \"button\": \"left\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [20, 0]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_up\", \"button\": \"left\"}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [10, 0]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_down\", \"button\": \"left\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [20, 0]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_up\", \"button\": \"left\"}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "move_rel",
+            "coordinate": [
+              10,
+              0
+            ]
+          },
+          {
+            "action": "mouse_down",
+            "button": "left"
+          },
+          {
+            "action": "move_rel",
+            "coordinate": [
+              20,
+              0
+            ]
+          },
+          {
+            "action": "mouse_up",
+            "button": "left"
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            979,
+            540
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "move_to",
+          [
+            1017,
+            540
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "double_click_in_place",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"double_click\"}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"double_click\"}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "double_click"
+          }
+        ]
+      },
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "key_chord_is_normalised_to_rdev_names",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"key\", \"keys\": [\"ctrl\", \"a\"]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"key\", \"keys\": [\"ControlLeft\", \"KeyA\"]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "key",
+            "keys": [
+              "ControlLeft",
+              "KeyA"
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "key_down",
+          [
+            "ControlLeft"
+          ]
+        ],
+        [
+          "key_down",
+          [
+            "KeyA"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "KeyA"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "ControlLeft"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "type",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"type\", \"text\": \"report.txt\"}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"type\", \"text\": \"report.txt\"}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "type",
+            "text": "report.txt"
+          }
+        ]
+      },
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "report.txt"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "scroll_down",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"scroll\", \"pixels\": -3}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"scroll\", \"pixels\": -3}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "scroll",
+            "pixels": -3
+          }
+        ]
+      },
+      "operations": [
+        [
+          "scroll",
+          [
+            0,
+            -3
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "terminate",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "terminate",
+            "status": "success"
+          }
+        ]
+      },
+      "operations": []
+    },
+    {
+      "name": "bare_json_without_tags_is_accepted",
+      "text": "{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [12, -8]}}",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [12, -8]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "move_rel",
+            "coordinate": [
+              12,
+              -8
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            983,
+            531
+          ]
+        ]
+      ],
+      "documents": "the prime-rl rollout path sees vLLM-parsed tool calls with no tags."
+    }
+  ],
+  "format_only": [
+    {
+      "name": "move_rel_only",
+      "action": {
+        "calls": [
+          {
+            "action": "move_rel",
+            "coordinate": [
+              -5,
+              5
+            ]
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [-5, 5]}}\n</tool_call>"
+    }
+  ],
+  "from_pixel_delta": [
+    {
+      "name": "pixel_delta_becomes_move_rel_plus_click",
+      "delta": [
+        23,
+        -9
+      ],
+      "then": {
+        "action": "left_click"
+      },
+      "calls": [
+        {
+          "action": "move_rel",
+          "coordinate": [
+            12,
+            -8
+          ]
+        },
+        {
+          "action": "left_click"
+        }
+      ],
+      "documents": "split_and_normalize's rule: norm = round(px / dim * 1000), the exact inverse of compile."
+    },
+    {
+      "name": "zero_delta_emits_only_the_click",
+      "delta": [
+        0,
+        0
+      ],
+      "then": {
+        "action": "left_click"
+      },
+      "calls": [
+        {
+          "action": "left_click"
+        }
+      ]
+    }
+  ],
+  "invalid_parse": [
+    {
+      "name": "coordinate_on_a_click_is_the_v1_defect",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [12, -8]}}\n</tool_call>",
+      "error": "takes no coordinate",
+      "documents": "native_rel_v1 folded the relative delta into the click's absolute coordinate. rl/grounding/parsing.py still accepts it; this grammar does not."
+    },
+    {
+      "name": "delta_key_is_rejected",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"delta\": [12, -8]}}\n</tool_call>",
+      "error": "carries its relative offset in `coordinate`"
+    },
+    {
+      "name": "move_rel_without_coordinate",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\"}}\n</tool_call>",
+      "error": "two-item coordinate"
+    },
+    {
+      "name": "mouse_move_is_not_in_this_grammar",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [12, -8]}}\n</tool_call>",
+      "error": "unsupported move_rel action",
+      "documents": "v2 replaced the canonically-absolute `mouse_move` with `move_rel` so the action name itself states the convention."
+    },
+    {
+      "name": "no_tool_call_at_all",
+      "text": "I will move right a little.",
+      "error": "no valid computer_use tool call found"
+    }
+  ],
+  "invalid_compile": [
+    {
+      "name": "newline_in_type",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"type\", \"text\": \"a\\nb\"}}\n</tool_call>",
+      "error": "cannot embed a newline"
+    }
+  ],
+  "lift": [
+    {
+      "name": "move_then_click_round_trips_exactly",
+      "operations": [
+        [
+          "move_to",
+          [
+            983,
+            531
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "move_rel",
+            "coordinate": [
+              12,
+              -8
+            ]
+          },
+          {
+            "action": "left_click"
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [12, -8]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>",
+      "recompiled": [
+        [
+          "move_to",
+          [
+            983,
+            531
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "23 px of 1920 and -9 px of 1080 normalise to 12 and -8 and denormalise back to 23 and -9. Deltas that do not land on the grid do not round-trip; that ceiling is the grammar's, and training pays it too."
+    },
+    {
+      "name": "drag_preserved_duration_dropped",
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "glide_to",
+          [
+            983,
+            540,
+            0.5
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "mouse_down",
+            "button": "left"
+          },
+          {
+            "action": "move_rel",
+            "coordinate": [
+              12,
+              0
+            ]
+          },
+          {
+            "action": "mouse_up",
+            "button": "left"
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_down\", \"button\": \"left\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [12, 0]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_up\", \"button\": \"left\"}}\n</tool_call>",
+      "recompiled": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "move_to",
+          [
+            983,
+            540
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "this schema expresses a drag as move, mouse_down, move, mouse_up and has no single drag action, so the drag survives and only the duration is dropped."
+    },
+    {
+      "name": "chord",
+      "operations": [
+        [
+          "key_down",
+          [
+            "ControlLeft"
+          ]
+        ],
+        [
+          "key_down",
+          [
+            "KeyA"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "KeyA"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "ControlLeft"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "key",
+            "keys": [
+              "ControlLeft",
+              "KeyA"
+            ]
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"key\", \"keys\": [\"ControlLeft\", \"KeyA\"]}}\n</tool_call>",
+      "recompiled": [
+        [
+          "key_down",
+          [
+            "ControlLeft"
+          ]
+        ],
+        [
+          "key_down",
+          [
+            "KeyA"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "KeyA"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "ControlLeft"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "type",
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "report.txt"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "type",
+            "text": "report.txt"
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"type\", \"text\": \"report.txt\"}}\n</tool_call>",
+      "recompiled": [
+        [
+          "coalesced_type",
+          [
+            "report.txt"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "scroll",
+      "operations": [
+        [
+          "scroll",
+          [
+            0,
+            -3
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "scroll",
+            "pixels": -3
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"scroll\", \"pixels\": -3}}\n</tool_call>",
+      "recompiled": [
+        [
+          "scroll",
+          [
+            0,
+            -3
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "terminate_is_a_call_not_a_flag",
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "terminate": "success",
+      "action": {
+        "calls": [
+          {
+            "action": "left_click"
+          },
+          {
+            "action": "terminate",
+            "status": "success"
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>",
+      "recompiled": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ]
+    }
+  ],
+  "lift_invalid": [
+    {
+      "name": "empty_stream",
+      "operations": [],
+      "error": "empty operation stream has no representation"
+    },
+    {
+      "name": "horizontal_scroll",
+      "operations": [
+        [
+          "scroll",
+          [
+            5,
+            0
+          ]
+        ]
+      ],
+      "error": "horizontal scroll cannot be expressed"
+    },
+    {
+      "name": "sub_grid_move_would_vanish",
+      "geometry": {
+        "desktop_width": 4000,
+        "desktop_height": 2000
+      },
+      "cursor": [
+        100,
+        100
+      ],
+      "operations": [
+        [
+          "move_to",
+          [
+            101,
+            100
+          ]
+        ]
+      ],
+      "error": "finer than the 1000ths grid",
+      "documents": "1 px of 4000 normalises to 0. Rather than silently dropping the move, the lift says the grammar cannot express it."
+    }
+  ],
+  "lift_note": "lift pins operations -> action -> text, and `recompiled` closes the triangle back to operations. Where `recompiled` differs from `operations` the case says why; that difference is the grammar's expressiveness ceiling, never a silent flattening."
+}

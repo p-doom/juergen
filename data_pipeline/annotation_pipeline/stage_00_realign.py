@@ -14,7 +14,7 @@ segments by recording, threads idle pauses across segment boundaries, and:
 Stage 01 then reads this manifest unchanged: bucketing the corrected keylog by
 raw timestamp == bucketing the raw keylog by corrected video time, so actions
 land on the right frames with no change to the frames/annotate/assemble/canonical
-code. The realignment math lives in ``realign_lib`` (spec-faithful: per-segment
+code. The realignment math lives in ``realign`` (spec-faithful: per-segment
 naive vs cross-segment global, overhang-refined leading collapse, 5-status
 taxonomy). Cross-segment threading needs *every* segment of a recording, so
 siblings are enumerated from the source uploads tree, not just manifest rows.
@@ -33,13 +33,23 @@ from __future__ import annotations
 import argparse
 import json
 import multiprocessing as mp
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
 import msgpack
 
-from annotation_pipeline import realign_lib as R
+# The realignment math had a byte-for-byte duplicate here (``annotation_pipeline/
+# realign_lib.py``, one import line different from ``pipeline/lib/realign.py``).
+# The duplicate is gone; this stage now uses the single copy in ``pipeline``,
+# which lives at the repo root.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from pipeline.lib import realign as R  # noqa: E402
+
 from annotation_pipeline.common import ensure_dir, read_jsonl, write_json
 
 

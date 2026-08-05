@@ -9,16 +9,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from realigned_pipeline.annotation.lib.prompts import PromptPack
-from realigned_pipeline.annotation.lib.registry import discover_methods, load_method
-from realigned_pipeline.annotation.lib.units import AnnotationUnit, build_units, plan_windows
-from realigned_pipeline.annotation.methods.describe_extract.annotator import (
+from pipeline.annotation.lib.prompts import PromptPack
+from pipeline.annotation.lib.registry import discover_methods, load_method
+from pipeline.annotation.lib.units import AnnotationUnit, build_units, plan_windows
+from pipeline.annotation.methods.describe_extract.annotator import (
     clean_goals,
     snap_goal_starts,
 )
-from realigned_pipeline.annotation.methods.plans.annotator import goal_start_frame, plan_flags
-from realigned_pipeline.lib.goals import validate_goal_row, view_span_to_master
-from realigned_pipeline.lib.views import build_segment_view
+from pipeline.annotation.methods.plans.annotator import goal_start_frame, plan_flags
+from pipeline.lib.goals import validate_goal_row, view_span_to_master
+from pipeline.lib.views import build_segment_view
 
 
 def _view(n_records: int = 150, fps: float = 1.0):

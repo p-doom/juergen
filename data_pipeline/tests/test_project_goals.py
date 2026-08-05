@@ -7,14 +7,14 @@ from __future__ import annotations
 
 import unittest
 
-from realigned_pipeline.lib.goals import (
+from pipeline.lib.goals import (
     assert_same_artifact,
     goals_by_segment,
     project_goals,
     validate_goal_row,
     view_span_to_master,
 )
-from realigned_pipeline.lib.views import build_segment_view
+from pipeline.lib.views import build_segment_view
 
 
 def _goal(start: int, end: int, *, goal_id: str = "g0", segment_id: str = "s0", **extra) -> dict:

@@ -1,0 +1,1357 @@
+{
+  "grammar": "native_absolute",
+  "geometry": {
+    "desktop_width": 1920,
+    "desktop_height": 1080
+  },
+  "default_cursor": [
+    960,
+    540
+  ],
+  "note": "cases pin all three directions: parse(text) == action, format(action) == canonical, compile(text, geometry, cursor) == operations.",
+  "cases": [
+    {
+      "name": "click_at_absolute_coordinate",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [300, 200]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [300, 200]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "left_click",
+            "coordinate": [
+              300,
+              200
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            300,
+            200
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "coordinate_less_click_lands_at_the_cursor",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "left_click"
+          }
+        ]
+      },
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "several_calls_per_turn_keep_their_order",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [500, 400]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [500, 400]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "mouse_move",
+            "coordinate": [
+              500,
+              400
+            ]
+          },
+          {
+            "action": "left_click"
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            500,
+            400
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "eval/action_parser.parse_computer_use_tool_call returned only the LAST call; this codec keeps every call, which is required for mouse_down / mouse_move / mouse_up drags."
+    },
+    {
+      "name": "drag",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [100, 100]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [100, 100]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "left_click_drag",
+            "coordinate": [
+              100,
+              100
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "glide_to",
+          [
+            100,
+            100,
+            0.5
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "a TIMED stroke, not an instant move_to. The historical lowering jumped, which many toolkits do not register as a drag; glide_to is an optional backend capability whose documented fallback is move_to."
+    },
+    {
+      "name": "triple_click_dispatches_three_pairs",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"triple_click\"}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"triple_click\"}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "triple_click"
+          }
+        ]
+      },
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "key_chord_is_normalised_to_rdev_names",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"key\", \"keys\": [\"ctrl\", \"a\"]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"key\", \"keys\": [\"ControlLeft\", \"KeyA\"]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "key",
+            "keys": [
+              "ControlLeft",
+              "KeyA"
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "key_down",
+          [
+            "ControlLeft"
+          ]
+        ],
+        [
+          "key_down",
+          [
+            "KeyA"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "KeyA"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "ControlLeft"
+          ]
+        ]
+      ],
+      "documents": "tool-call grammars arrive in pyautogui key words; they are normalised to the one rdev vocabulary the IR uses. Chord releases run in reverse."
+    },
+    {
+      "name": "held_modifier_across_steps",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"key_down\", \"keys\": [\"shift\"]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"key_down\", \"keys\": [\"ShiftLeft\"]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "key_down",
+            "keys": [
+              "ShiftLeft"
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "key_down",
+          [
+            "ShiftLeft"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "type",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"type\", \"text\": \"hello\"}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"type\", \"text\": \"hello\"}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "type",
+            "text": "hello"
+          }
+        ]
+      },
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "hello"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "scroll_down",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"scroll\", \"pixels\": -3}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"scroll\", \"pixels\": -3}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "scroll",
+            "pixels": -3
+          }
+        ]
+      },
+      "operations": [
+        [
+          "scroll",
+          [
+            0,
+            -3
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "horizontal_scroll",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"hscroll\", \"pixels\": 4}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"hscroll\", \"pixels\": 4}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "hscroll",
+            "pixels": 4
+          }
+        ]
+      },
+      "operations": [
+        [
+          "scroll",
+          [
+            4,
+            0
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "legacy_clicks_key_is_accepted_for_scroll",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"scroll\", \"clicks\": 2}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"scroll\", \"pixels\": 2}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "scroll",
+            "pixels": 2
+          }
+        ]
+      },
+      "operations": [
+        [
+          "scroll",
+          [
+            0,
+            2
+          ]
+        ]
+      ],
+      "documents": "rung1's NativeAbsoluteExecutor read `clicks`, the sign-of-life codec read `pixels`; both are accepted and canonicalise to `pixels`."
+    },
+    {
+      "name": "zero_scroll_is_a_no_op_not_an_error",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"scroll\", \"pixels\": 0}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"scroll\", \"pixels\": 0}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "scroll",
+            "pixels": 0
+          }
+        ]
+      },
+      "operations": []
+    },
+    {
+      "name": "wait_is_clamped_to_ten_seconds",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"wait\", \"time\": 99}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"wait\", \"time\": 10.0}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "wait",
+            "time": 10.0
+          }
+        ]
+      },
+      "operations": [
+        [
+          "wait",
+          [
+            10.0
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "coordinate_is_clamped_onto_the_display",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [5000, -20]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [5000, -20]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "left_click",
+            "coordinate": [
+              5000,
+              -20
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            1919,
+            0
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "parse keeps what the model said; compile clamps. Clamping is a display fact, not a grammar fact."
+    },
+    {
+      "name": "bare_json_without_tags_is_accepted",
+      "text": "{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [10, 10]}}",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [10, 10]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "left_click",
+            "coordinate": [
+              10,
+              10
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            10,
+            10
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "the RL rollout path sees vLLM-parsed tool calls with no tags; both surfaces parse and canonicalise to the tagged form."
+    },
+    {
+      "name": "fenced_json_is_accepted",
+      "text": "```json\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [1, 2]}}\n```",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [1, 2]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "mouse_move",
+            "coordinate": [
+              1,
+              2
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            1,
+            2
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "terminate",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "terminate",
+            "status": "success"
+          }
+        ]
+      },
+      "operations": []
+    },
+    {
+      "name": "drag_to_is_accepted_as_an_alias",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"drag_to\", \"coordinate\": [1240, 700]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [1240, 700]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "left_click_drag",
+            "coordinate": [
+              1240,
+              700
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "glide_to",
+          [
+            1240,
+            700,
+            0.5
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "rung1's executor exposed `drag_to` for this gesture, so a checkpoint may emit it; rejecting it would turn a semantically correct completion into a parse error. Accepted on input and canonicalised to the advertised name on output, exactly as `; ` canonicalises to ` ; ` in the bare-token arms. It is deliberately NOT a production: the tool schema the model reads must not offer two names for one gesture."
+    }
+  ],
+  "format_only": [
+    {
+      "name": "mouse_move",
+      "action": {
+        "calls": [
+          {
+            "action": "mouse_move",
+            "coordinate": [
+              1,
+              2
+            ]
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [1, 2]}}\n</tool_call>"
+    },
+    {
+      "name": "mouse_down_with_button",
+      "action": {
+        "calls": [
+          {
+            "action": "mouse_down",
+            "button": "right"
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_down\", \"button\": \"right\"}}\n</tool_call>"
+    }
+  ],
+  "invalid_parse": [
+    {
+      "name": "delta_is_rejected",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"delta\": [1, 2]}}\n</tool_call>",
+      "error": "coordinates are absolute",
+      "documents": "rl/computer_use/actions.py requires `delta` and rejects `coordinate` on clicks — the opposite of this grammar. Rejected with a message naming the relative dialect."
+    },
+    {
+      "name": "mouse_move_without_coordinate",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\"}}\n</tool_call>",
+      "error": "requires coordinate"
+    },
+    {
+      "name": "coordinate_on_type",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"type\", \"text\": \"x\", \"coordinate\": [1, 2]}}\n</tool_call>",
+      "error": "does not take a coordinate"
+    },
+    {
+      "name": "unknown_action",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"teleport\"}}\n</tool_call>",
+      "error": "unsupported native absolute action"
+    },
+    {
+      "name": "key_without_keys",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"key\"}}\n</tool_call>",
+      "error": "non-empty keys array"
+    },
+    {
+      "name": "empty_type_text",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"type\", \"text\": \"\"}}\n</tool_call>",
+      "error": "requires non-empty text"
+    },
+    {
+      "name": "unsupported_button",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_down\", \"button\": \"thumb\"}}\n</tool_call>",
+      "error": "unsupported mouse button"
+    },
+    {
+      "name": "no_tool_call_at_all",
+      "text": "I clicked the button.",
+      "error": "no valid computer_use tool call found"
+    }
+  ],
+  "invalid_compile": [
+    {
+      "name": "newline_in_type",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"type\", \"text\": \"a\\nb\"}}\n</tool_call>",
+      "error": "cannot embed a newline"
+    }
+  ],
+  "lift": [
+    {
+      "name": "move_then_click_collapses_to_left_click",
+      "operations": [
+        [
+          "move_to",
+          [
+            300,
+            200
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "left_click",
+            "coordinate": [
+              300,
+              200
+            ]
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [300, 200]}}\n</tool_call>",
+      "recompiled": [
+        [
+          "move_to",
+          [
+            300,
+            200
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "emits the idiomatic native form the base model speaks, and the collapse is exactly invertible."
+    },
+    {
+      "name": "coordinate_less_click",
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "left_click"
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>",
+      "recompiled": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "double_click_collapses",
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "double_click"
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"double_click\"}}\n</tool_call>",
+      "recompiled": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "middle_double_click_has_no_single_action_so_it_expands",
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "middle"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "middle"
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "middle"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "middle"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "mouse_down",
+            "button": "middle"
+          },
+          {
+            "action": "mouse_up",
+            "button": "middle"
+          },
+          {
+            "action": "mouse_down",
+            "button": "middle"
+          },
+          {
+            "action": "mouse_up",
+            "button": "middle"
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_down\", \"button\": \"middle\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_up\", \"button\": \"middle\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_down\", \"button\": \"middle\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_up\", \"button\": \"middle\"}}\n</tool_call>",
+      "recompiled": [
+        [
+          "mouse_down",
+          [
+            "middle"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "middle"
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "middle"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "middle"
+          ]
+        ]
+      ],
+      "documents": "the schema has no middle-button double click, so the transitions stay individual rather than being coerced into double_click."
+    },
+    {
+      "name": "drag_collapses_to_left_click_drag",
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "glide_to",
+          [
+            100,
+            100,
+            0.5
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "left_click_drag",
+            "coordinate": [
+              100,
+              100
+            ]
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [100, 100]}}\n</tool_call>",
+      "recompiled": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "glide_to",
+          [
+            100,
+            100,
+            0.5
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "exact only because left_click_drag now lowers to a TIMED stroke. Its historical lowering was an instant move_to, which many toolkits do not register as a drag."
+    },
+    {
+      "name": "approach_move_stays_separate_from_the_drag",
+      "operations": [
+        [
+          "move_to",
+          [
+            500,
+            500
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "glide_to",
+          [
+            600,
+            600,
+            0.5
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "mouse_move",
+            "coordinate": [
+              500,
+              500
+            ]
+          },
+          {
+            "action": "left_click_drag",
+            "coordinate": [
+              600,
+              600
+            ]
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [500, 500]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [600, 600]}}\n</tool_call>",
+      "recompiled": [
+        [
+          "move_to",
+          [
+            500,
+            500
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "glide_to",
+          [
+            600,
+            600,
+            0.5
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "left_click_drag presses where the cursor already is and names only its endpoint, so the approach move cannot be absorbed into it."
+    },
+    {
+      "name": "chord_collapses_to_key",
+      "operations": [
+        [
+          "key_down",
+          [
+            "ControlLeft"
+          ]
+        ],
+        [
+          "key_down",
+          [
+            "KeyA"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "KeyA"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "ControlLeft"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "key",
+            "keys": [
+              "ControlLeft",
+              "KeyA"
+            ]
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"key\", \"keys\": [\"ControlLeft\", \"KeyA\"]}}\n</tool_call>",
+      "recompiled": [
+        [
+          "key_down",
+          [
+            "ControlLeft"
+          ]
+        ],
+        [
+          "key_down",
+          [
+            "KeyA"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "KeyA"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "ControlLeft"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "type",
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "hi"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "type",
+            "text": "hi"
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"type\", \"text\": \"hi\"}}\n</tool_call>",
+      "recompiled": [
+        [
+          "coalesced_type",
+          [
+            "hi"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "scroll",
+      "operations": [
+        [
+          "scroll",
+          [
+            0,
+            -3
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "scroll",
+            "pixels": -3
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"scroll\", \"pixels\": -3}}\n</tool_call>",
+      "recompiled": [
+        [
+          "scroll",
+          [
+            0,
+            -3
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "wait",
+      "operations": [
+        [
+          "wait",
+          [
+            2.5
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "wait",
+            "time": 2.5
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"wait\", \"time\": 2.5}}\n</tool_call>",
+      "recompiled": [
+        [
+          "wait",
+          [
+            2.5
+          ]
+        ]
+      ],
+      "documents": "the only grammars of the seven that can say a timed wait; the bare-token ones collapse it to their idle action."
+    },
+    {
+      "name": "terminate_is_a_call_not_a_flag",
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "terminate": "success",
+      "action": {
+        "calls": [
+          {
+            "action": "left_click"
+          },
+          {
+            "action": "terminate",
+            "status": "success"
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>",
+      "recompiled": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "here termination rides inside the turn alongside real operations, which the flag-based grammars reject."
+    },
+    {
+      "name": "drag_operation_collapses_to_left_click_drag",
+      "operations": [
+        [
+          "drag",
+          [
+            1100,
+            640,
+            1240,
+            700
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "mouse_move",
+            "coordinate": [
+              1100,
+              640
+            ]
+          },
+          {
+            "action": "left_click_drag",
+            "coordinate": [
+              1240,
+              700
+            ]
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [1100, 640]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [1240, 700]}}\n</tool_call>",
+      "recompiled": [
+        [
+          "move_to",
+          [
+            1100,
+            640
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "glide_to",
+          [
+            1240,
+            700,
+            0.5
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "the approach move stays a separate mouse_move because left_click_drag presses where the cursor already is and names only the endpoint. Lossy only in the stroke's duration, which the schema does not carry."
+    },
+    {
+      "name": "click_operations_collapse_to_double_click",
+      "operations": [
+        [
+          "click",
+          [
+            "left"
+          ]
+        ],
+        [
+          "click",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "double_click"
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"double_click\"}}\n</tool_call>",
+      "recompiled": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "two synthesised `click` operations are one double_click, exactly as two mouse_down/mouse_up pairs are."
+    }
+  ],
+  "lift_invalid": [
+    {
+      "name": "empty_stream",
+      "operations": [],
+      "error": "empty operation stream has no representation"
+    },
+    {
+      "name": "bare_stroke",
+      "operations": [
+        [
+          "glide_to",
+          [
+            100,
+            100,
+            0.5
+          ]
+        ]
+      ],
+      "error": "timed stroke outside a held left button"
+    },
+    {
+      "name": "newline_in_type",
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "a\nb"
+          ]
+        ]
+      ],
+      "error": "cannot embed a newline"
+    }
+  ],
+  "lift_note": "lift pins operations -> action -> text, and `recompiled` closes the triangle back to operations. Where `recompiled` differs from `operations` the case says why; that difference is the grammar's expressiveness ceiling, never a silent flattening."
+}

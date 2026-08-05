@@ -191,12 +191,29 @@ def process_segment(row: dict[str, Any], frames_root: Path, run_dirs: dict[Any, 
         ensure_dir(frames_dir / "stage_00")
         write_jsonl(manifest_path, [row])
         if args.force_frames or not frame_records.exists():
-            with ffmpeg_sem:
-                s1 = ["--manifest", str(manifest_path), "--output-dir", str(frames_dir / "stage_01"),
-                      "--noop-keep-head", str(args.noop_keep_head), "--noop-keep-tail", str(args.noop_keep_tail)]
-                if args.target_fps is not None:
-                    s1 += ["--target-fps", str(args.target_fps)]
-                run_module("stage_01_frames_actions", s1, model=None)
+            # ``annotation_pipeline/stage_01_frames_actions.py`` coupled the ffmpeg
+            # decode to action alignment in ONE module. The current generation
+            # splits that: ``pipeline/stage_01_master_frames.py`` decodes a master
+            # frame store, ``pipeline/stage_02_realign.py`` recovers the time map,
+            # and alignment happens at ``pipeline/stage_03_filter.py`` /
+            # ``stage_04_build_conversations.py``. There is no drop-in module to
+            # shell out to and no honest way to synthesize one here, so the frames
+            # phase of this legacy orchestrator is retired rather than silently
+            # producing differently-shaped frame_records. ``--phase annotate`` (and
+            # everything downstream of it) still works against frames produced by
+            # the new pipeline.
+            #
+            # NOTE: this runs on a worker thread, where ``threading.excepthook``
+            # SILENTLY DROPS SystemExit. ``worker()`` therefore catches it and
+            # hands the message to ``main()``, which re-raises it on the main
+            # thread so the process actually aborts non-zero.
+            raise SystemExit(
+                "run_dataset.py --phase frames/all is retired: stage_01_frames_actions "
+                "was deleted as a duplicate of pipeline/lib/frames_actions.py. Produce "
+                f"frames with pipeline/stage_01_master_frames.py --clips-manifest {manifest_path} "
+                "then pipeline/stage_02_realign.py, and re-run this with --phase annotate "
+                f"--frames-root {frames_root}."
+            )
         if args.phase == "frames":
             recs0 = read_jsonl(frame_records) if frame_records.exists() else []
             return {"n_frames": len(recs0), "n_windows": 0, "units": [],
@@ -401,6 +418,11 @@ def main() -> None:
     counter = {"done": 0, "fail": 0, "goals": 0}
     total = len(todo)
     stop = threading.Event()
+    # A SystemExit raised on a worker thread (the retired --phase frames/all
+    # guard in process_segment) is silently discarded by threading.excepthook,
+    # so the run would otherwise report a clean "0 segments, 0 failed" and exit
+    # 0. Workers park the message here; main() re-raises it after the join.
+    fatal: list[str] = []
 
     def reporter() -> None:
         i = 0
@@ -423,6 +445,19 @@ def main() -> None:
                 rec = process_segment(row, frames_root, run_dirs, gov, ffmpeg_sem, variants, args)
                 rec["segment_id"] = seg
                 status = "ok"
+            except SystemExit as exc:
+                # Whole-run abort, not a per-segment failure: record it once,
+                # drain the queue so no sibling worker keeps going, and let
+                # main() turn it into a real non-zero process exit.
+                with lock:
+                    if not fatal:
+                        fatal.append(str(exc))
+                while True:
+                    try:
+                        q.get_nowait()
+                    except Empty:
+                        break
+                return
             except subprocess.CalledProcessError as exc:
                 err = exc.stderr.decode("utf-8", "replace")[-600:] if isinstance(exc.stderr, bytes) else str(exc.stderr or "")[-600:]
                 rec = {"segment_id": seg, "error": f"subprocess rc={exc.returncode}", "stderr": err}
@@ -447,6 +482,8 @@ def main() -> None:
     for t in threads:
         t.join()
     stop.set()
+    if fatal:
+        raise SystemExit(fatal[0])
 
     print(f"[run_dataset] finished: {counter['done']} segments, {counter['fail']} failed, "
           f"{counter['goals']} goals. tokens/model: "

@@ -6,6 +6,7 @@ loop pattern as stage C; each call runs inside omegalax's uv venv.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -34,9 +35,16 @@ flags.DEFINE_string(
 )
 flags.DEFINE_integer("max_length", None, "Max sequence length.", required=True)
 flags.DEFINE_integer("records_per_shard", None, "Records per output shard.", required=True)
-# omegalax's build_sft_chunk_index.py is single-threaded (build_chunk_index
-# iterates messages serially); no num_workers flag is exposed there. We
-# accept the flag here for recipe-side compatibility but never forward it.
+# --num_workers IS forwarded (see the cmd below); this comment used to claim the
+# opposite. Verified 2026-08-05 by enumerating every ref in the omegalax repo:
+# the four flags this stage forwards (num_workers, overflow_mode,
+# system_message_text, message_lengths_path) are all present on exactly three
+# refs -- `remove-naive-split-overflow-mode`, its origin/ twin, and
+# `origin/feat/chunk-index-truncate-mode`. They are NOT on `main` (whose
+# build_sft_chunk_index.py takes 9 flags and none of these four), and the script
+# does not exist at all on `feat/extra-transforms-hook`. So --omegalax_repo must
+# name a checkout of one of those three refs, or this stage dies on an
+# unrecognized flag. See the config's OMEGALAX_REPO note.
 flags.DEFINE_integer(
     "num_workers",
     None,
@@ -76,11 +84,69 @@ flags.DEFINE_string(
 )
 
 
+#: Dedicated omegalax venv root -- see stage_c_grain_payload.py for the rationale
+#: and the existing labctl UV_PROJECT_ENVIRONMENT convention this follows. Shared
+#: default with stage C on purpose: both stages run the same project, so they can
+#: reuse one synced environment.
+_UV_ENV_DEFAULT = (
+    "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/omegalax-datastages-venv"
+)
+
+
+def _uv_project_environment(omegalax_repo: Path) -> str:
+    """Resolve UV_PROJECT_ENVIRONMENT for the omegalax subprocess.
+
+    Duplicated from ``stage_c_grain_payload.py`` rather than shared, matching the
+    existing ``_as_child`` / ``_resolve_project_repo`` duplication convention in
+    this package: each stage stays standalone-runnable with no cross-stage import.
+    Keep the two copies in step.
+    """
+    env_path = Path(os.environ.get("OMEGALAX_UV_PROJECT_ENVIRONMENT", _UV_ENV_DEFAULT))
+
+    # Both the literal path and its symlink target, against both forms of the repo:
+    # <repo>/.venv is a SYMLINK out to p-doom_shared/franz/venvs/omegalax-venv here,
+    # so resolving first would make an inside-the-repo path look outside it.
+    def _forms(p: Path) -> set[Path]:
+        return {p.absolute(), Path(os.path.realpath(p))}
+
+    for cand in _forms(env_path):
+        for repo in _forms(omegalax_repo):
+            if cand == repo or repo in cand.parents:
+                raise RuntimeError(
+                    f"UV_PROJECT_ENVIRONMENT={cand} is inside --omegalax_repo={repo}, "
+                    "so syncing would mutate the training checkout's own environment. "
+                    "Point OMEGALAX_UV_PROJECT_ENVIRONMENT at a path outside the repo "
+                    f"(default: {_UV_ENV_DEFAULT})."
+                )
+
+    # A path comparison alone misses the symlink case: a path nowhere near the repo
+    # can still BE the physical environment the trainer uses.
+    checkout_venv = omegalax_repo / ".venv"
+    if checkout_venv.exists() and Path(os.path.realpath(env_path)) == Path(
+        os.path.realpath(checkout_venv)
+    ):
+        raise RuntimeError(
+            f"UV_PROJECT_ENVIRONMENT={env_path} resolves to the same directory as "
+            f"{checkout_venv} -> {os.path.realpath(checkout_venv)}, which IS the "
+            "training checkout's environment. Syncing would mutate it. Pick a "
+            f"different path (default: {_UV_ENV_DEFAULT})."
+        )
+    return str(env_path.absolute())
+
+
 def _run_split(split: str, src_payload: Path, out_split_dir: Path) -> dict:
     out_split_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         "uv",
         "run",
+        # --locked, NOT --no-sync -- see the full note in stage_c_grain_payload.py
+        # and _uv_project_environment() below. The venv is redirected out of the
+        # trainer's checkout, so the sync is kept (it is what makes this stage
+        # reproducible from omegalax's pyproject + uv.lock) and --locked turns a
+        # lockfile mismatch into a loud failure. --no-sync was tried and REJECTED:
+        # it would let this stage run mismatched code and environment with no
+        # signal. Kept in lockstep with stage C so the two cannot drift again.
+        "--locked",
         "--project",
         FLAGS.omegalax_repo,
         "python",
@@ -100,9 +166,11 @@ def _run_split(split: str, src_payload: Path, out_split_dir: Path) -> dict:
     if FLAGS.message_lengths_path:
         split_cache = Path(FLAGS.message_lengths_path) / split / MESSAGE_LENGTHS_FILENAME
         cmd.append(f"--message_lengths_path={split_cache}")
+    env = {**os.environ, "UV_PROJECT_ENVIRONMENT": _uv_project_environment(Path(FLAGS.omegalax_repo))}
     print(f"[stage_d] {split}: {' '.join(cmd)}", flush=True)
+    print(f"[stage_d] UV_PROJECT_ENVIRONMENT={env['UV_PROJECT_ENVIRONMENT']}", flush=True)
     t0 = time.time()
-    rc = subprocess.run(cmd, cwd=FLAGS.omegalax_repo, check=False).returncode
+    rc = subprocess.run(cmd, cwd=FLAGS.omegalax_repo, env=env, check=False).returncode
     elapsed = time.time() - t0
     if rc != 0:
         raise RuntimeError(f"build_sft_chunk_index.py failed (rc={rc}) for {split}")

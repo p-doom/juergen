@@ -45,6 +45,12 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 # Not a published package — pyproject anchors a uv venv at this directory.
+# Both entries still resolve after the data-layer restructure: `annotation_pipeline`
+# remains here (five superseded modules deleted, four load-bearing ones kept), and
+# `goal_timeline_viewer/` moved to ../tooling/ WITHOUT affecting this list — it has
+# no __init__.py, so it was never a subpackage of `annotation_pipeline` and was
+# never installed. `pipeline/`, `tooling/` and `datasets/` live at the repo root and
+# are deliberately NOT packaged (sys.path-hacked entrypoints, as before).
 packages = ["annotation_pipeline", "configs"]
 py-modules = []
 
@@ -82,6 +88,8 @@ known-first-party = [
     "_manifest",
     "configs",
     "annotation_pipeline",
+    # repo-root packages reached via sys.path (see conftest.py / stage entrypoints)
+    "pipeline",
     "filter_truncated",
     "generate_onpolicy_completions",
     "generate_onpolicy_completions_mm",

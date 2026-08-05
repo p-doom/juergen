@@ -23,12 +23,11 @@ build_manifest            walk a raw crowd-cast uploads tree, probe each MP4,
 stage_00_realign          (optional) recover the keylog→video time-map broken by
                           the OBS pause-clock bug; emits corrected keylogs + a
                           realigned manifest that stage 01 consumes unchanged
-stage_01_frames_actions   MP4 → 0.5fps/720p JPEG frames packed into one
-                          images.array_record (grain) per segment, + per-frame
-                          action strings binned from the keylog (~2s per frame).
-                          Idle is thinned by a NO_OP head/tail keep (first 1 +
-                          last 1 of each idle run, so a wait's start and end
-                          stay visible); dropped-frame action bins carry forward.
+(stage 01: DELETED — it was a byte-duplicate of the current generation's
+ pipeline/lib/frames_actions.py, 8 import lines apart. Decode frames with
+ pipeline/stage_01_master_frames.py + pipeline/stage_02_realign.py; the
+ downstream annotate/assemble/canonical stages here read the resulting
+ frame_records unchanged.)
 stage_02_annotate         vision-only, two passes over the clip's kept frames:
                           A describe  all frames → faithful factual prose
                                       narration (no goals/intent)
@@ -60,8 +59,11 @@ stage_03_assemble         goals + frame bounds → SFT rows: slice
 stage_04_build_canonical  portable canonical SFT JSONL (chat.jsonl + split/sample
                           manifests; grouped train/val split; optional system
                           prompt + terminal-token policy; ar:// URIs pass through)
-stage_05_length_buckets   optional token/length bucket inspector (exact via the
-                          trainee tokenizer — Qwen3-VL — on a compute node)
+(stage 05: DELETED — superseded by omegalax's
+ measure_message_lengths_from_chat.py / build_sft_records_from_chat.py, which is
+ the code path training actually uses. `build_sft.py --buckets` now shells out
+ to pipeline/stage_05_measure_lengths.py; pass --omegalax-repo /
+ --bucket-model-id.)
 ```
 
 Frames go to the VLM **clean** (no burned-in overlay, no timestamps). The
@@ -73,8 +75,9 @@ frames as one `images.array_record` (grain) per segment, referenced as
 Supporting modules: `config`, `common` (keylog parsing, action formatting,
 message shapes), `image_store` (grain), `frames_render` (frame data-URLs, token
 estimate `ceil(h/28)*ceil(w/28)`, window planning), `labeler` (VLM client),
-`prompts` + `prompts.yaml` (all prompt text), `qwen3_encoding` (stage 04/05
-token counts).
+`prompts` + `prompts.yaml` (all prompt text). Token counting is no longer
+vendored here: `qwen3_encoding` is deleted, and message serialization / loss
+masking now come from the `renderers` library via omegalax.
 
 ## Full-dataset run
 
@@ -150,19 +153,17 @@ flagged-unusable plans fall back to a plan-less first turn unless
 
 ## Fixing misaligned actions after the fact
 
-`realign_patch_canonical.py` realigns the assistant action turns of an
-ALREADY-BUILT canonical SFT artifact in place (joins samples to
-frame_records via their `ar://` URIs, recomputes each frame's own-bin action
-from the realigned keylog, tags every sample with its alignment status; a
-plan-bearing first turn keeps its plan prefix) — no re-annotation. Use
-`stage_00_realign` instead when (re)running the pipeline from scratch on
-misaligned recordings.
+`realign_patch_canonical.py` was a ONE-OFF migration script (its own docstring
+said so) for canonical artifacts built before the realignment fix; it is
+deleted. Use `stage_00_realign` when (re)running the pipeline from scratch on
+misaligned recordings — it now imports the single copy of the realignment math
+from `pipeline/lib/realign.py` (the duplicate `realign_lib.py` here is gone).
 
 ## Inspect
 
 ```bash
-PYTHONPATH=. python3 -m annotation_pipeline.visualize_run --port 8765 \
-    [--run-root annotation_pipeline/iteration_runs]
+uv run python tooling/visualize_run.py --port 8765 \
+    [--run-root data_pipeline/annotation_pipeline/iteration_runs]
 # ssh -L 8765:127.0.0.1:8765 <node>  then open http://127.0.0.1:8765/
 ```
 
@@ -172,9 +173,14 @@ narration); and the extracted goals (instruction + variants + anchor +
 grounding + frame bounds), each playable from the actual sample frames. Reads
 `stage_02/stage02_result.json` straight from the grain store.
 
-Also: `goal_timeline_viewer/` (full-recording goal-hierarchy timeline, see its
-README), `frame_stepper.py` (frame-by-frame action↔screen alignment for one
-clip), `action_video_viewer.py` (realtime video/action overlay, raw timeline).
+The viewers/annotator UIs were split out to `tooling/` (repo root):
+`tooling/goal_timeline_viewer/` (full-recording goal-hierarchy timeline + the
+manual human goal annotation server, see its README),
+`tooling/frame_stepper.py` (frame-by-frame action↔screen alignment for one
+clip), `tooling/action_video_viewer.py` (realtime video/action overlay, raw
+timeline), `tooling/visualize_frame_records.py` (the `pipeline/` frame-record
+inspector). `frames_render.py` stayed here — it is a library the annotate
+stages import, not a viewer.
 
 ## Environment
 
