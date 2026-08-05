@@ -1,0 +1,76 @@
+# Scripted NEGATIVE arm, deltatype_v2. Calibrated value: 0/4.
+#
+# `provenance.repo_path`, NOT the staged snapshot: labctl stages one repo and this
+# one has a sibling path dependency (`desktop-env = { path = "../desktop-env" }`,
+# no remote, no recorded commit) that cannot resolve inside a snapshot. See
+# tooling/labctl/recipes/README.md before changing this.
+name = "solv2r_compact_negative_cpu_kvm"
+repo = "juergen"
+command = ["bash", "-c", '''
+set -euo pipefail
+SOURCE="$(jq -er '.provenance.repo_path // .source_path' "$LABCTL_CONTEXT")"
+DESKTOP_ENV="$(jq -er '.inputs[] | select(.role == "desktop_env") | .resolved_path' "$LABCTL_CONTEXT")"
+RUNTIME="$(jq -er '.inputs[] | select(.role == "runtime") | .resolved_path' "$LABCTL_CONTEXT")"
+cd "$SOURCE"
+[[ -r /dev/kvm && -w /dev/kvm ]] || { echo "FATAL /dev/kvm unavailable" >&2; exit 2; }
+[[ -z "${CUDA_VISIBLE_DEVICES:-}" ]] || { echo "FATAL a scripted control must be CPU-only" >&2; exit 2; }
+# labctl records juergen's HEAD and diff; it records NOTHING about the sibling
+# checkout, so the only place desktop-env's identity exists is this line.
+echo "PROVENANCE juergen     $(git -C "$SOURCE" rev-parse HEAD) dirty=$(git -C "$SOURCE" status --porcelain | wc -l)"
+echo "PROVENANCE desktop-env $(git -C "$DESKTOP_ENV" rev-parse HEAD) dirty=$(git -C "$DESKTOP_ENV" status --porcelain | wc -l)"
+export PYTHONPATH="$SOURCE:$DESKTOP_ENV"
+export XDG_CACHE_HOME="$LABCTL_RUN_DIR/.cache"
+mkdir -p "$XDG_CACHE_HOME"
+exec "$RUNTIME/bin/python" -m evals.signoflife "$@"
+''', "--"]
+
+[resources]
+gpus = 0
+cpus = 4
+mem = "24GB"
+time = "02:00:00"
+qos = "low"
+account = "hfmi_synergyunit"
+partition = "standard"
+# Pinned, not excluded. Controls and model arms must share a host: the published
+# comparison this run re-baselines had its controls on hai003 and arm D on hai002,
+# so control conformance was never established on the measurement node.
+sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1", "--nodelist=hai003"]
+
+[inputs.desktop_env]
+# The sibling checkout labctl cannot stage. Declared so the resolved path is in the
+# run context; the commit itself only reaches the record via the PROVENANCE line.
+type = "external"
+path = "/fast/home/franz.srambical/desktop-env"
+
+[inputs.vm]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_vm"
+
+[inputs.qemu]
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu"
+
+[inputs.runtime]
+# Prebuilt, CUDA-free: verifiers 0.2.1 + the harness's pure-python deps. Built with
+# `uv venv` + `uv pip install --python`, never a project-mode sync against a shared
+# .venv.
+type = "external"
+path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/venvs/juergen-testgate-venv"
+
+[outputs.result]
+type = "eval_result"
+marker = "result.json"
+alias = "solv2r_compact_negative_cpu_kvm_{run.id}"
+
+[args]
+arm = "compact_negative"
+output = "{outputs.result.path}"
+trials = "1"
+qcow = "{inputs.vm.path}/Ubuntu.qcow2"
+qemu = "{inputs.qemu.path}/bin/qemu-system-x86_64-wrapped"
+vm-smp = "4"
+vm-mem = "8G"
+
+[env]
+PYTHONUNBUFFERED = "1"
