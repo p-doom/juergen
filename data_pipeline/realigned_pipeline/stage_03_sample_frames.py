@@ -19,7 +19,14 @@ HERE. This stage is the cheap, metadata-only half of the old
     screen have no visible frame to attach to),
   * thins NO_OP frames per ``--noop-mode`` (``none`` drop all / ``ends`` keep each
     idle run's first+last / ``all`` keep every one; legacy ``--noop-keep-head/tail``
-    still honored when ``--noop-mode`` is unset), and
+    still honored when ``--noop-mode`` is unset),
+  * labels each kept frame with the FOREGROUND APP (``--app-context``, on by
+    default): the recorder's ``ContextChanged`` events out of the SAME realigned
+    keylog, forward-filled onto the master axis (``lib/app_context``). Same clock
+    as the actions -- realignment re-stamps context events with the identical
+    splice map -- so ``app`` is an exact join, and ``app_window_switches`` marks the
+    turns whose action window straddles a switch. This is what stage 04's
+    ``--include-app`` / ``--split-by-app`` filter reads, and
   * emits ``frame_records.jsonl`` whose ``image_path`` points at the SAME master
     shard (``ar:///…/images.array_record#idx``) -- no new JPEG bytes are written.
 
@@ -74,6 +81,10 @@ if str(DATA_PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(DATA_PIPELINE_DIR))
 
 from realigned_pipeline.lib import config  # noqa: E402
+from realigned_pipeline.lib.app_context import (  # noqa: E402
+    frame_app_stats,
+    load_app_track,
+)
 from realigned_pipeline.lib.common import (  # noqa: E402
     ActionBin,
     ActionStats,
@@ -152,6 +163,8 @@ def _is_cached(
     drop_black: bool,
     black_luma_max: float,
     black_dark_frac_min: float,
+    *,
+    app_context: bool,
 ) -> list[dict[str, Any]] | None:
     """Return existing records iff a prior run wrote them at the SAME params (so
     re-sampling a different fps / NO_OP mode / black threshold into the same dir
@@ -172,9 +185,37 @@ def _is_cached(
         or bool(meta.get("drop_black_frames", False)) != drop_black
         or abs(float(meta.get("black_luma_max", -1)) - black_luma_max) > _FPS_EPS
         or abs(float(meta.get("black_dark_frac_min", -1)) - black_dark_frac_min) > _FPS_EPS
+        # app labels are per-RECORD, so toggling them changes the records
+        or bool(meta.get("app_context", False)) != app_context
     ):
         return None
     return read_jsonl(fr)
+
+
+def _cached_app_fields(
+    s01_dir: Path, cached: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """The index row's app fields for a CACHE HIT, identical to what a fresh run
+    emits. Frame-weighted stats are recomputed from the cached records; the
+    tick-weighted ``n_app_switches`` is read back from the per-segment summary the
+    original run wrote (a cache hit must not re-open the keylog)."""
+    stats = frame_app_stats(cached)
+    n_switches = None
+    try:
+        prev = json.loads((s01_dir / "segment_summaries.json").read_text())
+        if isinstance(prev, list) and prev:
+            n_switches = prev[0].get("n_app_switches")
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+    return {
+        "app": stats["app"],
+        "app_frac": stats["app_frac"],
+        "n_app_switches": n_switches,
+        "n_app_seam_turns": stats["app_seam_turns"],
+        "app_frame_counts": dict(
+            Counter(str(r["app"]) for r in cached if r.get("app"))
+        ),
+    }
 
 
 def sample_segment(task: dict[str, Any]) -> dict[str, Any]:
@@ -193,6 +234,7 @@ def sample_segment(task: dict[str, Any]) -> dict[str, Any]:
     drop_black = bool(task.get("drop_black_frames", True))
     black_luma_max = float(task.get("black_luma_max", config.DEFAULT_BLACK_LUMA_MAX))
     black_dark_frac_min = float(task.get("black_dark_frac_min", config.DEFAULT_BLACK_DARK_FRAC_MIN))
+    app_context = bool(task.get("app_context", True))
 
     clip_dir = Path(task["clips_dir"]) / seg
     s01_dir = clip_dir / "stage_01"
@@ -225,10 +267,18 @@ def sample_segment(task: dict[str, Any]) -> dict[str, Any]:
     # Resume: reuse only if the existing records were sampled at the same params.
     if not task["force"]:
         cached = _is_cached(s01_dir, target_fps, head, tail, keep_all_noops,
-                            drop_black, black_luma_max, black_dark_frac_min)
+                            drop_black, black_luma_max, black_dark_frac_min,
+                            app_context=app_context)
         if cached is not None:
+            # Rebuild the index row's app fields so a resumed run reports the same
+            # inventory a fresh one does instead of a misleading zero. Frame-weighted
+            # stats come from the cached RECORDS; ``n_app_switches`` is tick-weighted
+            # (it counts switches the sampling never landed on) and so can only come
+            # from the cached per-segment summary -- recomputing it would need the
+            # keylog, which a cache hit must not read.
             return {**base, "status": "cached", "n_frames": len(cached),
-                    "n_non_noop": sum(1 for r in cached if r.get("action") != "NO_OP")}
+                    "n_non_noop": sum(1 for r in cached if r.get("action") != "NO_OP"),
+                    **(_cached_app_fields(s01_dir, cached) if app_context else {})}
 
     master_manifest = read_jsonl(_master_frame_manifest(master_row, Path(task["frames_dir"]), seg))
     num_records = len(master_manifest)
@@ -325,6 +375,31 @@ def sample_segment(task: dict[str, Any]) -> dict[str, Any]:
             "action": cand["action"],
         })
 
+    # Foreground app per kept frame (``--app-context``): the recorder's
+    # ContextChanged events forward-filled onto the master axis, sampled at the
+    # frame's own tick. Same keylog, same clock as the actions -- realignment
+    # re-stamps context events with the identical splice map -- so this is an exact
+    # join, not a heuristic. ``app_window_switches`` counts the switches strictly
+    # INSIDE the frame's label window ``[tick_i, tick_{i+1})``: those turns
+    # aggregate input from two apps and are the seams a per-app split must cut on
+    # (a point sample alone cannot see an A->B->A flip inside one window).
+    app_summary: dict[str, Any] = {"app_context": app_context}
+    if app_context:
+        track = load_app_track(keylog, n_ticks=num_records, master_fps=master_fps)
+        ticks = [int(r["master_record_index"]) for r in records]
+        for i, rec in enumerate(records):
+            win_end = ticks[i + 1] if i + 1 < len(ticks) else num_records
+            rec["app"] = track.at(ticks[i])
+            rec["app_window_switches"] = len(track.switches_in(ticks[i], win_end))
+        # Two weightings, kept distinct on purpose: ``*_by_ticks`` is coverage over
+        # the whole master axis, while the unsuffixed keys are over the KEPT frames
+        # -- the ones stage 04's filter gates on (thinning keeps a small, biased
+        # subset of the ticks, so the two dominants genuinely differ).
+        app_summary.update(track.summary())
+        app_summary.update(frame_app_stats(records))
+        app_summary["n_app_seam_turns"] = app_summary.pop("app_seam_turns")
+        app_summary["app_frame_counts"] = dict(Counter(str(r["app"]) for r in records))
+
     seg_summary = {
         "segment_id": seg,
         "segment_idx": mrow.get("segment_idx"),
@@ -350,6 +425,7 @@ def sample_segment(task: dict[str, Any]) -> dict[str, Any]:
         "alignment_status": mrow.get("alignment_status"),
         "action_stats": asdict(action_stats),
         "n_non_noop": sum(1 for r in records if r["action"] != "NO_OP"),
+        **app_summary,
     }
 
     write_jsonl(frame_records_path, records)
@@ -371,6 +447,7 @@ def sample_segment(task: dict[str, Any]) -> dict[str, Any]:
         "drop_black_frames": drop_black,
         "black_luma_max": black_luma_max,
         "black_dark_frac_min": black_dark_frac_min,
+        "app_context": app_context,
         "sampling_backend": "frames_master",
         "total_duration_s": round(duration_s, 3),
     })
@@ -380,10 +457,19 @@ def sample_segment(task: dict[str, Any]) -> dict[str, Any]:
         **mrow, "sampled_target_fps": target_fps, "master_shard": master_row.get("shard_path"),
     }])
 
+    # The dominant app rides the index row too, so stage 04 can gate whole segments
+    # without opening 23k frame_records files.
+    app_index_fields = (
+        {k: app_summary[k] for k in ("app", "app_frac", "n_app_switches") if k in app_summary}
+        if app_context else {}
+    )
     return {**base, "status": "ok" if records else "empty",
             "n_frames": len(records), "n_non_noop": seg_summary["n_non_noop"],
             "n_missing_frames": missing_frames, "n_noop_dropped": n_noop_dropped,
-            "n_black_dropped": n_black_dropped, "n_black_events_dropped": n_black_events_dropped}
+            "n_black_dropped": n_black_dropped, "n_black_events_dropped": n_black_events_dropped,
+            **app_index_fields,
+            "n_app_seam_turns": app_summary.get("n_app_seam_turns"),
+            "app_frame_counts": app_summary.get("app_frame_counts")}
 
 
 def _load_master_fps(master_dir: Path, index_rows: list[dict[str, Any]], fallback: float) -> float:
@@ -448,6 +534,14 @@ def parse_args() -> argparse.Namespace:
                    help="Drop a frame if its mean luma (0-255) is <= this.")
     p.add_argument("--black-dark-frac-min", type=float, default=config.DEFAULT_BLACK_DARK_FRAC_MIN,
                    help="...or if this fraction of its pixels are near-black.")
+    p.add_argument("--app-context", nargs="?", const=True, type=_str2bool,
+                   default=True, metavar="BOOL",
+                   help="Label every kept frame with the FOREGROUND APP (the recorder's "
+                        "ContextChanged events from the same realigned keylog the actions "
+                        "come from, forward-filled onto the master axis): adds 'app' + "
+                        "'app_window_switches' per record and per-segment app stats. Free "
+                        "(no decode, same keylog read). Recorder versions before 0.1.1 emit "
+                        "no such events -> 'UNKNOWN'. Pass --app-context=false to omit.")
     p.add_argument("--num-workers", type=int, default=0, help="0 = cpu_count().")
     p.add_argument("--limit", type=int, default=None, help="Process only the first N segments (debug).")
     p.add_argument("--force", action="store_true", help="Re-sample segments even if same-fps records already exist.")
@@ -499,6 +593,7 @@ def main() -> None:
             "drop_black_frames": args.drop_black_frames,
             "black_luma_max": args.black_luma_max,
             "black_dark_frac_min": args.black_dark_frac_min,
+            "app_context": args.app_context,
             "force": args.force,
         }
         for row in manifest_rows
@@ -524,6 +619,9 @@ def main() -> None:
     n_non_noop_total = 0
     n_black_dropped_total = 0
     n_black_events_dropped_total = 0
+    app_frames: Counter = Counter()
+    app_segments: Counter = Counter()
+    n_app_seam_turns_total = 0
     with mp.Pool(n_workers) as pool:
         for i, res in enumerate(pool.imap_unordered(sample_segment, tasks, chunksize=8), 1):
             counts[res["status"]] += 1
@@ -531,6 +629,11 @@ def main() -> None:
             n_non_noop_total += int(res.get("n_non_noop") or 0)
             n_black_dropped_total += int(res.get("n_black_dropped") or 0)
             n_black_events_dropped_total += int(res.get("n_black_events_dropped") or 0)
+            n_app_seam_turns_total += int(res.get("n_app_seam_turns") or 0)
+            for app, n in (res.get("app_frame_counts") or {}).items():
+                app_frames[app] += int(n)
+            if res.get("app"):
+                app_segments[str(res["app"])] += 1
             index_out.append(res)
             if res["status"] == "failed":
                 print(f"  FAIL {res['segment_id']}: {res.get('error')}", flush=True)
@@ -551,6 +654,12 @@ def main() -> None:
         "drop_black_frames": args.drop_black_frames,
         "black_luma_max": args.black_luma_max,
         "black_dark_frac_min": args.black_dark_frac_min,
+        "app_context": bool(args.app_context),
+        # Per-app frame/segment inventory of THIS sample (the vocabulary a stage-04
+        # --include-app can select from) + how many turns straddle an app switch.
+        "app_frame_counts": dict(app_frames.most_common()) if args.app_context else None,
+        "app_dominant_segment_counts": dict(app_segments.most_common()) if args.app_context else None,
+        "n_app_seam_turns_total": n_app_seam_turns_total if args.app_context else None,
         "n_segments": len(tasks),
         "status_counts": dict(counts),
         "n_frames_total": n_frames_total,
@@ -571,10 +680,17 @@ def main() -> None:
             **summary,
         },
     )
+    app_note = ""
+    if args.app_context:
+        top = ", ".join(f"{a}={n}" for a, n in app_frames.most_common(5))
+        app_note = (
+            f" | apps: {len(app_frames)} distinct, {n_app_seam_turns_total} seam turns"
+            + (f" (top: {top})" if top else "")
+        )
     print(
         f"[sample] done: {dict(counts)} | {n_frames_total} frames "
         f"({n_non_noop_total} non-NO_OP, {n_black_dropped_total} black dropped, "
-        f"{n_black_events_dropped_total} black actions discarded) -> {out_dir}",
+        f"{n_black_events_dropped_total} black actions discarded){app_note} -> {out_dir}",
         flush=True,
     )
 

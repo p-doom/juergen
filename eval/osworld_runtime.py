@@ -14,6 +14,7 @@ import logging
 import re
 import subprocess
 import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -156,6 +157,38 @@ def build_loggable_messages(
     return _interleave_messages(system_prompt, instruction, parts, recent_actions, current_message)
 
 
+@dataclass(frozen=True)
+class SamplingOverrides:
+    """Optional sampling knobs sent alongside ``max_tokens``/``temperature``.
+
+    Every field is tri-state: ``None`` means "do not put this key in the request
+    body", which is *not* the same as sending the OpenAI default. sglang resolves
+    an omitted key as ``user value > the model's generation_config.json > OpenAI
+    default`` (``ChatCompletionRequest.to_sampling_params``), and the server-side
+    ``--sampling-defaults`` defaults to ``model``, so omitting ``top_p``/``top_k``/
+    ``repetition_penalty``/``min_p`` inherits the checkpoint's own recommended
+    values (Qwen3-VL ships top_p=0.8, top_k=20, repetition_penalty=1.0). Sending
+    an explicit value pins it instead, which is what makes runs comparable across
+    lineages whose exports carry different generation_configs.
+
+    ``presence_penalty``/``frequency_penalty`` are the exception: sglang reads
+    those straight off the request and never consults generation_config for them,
+    so they are 0.0 unless set here. Qwen3-VL's recommended
+    ``presence_penalty=1.5`` is only reachable this way.
+    """
+
+    top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
+    repetition_penalty: float | None = None
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+
+    def to_request_fields(self) -> dict[str, Any]:
+        """The subset to merge into the chat-completions body (drops ``None``)."""
+        return {k: v for k, v in asdict(self).items() if v is not None}
+
+
 def _call_model(
     *,
     sglang_url: str,
@@ -167,6 +200,7 @@ def _call_model(
     recent_actions: list[str] | None = None,
     max_tokens: int,
     temperature: float,
+    sampling: SamplingOverrides | None = None,
     current_message: str | None = None,
     request_timeout_s: float = 120.0,
 ) -> str:
@@ -207,6 +241,7 @@ def _call_model(
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
+            **(sampling.to_request_fields() if sampling else {}),
         },
         timeout=request_timeout_s,
     )

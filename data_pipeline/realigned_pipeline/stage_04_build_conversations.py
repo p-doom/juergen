@@ -102,6 +102,21 @@ totals in the summary.
 One conversation per segment (no windowing): a long, high-fps segment becomes a
 long conversation -- watch the trainee's context window at high --target-fps.
 
+APPLICATION FILTER (``--include-app`` / ``--exclude-app`` / ``--split-by-app``):
+selects conversations by the FOREGROUND APP, read from the per-frame ``app``
+labels stage 03 writes (the recorder's ``ContextChanged`` events off the same
+realigned keylog the actions come from -- exact join, not a heuristic; back-filled
+here when the sample predates the labels). Two modes, because a segment is not
+app-homogeneous (only ~31% of ccast0618d segments touch a single app):
+``--include-app firefox`` GATES whole segments on their dominant app (optionally
+with a purity floor, ``--app-min-frac``), keeping trajectories intact;
+``--split-by-app`` instead cuts each segment into ONE CONVERSATION PER maximal
+same-app run, which is how you get pure per-app data. Runs are labeled before any
+cut, so every surviving turn's action string is byte-identical to the unfiltered
+build. ``--app-drop-seam-turns`` (default on) drops the boundary turn whose action
+window straddles the switch -- the same argument as the black-frame dead zones:
+one label must not aggregate input from two applications.
+
 The train/val split is NOT applied here: this stage emits a single
 split-agnostic ``chat.jsonl`` and the recording-level split is deferred to the
 records stage (stage 06, via ``--val_fraction``). That keeps this stage -- and
@@ -136,7 +151,7 @@ import json
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -155,6 +170,13 @@ from realigned_pipeline.lib.action_format import (  # noqa: E402
     ActionFormatter,
     get_formatter,
     plan_typing_coalesce,
+)
+from realigned_pipeline.lib.app_context import (  # noqa: E402
+    UNRESOLVED_APPS,
+    frame_app_stats,
+    iter_app_spans,
+    load_app_track,
+    resolve_app_selector,
 )
 from realigned_pipeline.lib.common import ensure_dir, read_jsonl, write_json, write_jsonl  # noqa: E402
 from realigned_pipeline.lib.events import DeadZone, Window, load_events  # noqa: E402
@@ -554,6 +576,159 @@ def _coalesce_counts(frames: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Application filtering (--include-app / --exclude-app / --split-by-app)
+#
+# The foreground app is a per-FRAME label written by stage 03 (``app``, plus
+# ``app_window_switches`` marking turns whose action window straddles a switch).
+# It is read here, never re-derived, EXCEPT when the sample predates the labels:
+# then ``_ensure_app_labels`` fills them from the same realigned keylog the
+# formatter already uses, so an app-filtered set can be built off an existing
+# stage-03 artifact without re-sampling.
+#
+# Two modes, because a segment is NOT app-homogeneous (measured on
+# ccast0618d: only ~31% of segments touch a single app, median 3 same-app runs):
+#   * gate  -- keep or drop the WHOLE segment on its dominant app. Trajectories
+#              stay intact; a kept conversation still carries the minority apps.
+#   * split -- one conversation per maximal same-app run (``--split-by-app``).
+#              Pure per-app data at the cost of cutting segments.
+#
+# Splitting inherits goal mode's windowing caveat: a formatter's cross-turn state
+# (a key held across the cut) can leave an ``up(X)`` whose ``down(X)`` sits in
+# another conversation. Dropping the seam turn (``--app-drop-seam-turns``, on by
+# default) removes the boundary turn itself, whose action window mixes both apps.
+# --------------------------------------------------------------------------- #
+APP_UNKNOWN_MODES = ("keep", "drop")
+
+
+@dataclass(frozen=True)
+class AppFilter:
+    """Resolved ``--include-app``/``--exclude-app``/``--split-by-app`` policy."""
+
+    include: frozenset[str] = frozenset()
+    exclude: frozenset[str] = frozenset()
+    min_frac: float = 0.0
+    unknown: str = "keep"
+    split: bool = False
+    min_run_frames: int = 1
+    drop_seam_turns: bool = True
+
+    @property
+    def active(self) -> bool:
+        return bool(
+            self.include or self.exclude or self.split
+            or self.min_frac > 0.0 or self.unknown == "drop"
+        )
+
+    def accepts(self, app: str | None, frac: float) -> bool:
+        """Does a conversation whose dominant app is ``app`` (holding ``frac`` of its
+        labeled frames) survive? An unresolved/absent label can only pass when no
+        include list is set and unknowns are kept -- never claim a segment is
+        Firefox because nothing said otherwise."""
+        if app is None or app in UNRESOLVED_APPS:
+            return not self.include and self.unknown == "keep"
+        if self.include and app not in self.include:
+            return False
+        if app in self.exclude:
+            return False
+        return frac >= self.min_frac
+
+
+def split_app_selectors(values: list[str] | None) -> list[str]:
+    """Flatten ``--include-app`` / ``--exclude-app`` values: repeatable AND
+    comma-separated, because labctl renders every recipe arg as a single
+    ``--key=value`` and so cannot repeat a flag."""
+    out: list[str] = []
+    for value in values or []:
+        out.extend(part for part in str(value).replace(";", ",").split(",") if part.strip())
+    return out
+
+
+def app_stats(frames: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per-conversation app scoring over the frames this conversation actually
+    contains. Same frame-weighted function stage 03 writes into its index row, so a
+    prefilter on that row and this gate can never disagree."""
+    return frame_app_stats(frames)
+
+
+def _ensure_app_labels(
+    frames: list[dict[str, Any]],
+    index_row: dict[str, Any],
+    sample_cfg: dict[str, Any] | None,
+) -> bool:
+    """Backfill ``app``/``app_window_switches`` on a stage-03 sample built before
+    app labeling existed. Same source, same clock as stage 03 does it (the
+    realigned keylog off the index row). Returns True if labels are present after
+    this call."""
+    if not frames:
+        return False
+    if frames[0].get("app") is not None:
+        return True
+    keylog = index_row.get("keylog_path")
+    if not keylog or not Path(keylog).exists():
+        return False
+    ticks = [int(f["master_record_index"]) for f in frames]
+    master_fps = float(
+        index_row.get("master_fps") or (sample_cfg or {}).get("master_fps") or 0.0
+    )
+    if master_fps <= 0:
+        raise ValueError(
+            f"{index_row.get('segment_id')}: no master_fps on the sample index row -- "
+            "cannot place app switches on the master axis"
+        )
+    axis_end = ticks[-1] + 1
+    track = load_app_track(keylog, n_ticks=axis_end, master_fps=master_fps)
+    for i, f in enumerate(frames):
+        win_end = ticks[i + 1] if i + 1 < len(ticks) else axis_end
+        f["app"] = track.at(ticks[i])
+        f["app_window_switches"] = len(track.switches_in(ticks[i], win_end))
+    return True
+
+
+@dataclass(frozen=True)
+class AppSpan:
+    """One ``[lo, hi)`` frame span of a segment that becomes one conversation."""
+
+    app: str | None
+    lo: int
+    hi: int
+    seam_trimmed: bool = False
+
+
+def plan_app_spans(
+    frames: list[dict[str, Any]],
+    cfg: AppFilter,
+    *,
+    min_frames: int,
+) -> list[AppSpan]:
+    """Which frame spans of one segment become conversations.
+
+    Gate mode returns at most one span (the whole segment, or nothing). Split mode
+    returns one span per maximal same-app run that passes the filter and is long
+    enough; ``--app-drop-seam-turns`` first trims the boundary turn whose action
+    window straddles the switch."""
+    if not frames:
+        return []
+    if not cfg.split:
+        stats = app_stats(frames)
+        if not cfg.accepts(stats["app"], float(stats["app_frac"])):
+            return []
+        return [AppSpan(stats["app"], 0, len(frames))]
+
+    out: list[AppSpan] = []
+    for app, lo, hi in iter_app_spans(frames):
+        end, trimmed = hi, False
+        if cfg.drop_seam_turns and end > lo and frames[end - 1].get("app_window_switches"):
+            end -= 1  # that turn's action label mixes this app with the next one
+            trimmed = True
+        if end - lo < max(cfg.min_run_frames, min_frames, 1):
+            continue
+        if not cfg.accepts(app, 1.0):
+            continue
+        out.append(AppSpan(app, lo, end, trimmed))
+    return out
+
+
 def _resolve_instruction(
     index_row: dict[str, Any],
     frames: list[dict[str, Any]],
@@ -580,22 +755,27 @@ def build_conversation(
     system_prompt: str | None,
     idle_fn: Callable[[str], bool],
     fmt_fields: dict[str, Any] | None = None,
+    app_fields: dict[str, Any] | None = None,
+    id_suffix: str = "",
 ) -> dict[str, Any]:
-    """One segment -> one conversation record (frames pre-loaded and pre-filtered
-    by the caller; ``fmt_fields`` carries the formatter provenance when the
-    actions were re-derived -- action_format / dead-zone accounting)."""
+    """One segment (or one same-app run of it) -> one conversation record. Frames are
+    pre-loaded and pre-filtered by the caller; ``fmt_fields`` carries the formatter
+    provenance when the actions were re-derived (action_format / dead-zone
+    accounting) and ``app_fields`` the app-filter provenance. ``id_suffix``
+    distinguishes several conversations cut from one segment (``--split-by-app``)."""
     seg_instruction = _resolve_instruction(
         index_row, frames, instruction=instruction, instruction_field=instruction_field
     )
     messages = build_messages(frames, instruction=seg_instruction, system_prompt=system_prompt)
     return {
-        "conversation_id": str(index_row.get("segment_id")),
+        "conversation_id": f"{index_row.get('segment_id')}{id_suffix}",
         "recording_id": index_row.get("recording_id"),
         "segment_id": index_row.get("segment_id"),
         "segment_idx": index_row.get("segment_idx"),
         "instruction": seg_instruction,
         "goal_conditioned": seg_instruction is not None,
         **(fmt_fields or {}),
+        **(app_fields or {}),
         **_coalesce_counts(frames),
         "n_frames": len(frames),
         "n_turns": len(frames),  # one user+assistant pair per frame
@@ -617,6 +797,7 @@ def build_goal_conversation(
     terminate_token: str | None = None,
     fmt_fields: dict[str, Any] | None = None,
     precoalesce_source_idx: list[int] | None = None,
+    app_filter: AppFilter | None = None,
 ) -> dict[str, Any] | None:
     """One goal-conditioned conversation: OUR ``--sample-dir`` frames for the goal's
     segment, windowed to its source-frame span ``[lo, hi]`` (from stage-03b), with the
@@ -646,6 +827,13 @@ def build_goal_conversation(
     if n_gate < min_frames or not frames:
         return None
     frames.sort(key=lambda r: int(r["source_frame_idx"]))
+    # App gate over the goal's own window (goal windows already define the units, so
+    # --split-by-app is rejected in goal mode; this only keeps or drops).
+    app_info = app_stats(frames)
+    if app_filter is not None and not app_filter.accepts(
+        app_info["app"], float(app_info["app_frac"])
+    ):
+        return None
     instruction = goal.get("instruction")
     context = goal.get("context")  # self-compaction rolling summary (non-first chunks)
     messages = build_messages(
@@ -673,6 +861,7 @@ def build_goal_conversation(
         "kind": goal.get("kind"),
         "status": goal.get("status"),
         "split": goal.get("split"),
+        **app_info,
         **(fmt_fields or {}),  # segment-level formatter provenance (dead-zone counters)
         **_coalesce_counts(frames),
         "n_frames": len(frames),
@@ -755,6 +944,54 @@ def parse_args() -> argparse.Namespace:
                         "in per-segment mode, where a segment end is not a task completion. Pair "
                         "with a system prompt that describes the contract, e.g. "
                         "--system-prompt-id yll_v1.")
+    ap = p.add_argument_group(
+        "application filter",
+        "Select conversations by the FOREGROUND APP recorded in the keylog "
+        "(stage-03 'app' labels; back-filled from the realigned keylog when the "
+        "sample predates them). App ids accept friendly names (firefox, cursor, "
+        "vscode, ghostty, safari, arc, ...) or raw bundle ids / process names.",
+    )
+    ap.add_argument("--include-app", action="append", default=None, metavar="APP",
+                    help="Keep only conversations whose app is APP. Repeatable "
+                         "(--include-app firefox --include-app safari) OR comma-separated "
+                         "(--include-app=firefox,safari), since a labctl recipe renders "
+                         "each arg once as --key=value and cannot repeat a flag.")
+    ap.add_argument("--exclude-app", action="append", default=None, metavar="APP",
+                    help="Drop conversations whose app is APP. Repeatable or "
+                         "comma-separated, like --include-app. Applied after it.")
+    ap.add_argument("--app-min-frac", type=float, default=0.0,
+                    help="Gate mode only: require the dominant app to hold at least this "
+                         "fraction of the conversation's LABELED frames (0 = no purity "
+                         "requirement). Measured on ccast0618d: 0.8 keeps ~65%% of "
+                         "segments, 0.95 keeps ~43%%. Ignored with --split-by-app, whose "
+                         "runs are pure by construction.")
+    ap.add_argument("--app-unknown", choices=APP_UNKNOWN_MODES, default="keep",
+                    help="What to do with conversations that carry NO app label -- "
+                         "recorder versions before 0.1.1 emit no ContextChanged, and "
+                         "UNCAPTURED is the privacy blackout. 'keep' (default) passes them "
+                         "when no --include-app is set; 'drop' removes every unlabeled "
+                         "conversation, which is what you want for a clean per-app "
+                         "comparison (~23%% of ccast0618d segments are unlabeled).")
+    ap.add_argument("--split-by-app", nargs="?", const=True, type=_str2bool,
+                    default=False, metavar="BOOL",
+                    help="Cut each segment into ONE CONVERSATION PER maximal same-app run "
+                         "instead of gating whole segments. A segment is not "
+                         "app-homogeneous (only ~31%% touch a single app), so this is the "
+                         "way to get pure per-app data. An UNCAPTURED gap does not break a "
+                         "run when the same app resumes (those frames are the black ones "
+                         "already dropped). Rejected in --goal-index mode, where the goal "
+                         "windows already define the conversation units.")
+    ap.add_argument("--app-min-run-frames", type=int, default=1,
+                    help="--split-by-app: skip runs shorter than this many frames (== turns; "
+                         "at --target-fps 1 it is also seconds). Runs >= 30 frames @1 fps "
+                         "hold ~91%% of the corpus's captured foreground time.")
+    ap.add_argument("--app-drop-seam-turns", nargs="?", const=True, type=_str2bool,
+                    default=True, metavar="BOOL",
+                    help="--split-by-app: drop each run's final turn when its action window "
+                         "straddles the app switch (stage-03 'app_window_switches'), since "
+                         "that one label aggregates input from BOTH apps -- the same "
+                         "argument as the black-frame dead zones. ~2.5%% of turns @1 fps. "
+                         "Pass =false to keep them.")
     p.add_argument("--min-frames", type=int, default=1,
                    help="Skip segments (or goals, in --goal-index mode) with fewer than "
                         "this many frames.")
@@ -798,6 +1035,36 @@ def main() -> None:
     idle_fn: Callable[[str], bool] = (
         formatter.is_idle_label if formatter is not None else (lambda a: a == "NO_OP")
     )
+
+    # Application filter. Selectors are resolved once (friendly name -> canonical
+    # id) so an unknown spelling fails here rather than silently matching nothing.
+    try:
+        app_filter = AppFilter(
+            include=frozenset(
+                resolve_app_selector(a) for a in split_app_selectors(args.include_app)
+            ),
+            exclude=frozenset(
+                resolve_app_selector(a) for a in split_app_selectors(args.exclude_app)
+            ),
+            min_frac=float(args.app_min_frac),
+            unknown=args.app_unknown,
+            split=bool(args.split_by_app),
+            min_run_frames=int(args.app_min_run_frames),
+            drop_seam_turns=bool(args.app_drop_seam_turns),
+        )
+    except ValueError as exc:
+        raise SystemExit(f"--include-app/--exclude-app: {exc}") from exc
+    if app_filter.split and args.goal_index:
+        raise SystemExit(
+            "--split-by-app is not compatible with --goal-index: a goal window already "
+            "defines the conversation unit. Use --include-app/--exclude-app to gate goals "
+            "on their dominant app instead."
+        )
+    if app_filter.active and sample_cfg is None:
+        sample_cfg = _load_sample_config(args.sample_dir)
+    if app_filter.active and not sample_cfg.get("app_context", False):
+        print("[conversations] NOTE: this stage-03 sample carries no app labels; "
+              "back-filling them from the realigned keylogs.", flush=True)
 
     # System prompt: explicit override wins; else default by goal-conditioning. A
     # segment is goal-conditioned iff it resolves an instruction, but the system
@@ -848,6 +1115,10 @@ def main() -> None:
     n_coalesced_turns = 0
     n_coalesced_dropped = 0
     n_forced_idle_turns = 0
+    n_skipped_app = 0
+    n_app_unlabeled = 0
+    n_seam_turns_dropped = 0
+    app_conv_counts: Counter = Counter()
 
     def _reformat(
         frames: list[dict[str, Any]],
@@ -913,6 +1184,8 @@ def main() -> None:
                          if g.get("coll_source_frame_idx_lo") is not None
                          and g.get("coll_source_frame_idx_hi") is not None]
                 fmt_fields = _reformat(seg_frames, row, goal_spans=spans)
+                if app_filter.active and not _ensure_app_labels(seg_frames, row, sample_cfg):
+                    n_app_unlabeled += 1
             except Exception as exc:  # noqa: BLE001 - one bad segment must not abort the run
                 n_failed += len(seg_goals)
                 print(f"  FAIL {segment_id}: {exc}", flush=True)
@@ -923,6 +1196,7 @@ def main() -> None:
                     min_frames=args.min_frames, idle_fn=idle_fn,
                     terminate_token=terminate_token, fmt_fields=fmt_fields,
                     precoalesce_source_idx=pre_src if args.coalesce_typing else None,
+                    app_filter=app_filter if app_filter.active else None,
                 )
                 if conv is None:
                     n_skipped += 1
@@ -930,6 +1204,8 @@ def main() -> None:
                 records.append(conv)
                 n_frames_total += conv["n_frames"]
                 n_turns_total += conv["n_turns"]
+                if conv.get("app"):
+                    app_conv_counts[str(conv["app"])] += 1
             if j % 500 == 0:
                 print(f"  {j}/{len(goals_by_seg)} segments | {len(records)} goal conversations", flush=True)
     else:
@@ -939,28 +1215,65 @@ def main() -> None:
                 if frames is None or len(frames) < args.min_frames:
                     n_skipped += 1
                     continue
+                # Labels are re-derived (and typing coalesced) over the WHOLE segment
+                # first, so every kept turn's action is byte-identical to the unsplit
+                # dataset; the app filter then only decides which turns survive.
                 fmt_fields = _reformat(frames, row)
-                conv = build_conversation(
-                    row,
-                    frames,
-                    instruction=args.instruction,
-                    instruction_field=args.instruction_field,
-                    system_prompt=system_prompt,
-                    idle_fn=idle_fn,
-                    fmt_fields=fmt_fields,
+                if app_filter.active and not _ensure_app_labels(frames, row, sample_cfg):
+                    n_app_unlabeled += 1
+                spans = (
+                    plan_app_spans(frames, app_filter, min_frames=args.min_frames)
+                    if app_filter.active
+                    else [AppSpan(None, 0, len(frames))]
                 )
+                if not spans:
+                    n_skipped += 1
+                    n_skipped_app += 1
+                    continue
+                convs = []
+                for run_idx, span in enumerate(spans):
+                    span_frames = frames[span.lo:span.hi]
+                    info = app_stats(span_frames) if app_filter.active else {}
+                    if app_filter.split:
+                        if span.seam_trimmed:
+                            n_seam_turns_dropped += 1
+                        info = {
+                            **info,
+                            "app_run_idx": run_idx,
+                            "n_app_runs": len(spans),
+                            "app_seam_turn_dropped": span.seam_trimmed,
+                        }
+                    convs.append(build_conversation(
+                        row,
+                        span_frames,
+                        instruction=args.instruction,
+                        instruction_field=args.instruction_field,
+                        system_prompt=system_prompt,
+                        idle_fn=idle_fn,
+                        fmt_fields=fmt_fields,
+                        app_fields=info or None,
+                        # one segment can now yield several conversations
+                        id_suffix=f"_app{run_idx:02d}" if app_filter.split else "",
+                    ))
             except Exception as exc:  # noqa: BLE001 - one bad segment must not abort the run
                 n_failed += 1
                 print(f"  FAIL {row.get('segment_id')}: {exc}", flush=True)
                 continue
-            records.append(conv)
-            n_frames_total += conv["n_frames"]
-            n_turns_total += conv["n_turns"]
+            for conv in convs:
+                records.append(conv)
+                n_frames_total += conv["n_frames"]
+                n_turns_total += conv["n_turns"]
+                if conv.get("app"):
+                    app_conv_counts[str(conv["app"])] += 1
             if i % 1000 == 0:
                 print(f"  {i}/{len(usable)} segments | {len(records)} conversations", flush=True)
 
     if not records:
-        raise SystemExit("no conversations built (all segments empty or below --min-frames)")
+        raise SystemExit(
+            "no conversations built (all segments empty or below --min-frames"
+            + (", or rejected by the app filter" if app_filter.active else "")
+            + ")"
+        )
 
     write_jsonl(out_dir / "conversations.jsonl", records)
     write_jsonl(out_dir / "chat.jsonl", records)
@@ -984,6 +1297,20 @@ def main() -> None:
         "primitive_counts": dict(prim_totals) if prim_totals else None,
         "dead_zone_totals": dict(dz_totals) if formatter is not None else None,
         "n_dead_zone_flagged": n_dz_flagged if formatter is not None else None,
+        # --- application filter -------------------------------------------------
+        "app_filter_active": app_filter.active,
+        "include_app": sorted(app_filter.include) or None,
+        "exclude_app": sorted(app_filter.exclude) or None,
+        "app_min_frac": app_filter.min_frac if not app_filter.split else None,
+        "app_unknown": app_filter.unknown,
+        "split_by_app": app_filter.split,
+        "app_min_run_frames": app_filter.min_run_frames if app_filter.split else None,
+        "app_drop_seam_turns": app_filter.drop_seam_turns if app_filter.split else None,
+        "n_app_seam_turns_dropped": n_seam_turns_dropped if app_filter.split else None,
+        # segment mode only -- goal mode folds app rejections into n_skipped
+        "n_skipped_app_filter": n_skipped_app if not args.goal_index else None,
+        "n_segments_without_app_labels": n_app_unlabeled if app_filter.active else None,
+        "app_conversation_counts": dict(app_conv_counts.most_common()) or None,
         "terminate_token": terminate_token,
         "instruction": args.instruction,
         "instruction_field": args.instruction_field,
@@ -1003,10 +1330,20 @@ def main() -> None:
         f" | coalesced {n_coalesced_turns} turns (-{n_coalesced_dropped} frames)"
         if args.coalesce_typing else ""
     )
+    app_note = ""
+    if app_filter.active:
+        top = ", ".join(f"{a}={n}" for a, n in app_conv_counts.most_common(5))
+        app_note = (
+            f" | apps: {'split' if app_filter.split else 'gate'}, "
+            f"{len(app_conv_counts)} distinct"
+            + (f", {n_seam_turns_dropped} seam turns dropped" if app_filter.split else "")
+            + (f", {n_app_unlabeled} segments unlabeled" if n_app_unlabeled else "")
+            + (f" (top: {top})" if top else "")
+        )
     print(
         f"[conversations] {len(records)} conversations, {n_turns_total} turns, "
         f"{n_frames_total} frames, {n_skipped} skipped, {n_failed} failed "
-        f"| format={args.action_format}{coalesce_note} -> {out_dir}",
+        f"| format={args.action_format}{coalesce_note}{app_note} -> {out_dir}",
         flush=True,
     )
 

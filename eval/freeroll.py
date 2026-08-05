@@ -67,7 +67,7 @@ from osworld_system_prompts import (  # noqa: E402
 )
 from osworld_runtime import (  # noqa: E402
     _DEFAULT_QCOW2, _DEFAULT_QEMU_BIN, _EVAL_DIR,
-    _call_model, _pil_to_data_url, _wait_for, append_turn,
+    SamplingOverrides, _call_model, _pil_to_data_url, _wait_for, append_turn,
     build_loggable_messages, parse_resolution, window_frame_labels,
 )
 
@@ -232,6 +232,7 @@ def _run_rollout(
     persist_instruction: bool,
     max_tokens: int,
     temperature: float,
+    sampling: SamplingOverrides,
     save_frames: bool,
     stop_on_click: bool,
     desktop_setup: str,
@@ -302,6 +303,7 @@ def _run_rollout(
                     recent_frames=recent_frames,
                     recent_actions=recent_actions,
                     max_tokens=max_tokens, temperature=temperature,
+                    sampling=sampling,
                 )
             except Exception as e:
                 _LOGGER.error("step %d: model call failed: %s", step, e)
@@ -450,6 +452,10 @@ def _run_rollout(
         "persist_instruction": persist_instruction,
         "max_tokens": max_tokens,
         "temperature": temperature,
+        # Only the knobs explicitly pinned on the command line. Keys absent here
+        # were left to sglang, i.e. resolved from the checkpoint's
+        # generation_config.json — see SamplingOverrides.
+        "sampling": sampling.to_request_fields(),
         "desktop_setup": desktop_setup,
         "settle_s": settle_s,
         "settle_stable_timeout_s": settle_stable_timeout_s,
@@ -551,6 +557,42 @@ def main() -> int:
     )
     p.add_argument("--max_tokens", type=int, default=64)
     p.add_argument("--temperature", type=float, default=0.0)
+    # Sampling knobs beyond temperature. All default to None = "not sent", which
+    # lets sglang fall back to the served checkpoint's generation_config.json
+    # (Qwen3-VL: top_p=0.8, top_k=20, repetition_penalty=1.0). Pass them to pin
+    # the values instead — that is the only way to keep two lineages comparable
+    # when their exports carry different generation_configs, and the only way to
+    # set presence/frequency penalties at all (sglang never reads those from
+    # generation_config). Whatever is set lands in result.json under "sampling".
+    p.add_argument(
+        "--top_p", type=float, default=None,
+        help="Nucleus sampling top_p. Unset → the checkpoint's "
+             "generation_config.json value (Qwen3-VL: 0.8), else 1.0.",
+    )
+    p.add_argument(
+        "--top_k", type=int, default=None,
+        help="Top-k cutoff (-1 = disabled). Unset → the checkpoint's "
+             "generation_config.json value (Qwen3-VL: 20), else -1.",
+    )
+    p.add_argument(
+        "--min_p", type=float, default=None,
+        help="min_p cutoff. Unset → generation_config.json, else 0.0.",
+    )
+    p.add_argument(
+        "--repetition_penalty", type=float, default=None,
+        help="Repetition penalty. Unset → generation_config.json "
+             "(Qwen3-VL: 1.0), else 1.0.",
+    )
+    p.add_argument(
+        "--presence_penalty", type=float, default=None,
+        help="Presence penalty. Never comes from generation_config, so unset "
+             "means 0.0 (Qwen3-VL recommends 1.5).",
+    )
+    p.add_argument(
+        "--frequency_penalty", type=float, default=None,
+        help="Frequency penalty. Never comes from generation_config, so unset "
+             "means 0.0.",
+    )
     p.add_argument("--n_history_frames", type=int, default=16)
     p.add_argument(
         "--persist_instruction", action=argparse.BooleanOptionalAction, default=True,
@@ -616,6 +658,15 @@ def main() -> int:
         args.system_prompt_id,
     )
 
+    sampling = SamplingOverrides(
+        top_p=args.top_p,
+        top_k=args.top_k,
+        min_p=args.min_p,
+        repetition_penalty=args.repetition_penalty,
+        presence_penalty=args.presence_penalty,
+        frequency_penalty=args.frequency_penalty,
+    )
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -636,6 +687,13 @@ def main() -> int:
                  args.model_path, len(instructions), args.max_steps,
                  vm_port, sglang_port, args.system_prompt_id)
     _LOGGER.info("desktop_setup=%s", args.desktop_setup)
+    # Everything not listed here is resolved server-side from the checkpoint's
+    # generation_config.json; grep sglang.log for "default chat sampling params"
+    # to see what it picked.
+    _LOGGER.info(
+        "decoding max_tokens=%d temperature=%s pinned_sampling=%s",
+        args.max_tokens, args.temperature, sampling.to_request_fields() or "{} (all inherited)",
+    )
 
     # Cleanup: terminate VM and sglang on exit.
     _procs: list[subprocess.Popen] = []
@@ -717,6 +775,7 @@ def main() -> int:
                 persist_instruction=args.persist_instruction,
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
+                sampling=sampling,
                 save_frames=not args.no_frames,
                 stop_on_click=args.stop_on_click,
                 desktop_setup=args.desktop_setup,
@@ -752,6 +811,12 @@ def main() -> int:
                 "system_prompt_id": args.system_prompt_id,
                 "action_format": action_format,
                 "desktop_setup": args.desktop_setup,
+                # Decoding is shared by every instruction (one sglang server),
+                # so record it once at the aggregate level too — otherwise the
+                # only trace of it is each per-run result.json.
+                "max_tokens": args.max_tokens,
+                "temperature": args.temperature,
+                "sampling": sampling.to_request_fields(),
                 "n_instructions": len(instructions),
                 "runs": runs,
             }, f, indent=2)

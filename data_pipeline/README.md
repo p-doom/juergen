@@ -9,6 +9,15 @@ Consumed by [`pmanager`][pmanager]/[`labctl`][labctl] recipes that inject params
 
 ## Layout
 
+### Realigned crowd-cast chain (`realigned_pipeline/`)
+
+The current chain (stage 00 → 06): decode-once master frame store, keylog↔video
+realignment, fps sampling, conversation assembly (per segment, per same-app run, or
+per goal), tokenizer cache, inline SFT records. Documented in
+[`realigned_pipeline/README.md`](realigned_pipeline/README.md), which also covers
+**application filtering** — selecting or splitting conversations by the foreground
+app recorded in the keylog.
+
 ### Crowd-cast 4-stage chain (`stage_*`)
 
 | Stage | Script | Role |
