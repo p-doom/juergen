@@ -1,5 +1,29 @@
 # Annotation pipeline — hindsight instruction annotation
 
+> **SUPERSEDED — scheduled for deletion.** The current generation is `pipeline/`
+> at the repo root (stages 00–06 + `pipeline/annotation/`). **Nothing outside this
+> directory imports this package any more.** Two modules were ported out and are
+> now thin aliases kept only so recorded labctl `submit.sh` scripts keep
+> resolving:
+>
+> | old | new |
+> |---|---|
+> | `annotation_pipeline.build_manifest` | `pipeline.stage_00_clip_manifest` (byte-identical) |
+> | `annotation_pipeline.stage_04_build_canonical_sft` | `pipeline.stage_04_build_canonical_sft` (byte-identical body) |
+>
+> What is still real here is the LEGACY ANNOTATION ENGINE — `run_dataset`,
+> `stage_02_annotate`, `stage_02b_plans`, `stage_03_assemble_trajectories`,
+> `stage_00_realign`, plus `labeler`/`prompts`/`frames_render`/`config`/`common`
+> — and its two drivers `build_sft` and `reextract_run`, which only ever run over
+> the `dataset_runs/<run>/<model>/clips/<uid>` layout `run_dataset` produces.
+> `pipeline/annotation/stage_annotate.py` is the port of that engine
+> (`describe_extract` = `stage_02_annotate`, incl. `clean_goals` +
+> `snap_goal_starts`; `plans` = `stage_02b_plans`; the prompt packs differ only
+> by parameterising the hardcoded 2 s frame period as `${frame_period_s}`), and
+> `pipeline/stage_04_build_conversations.py` is the port of
+> `stage_03_assemble` + message assembly. Deleting this directory is a decision
+> about whether that port is trusted, not a porting task.
+
 Turns human screen recordings (MP4 + msgpack keylog) into instruction-annotated
 computer-use SFT data. Each sample is `(instruction, trajectory)` where the
 **instruction** is the prompt a user would type to make an agent do this and the
@@ -20,6 +44,7 @@ for annotation.
 ```
 build_manifest            walk a raw crowd-cast uploads tree, probe each MP4,
                           pair it with its keylog → per-segment JSONL manifest
+                          (PORTED: alias for pipeline.stage_00_clip_manifest)
 stage_00_realign          (optional) recover the keylog→video time-map broken by
                           the OBS pause-clock bug; emits corrected keylogs + a
                           realigned manifest that stage 01 consumes unchanged
@@ -59,6 +84,8 @@ stage_03_assemble         goals + frame bounds → SFT rows: slice
 stage_04_build_canonical  portable canonical SFT JSONL (chat.jsonl + split/sample
                           manifests; grouped train/val split; optional system
                           prompt + terminal-token policy; ar:// URIs pass through)
+                          (PORTED: alias for
+                          pipeline.stage_04_build_canonical_sft)
 (stage 05: DELETED — superseded by omegalax's
  measure_message_lengths_from_chat.py / build_sft_records_from_chat.py, which is
  the code path training actually uses. `build_sft.py --buckets` now shells out
@@ -82,10 +109,11 @@ masking now come from the `renderers` library via omegalax.
 ## Full-dataset run
 
 ```bash
-cd /fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline
-PYTHONPATH=. python3 -m annotation_pipeline.build_manifest \
+cd /fast/project/HFMI_SynergyUnit/yll/juergen           # repo root, not data_pipeline
+python3 -m pipeline.stage_00_clip_manifest \
     --dataset-root /fast/project/HFMI_SynergyUnit/p-doom/crowd-cast/crowd-cast-2026-06-18 \
     --out manifest.crowd-cast-2026-06-18.jsonl --workers 32
+cd data_pipeline
 PYTHONPATH=. python3 -m annotation_pipeline.run_dataset \
     --manifest manifest.crowd-cast-2026-06-18.jsonl \
     --run-name full --models Kimi-K2.6,Kimi-K2.5 \

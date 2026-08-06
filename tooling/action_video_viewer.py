@@ -24,17 +24,17 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
-# ``annotation_pipeline`` lives under ``data_pipeline/``; this viewer was split
-# out to ``tooling/`` in the data-layer restructure, so put that root on the path
-# when run directly (``uv run python tooling/action_video_viewer.py``).
+# ``pipeline`` lives at the repo root; this viewer was split out to ``tooling/``
+# in the data-layer restructure, so put that root on the path when run directly
+# (``uv run python tooling/action_video_viewer.py``).
 import sys as _sys
 from pathlib import Path as _Path
 
-_DATA_PIPELINE_DIR = _Path(__file__).resolve().parents[1] / "data_pipeline"
-if str(_DATA_PIPELINE_DIR) not in _sys.path:
-    _sys.path.insert(0, str(_DATA_PIPELINE_DIR))
+_REPO_ROOT = _Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_REPO_ROOT))
 
-from annotation_pipeline.common import (
+from pipeline.lib.common import (
     aggregate_actions,
     ceil_frames,
     format_action,

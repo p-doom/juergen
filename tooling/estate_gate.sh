@@ -10,7 +10,12 @@
 #                                      the sibling checkout).
 #   juergen/data_pipeline/tests        needs cv2 (opencv-python-headless), which
 #                                      the testgate venv deliberately does not
-#                                      have -- so it runs under its own.
+#                                      have -- so it runs under its own. NOT
+#                                      `juergen/.venv`: that one is uv's project
+#                                      environment, so any `uv sync` without the
+#                                      `dev` extra prunes pytest out from under a
+#                                      run in progress. Observed doing exactly
+#                                      that mid-gate.
 #   pixeldesk                          Pillow and nothing else. Its one runtime
 #                                      dependency is the point of that repo. It
 #                                      was `desktop-env` until 2026-08-06; if the
@@ -33,7 +38,8 @@
 # are actually run under on this cluster; on another machine, set the variables.
 #
 #   JUERGEN_PYTHON          tests + grammars        (default: shared testgate venv)
-#   DATA_PIPELINE_PYTHON    data_pipeline/tests     (default: juergen/.venv)
+#   DATA_PIPELINE_PYTHON    data_pipeline/tests     (default: shared data-pipeline
+#                                                   testgate venv)
 #   PIXELDESK_PYTHON        pixeldesk               (default: shared testgate venv)
 #   ENV_FLEET_PYTHON        env-fleet               (default: env-fleet/.venv)
 #   OMEGALAX_PYTHON         omegalax-rearch         (default: shared rearch venv)
@@ -62,7 +68,7 @@ SIBLINGS="$(cd -- "$JUERGEN_ROOT/.." && pwd)"
 
 VENVS=/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/venvs
 : "${JUERGEN_PYTHON:=$VENVS/juergen-testgate-venv/bin/python}"
-: "${DATA_PIPELINE_PYTHON:=$JUERGEN_ROOT/.venv/bin/python}"
+: "${DATA_PIPELINE_PYTHON:=$VENVS/data-pipeline-testgate-venv/bin/python}"
 : "${PIXELDESK_PYTHON:=$VENVS/juergen-testgate-venv/bin/python}"
 : "${ENV_FLEET_PYTHON:=$ENV_FLEET_ROOT/.venv/bin/python}"
 : "${OMEGALAX_PYTHON:=$VENVS/omegalax-rearch-testgate-venv/bin/python}"

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from annotation_pipeline.stage_04_build_canonical_sft import build_canonical_sft
+from pipeline.stage_04_build_canonical_sft import build_canonical_sft
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:

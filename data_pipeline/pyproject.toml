@@ -27,9 +27,11 @@ dependencies = [
     "array-record>=0.5.1",         # ArrayRecord (grain) JPEG image store: stage_01 pack + migration + ar:// decode
     # Floor at 0.5.1 (not 0.6.0) so sglang's diffusion extra — which pins ==0.5.1 — can co-resolve in the workspace lock. Only a PATH fallback; minor version doesn't matter.
     "imageio-ffmpeg>=0.5.1",
-    "openai>=2.26.0",              # annotation_pipeline stage 02 labeler (Azure/OpenAI-compatible) + local Qwen
-    "PyYAML>=6.0",                 # annotation_pipeline prompts.yaml loader (prompts.py)
-    "opencv-python-headless>=4.10.0.84",  # annotation_pipeline video probing/frame rendering; matches sglang workspace pin
+    # The next three are needed by BOTH annotation_pipeline (legacy) and
+    # pipeline/ (current), so none of them dies with the legacy package.
+    "openai>=2.26.0",              # VLM labeler (Azure/OpenAI-compatible) + local Qwen: annotation_pipeline/labeler.py, pipeline/annotation/lib/labeler.py
+    "PyYAML>=6.0",                 # prompts.yaml loaders: annotation_pipeline/prompts.py, pipeline/annotation/lib/prompts.py
+    "opencv-python-headless>=4.10.0.84",  # video probing / frame decode: pipeline/stage_00_clip_manifest.py + pipeline/lib, annotation_pipeline/frames_render.py; matches sglang workspace pin
     "datasets>=3.0",               # prep_{finevision,smoltalk2,tulu3_persona_if} + preprocess_smoltalk_prompts HF loaders
     # tokenizer for prompt-length filtering in preprocess_smoltalk_prompts.py
     # (Qwen3-VL-2B chat template).
@@ -45,12 +47,21 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 # Not a published package — pyproject anchors a uv venv at this directory.
-# Both entries still resolve after the data-layer restructure: `annotation_pipeline`
-# remains here (five superseded modules deleted, four load-bearing ones kept), and
-# `goal_timeline_viewer/` moved to ../tooling/ WITHOUT affecting this list — it has
-# no __init__.py, so it was never a subpackage of `annotation_pipeline` and was
-# never installed. `pipeline/`, `tooling/` and `datasets/` live at the repo root and
-# are deliberately NOT packaged (sys.path-hacked entrypoints, as before).
+# `pipeline/`, `tooling/` and `datasets/` live at the REPO ROOT and are
+# deliberately NOT packaged (sys.path-hacked entrypoints, as before);
+# `goal_timeline_viewer/` moved to ../tooling/ WITHOUT affecting this list — it
+# has no __init__.py, so it was never a subpackage and was never installed.
+#
+# `annotation_pipeline` is the SUPERSEDED generation and is on notice. Nothing
+# outside it imports it any more: the two modules with external callers are now
+# thin aliases over the ported implementations
+#   annotation_pipeline.build_manifest                -> pipeline.stage_00_clip_manifest
+#   annotation_pipeline.stage_04_build_canonical_sft  -> pipeline.stage_04_build_canonical_sft
+# and exist only so recorded labctl `submit.sh` scripts and the in-package
+# `build_sft.py` driver keep resolving. It stays in `packages` (a) because it is
+# still on disk and importable by design, and (b) because configs/stage_[a-d]_v1_*
+# assert `annotation_pipeline/` exists as their "this is a data_pipeline root"
+# sentinel — retarget that sentinel before dropping this entry.
 packages = ["annotation_pipeline", "configs"]
 py-modules = []
 

@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 """Re-run ONLY the extract pass over an existing dataset_run, in place.
 
+SUPERSEDED, NOT PORTED — same reason as ``build_sft.py``: it subprocess-invokes
+``annotation_pipeline.stage_02_annotate`` over the legacy
+``dataset_runs/<run>/<model>/clips/<uid>`` tree, so it cannot outlive the engine
+it drives. The capability itself already exists in the current generation:
+``pipeline/annotation/methods/describe_extract/annotator.py`` caches the two
+passes independently (``<calls>/<model>/<unit>/describe_prose.txt`` and
+``extract_from_prose.txt``), so an extract-prompt iteration is "delete the
+``extract_from_prose.txt`` cache files, re-run ``stage_annotate.py --force``" —
+describe is reused, no tokens re-spent. The one affordance not carried over is
+the ``--refresh <call-name>`` flag that did that invalidation for you.
+
 Used to validate a change to the EXTRACT prompt without re-paying for describe:
 for every clip dir already under <run>/<model>/clips/<uid>, invalidate just the
 extract cache (`--refresh extract_from_prose`) and re-run stage_02 with

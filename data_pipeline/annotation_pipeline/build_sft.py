@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """Build an SFT dataset from a dataset_runs/<run> annotation run.
 
+SUPERSEDED, NOT PORTED — and deliberately so. This is a driver OF the legacy
+annotation engine, not a consumer of it: its only possible input is the
+``dataset_runs/<run>/<model>/clips/<uid>`` tree that ``run_dataset.py`` writes,
+and it calls ``stage_03_assemble_trajectories.assemble_samples``, which has no
+counterpart under ``pipeline/``. Lifting it to ``pipeline/`` would either invert
+the dependency (pipeline importing annotation_pipeline) or drag the whole legacy
+engine along, and the result would still only run on this package's output. It
+dies with the engine, not before it. The current-generation equivalent is
+``pipeline/annotation/stage_annotate.py`` (one goals.jsonl over master-tick
+intervals — the per-model/per-window regrouping this file does is already
+absorbed there) followed by ``pipeline/stage_04_build_conversations.py``.
+
 Walks <run>/<model>/clips/<uid>, groups window-units back into their PARENT
 segment, and for each parent feeds the parent's FULL frame_records (from
 <run>/_frames/clips/<parent>/stage_01) plus the concatenated goal trajectories
