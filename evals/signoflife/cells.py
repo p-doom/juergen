@@ -62,7 +62,7 @@ from evals.harness import (
 
 __all__ = [
     "ARMS",
-    "CELLS",
+    "CONTROL_ARMS",
     "COMPACT_CODEC",
     "MODEL_ARMS",
     "NATIVE_CODEC",
@@ -187,13 +187,19 @@ def _control(codec: str, *, negative: bool, name: str) -> DesktopHarnessConfig:
     )
 
 
-CELLS: dict[str, DesktopHarnessConfig] = {
+CONTROL_ARMS: dict[str, DesktopHarnessConfig] = {
     "native_oracle": _control(NATIVE_CODEC, negative=False, name="sol_native_oracle"),
     "native_negative": _control(NATIVE_CODEC, negative=True, name="sol_native_negative"),
     "compact_oracle": _control(COMPACT_CODEC, negative=False, name="sol_compact_oracle"),
     "compact_negative": _control(COMPACT_CODEC, negative=True, name="sol_compact_negative"),
 }
-"""The four-cell gate proper: {oracle, negative} x {native, compact}."""
+"""The four **control arms**: {oracle, negative} x {native, compact}.
+
+Not the four suite *cells* — those are `terminal_ls`, `terminal_exact_text`,
+`desktop_open_chrome` and `focus_terminal_and_type`, and they live in `suite.json`
+behind `suite.load_suite()`. Every arm here runs all four of them. This mapping used
+to be called `CELLS`, which is how a reader came to report the gate's structure as
+four oracle/negative arms."""
 
 
 MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
@@ -227,4 +233,4 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
 Qwen3-VL-4B native = 4/4, Phase-B step-900 compact = 2/4."""
 
 
-ARMS: dict[str, DesktopHarnessConfig] = {**CELLS, **MODEL_ARMS}
+ARMS: dict[str, DesktopHarnessConfig] = {**CONTROL_ARMS, **MODEL_ARMS}

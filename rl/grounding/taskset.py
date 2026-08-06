@@ -26,7 +26,7 @@ from typing import Iterable
 import verifiers.v1 as vf
 
 from evals.indicators import MouseIndicators, SamplingProvenance
-from evals.tasks import RESULT_KEY, DesktopState, DesktopTask, DesktopTaskData
+from evals.tasks import RESULT_KEY, DesktopTask, DesktopTaskData
 from rl.grounding.dataset import REGIMES, cursor_start, load_targets
 
 __all__ = ["GroundingTask", "GroundingTaskset", "GroundingTasksetConfig"]
@@ -125,7 +125,3 @@ class GroundingTaskset(vf.Taskset[GroundingTask, GroundingTasksetConfig]):
                     self.config.task,
                 )
                 idx += 1
-
-
-def state_type() -> type[DesktopState]:
-    return DesktopState

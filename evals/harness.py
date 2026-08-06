@@ -37,10 +37,10 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Protocol
+from typing import Any, Iterator, Literal, Protocol
 
 import verifiers.v1 as vf
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from agent.agent import (
     Agent,
@@ -92,11 +92,21 @@ class HistoryConfig(vf.BaseConfig):
     name: str = "interleaved_frames"
     n_history_frames: int = Field(default=16, ge=1)
     persist_instruction: bool = True
+    """`InterleavedFrames` is the only policy that implements this."""
+
+    @model_validator(mode="after")
+    def _persist_instruction_is_implemented(self) -> "HistoryConfig":
+        if self.name != "interleaved_frames" and not self.persist_instruction:
+            raise ValueError(
+                f"persist_instruction=False is implemented by interleaved_frames only; "
+                f"policy {self.name!r} would ignore it"
+            )
+        return self
 
 
 class ImageBudgetConfig(vf.BaseConfig):
     max_images: int = Field(default=16, ge=1)
-    media: str = "jpeg"
+    media: Literal["jpeg", "png"] = "jpeg"
     quality: int = Field(default=85, ge=1, le=100)
     max_pixels: int = Field(default=0, ge=0)
 
@@ -167,6 +177,8 @@ class DesktopPoolConfig(vf.BaseConfig):
     `@vf.reward` can still probe live guest state."""
     pool_idle_ttl_s: float = Field(default=900.0, ge=0.0)
     acquire_timeout_s: float = Field(default=1800.0, gt=0.0)
+    reap_interval_s: float = Field(default=15.0, gt=0.0)
+    """How often the reaper looks for expired leases and an idle pool."""
     session_kwargs: dict[str, Any] = Field(default_factory=dict)
     """Passed verbatim to the session-pool constructor named by `pool_target`."""
     pool_target: str = "desktop_env.vm.pool:DesktopSessionPool"
@@ -300,9 +312,6 @@ def _geometry(session: Any) -> Any:
     description, and handing it a bare size would put the clamp back on the caller —
     which is where the coordinate bugs lived.
     """
-    getter = getattr(session, "geometry", None)
-    if callable(getter):
-        return getter()
     from desktop_env.geometry import DisplayGeometry  # type: ignore[import-not-found]
 
     # Field names are `desktop_width` / `desktop_height`, verbatim from Harbor.
@@ -312,8 +321,13 @@ def _geometry(session: Any) -> Any:
 
 def _screenshot(session: Any, settle: SettleConfig, kind: str) -> bytes:
     delay = settle.per_kind.get(kind, settle.min_delay_s)
-    settled = getattr(session, "screenshot_settled", None)
-    if callable(settled) and settle.stability_timeout_s > 0:
+    if settle.stability_timeout_s > 0:
+        settled = getattr(session, "screenshot_settled", None)
+        if not callable(settled):
+            raise LookupError(
+                "settle.stability_timeout_s asks for framebuffer stability polling, "
+                f"which {type(session).__name__} does not implement"
+            )
         return settled(
             min_delay_s=delay,
             stability_timeout_s=settle.stability_timeout_s,
@@ -394,6 +408,10 @@ def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _tri_state(value: bool | None) -> float | None:
+    return None if value is None else (1.0 if value else 0.0)
+
+
 _CODECS: dict[str, Any] = {}
 
 
@@ -434,12 +452,15 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
     @vf.metric
     async def harness_provenance(self, trace: vf.Trace) -> dict[str, float]:
         result = trace.info.get(RESULT_KEY) or {}
-        return {
+        metrics = {
             "scripted": 1.0 if self.config.scripted.enabled else 0.0,
             "negative_control": 1.0 if self.config.scripted.negative else 0.0,
-            "control_conformant": float(result.get("control_ok", 0.0)),
             "infra_valid": 1.0 if result.get("validity") == "valid" else 0.0,
         }
+        # Only a control arm has a value to conform to; see `_control_ok`.
+        if self.config.scripted.enabled:
+            metrics["control_conformant"] = float(result.get("control_ok") or 0.0)
+        return metrics
 
     # -- the episode ------------------------------------------------------ #
 
@@ -459,6 +480,20 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         if not isinstance(trace.state, DesktopState):
             raise TypeError("DesktopHarness requires DesktopState")
 
+        # Everything resolvable from config, resolved before a VM is booted. An
+        # unknown grammar, an unregistered task kind and a scripted arm on a family
+        # with no gold plan are all config errors, and discovering one at step 1 has
+        # already cost a boot and the cell's whole guest setup.
+        codec = _codec(self.config.codec)
+        preparer = preparer_for(task.kind)
+        if self.config.scripted.enabled and not callable(
+            getattr(preparer, "script_plan", None)
+        ):
+            raise LookupError(
+                f"task kind {task.kind!r} has no scripted arm; scripted.enabled "
+                "requires a preparer implementing script_plan() + render_step()"
+            )
+
         spec = PoolSpec(
             key=self.config.pool.key,
             max_node_slots=self.config.pool.max_node_slots,
@@ -466,6 +501,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             episode_ttl_s=self.config.pool.episode_ttl_s,
             scoring_grace_s=self.config.pool.scoring_grace_s,
             pool_idle_ttl_s=self.config.pool.pool_idle_ttl_s,
+            reap_interval_s=self.config.pool.reap_interval_s,
             acquire_timeout_s=self.config.pool.acquire_timeout_s,
         )
         pool = pool_for(spec, self.pool_factory())
@@ -477,7 +513,9 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             with _hidden_gpu(self.config.pool.hide_gpu_during_boot):
                 lease = await asyncio.to_thread(pool.acquire, trace.id)
             trace.info["desktop_session"] = getattr(lease.session, "session_id", None)
-            await self._run(ctx, trace, task, lease.session, endpoint, secret)
+            await self._run(
+                ctx, trace, task, lease.session, endpoint, secret, codec, preparer
+            )
             failed = False
             return vf.ProgramResult(0, "", "")
         except BaseException as exc:
@@ -508,12 +546,12 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         session: Any,
         endpoint: str,
         secret: str,
+        codec: Any,
+        preparer: Any,
     ) -> None:
         state = trace.state
         assert isinstance(state, DesktopState)
-        codec = _codec(self.config.codec)
         trace.info["prompt"] = self._prompt_report(codec)
-        preparer = preparer_for(task.kind)
         budget = _Budget(self.config.budget)
         max_steps = self.config.max_steps or task.max_steps
         artifacts = self._artifact_dir(task)
@@ -756,7 +794,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             "setup": setup,
             "budget": budget.snapshot(),
             "infra_error": infra_error,
-            "control_ok": 1.0 if self._control_ok(state) else 0.0,
+            "control_ok": _tri_state(self._control_ok(state)),
             "scripted": state.scripted,
             "negative_control": state.negative_control,
             "steps_detail": steps_detail,
@@ -879,13 +917,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         measures, and rendering per step is the way to keep it honest instead of
         hiding it.
         """
-        plan = getattr(preparer, "script_plan", None)
-        if not callable(plan):
-            raise LookupError(
-                f"task kind {task.kind!r} has no scripted arm; scripted.enabled "
-                "requires a preparer implementing script_plan() + render_step()"
-            )
-        return list(plan(task, negative=self.config.scripted.negative))
+        return list(preparer.script_plan(task, negative=self.config.scripted.negative))
 
     def _render_step(
         self, preparer: Any, session: Any, task: DesktopTaskData, codec: Any, intent: Any
@@ -906,11 +938,8 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         step for exactly this reason, and grounding stops at nothing (it wants the
         full K frames so trajectory length is comparable across regimes).
         """
-        if probe.get("postcondition_success") is True:
-            return True
-        if task.bbox is not None:
-            return False
-        return False
+        del task
+        return probe.get("postcondition_success") is True
 
     def _assert_unsolved(self, task: DesktopTaskData, probe: dict[str, Any]) -> None:
         if not self.config.require_unsolved_start:
@@ -964,15 +993,15 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             ),
         }
 
-    def _control_ok(self, state: DesktopState) -> bool:
-        """Calibration conformance for a control arm.
+    def _control_ok(self, state: DesktopState) -> bool | None:
+        """Calibration conformance for a control arm; `None` for a model arm.
 
         Oracle arm: must pass. Negative arm: must fail. A model arm has no expected
-        value, so it is trivially conformant — the point of the controls is that they
-        do.
+        value, so there is nothing here to conform to — it used to return True, and a
+        field that cannot fail reads as a green light while measuring nothing.
         """
         if not state.scripted:
-            return True
+            return None
         if state.infra_error is not None:
             return False
         return bool(state.success) is not state.negative_control
@@ -980,7 +1009,10 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
     async def _evaluate(self, session: Any) -> float | None:
         evaluate = getattr(session, "evaluate", None)
         if not callable(evaluate):
-            return None
+            raise LookupError(
+                "evaluate_on_finish asks for the OSWorld scorer, which "
+                f"{type(session).__name__} does not implement"
+            )
         try:
             score = float(await asyncio.to_thread(evaluate))
         except Exception as exc:  # noqa: BLE001 - recorded as missing, never as 0.0

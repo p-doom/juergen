@@ -71,6 +71,27 @@ def test_node_slots_records_the_holding_pid(tmp_path: Path) -> None:
         slot.release()
 
 
+def test_a_slot_that_cannot_be_stamped_gives_its_lock_back(tmp_path: Path, monkeypatch) -> None:
+    """The flock is taken before the pid is written. A raise in between used to leave
+    the lock held by a `_Slot` nobody has, burning one of the node's tickets until the
+    process exits."""
+    slots = NodeSlots(directory=tmp_path, max_slots=1)
+    real = Path.open
+
+    def exploding(self, *args, **kwargs):
+        handle = real(self, *args, **kwargs)
+        handle.truncate = lambda *a: (_ for _ in ()).throw(OSError("no space left"))
+        return handle
+
+    monkeypatch.setattr(Path, "open", exploding)
+    with pytest.raises(OSError, match="no space"):
+        slots.acquire()
+    monkeypatch.undo()
+    recovered = slots.acquire()
+    assert recovered.index == 0, "the ticket came back"
+    recovered.release()
+
+
 def test_node_slots_timeout_waits_then_raises(tmp_path: Path) -> None:
     slots = NodeSlots(directory=tmp_path, max_slots=1)
     held = slots.acquire()
@@ -357,6 +378,19 @@ def test_pool_for_is_process_global_and_keyed_by_spec(tmp_path: Path) -> None:
     assert pool_for(other, FakePool) is not first
     close_all_pools()
     assert pool_for(spec, FakePool) is not first, "close_all_pools must forget the pool"
+    close_all_pools()
+
+
+def test_pool_for_refuses_one_key_with_two_specs(tmp_path: Path) -> None:
+    """The cache key is `spec.key` alone. Handing back the pool that got there first
+    would run the episode under someone else's slot budget and TTLs, silently."""
+    spec = PoolSpec(key="collide", slot_dir=str(tmp_path), max_node_slots=2)
+    pool_for(spec, FakePool)
+    try:
+        with pytest.raises(ValueError, match="different spec"):
+            pool_for(PoolSpec(key="collide", slot_dir=str(tmp_path), max_node_slots=9), FakePool)
+    finally:
+        close_all_pools()
 
 
 # --------------------------------------------------------------------------- #

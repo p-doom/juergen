@@ -430,9 +430,15 @@ def test_sign_of_life_setup_is_hermetic_per_cell() -> None:
 
 
 def test_the_per_kind_settle_is_2s_for_chrome_and_0_75s_elsewhere() -> None:
-    for kind in SIGN_OF_LIFE_KINDS:
-        expected = 2.0 if kind == "open_chrome" else 0.75
-        assert PREPARERS[kind].settle_s() == expected
+    """One source of truth: the arms' `SettleConfig`, which is what the harness reads.
+
+    `SignOfLifePreparer.settle_s()` used to be a second, unread copy of this profile.
+    """
+    from evals.signoflife.cells import CONTROL_ARMS
+
+    for config in CONTROL_ARMS.values():
+        assert config.settle.per_kind == {"open_chrome": 2.0}
+        assert config.settle.min_delay_s == 0.75
 
 
 def test_an_unsupported_sign_of_life_kind_is_refused_at_construction() -> None:

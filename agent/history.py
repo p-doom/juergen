@@ -26,7 +26,7 @@ from __future__ import annotations
 import base64
 import io
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal, Protocol, Sequence, runtime_checkable
+from typing import Any, Literal, Protocol, Sequence, runtime_checkable
 
 import verifiers.v1 as vf
 
@@ -167,17 +167,6 @@ class History:
     def current(self) -> bytes:
         return self.turns[-1].image
 
-    def frame_labels(self, step: int) -> list[str]:
-        """`step_NNN.png` names for the frames in the window at the start of `step`.
-
-        At step S with L frames in the window the current frame is `step_{S-1}.png`,
-        so the ids are `[S-L .. S-1]`. Kept verbatim from
-        `osworld_runtime.window_frame_labels` so persisted prompt sidecars stay
-        comparable with the old runs.
-        """
-        base = step - len(self.turns)
-        return [f"step_{base + i:03d}.png" for i in range(len(self.turns))]
-
 
 # --------------------------------------------------------------------------- #
 # policies
@@ -212,8 +201,7 @@ def _interleave(
 
     `parts[i]` represents frame i and `outputs[i]` is the action that followed it,
     so `len(outputs) == len(parts) - 1`. Verbatim structure of
-    `osworld_runtime._interleave_messages`, which is why the loggable prompt
-    sidecar and the real payload can share one builder.
+    `osworld_runtime._interleave_messages`.
     """
     messages: vf.Messages = [vf.SystemMessage(content=system)]
     for index, part in enumerate(parts):
@@ -258,27 +246,6 @@ class InterleavedFrames:
             instruction=goal,
             parts=[budget.image_part(image) for image in images],
             outputs=outputs,
-        )
-
-    def loggable(
-        self, *, history: History, system: str, instruction: str | None, step: int
-    ) -> vf.Messages:
-        """The same message list with each image replaced by `<image step_NNN.png>`.
-
-        Structurally identical to what goes on the wire, so a small
-        `prompt_NNN.json` sidecar audits turn order, instruction placement and the
-        eviction window without duplicating base64 bytes.
-        """
-        labels = history.frame_labels(step)
-        goal = instruction if (step == 1 or self.persist_instruction) else None
-        return _interleave(
-            system=system,
-            instruction=goal,
-            # A text part, because `ContentPart` is `text | image_url` only
-            # (`types.py:28-30`): a `{"type": "image"}` part failed validation, so this
-            # method raised for every window it was asked to render.
-            parts=[{"type": "text", "text": f"<image {label}>"} for label in labels],
-            outputs=history.outputs,
         )
 
 
@@ -460,25 +427,3 @@ def history_policy(name: str, **kwargs: Any) -> HistoryPolicy:
             f"unknown history policy {name!r}; known: {sorted(POLICIES)}"
         ) from exc
     return factory(**kwargs)
-
-
-def render_all(
-    policies: Iterable[HistoryPolicy],
-    *,
-    history: History,
-    system: str,
-    instruction: str | None,
-    step: int,
-    budget: ImageBudget,
-) -> dict[str, vf.Messages]:
-    """Render one window under several policies — the prompt-shape A/B, offline."""
-    return {
-        policy.name: policy.render(
-            history=history,
-            system=system,
-            instruction=instruction,
-            step=step,
-            budget=budget,
-        )
-        for policy in policies
-    }

@@ -388,12 +388,14 @@ def test_an_exhausted_script_does_not_erase_the_sampling_provenance(tmp_path, pr
     assert result["sampling"]["temperature_source"] == "scripted"
 
 
-def test_a_kind_with_no_scripted_arm_fails_loudly(tmp_path) -> None:
+def test_a_kind_with_no_scripted_arm_fails_before_a_vm_is_booted(tmp_path) -> None:
+    """A config error, so it is refused at `launch` and not after a boot + guest setup."""
+
     class NoScript:
         kind = "no_script_kind"
 
         def prepare(self, session, task):
-            return {}
+            raise AssertionError("prepare must not run: the arm is unrunnable")
 
         def probe(self, session, task):
             return {"postcondition_status": "ok", "postcondition_success": False}
@@ -401,11 +403,18 @@ def test_a_kind_with_no_scripted_arm_fails_loudly(tmp_path) -> None:
     register_preparer(NoScript())
     try:
         config = _config(tmp_path, scripted=ScriptedConfig(enabled=True))
-        _, result, _ = _run(config, make_task_data(kind="no_script_kind", max_steps=2))
-        assert result["validity"] == "infra_invalid"
-        assert "no scripted arm" in result["infra_error"]["message"]
+        with pytest.raises(LookupError, match="no scripted arm"):
+            _run(config, make_task_data(kind="no_script_kind", max_steps=2))
     finally:
         PREPARERS.pop("no_script_kind", None)
+
+
+def test_an_unknown_codec_is_refused_before_a_vm_is_booted(tmp_path, preparer) -> None:
+    """`codec` is config, so resolving it must not wait for a checked-out desktop."""
+    config = _config(tmp_path, codec="no_such_grammar")
+    with pytest.raises(LookupError, match="no_such_grammar"):
+        _run(config, _task(max_steps=1))
+    assert preparer.prepared == 0, "no VM work before the config resolves"
 
 
 def test_the_harness_provenance_metric_reports_the_calibration(tmp_path, preparer) -> None:
@@ -459,12 +468,11 @@ def test_a_stability_capable_session_is_polled_instead_of_slept(monkeypatch) -> 
     assert calls == {"min_delay_s": 2.0, "stability_timeout_s": 5.0}
 
 
-def test_stability_is_ignored_when_the_session_cannot_settle(monkeypatch) -> None:
-    slept: list[float] = []
-    monkeypatch.setattr("time.sleep", lambda s: slept.append(s))
+def test_stability_asked_for_but_unimplemented_is_refused_not_ignored() -> None:
+    """A silently-downgraded settle is a silently different measurement."""
     settle = SettleConfig(min_delay_s=0.5, stability_timeout_s=5.0, per_kind={})
-    _screenshot(FakeSession(), settle, "any")
-    assert slept == [0.5], "probed with getattr, never assumed"
+    with pytest.raises(LookupError, match="stability"):
+        _screenshot(FakeSession(), settle, "any")
 
 
 # =========================================================================== #
@@ -825,13 +833,21 @@ def test_a_failing_evaluate_is_recorded_as_missing_never_as_zero(tmp_path, prepa
     assert result["task_reward"] is None, "0.0 would be trained as a task failure"
 
 
-def test_a_session_without_evaluate_reports_none(tmp_path, preparer) -> None:
+def test_a_session_without_evaluate_refuses_the_flag_it_cannot_honour(
+    tmp_path, preparer
+) -> None:
+    """`evaluate_on_finish` used to be silently ignored here and the missing score
+    resurfaced as `OSWorldEvaluateOracle` complaining about a non-numeric reward, one
+    layer away from the config that caused it."""
+
     class NoEval(FakeSession):
         evaluate = None
 
     config = _config(tmp_path, evaluate_on_finish=True)
     _, result, _ = _run(config, _task(max_steps=1), replies=["0 0 0 ;"], session=NoEval())
-    assert result["task_reward"] is None
+    assert result["validity"] == "infra_invalid"
+    assert "evaluate_on_finish" in result["infra_error"]["message"]
+    assert result["task_reward"] is None, "0.0 would be trained as a task failure"
 
 
 # =========================================================================== #
@@ -1002,3 +1018,22 @@ def test_the_image_budget_config_validates_quality_and_pixels() -> None:
     for kwargs in ({"quality": 0}, {"quality": 101}, {"max_images": 0}, {"max_pixels": -1}):
         with pytest.raises(ValidationError):
             ImageBudgetConfig(**kwargs)
+
+
+def test_the_image_budget_config_refuses_a_media_it_cannot_encode() -> None:
+    """`media` used to be a bare `str` coerced to jpeg by anything but the word png,
+    so `media="webp"` silently produced JPEG."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        ImageBudgetConfig(media="webp")
+
+
+def test_persist_instruction_is_refused_by_a_policy_that_would_ignore_it() -> None:
+    """Only `InterleavedFrames` implements it; the other three took the field and
+    dropped it."""
+    from pydantic import ValidationError
+
+    assert HistoryConfig(name="prose_summarised_window").persist_instruction is True
+    with pytest.raises(ValidationError, match="interleaved_frames only"):
+        HistoryConfig(name="prose_summarised_window", persist_instruction=False)

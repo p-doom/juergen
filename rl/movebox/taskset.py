@@ -20,7 +20,7 @@ from typing import Any, Iterable
 import verifiers.v1 as vf
 
 from evals.indicators import MouseIndicators, SamplingProvenance
-from evals.tasks import RESULT_KEY, DesktopState, DesktopTask, DesktopTaskData
+from evals.tasks import RESULT_KEY, DesktopTask, DesktopTaskData
 from rl.movebox.dataset import (
     DEFAULT_BACKGROUNDS_DIR,
     SCREEN_H,
@@ -144,7 +144,3 @@ _INSTRUCTION = (
     "Move the mouse cursor INTO the green highlighted box. The cursor is at the red "
     "crosshair marker. When the cursor is inside the box, you are done."
 )
-
-
-def state_type() -> type[DesktopState]:
-    return DesktopState

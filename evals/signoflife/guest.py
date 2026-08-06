@@ -504,9 +504,6 @@ class SignOfLifePreparer:
     ) -> str:
         return render_step(session, task, codec=codec, intent=intent)
 
-    def settle_s(self) -> float:
-        return 2.0 if self.kind == "open_chrome" else 0.75
-
 
 def register_preparers() -> None:
     for kind in sorted(ALLOWED_KINDS):

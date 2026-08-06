@@ -41,7 +41,7 @@ import evals.indicators as indicators
 import evals.signoflife.guest as guest
 from evals.signoflife.cells import (
     ARMS,
-    CELLS,
+    CONTROL_ARMS,
     COMPACT_CODEC,
     MODEL_ARMS,
     NATIVE_CODEC,
@@ -295,37 +295,37 @@ def test_14m_the_cell_id_and_kind_coincidence_that_hid_the_coupling() -> None:
 
 
 def test_the_gate_is_four_controls_plus_two_model_arms() -> None:
-    assert set(CELLS) == {
+    assert set(CONTROL_ARMS) == {
         "native_oracle",
         "native_negative",
         "compact_oracle",
         "compact_negative",
     }
     assert set(MODEL_ARMS) == {"offshelf_native", "phaseb_compact"}
-    assert set(ARMS) == set(CELLS) | set(MODEL_ARMS)
+    assert set(ARMS) == set(CONTROL_ARMS) | set(MODEL_ARMS)
     assert len(ARMS) == 6
 
 
 def test_both_controls_exist_per_grammar() -> None:
     """A control that certified only one grammar leaves the other's parse path unmeasured."""
     by_codec: dict[str, set[bool]] = {}
-    for config in CELLS.values():
+    for config in CONTROL_ARMS.values():
         by_codec.setdefault(config.codec, set()).add(config.scripted.negative)
     assert by_codec == {NATIVE_CODEC: {False, True}, COMPACT_CODEC: {False, True}}
 
 
 def test_control_arms_are_scripted_and_model_arms_are_not() -> None:
-    assert all(c.scripted.enabled for c in CELLS.values())
+    assert all(c.scripted.enabled for c in CONTROL_ARMS.values())
     assert not any(c.scripted.enabled for c in MODEL_ARMS.values())
 
 
-@pytest.mark.parametrize("name", sorted(CELLS))
+@pytest.mark.parametrize("name", sorted(CONTROL_ARMS))
 def test_control_ok_encodes_oracle_4_of_4_and_negative_0_of_4(name: str) -> None:
     """`_control_ok` is the calibration assertion; this pins its truth table."""
     from evals.harness import DesktopHarness
     from evals.tasks import DesktopState
 
-    config = CELLS[name]
+    config = CONTROL_ARMS[name]
     harness = DesktopHarness(config)
     negative = config.scripted.negative
     for success in (True, False):
@@ -345,13 +345,18 @@ def test_control_ok_encodes_oracle_4_of_4_and_negative_0_of_4(name: str) -> None
     )
 
 
-def test_a_model_arm_is_trivially_conformant() -> None:
+def test_a_model_arm_has_no_conformance_verdict_at_all() -> None:
+    """Not `True`: a model arm has no expected value, so any verdict computed from its
+    own rows restates the measurement. `None`, and the field disappears from the
+    provenance metric."""
     from evals.harness import DesktopHarness
     from evals.tasks import DesktopState
 
     harness = DesktopHarness(MODEL_ARMS["phaseb_compact"])
     for success in (True, False, None):
-        assert harness._control_ok(DesktopState(scripted=False, success=success))
+        assert harness._control_ok(DesktopState(scripted=False, success=success)) is None
+    trace = make_trace(episode={"control_ok": None, "validity": "valid"})
+    assert "control_conformant" not in asyncio.run(harness.harness_provenance(trace))
 
 
 def test_negative_plans_are_plausible_wrong_actions_not_no_ops() -> None:

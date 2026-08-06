@@ -66,7 +66,7 @@ import verifiers.v1 as vf  # noqa: E402
 from verifiers.v1.cli.eval.runner import run_eval  # noqa: E402
 from verifiers.v1.configs.eval import EvalConfig  # noqa: E402
 
-from evals.signoflife.cells import ARMS  # noqa: E402
+from evals.signoflife.cells import ARMS, verify_phaseb_provenance  # noqa: E402
 from evals.signoflife.suite import load_suite  # noqa: E402
 from evals.tasks import RESULT_KEY  # noqa: E402
 from signoflife import PLUGIN_ID  # noqa: E402
@@ -140,12 +140,16 @@ def _sglang(
     ]
     _LOGGER.info("sglang: %s", " ".join(command))
     handle = log_path.open("w", encoding="utf-8")
-    process = subprocess.Popen(
-        command,
-        env={**os.environ, "SGLANG_DISABLE_CUDNN_CHECK": "1"},
-        stdout=handle,
-        stderr=subprocess.STDOUT,
-    )
+    try:
+        process = subprocess.Popen(
+            command,
+            env={**os.environ, "SGLANG_DISABLE_CUDNN_CHECK": "1"},
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+        )
+    except BaseException:
+        handle.close()
+        raise
     try:
         deadline = time.monotonic() + ready_timeout_s
         probe = f"http://127.0.0.1:{port}/health_generate"
@@ -163,7 +167,8 @@ def _sglang(
                     if response.status < 500:
                         break
             except Exception:  # noqa: BLE001 - not up yet is the normal case
-                time.sleep(2.0)
+                pass
+            time.sleep(2.0)
         else:
             raise TimeoutError(f"sglang not ready after {ready_timeout_s}s")
         url = f"http://127.0.0.1:{port}/v1"
@@ -361,14 +366,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="python -m evals.signoflife")
     parser.add_argument("--arm", required=True, choices=sorted(ARMS))
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument(
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument(
         "--task-index",
         type=int,
         action="append",
         default=None,
         help="zero-based suite cell; repeatable. Omitted = all four (the gate).",
     )
-    parser.add_argument("--cell", action="append", default=None, help="cell id; repeatable")
+    selection.add_argument("--cell", action="append", default=None, help="cell id; repeatable")
     parser.add_argument(
         "--trials",
         type=int,
@@ -384,6 +390,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--vm-mem", default=None)
     parser.add_argument("--vm-slots", type=int, default=1)
     parser.add_argument("--vm-rollouts-per-session", type=int, default=1)
+    parser.add_argument(
+        "--scoring-grace-s",
+        type=float,
+        default=120.0,
+        help="how long the desktop stays leased after the episode so a "
+        "runtime-declaring reward can probe live guest state. Pure wall clock per "
+        "cell, and until now it was pinned in code with no way to name it.",
+    )
     parser.add_argument("--model-path", type=Path, default=None)
     parser.add_argument("--base-url", default=None, help="serve externally instead")
     parser.add_argument("--sglang-python", default=None)
@@ -427,12 +441,15 @@ def main(argv: list[str] | None = None) -> int:
             args.trials,
         )
     if scripted and (args.model_path or args.base_url):
-        _LOGGER.warning("arm %s is scripted; the model endpoint is unused", args.arm)
+        raise SystemExit(
+            f"arm {args.arm} is scripted and never calls a model; --model-path / "
+            "--base-url would be recorded in the run and ignored"
+        )
     if not scripted and args.model_path is None and args.base_url is None:
         raise SystemExit(f"arm {args.arm} is a model arm: pass --model-path or --base-url")
     if args.verify_phaseb:
-        from evals.signoflife.cells import verify_phaseb_provenance
-
+        if args.model_path is None:
+            raise SystemExit("--verify-phaseb checks a checkpoint: pass --model-path")
         verify_phaseb_provenance(args.model_path)
 
     output: Path = args.output
@@ -464,6 +481,7 @@ def main(argv: list[str] | None = None) -> int:
         "key": f"signoflife-{args.arm}",
         "max_node_slots": args.vm_slots,
         "slot_dir": str(output / "vm_slots"),
+        "scoring_grace_s": args.scoring_grace_s,
         "pool_target": "evals.vm:kvm_desktop_pool",
         "session_kwargs": session_kwargs,
     }

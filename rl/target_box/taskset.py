@@ -20,7 +20,7 @@ from typing import Iterable
 import verifiers.v1 as vf
 
 from evals.indicators import MouseIndicators, SamplingProvenance
-from evals.tasks import RESULT_KEY, DesktopState, DesktopTask, DesktopTaskData
+from evals.tasks import RESULT_KEY, DesktopTask, DesktopTaskData
 from rl.target_box.geometry import TARGET_BOX_INSTRUCTION
 
 __all__ = ["TargetBoxTask", "TargetBoxTaskset", "TargetBoxTasksetConfig"]
@@ -131,7 +131,3 @@ class TargetBoxTaskset(vf.Taskset[TargetBoxTask, TargetBoxTasksetConfig]):
             root = Path(self.config.base_path)
             return [root / f"{name}.json" if not name.endswith(".json") else root / name for name in names]
         return sorted(Path(self.config.base_path).rglob("*.json"))
-
-
-def state_type() -> type[DesktopState]:
-    return DesktopState

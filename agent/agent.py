@@ -364,41 +364,54 @@ _CONTROL_FLAGS = ("terminate", "fail", "no_op")
 def _control_of(action: Any) -> str | None:
     """Read a grammar's control outcome without knowing its action type.
 
-    The two shapes in the tree are the bare-token families (`deltatype_v2`,
-    `compact_raw`: `no_op` / `terminate` / `fail` flags) and the tool-call families
-    (`native_absolute`, `move_rel`: a `terminate` property plus a `status` string,
-    with no `no_op` or `fail`). A tool-call `terminate(status="failure")` is the same
+    Four *different* concepts on four names, not four spellings of one — measured
+    across the seven in-tree grammars:
+
+        terminate  deltatype_v2, diffabs, ordered_events_v3, native_absolute, move_rel
+        status     native_absolute, move_rel  (tool-call families only)
+        fail       deltatype_v2
+        no_op      deltatype_v2, diffabs, ordered_events_v3
+        (none)     compact_raw, native_absolute_control
+
+    `compact_raw` and `native_absolute_control` declare no control tokens at all, so
+    every lookup misses and their idling (`0 0 0`) surfaces as the empty-operations
+    `no_op` the caller derives. A tool-call `terminate(status="failure")` is the same
     outcome as a bare-token `FAIL`, so it is normalised to `fail` — otherwise the
     premature-terminate indicator would count a self-declared failure as a claimed
     success.
+
+    Reads attributes only. `codec.parse` returns an action object in every grammar;
+    the dict fork that used to sit here fired for nothing but its own tests.
     """
     if action is None:
         return None
-    getter = action.get if isinstance(action, dict) else (lambda k, d=False: getattr(action, k, d))
-    if getter("terminate", False):
-        status = str(getter("status", "") or "").strip().lower()
+    if getattr(action, "terminate", False):
+        status = str(getattr(action, "status", "") or "").strip().lower()
         return "fail" if status == "failure" else "terminate"
     for flag in ("fail", "no_op"):
-        if getter(flag, False):
+        if getattr(action, flag, False):
             return flag
     return None
 
 
 def _action_record(action: Any) -> Any:
-    if action is None or isinstance(action, (dict, list, str, int, float, bool)):
-        return action
-    for attr in ("to_dict", "as_dict", "model_dump", "_asdict"):
-        method = getattr(action, attr, None)
-        if callable(method):
-            try:
-                return method()
-            except TypeError:
-                pass
-    if hasattr(action, "__dataclass_fields__"):
-        from dataclasses import asdict
+    """`parsed_action`, straight from the grammar's own serialiser.
 
-        return asdict(action)
-    return repr(action)
+    One name, called directly. It used to probe `to_dict` / `as_dict` / `model_dump` /
+    `_asdict` and then fall back to `dataclasses.asdict` and `repr`: all seven in-tree
+    action types define `to_dict` and none define any of the others, so five of the six
+    arms were unreachable — and because the reachable one was reached by string, every
+    `to_dict` in `grammars/` read as 0% covered while writing every trajectory row.
+    """
+    if action is None:
+        return None
+    to_dict = getattr(action, "to_dict", None)
+    if not callable(to_dict):
+        raise TypeError(
+            f"{type(action).__name__} has no to_dict(); a grammar's action type must "
+            "serialise itself — `parsed_action` is a published trajectory field"
+        )
+    return to_dict()
 
 
 def _operation_record(operation: Any) -> Any:

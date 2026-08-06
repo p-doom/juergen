@@ -18,8 +18,10 @@ instance, and per-rollout state must not either.
 
 The fix is at our boundary and has three parts:
 
-  * **Process-global pools** keyed by config fingerprint, created lazily on first
+  * **Process-global pools** keyed by `PoolSpec.key`, created lazily on first
     `acquire` and torn down by `atexit`/SIGTERM. Not per-Harness, not per-rollout.
+    Two callers that reuse one key with different specs is a configuration error and
+    is refused, not silently resolved to whichever spec arrived first.
   * **A node-wide slot lease** (`NodeSlots`): one `flock`ed file per admissible
     VM under a shared directory, so the *sum* over spawn-workers can never exceed
     the node budget however many workers the broker decides to start. This is the
@@ -42,7 +44,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -110,11 +112,19 @@ class NodeSlots:
                 except OSError:
                     handle.close()
                     continue
-                handle.seek(0)
-                handle.truncate()
-                handle.write(f"pid={os.getpid()} acquired={time.time():.3f}\n")
-                handle.flush()
-                return _Slot(index=index, path=path, handle=handle)
+                slot = _Slot(index=index, path=path, handle=handle)
+                # The lock is already held here, so anything that can raise has to
+                # give it back: an unreleased flock with no `_Slot` to release it
+                # burns one of the node's admission tickets until the process exits.
+                try:
+                    handle.seek(0)
+                    handle.truncate()
+                    handle.write(f"pid={os.getpid()} acquired={time.time():.3f}\n")
+                    handle.flush()
+                except BaseException:
+                    slot.release()
+                    raise
+                return slot
             if time.monotonic() >= deadline:
                 raise SlotExhausted(
                     f"all {self.max_slots} VM slots under {self.directory} are held"
@@ -270,10 +280,12 @@ class LeasedDesktopPool:
             if self._closed:
                 raise RuntimeError(f"desktop pool {self.spec.key!r} is closed")
             if self._pool is None:
-                self._pool = self._factory()
-                start = getattr(self._pool, "start", None)
-                if callable(start):
-                    start()
+                # Assigned only once `start()` has returned: caching a pool whose
+                # start raised would make every later `acquire` check out of a pool
+                # that was never brought up, and report no error while doing it.
+                pool = self._factory()
+                pool.start()
+                self._pool = pool
                 _LOGGER.info("desktop pool %s: started", self.spec.key)
             return self._pool
 
@@ -380,8 +392,15 @@ def pool_for(spec: PoolSpec, factory: Callable[[], Any]) -> LeasedDesktopPool:
     with _POOLS_LOCK:
         pool = _POOLS.get(spec.key)
         if pool is None:
+            _install_teardown()
             pool = LeasedDesktopPool(spec, factory)
             _POOLS[spec.key] = pool
+        elif pool.spec != spec:
+            raise ValueError(
+                f"desktop pool {spec.key!r} already exists with a different spec; "
+                f"live={pool.spec!r} requested={spec!r}. Returning the live one would "
+                "silently run the episode under someone else's slot budget and TTLs."
+            )
         return pool
 
 
@@ -393,7 +412,21 @@ def close_all_pools() -> None:
         pool.close()
 
 
+_TEARDOWN_INSTALLED = False
+
+
 def _install_teardown() -> None:
+    """Register the process-wide teardown, once, when the first pool is created.
+
+    Not at import: `import agent.desktop` would then replace the process's SIGINT and
+    SIGTERM handlers as a side effect of importing a library, in a process that may
+    own no VM at all. There is nothing to tear down until a pool exists, so that is
+    when the handlers go in.
+    """
+    global _TEARDOWN_INSTALLED
+    if _TEARDOWN_INSTALLED:
+        return
+    _TEARDOWN_INSTALLED = True
     atexit.register(close_all_pools)
 
     def _on_signal(signum: int, frame: Any) -> None:
@@ -412,9 +445,6 @@ def _install_teardown() -> None:
             signal.signal(signum, _on_signal)
         except (ValueError, OSError):  # not the main thread / unsupported
             pass
-
-
-_install_teardown()
 
 
 DEFAULT_POOL_TARGET = "desktop_env.vm.pool:DesktopSessionPool"
@@ -447,15 +477,3 @@ def default_pool_factory(
         return constructor(**session_kwargs)
 
     return factory
-
-
-def leased(
-    spec: PoolSpec, factory: Callable[[], Any], trace_id: str
-) -> Iterator[DesktopLease]:
-    """Rarely useful directly; the harness drives `acquire`/`finish` explicitly so
-    the grace window survives the end of the episode."""
-    lease = pool_for(spec, factory).acquire(trace_id)
-    try:
-        yield lease
-    finally:
-        lease.finish(failed=False, error=None, grace_s=spec.scoring_grace_s)

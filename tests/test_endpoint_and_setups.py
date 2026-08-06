@@ -589,8 +589,8 @@ def test_the_web_fixture_preparer_serves_launches_and_reads_back(monkeypatch) ->
     import evals.fixtures.preparers as preparers
     from evals.fixtures.chrome import ChromeLaunch
 
-    saved_server, saved_map = preparers._SERVER, dict(preparers._SERVER_FIXTURES)
-    preparers._SERVER, preparers._SERVER_FIXTURES = None, {}
+    saved_server = preparers._SERVER
+    preparers._SERVER = None
     try:
         launched: list = []
 
@@ -636,15 +636,15 @@ def test_the_web_fixture_preparer_serves_launches_and_reads_back(monkeypatch) ->
     finally:
         if preparers._SERVER is not None:
             preparers._SERVER.close()
-        preparers._SERVER, preparers._SERVER_FIXTURES = saved_server, saved_map
+        preparers._SERVER = saved_server
 
 
 def test_a_cdp_failure_does_not_lose_the_primary_http_state(monkeypatch) -> None:
     """The HTTP state is the primary read; CDP is the second, independent one."""
     import evals.fixtures.preparers as preparers
 
-    saved_server, saved_map = preparers._SERVER, dict(preparers._SERVER_FIXTURES)
-    preparers._SERVER, preparers._SERVER_FIXTURES = None, {}
+    saved_server = preparers._SERVER
+    preparers._SERVER = None
     try:
         monkeypatch.setattr(
             preparers,
@@ -669,7 +669,7 @@ def test_a_cdp_failure_does_not_lose_the_primary_http_state(monkeypatch) -> None
     finally:
         if preparers._SERVER is not None:
             preparers._SERVER.close()
-        preparers._SERVER, preparers._SERVER_FIXTURES = saved_server, saved_map
+        preparers._SERVER = saved_server
 
 
 def test_the_app_fixture_preparer_sets_up_and_probes() -> None:

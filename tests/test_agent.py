@@ -25,6 +25,7 @@ from agent.agent import (
     EffectiveSampling,
     EndpointTransport,
     ModelCallError,
+    _action_record,
     _control_of,
     _first_prose,
     build_transport,
@@ -39,6 +40,24 @@ from juergen_doubles import FakeClient, make_ctx, png
 BARE_TOKEN_GRAMMARS = ("deltatype_v2",)
 TOOL_CALL_GRAMMARS = ("native_absolute", "move_rel")
 ALL_FOUR = ("deltatype_v2", "compact_raw", "native_absolute", "move_rel")
+
+_BARE_LINE = "0 0 0 ; +LMB -LMB"
+_CLICK_CALL = (
+    "<tool_call>\n"
+    + json.dumps({"name": "computer_use", "arguments": {"action": "left_click", "coordinate": [1, 1]}})
+    + "\n</tool_call>"
+)
+_SMOKE_TEXT = {
+    "compact_raw": _BARE_LINE,
+    "deltatype_v2": _BARE_LINE,
+    "diffabs": _BARE_LINE,
+    "native_absolute_control": _BARE_LINE,
+    "ordered_events_v3": "NO_OP",
+    "native_absolute": _CLICK_CALL,
+    "move_rel": _CLICK_CALL.replace("left_click", "move_rel"),
+}
+"""One parseable sample per in-tree grammar, so a new grammar has to declare itself
+here rather than quietly skip the `to_dict` contract check below."""
 
 
 def _geometry(width: int = 1920, height: int = 1080):
@@ -93,27 +112,33 @@ def test_a_tool_call_terminate_with_no_status_is_a_success_termination(codec_nam
 
 
 @pytest.mark.parametrize("status", ["FAILURE", " failure ", "Failure"])
-def test_the_failure_status_match_is_case_and_whitespace_insensitive(status: str) -> None:
-    assert _control_of({"terminate": True, "status": status}) == "fail"
+@pytest.mark.parametrize("codec_name", TOOL_CALL_GRAMMARS)
+def test_the_failure_status_match_is_case_and_whitespace_insensitive(
+    codec_name: str, status: str
+) -> None:
+    action = load_codec(codec_name).parse(
+        _tool_call({"action": "terminate", "status": status})
+    )
+    assert _control_of(action) == "fail"
 
 
-def test_an_unknown_status_is_not_silently_a_failure() -> None:
-    assert _control_of({"terminate": True, "status": "partial"}) == "terminate"
+@pytest.mark.parametrize("codec_name", TOOL_CALL_GRAMMARS)
+def test_an_unknown_status_is_not_silently_a_failure(codec_name: str) -> None:
+    action = load_codec(codec_name).parse(
+        _tool_call({"action": "terminate", "status": "partial"})
+    )
+    assert _control_of(action) == "terminate"
 
 
-def test_control_of_reads_a_dict_action_as_well_as_an_object() -> None:
-    assert _control_of({"no_op": True}) == "no_op"
-    assert _control_of({"fail": True}) == "fail"
-    assert _control_of({}) is None
+def test_control_of_reads_attributes_and_never_a_dict() -> None:
+    """`codec.parse` returns an action object in all seven grammars, so the dict fork
+    `_control_of` used to carry fired for nothing but its own tests."""
+    assert _control_of({"no_op": True}) is None
+    assert _control_of({"terminate": True, "status": "failure"}) is None
 
 
 def test_compact_raw_and_native_absolute_control_declare_no_control_tokens() -> None:
-    """The paired arms are deliberately control-token free, so `_control_of` is None.
-
-    The `_control_of` docstring claims `compact_raw` carries `no_op`/`terminate`/`fail`
-    flags; it does not (`cells.py` calls it "its control-token-free sibling"). Recorded
-    as a docstring defect — the behaviour is right, the comment is not.
-    """
+    """The paired arms are deliberately control-token free, so `_control_of` is None."""
     for name in ("compact_raw", "native_absolute_control"):
         action = load_codec(name).parse("0 0 0 ;")
         assert _control_of(action) is None
@@ -206,6 +231,42 @@ def test_prose_is_everything_before_the_final_line() -> None:
     assert _first_prose("thinking here\nmore\n0 0 0 ;") == "thinking here more"
     assert _first_prose("0 0 0 ;") == ""
     assert _first_prose("") == ""
+
+
+def test_parsed_action_comes_from_the_grammars_own_to_dict() -> None:
+    """`_action_record` calls `to_dict` by name, so a grammar that dropped it would
+    read as covered while writing nothing. Assert the coupling instead of probing it."""
+    import grammars
+
+    for name in sorted(grammars.available()):
+        action_type = type(load_codec(name).parse(_SMOKE_TEXT[name]))
+        assert callable(getattr(action_type, "to_dict", None)), name
+    action = load_codec("deltatype_v2").parse("0 0 0 ; +LMB -LMB")
+    assert _action_record(action) == action.to_dict()
+    assert _action_record(None) is None
+    with pytest.raises(TypeError, match="to_dict"):
+        _action_record(object())
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"name": "computer_use", "arguments": {"action": "terminate", "status": "failure"}}',
+        '```json\n{"name": "computer_use", "arguments": '
+        '{"action": "terminate", "status": "failure"}}\n```',
+        '[{"name": "computer_use", "arguments": '
+        '{"action": "terminate", "status": "failure"}}]',
+    ],
+    ids=["bare_json", "fenced", "array"],
+)
+@pytest.mark.parametrize("codec_name", TOOL_CALL_GRAMMARS)
+def test_untagged_tool_call_shapes_reach_the_same_control_outcome(
+    codec_name: str, text: str
+) -> None:
+    """`_support.iter_tool_calls` accepts bare JSON, a ``` fence and a JSON array
+    because "that is how the RL rollout path sees vLLM-parsed output" — three live
+    reader paths that had no vectors of their own."""
+    assert _control_of(load_codec(codec_name).parse(text)) == "fail"
 
 
 def test_as_record_is_json_serialisable_for_every_grammar() -> None:

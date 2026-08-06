@@ -299,8 +299,8 @@ def test_the_preparer_registers_into_a_shared_process_global_server() -> None:
     import evals.fixtures.preparers as preparers
 
     first, second = _fixture("click"), _fixture("drag")
-    saved_server, saved_map = preparers._SERVER, dict(preparers._SERVER_FIXTURES)
-    preparers._SERVER, preparers._SERVER_FIXTURES = None, {}
+    saved_server = preparers._SERVER
+    preparers._SERVER = None
     try:
         server = preparers.web_fixture_server(first)
         assert preparers.web_fixture_server(second) is server, "one server per process"
@@ -312,7 +312,7 @@ def test_the_preparer_registers_into_a_shared_process_global_server() -> None:
     finally:
         if preparers._SERVER is not None:
             preparers._SERVER.close()
-        preparers._SERVER, preparers._SERVER_FIXTURES = saved_server, saved_map
+        preparers._SERVER = saved_server
 
 
 def test_an_oversized_post_is_refused() -> None:

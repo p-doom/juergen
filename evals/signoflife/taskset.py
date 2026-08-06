@@ -22,7 +22,7 @@ from evals.oracles import OracleOutcome, StateOracle
 import evals.signoflife.guest  # noqa: F401  import registers the four preparers
 from evals.signoflife.oracle import evaluate_postcondition
 from evals.signoflife.suite import NO_SUBMIT_CELLS, load_suite
-from evals.tasks import DesktopState, DesktopTask, DesktopTaskData
+from evals.tasks import DesktopTask, DesktopTaskData
 
 __all__ = ["SignOfLifeTask", "SignOfLifeTaskset", "SignOfLifeTasksetConfig"]
 
@@ -86,8 +86,3 @@ class SignOfLifeTaskset(vf.Taskset[SignOfLifeTask, SignOfLifeTasksetConfig]):
                 ),
                 self.config.task,
             )
-
-
-def state_type() -> type[DesktopState]:
-    """`Task[..., StateT, ...]` resolution needs the state class to be reachable."""
-    return DesktopState

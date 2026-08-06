@@ -1,6 +1,6 @@
 """Item 3 — `HistoryPolicy` / `History`.
 
-Four faithful ports, but **block eviction and `render_all` are new**, so the
+Four faithful ports, but **block eviction is new**, so the
 boundaries are what matters here: the window invariant
 (`turns[-1].output is None`), the block-eviction arithmetic, and that every policy
 respects `ImageBudget.max_images` however long the window has grown.
@@ -24,7 +24,6 @@ from agent.history import (
     StatelessSingleTurn,
     history_policy,
     prose_summary,
-    render_all,
 )
 from juergen_doubles import png
 
@@ -120,17 +119,6 @@ def test_eviction_never_empties_the_window(n: int) -> None:
     assert len(history.all_outputs) == 40
 
 
-def test_frame_labels_name_the_window_at_the_start_of_a_step() -> None:
-    history = History(n_history_frames=16)
-    _drive(history, 3)  # frames 0..3 in the window, next step is 4
-    assert history.frame_labels(4) == [
-        "step_000.png",
-        "step_001.png",
-        "step_002.png",
-        "step_003.png",
-    ]
-
-
 # --------------------------------------------------------------------------- #
 # InterleavedFrames
 # --------------------------------------------------------------------------- #
@@ -190,37 +178,6 @@ def test_persist_instruction_re_anchors_the_goal_every_step() -> None:
         InterleavedFrames(persist_instruction=False).render(
             history=fresh, system="S", instruction="GOAL", step=1, budget=ImageBudget()
         )[1]
-    )
-
-
-def test_interleaved_loggable_mirrors_the_wire_structure() -> None:
-    history = History(n_history_frames=16)
-    _drive(history, 2)
-    policy = InterleavedFrames()
-    wire = policy.render(
-        history=history, system="S", instruction="G", step=3, budget=ImageBudget(max_images=16)
-    )
-    logged = policy.loggable(history=history, system="S", instruction="G", step=3)
-    assert [m.role for m in logged] == [m.role for m in wire]
-    assert "<image step_002.png>" in _text_of(logged[-1])
-
-
-def test_interleaved_loggable_ignores_the_image_budget() -> None:
-    """A recorded defect, not a fixed one: `loggable` claims to be structurally
-    identical to the wire payload, but it renders the whole window regardless of
-    `max_images`, so a sidecar written for a budgeted arm would over-report the
-    window. It is unused by the harness today (which writes `dump_prompt(build_body)`
-    instead), which is why this is recorded rather than repaired."""
-    history = History(n_history_frames=16)
-    _drive(history, 8)
-    policy = InterleavedFrames()
-    wire = policy.render(
-        history=history, system="S", instruction="G", step=9, budget=ImageBudget(max_images=3)
-    )
-    logged = policy.loggable(history=history, system="S", instruction="G", step=9)
-    assert _images(wire) == 3
-    assert len([m for m in logged if m.role == "user"]) == 9, (
-        "loggable renders 9 frames where the wire carries 3"
     )
 
 
@@ -374,7 +331,7 @@ def test_image_budget_downscales_to_max_pixels() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# registry + render_all
+# registry
 # --------------------------------------------------------------------------- #
 
 
@@ -390,37 +347,3 @@ def test_every_registered_policy_name_matches_its_key() -> None:
         assert factory().name == name
 
 
-def test_render_all_renders_one_window_under_every_policy() -> None:
-    history = History(n_history_frames=32)
-    _drive(history, 3)
-    rendered = render_all(
-        [InterleavedFrames(), LatestImageOnly(), StatelessSingleTurn()],
-        history=history,
-        system="S",
-        instruction="G",
-        step=4,
-        budget=ImageBudget(max_images=4),
-    )
-    assert set(rendered) == {"interleaved_frames", "latest_image_only", "stateless_single_turn"}
-    assert _images(rendered["interleaved_frames"]) == 4
-    assert _images(rendered["latest_image_only"]) == 1
-    assert _images(rendered["stateless_single_turn"]) == 1
-    assert len(rendered["stateless_single_turn"]) == 2
-
-
-def test_render_all_keyed_by_name_collapses_two_configurations_of_one_policy() -> None:
-    """Recorded, not fixed: `render_all` keys by `policy.name`, and `name` is a class
-    default, so an A/B between `persist_instruction=True` and `False` silently keeps
-    only the last one. The two shapes it is documented for (different classes) are
-    unaffected."""
-    history = History(n_history_frames=32)
-    _drive(history, 2)
-    rendered = render_all(
-        [InterleavedFrames(persist_instruction=True), InterleavedFrames(persist_instruction=False)],
-        history=history,
-        system="S",
-        instruction="G",
-        step=3,
-        budget=ImageBudget(),
-    )
-    assert len(rendered) == 1, "two policies in, one rendering out"

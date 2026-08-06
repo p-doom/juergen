@@ -22,7 +22,7 @@ it this taskset's default harness.
 from evals.harness import DesktopHarness
 from evals.signoflife.cells import (
     ARMS,
-    CELLS,
+    CONTROL_ARMS,
     MODEL_ARMS,
     verify_phaseb_provenance,
 )
@@ -42,7 +42,7 @@ from evals.signoflife.taskset import (
 
 __all__ = [
     "ARMS",
-    "CELLS",
+    "CONTROL_ARMS",
     "MODEL_ARMS",
     "NO_SUBMIT_CELLS",
     "DesktopHarness",

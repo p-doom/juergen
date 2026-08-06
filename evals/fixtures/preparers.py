@@ -25,7 +25,6 @@ from evals.tasks import DesktopTaskData, register_preparer
 __all__ = ["AppFixturePreparer", "WebFixturePreparer", "web_fixture_server"]
 
 _SERVER: WebFixtureServer | None = None
-_SERVER_FIXTURES: dict[str, WebFixture] = {}
 _SERVER_LOCK = threading.Lock()
 
 
@@ -45,15 +44,18 @@ def web_fixture_server(fixture: WebFixture) -> WebFixtureServer:
     Registered fixtures accumulate: a worker serves every fixture any of its rollouts
     asked for, and a rollout's page is identified by fixture id, so two concurrent
     rollouts of different cells cannot collide.
+
+    `server.store.fixtures` is the one registry. There used to be a module-level dict
+    as well, handed to the constructor for the first fixture and then written to in
+    parallel forever after — and `FixtureStateStore` copies what it is given, so the
+    two diverged by construction.
     """
     global _SERVER
     with _SERVER_LOCK:
-        _SERVER_FIXTURES[fixture.id] = fixture
         if _SERVER is None:
-            _SERVER = WebFixtureServer(_SERVER_FIXTURES)
+            _SERVER = WebFixtureServer({})
             _SERVER.start()
-        else:
-            _SERVER.store.fixtures[fixture.id] = fixture
+        _SERVER.store.fixtures[fixture.id] = fixture
         return _SERVER
 
 
