@@ -26,6 +26,14 @@ if str(_DESKTOP_ENV) not in sys.path:
 from juergen_doubles import FakeSession, png  # noqa: E402
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "slow: drives a whole `python -m evals.signoflife` run in-process "
+        "(seconds, not milliseconds). Still no VM, no GPU and no network.",
+    )
+
+
 @pytest.fixture
 def frame() -> bytes:
     return png()

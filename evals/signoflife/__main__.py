@@ -277,6 +277,35 @@ def _eval_config(
 # --------------------------------------------------------------------------- #
 
 
+def _harness_error(trace: Any) -> dict[str, Any] | None:
+    """The reason an episode published nothing at all.
+
+    `DesktopHarness._run` turns an episode failure into `validity="infra_invalid"`
+    with an `infra_error`, but a raise *before* it — a bad pool spec, an unknown
+    grammar, an unregistered task kind — never reaches that code and leaves
+    `trace.info` empty. The row then said `validity: null, infra_error: null`, so
+    the run exited 3 with no reason recorded anywhere a reader would look, and the
+    only copy of the message was a log line in a batch job's stdout.
+
+    Reads `trace.errors` / `trace.stop_condition`, which verifiers fills in for
+    exactly this case. Diagnostic only: an episode with no result was already
+    excluded from every rate (`_aggregate` counts `validity == "valid"`), so
+    nothing here can move a pass count.
+    """
+    errors = getattr(trace, "errors", None) or []
+    if not errors:
+        return None
+    first = errors[0]
+    if not isinstance(first, dict):
+        first = getattr(first, "model_dump", lambda: {"message": str(first)})()
+    return {
+        "stage": "harness",
+        "type": str(first.get("type") or "HarnessError"),
+        "message": str(first.get("message") or first),
+        "stop_condition": getattr(trace, "stop_condition", None),
+    }
+
+
 def _episode_row(trace: Any, trial: int) -> dict[str, Any]:
     episode = dict(trace.info.get(RESULT_KEY) or {})
     prompt = dict(trace.info.get("prompt") or {})
@@ -295,7 +324,7 @@ def _episode_row(trace: Any, trial: int) -> dict[str, Any]:
         "control_terminate": episode.get("control_terminate"),
         "terminate_step": episode.get("terminate_step"),
         "control_ok": episode.get("control_ok"),
-        "infra_error": episode.get("infra_error"),
+        "infra_error": episode.get("infra_error") or _harness_error(trace),
         "final_probe": episode.get("final_probe"),
         "sampling": episode.get("sampling"),
         "host": episode.get("host"),
