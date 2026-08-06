@@ -9,6 +9,7 @@
 > | old | new |
 > |---|---|
 > | `annotation_pipeline.build_manifest` | `pipeline.stage_00_clip_manifest` (byte-identical) |
+> | `annotation_pipeline.stage_00_realign` | `pipeline.stage_02_realign` (byte-identical body) |
 > | `annotation_pipeline.stage_04_build_canonical_sft` | `pipeline.stage_04_build_canonical_sft` (byte-identical body) |
 >
 > What is still real here is the LEGACY ANNOTATION ENGINE — `run_dataset`,
