@@ -22,7 +22,7 @@ and there is no replacement gate.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any
 
 from desktop_env.geometry import DisplayGeometry
@@ -317,9 +317,6 @@ class DeltatypeV2Codec:
                 "+LMB MOVE(drag_dx,drag_dy) -LMB`"
             )
         return action
-
-    def with_digest(self, action: DeltatypeV2Action) -> DeltatypeV2Action:
-        return replace(action, prompt_digest=self.digest)
 
 
 CODEC = DeltatypeV2Codec()

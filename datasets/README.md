@@ -55,8 +55,11 @@ to write a zero-coverage dataset. Because a zero floor cannot see `100% vs 5%`,
 it *also* compares this arm's coverage against sibling arms in sibling
 `--out_dir`s that record the same rollout selection, over the codec-invariant
 pre-codec turn population, and warns above `--prose_divergence_tol` (default
-0.05; `--strict_prose_divergence` to refuse instead, `--no_prose_divergence_check`
-to skip). The comparison is recorded in the manifest under `prose_divergence`.
+0.05). `--prose_divergence` picks what a divergence does — `warn` (default),
+`abort`, or `off` — in one flag, so `abort` cannot be silently ignored by a
+second flag that turned the comparison off. `--no_keep_prose` forces `off`, and
+naming both is an error. The comparison is recorded in the manifest under
+`prose_divergence`.
 An absent or mid-build sibling is skipped, never a failure — so the first arm of
 a sweep is compared against nothing.
 

@@ -342,7 +342,8 @@ class NativeAbsoluteCodec:
                 if target is not None and target != here:
                     operations.append(_support.move_to(target))
                     here = target
-                button = call.button or "left"
+                button = call.button
+                assert button, "validate_call and the lift both set button"
                 operations.append(
                     _support.mouse_down(button)
                     if name == "mouse_down"

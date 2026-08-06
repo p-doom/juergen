@@ -23,12 +23,18 @@ a staged run cannot resolve the dependency and, worse, would not be able to say 
 Every recipe here therefore does what the working sign-of-life recipes did:
 
 ```bash
-SOURCE="$(jq -er '.provenance.repo_path // .source_path' "$LABCTL_CONTEXT")"
+SOURCE="$(jq -er '.provenance.repo_path' "$LABCTL_CONTEXT")"
 ```
 
 `provenance.repo_path` is the *registered* checkout (`[repos] juergen` in
 `cluster.toml`), which has its siblings. The snapshot is then only a record, not
 the thing that runs — an honest trade, because the alternative does not run at all.
+
+There is no `// .source_path` alternative in that expression. `repo_path` is
+non-optional in labctl's `RepoProvenance`, so the fallback could never fire; had
+it fired it would have run the snapshot's code instead of the registered
+checkout's, silently, since `desktop-env` reaches the interpreter through
+`PYTHONPATH` either way. `jq -er` under `set -e` is the assertion.
 
 Two consequences to hold onto:
 
@@ -67,6 +73,26 @@ same host or the controls do not calibrate anything: the previously published
 comparison had its controls on hai003 and arm D on hai002, so control conformance
 was never established on the node the model arm was measured on. Change the node
 if you must, but change it in all nine files at once.
+
+### 4. Paths concatenated onto an input are checked before anything starts
+
+`model-path`, `qcow` and `qemu` are built by appending to `{inputs.X.path}`, and
+that template encodes a LAYOUT. `model-path = "{inputs.model.path}/hf"` is right
+for a labctl checkpoint export and wrong for a raw HF hub snapshot, whose
+`config.json` sits at the snapshot root — the off-the-shelf arm carried the `/hf`
+form, matched nothing, and surfaced 56 s later as an `HFValidationError` about
+repo-id format, because `transformers` fell through to treating the whole string
+as a repo id.
+
+Every recipe therefore walks its own rendered `"$@"` in the prologue and refuses
+a `--qcow`/`--qemu` that does not exist or a `--model-path` with no `config.json`,
+before the venv, the VM or sglang are touched.
+
+Two `[inputs.model]` shapes exist and they are not interchangeable:
+`type = "artifact"` + `artifact = "<alias>"` for anything labctl produced (the
+alias is the directory name under `artifact_roots[checkpoint]/<user>/`, and the
+reference records lineage), `type = "external"` + `path` only for the HF hub
+snapshot, which the registry does not own.
 
 ## Trials
 

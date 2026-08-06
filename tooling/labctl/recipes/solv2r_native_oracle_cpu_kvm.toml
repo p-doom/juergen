@@ -8,12 +8,18 @@ name = "solv2r_native_oracle_cpu_kvm"
 repo = "juergen"
 command = ["bash", "-c", '''
 set -euo pipefail
-SOURCE="$(jq -er '.provenance.repo_path // .source_path' "$LABCTL_CONTEXT")"
+SOURCE="$(jq -er '.provenance.repo_path' "$LABCTL_CONTEXT")"
 DESKTOP_ENV="$(jq -er '.inputs[] | select(.role == "desktop_env") | .resolved_path' "$LABCTL_CONTEXT")"
 RUNTIME="$(jq -er '.inputs[] | select(.role == "runtime") | .resolved_path' "$LABCTL_CONTEXT")"
 cd "$SOURCE"
 [[ -r /dev/kvm && -w /dev/kvm ]] || { echo "FATAL /dev/kvm unavailable" >&2; exit 2; }
 [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]] || { echo "FATAL a scripted control must be CPU-only" >&2; exit 2; }
+for arg in "$@"; do
+  case "$arg" in
+    --qcow=*|--qemu=*)
+      [[ -e "${arg#*=}" ]] || { echo "FATAL ${arg%%=*} does not exist: ${arg#*=}" >&2; exit 2; } ;;
+  esac
+done
 # labctl records juergen's HEAD and diff; it records NOTHING about the sibling
 # checkout, so the only place desktop-env's identity exists is this line.
 echo "PROVENANCE juergen     $(git -C "$SOURCE" rev-parse HEAD) dirty=$(git -C "$SOURCE" status --porcelain | wc -l)"

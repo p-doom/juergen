@@ -337,7 +337,8 @@ class MoveRelCodec:
                     operations.append(_support.mouse_down(button))
                     operations.append(_support.mouse_up(button))
             elif name in ("mouse_down", "mouse_up"):
-                button = call.button or "left"
+                button = call.button
+                assert button, "validate_call and the lift both set button"
                 operations.append(
                     _support.mouse_down(button)
                     if name == "mouse_down"
@@ -393,9 +394,13 @@ class MoveRelCodec:
                 raise MoveRelError("type requires non-empty text")
             return MoveRelCall(name, text=text)
         if name == "scroll":
-            raw = arguments.get("pixels", arguments.get("clicks", 0))
+            if "clicks" in arguments:
+                raise MoveRelError(
+                    "move_rel spells the scroll magnitude `pixels`; `clicks` is "
+                    "rung1's native_absolute spelling and is not this grammar"
+                )
             try:
-                return MoveRelCall(name, scroll=int(round(float(raw))))
+                return MoveRelCall(name, scroll=int(round(float(arguments.get("pixels", 0)))))
             except (TypeError, ValueError) as exc:
                 raise MoveRelError("scroll pixels must be numeric") from exc
         if name == "wait":

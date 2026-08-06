@@ -161,22 +161,19 @@ def render_spec(codec: Any) -> str:
     """Render the codec's system prompt from its own docstrings.
 
     Preamble = the codec class docstring. Body = one block per ``@production``.
-    Epilogue = the docstring of a ``notes`` member, if the codec defines one.
+    Epilogue = the ``notes`` docstring. All three are mandatory: a codec that
+    grows a prompt section by accident is better than one that silently ships a
+    prompt missing one, so this raises rather than omitting a block.
     """
-    blocks: list[str] = []
-    preamble = inspect.cleandoc(type(codec).__doc__ or "")
-    if preamble:
-        blocks.append(preamble)
     body: list[str] = []
     for item in productions(codec):
         body.append("  " + item.syntax)
         body.append(textwrap.indent(item.doc, "      "))
-    if body:
-        blocks.append("\n".join(body))
-    notes = getattr(codec, "notes", None)
-    epilogue = inspect.cleandoc(getattr(notes, "__doc__", "") or "")
-    if epilogue:
-        blocks.append(epilogue)
+    blocks = [
+        inspect.cleandoc(type(codec).__doc__),
+        "\n".join(body),
+        inspect.cleandoc(codec.notes.__doc__),
+    ]
     return "\n\n".join(blocks) + "\n"
 
 
@@ -191,9 +188,7 @@ def render_tool_prompt(codec: Any, *, properties: dict[str, Any]) -> str:
     one entry of the action enum, and ``notes`` is the epilogue.
     """
     actions = productions(codec)
-    described = inspect.cleandoc(
-        getattr(getattr(codec, "tool_description", None), "__doc__", "") or ""
-    )
+    described = inspect.cleandoc(codec.tool_description.__doc__)
     schema = {
         "type": "function",
         "function": {
@@ -215,13 +210,11 @@ def render_tool_prompt(codec: Any, *, properties: dict[str, Any]) -> str:
             },
         },
     }
-    epilogue = inspect.cleandoc(
-        getattr(getattr(codec, "notes", None), "__doc__", "") or ""
-    )
+    epilogue = inspect.cleandoc(codec.notes.__doc__)
     return (
         "\n".join(
             [
-                inspect.cleandoc(type(codec).__doc__ or ""),
+                inspect.cleandoc(type(codec).__doc__),
                 "",
                 "# Tools",
                 "",
@@ -332,7 +325,10 @@ class Element:
             return {"kind": "event", "name": self.name, "pressed": self.pressed}
         if self.kind == "type":
             return {"kind": "type", "text": self.text}
-        return {"kind": "move", "delta": list(self.delta or ())}
+        if self.kind == "move":
+            assert self.delta is not None
+            return {"kind": "move", "delta": list(self.delta)}
+        raise ValueError(f"unknown element kind: {self.kind!r}")
 
 
 def element_from_dict(value: dict[str, Any]) -> Element:
@@ -796,23 +792,21 @@ def click_action_name(button: str, repeats: int) -> str | None:
 def terminate_status(
     value: object, *, error: type[Exception] = ValueError
 ) -> str | None:
-    """Normalise the lift's ``terminate`` argument to ``None``/success/failure.
+    """Validate the lift's ``terminate`` argument. ``None``, success or failure.
 
     Each grammar then spells it its own way — a flag, a distinct FAIL token, a
     ``terminate`` call, or not at all.
+
+    Three states, three spellings, no case folding. The bool forms this also used
+    to take (``False`` meaning None, ``True`` meaning success) were a fourth and a
+    fifth that no caller passes, and ``True`` silently meaning SUCCESS is how a
+    terminate whose status was lost lands as a claimed success.
     """
-    if value is None or value is False:
+    if value is None:
         return None
-    if value is True:
-        return "success"
-    if isinstance(value, str):
-        status = value.strip().lower()
-        if status in ("success", "failure"):
-            return status
-        raise error(
-            f"terminate must be None, a bool, 'success' or 'failure', got {value!r}"
-        )
-    raise error(f"terminate must be None, a bool or a status string, got {value!r}")
+    if value in ("success", "failure"):
+        return str(value)
+    raise error(f"terminate must be None, 'success' or 'failure', got {value!r}")
 
 
 # --------------------------------------------------------------------------

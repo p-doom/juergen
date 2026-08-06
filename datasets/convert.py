@@ -59,8 +59,8 @@ is one arm; sibling arms of a sweep are sibling ``--out_dir``s, each with a
 ``convert_manifest.json``. After building, this arm's prose coverage is compared
 against every sibling manifest under ``--out_dir``'s parent that records the
 SAME rollout selection, and a relative divergence above
-``--prose_divergence_tol`` is reported (WARNING by default, abort under
-``--strict_prose_divergence``) and recorded in the manifest under
+``--prose_divergence_tol`` is reported (``--prose_divergence warn``, the default;
+``abort`` refuses to write, ``off`` skips) and recorded in the manifest under
 ``prose_divergence``.
 
 The gated statistic is coverage over the PRE-CODEC turn population,
@@ -77,7 +77,7 @@ order-dependent: it only sees arms that have already finished, so the first arm
 of a sweep is compared against nothing and an absent or mid-build sibling is
 skipped, never aborts. A sweep is therefore only covered from its second arm
 onwards, and never symmetrically — run the last arm with
-``--strict_prose_divergence`` or diff the manifests when the sweep is done.
+``--prose_divergence abort`` or diff the manifests when the sweep is done.
 (2) It cannot tell a STALE sibling manifest from a current one. (3) A failure
 that zeroes prose in EVERY arm diverges nowhere and is caught only by the
 zero-abort. (4) The normalization deliberately forgives the supervision-density
@@ -141,9 +141,6 @@ _COORD_ACTIONS = frozenset(
         "mouse_down",
     }
 )
-# The codec method that lifts absolute Operations back into a grammar Action —
-# the inverse of ``Codec.compile_action``. Tried in order.
-_LIFT_METHODS = ("action_from_operations", "from_operations", "lift")
 
 
 # ---------------------------------------------------------------------------
@@ -160,14 +157,18 @@ class Step:
     ``terminate`` / ``terminate_status`` with an empty ``action``, because every
     grammar spells termination differently (a ``terminate{status}`` tool call vs a
     bare ``TERMINATE`` / ``FAIL`` token).
+
+    ``screen`` has no default. Every relative grammar clamps against it and
+    ``move_rel`` normalizes against it, so an invented size is a silently wrong
+    label, not a missing one.
     """
 
+    screen: tuple[int, int]
     action: dict[str, Any] = field(default_factory=dict)
     terminate: bool = False
     terminate_status: str = "success"
     cursor_before: tuple[int, int] | None = None
     intended_target: tuple[int, int] | None = None
-    screen: tuple[int, int] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -189,8 +190,10 @@ def step_to_operations(step: Step) -> tuple[Any, ...] | None:
     cursor = step.cursor_before
 
     if kind == "hscroll":
-        amount = _number(a.get("pixels", a.get("scroll_amount", a.get("amount", 0))))
-        return (_support.scroll(int(round(amount)), 0),)
+        amount = _scroll_amount(a)
+        if amount is None:
+            return None
+        return (_support.scroll(amount, 0),)
 
     if kind in _COORD_ACTIONS and target is not None and kind != "left_click_drag":
         ops.append(_support.move_to(target))
@@ -237,8 +240,9 @@ def step_to_operations(step: Step) -> tuple[Any, ...] | None:
             return None
         ops.append(_support.coalesced_type(text))
     elif kind == "scroll":
-        amount = _number(a.get("pixels", a.get("scroll_amount", a.get("amount", 0))))
-        amount = int(round(amount))
+        amount = _scroll_amount(a)
+        if amount is None:
+            return None
         if str(a.get("scroll_direction") or "").strip().lower() == "down" and amount > 0:
             amount = -amount
         ops.append(_support.scroll(0, amount))
@@ -257,12 +261,31 @@ def _number(value: Any, default: float = 0.0) -> float:
         return default
 
 
+#: The keys the teacher collections in scope have used for a scroll magnitude.
+#: The teacher is an external, unversioned producer, so this reads all three —
+#: but ONLY these three, and a step carrying none of them is off-grammar rather
+#: than a zero scroll. A zero scroll lowers to `scroll(0, 0)`, which every
+#: bare-token grammar renders as its idle line: a real scroll silently labelled
+#: as doing nothing.
+_SCROLL_KEYS = ("pixels", "scroll_amount", "amount")
+
+
+def _scroll_amount(action: dict[str, Any]) -> int | None:
+    for key in _SCROLL_KEYS:
+        if key in action:
+            try:
+                return int(round(float(action[key])))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Grammar bridge
 # ---------------------------------------------------------------------------
 
 
-def _geometry(screen: tuple[int, int] | None):
+def _geometry(screen: tuple[int, int]):
     """A ``DisplayGeometry`` for the rollout's screen size.
 
     Field names are ``desktop_*`` (``desktop_env.geometry.DisplayGeometry`` is a
@@ -275,7 +298,7 @@ def _geometry(screen: tuple[int, int] | None):
     """
     from desktop_env.geometry import DisplayGeometry  # noqa: PLC0415
 
-    width, height = screen or (1920, 1080)
+    width, height = screen
     return DisplayGeometry(
         desktop_width=int(width),
         desktop_height=int(height),
@@ -298,25 +321,24 @@ def _lift(codec: Any, ops: tuple[Any, ...], step: Step, terminate: str | None) -
     A grammar that has not implemented this fails HERE, loudly, naming the method
     it must add — never by silently emitting a differently-encoded dataset.
     """
-    for name in _LIFT_METHODS:
-        fn = getattr(codec, name, None)
-        if callable(fn):
-            return fn(
-                ops,
-                geometry=_geometry(step.screen),
-                cursor=step.cursor_before or (0, 0),
-                terminate=terminate,
-            )
-    raise NotImplementedError(
-        f"grammar codec {type(codec).__name__} exposes none of {_LIFT_METHODS}. "
-        "Training-target construction needs the inverse of Codec.compile_action:\n\n"
-        "    def action_from_operations(self, operations, *, geometry, cursor, "
-        "terminate=None) -> Action\n\n"
-        "taking the absolute-Operation vocabulary documented in grammars/_support.py "
-        "and resolving it into this grammar's own coordinate convention and its own "
-        "terminal spelling. It cannot live in the converter: the converter must not "
-        "know a coordinate space, and must not know how each grammar encodes "
-        "TERMINATE / FAIL."
+    lift = getattr(codec, "action_from_operations", None)
+    if not callable(lift):
+        raise NotImplementedError(
+            f"grammar codec {type(codec).__name__} has no action_from_operations. "
+            "Training-target construction needs the inverse of Codec.compile_action:\n\n"
+            "    def action_from_operations(self, operations, *, geometry, cursor, "
+            "terminate=None) -> Action\n\n"
+            "taking the absolute-Operation vocabulary documented in grammars/_support.py "
+            "and resolving it into this grammar's own coordinate convention and its own "
+            "terminal spelling. It cannot live in the converter: the converter must not "
+            "know a coordinate space, and must not know how each grammar encodes "
+            "TERMINATE / FAIL."
+        )
+    return lift(
+        ops,
+        geometry=_geometry(step.screen),
+        cursor=step.cursor_before or (0, 0),
+        terminate=terminate,
     )
 
 
@@ -332,10 +354,12 @@ def format_step(codec: Any, step: Step) -> str | None:
             return None
     try:
         return codec.format(_lift(codec, ops, step, terminate))
-    except NotImplementedError:
-        raise
-    except (ValueError, KeyError, AssertionError):
-        return None  # off-grammar for THIS grammar; counted as a parse error
+    except ValueError:
+        # An expressiveness ceiling, and the ONLY thing a dropped turn may mean.
+        # Every codec's error type subclasses ValueError; an AssertionError or a
+        # KeyError out of a lift is a broken codec invariant, and swallowing one
+        # here booked a bug as a per-arm `n_turns_dropped_by_codec`.
+        return None
 
 
 def system_prompt(codec: Any, *, thinking: bool) -> str:
@@ -376,10 +400,22 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
 
 
-def _read_slugs(path: str | None) -> set[str] | None:
-    if not path or not Path(path).is_file():
+def _read_slugs(path: str | None, *, flag: str) -> set[str] | None:
+    """The slug set from a caller-named file. ``None`` only when no file was named.
+
+    A named-but-absent file used to read as "no filter", which silently disables
+    the OSWorld eval-leak drop (``--exclude_slugs``) or the quality keep
+    (``--keep_slugs``) and produces a dataset the caller believes is filtered.
+    """
+    if path is None:
         return None
-    return {s.strip() for s in Path(path).read_text().splitlines() if s.strip()}
+    file = Path(path)
+    if not file.is_file():
+        raise SystemExit(f"{flag}: not a file: {file}")
+    slugs = {s.strip() for s in file.read_text().splitlines() if s.strip()}
+    if not slugs:
+        raise SystemExit(f"{flag}: {file} lists no slugs")
+    return slugs
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +471,13 @@ def convert_rollout(
 
     instruction = result.get("instruction")
     screen = _pair(result.get("screen_size"))
+    if screen is None:
+        raise SystemExit(
+            f"{result_path}: no usable `screen_size`. Every grammar resolves its "
+            "coordinates against it — a relative delta is clamped to it and "
+            "move_rel normalizes by it — so a default would emit silently wrong "
+            "labels for the whole rollout."
+        )
     steps_dir = run_dir / "steps"
 
     turns: list[tuple[str, str, str]] = []  # (frame_path, assistant_text, prose)
@@ -532,12 +575,16 @@ def discover_run_dirs(roots: str, *, recursive: bool = False) -> list[Path]:
 
     ``recursive`` walks nested layouts (what ``convert_abs_to_deltatype.py`` did
     with ``rglob``); the default is the flat one-level layout the other four used.
+
+    A root that is not a directory is fatal. Skipping it silently halves a
+    two-collection build on one typo and the manifest still records the string
+    that was asked for.
     """
     out: list[Path] = []
     for raw in roots.split(","):
         root = Path(raw.strip())
         if not root.is_dir():
-            continue
+            raise SystemExit(f"--rollouts_dir: not a directory: {root}")
         candidates = root.rglob("*") if recursive else root.iterdir()
         out += [
             d
@@ -830,7 +877,7 @@ def format_prose_divergence(report: dict[str, Any], codec: str) -> str:
         "the same defect class as the 0-of-11k vs 10721-of-10721 asymmetry, at lower "
         "severity. Either the codecs drop different prose-bearing turns (check "
         "n_turns_dropped_by_codec), or a sibling manifest is stale. Pass "
-        "--no_prose_divergence_check to silence, or --no_keep_prose if this arm is "
+        "--prose_divergence off to silence, or --no_keep_prose if this arm is "
         "meant to be prose-free."
     )
     return "\n".join(lines)
@@ -873,26 +920,38 @@ def main(argv: list[str] | None = None) -> int:
                         "arm is intentionally prose-free, so it is exempt from the cross-arm "
                         "divergence check below and invisible to other arms' checks.")
     p.set_defaults(keep_prose=True)
-    p.add_argument("--prose_divergence_tol", type=float, default=PROSE_DIVERGENCE_TOL,
+    p.add_argument("--prose_divergence", choices=("warn", "abort", "off"), default=None,
+                   help="What a cross-arm prose-coverage divergence does: `warn` (the default) "
+                        "reports it, `abort` refuses to write — use it for the LAST arm of a "
+                        "sweep, or in CI — and `off` skips the comparison. The zero-coverage "
+                        "abort applies regardless. Forced to `off` by --no_keep_prose, which is "
+                        "why naming it alongside --no_keep_prose is an error rather than a "
+                        "silently ignored flag.")
+    p.add_argument("--prose_divergence_tol", type=float, default=None,
                    help="Relative tolerance for this arm's prose coverage against sibling arms "
                         "in sibling --out_dirs built from the same rollout selection, measured "
-                        "over the PRE-CODEC turn population. Default %(default)s: the measured "
-                        "legitimate spread between codecs is 0.00%% and the smallest real defect "
-                        "instance is 6.25%% (see PROSE_DIVERGENCE_TOL).")
-    p.add_argument("--no_prose_divergence_check", dest="prose_divergence_check",
-                   action="store_false",
-                   help="Skip the cross-arm comparison entirely (the zero-coverage abort still "
-                        "applies). For building one arm on purpose with no interest in siblings.")
-    p.set_defaults(prose_divergence_check=True)
-    p.add_argument("--strict_prose_divergence", action="store_true",
-                   help="Turn the divergence WARNING into a refusal to write. Off by default "
-                        "because the comparison depends on sibling directories this invocation "
-                        "does not own; turn it on for the LAST arm of a sweep, or in CI.")
+                        f"over the PRE-CODEC turn population. Default {PROSE_DIVERGENCE_TOL}: "
+                        "the measured legitimate spread between codecs is 0.00%% and the "
+                        "smallest real defect instance is 6.25%% (see PROSE_DIVERGENCE_TOL).")
     args = p.parse_args(argv)
 
+    if not args.keep_prose and args.prose_divergence not in (None, "off"):
+        p.error(
+            f"--prose_divergence {args.prose_divergence} cannot run under --no_keep_prose: "
+            "that arm is intentionally prose-free and is exempt from the comparison"
+        )
+    divergence = args.prose_divergence or ("warn" if args.keep_prose else "off")
+    if divergence == "off" and args.prose_divergence_tol is not None:
+        p.error("--prose_divergence_tol has no effect while the comparison is off")
+    tol = (
+        PROSE_DIVERGENCE_TOL
+        if args.prose_divergence_tol is None
+        else args.prose_divergence_tol
+    )
+
     codec = grammars.load(args.codec)
-    keep = _read_slugs(args.keep_slugs)
-    drop = _read_slugs(args.exclude_slugs) or set()
+    keep = _read_slugs(args.keep_slugs, flag="--keep_slugs")
+    drop = _read_slugs(args.exclude_slugs, flag="--exclude_slugs") or set()
 
     stats = ConvertStats()
     records: list[dict[str, Any]] = []
@@ -927,15 +986,11 @@ def main(argv: list[str] | None = None) -> int:
     train, val = split_by_recording(records, train_ratio=args.train_ratio, seed=args.split_seed)
     out = Path(args.out_dir)
 
-    # ``Codec.digest`` is a PROPERTY on all seven grammars (grammars/README.md
-    # documents it as ``codec.digest``), so it must not be called. Tolerate a
-    # method too, in case a future grammar spells it that way.
-    _digest = getattr(codec, "digest", None)
     manifest = {
         "codec": args.codec,
         # The grammar's own spec digest, so a dataset is traceable to the exact
         # grammar revision that produced it.
-        "codec_digest": _digest() if callable(_digest) else _digest,
+        "codec_digest": codec.digest,
         "rollouts_dir": args.rollouts_dir,
         "recursive": args.recursive,
         "keep_slugs": args.keep_slugs,
@@ -968,13 +1023,13 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     # The zero-abort above is a floor; THIS is the asymmetry check. Run it before
-    # anything is written so --strict_prose_divergence can still refuse.
-    if args.keep_prose and args.prose_divergence_check:
-        report = prose_divergence(out, manifest, tol=args.prose_divergence_tol)
+    # anything is written so `abort` can still refuse.
+    if divergence != "off":
+        report = prose_divergence(out, manifest, tol=tol)
         manifest["prose_divergence"] = report
         if report["diverged"]:
             message = format_prose_divergence(report, args.codec)
-            if args.strict_prose_divergence:
+            if divergence == "abort":
                 raise SystemExit(f"REFUSING TO WRITE: {message}")
             print(f"WARNING: {message}", file=sys.stderr)
 

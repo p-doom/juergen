@@ -143,6 +143,21 @@ def test_canonical_is_a_fixpoint(name, payload, case):
     assert reparsed == codec.parse(case["text"])
 
 
+@pytest.mark.parametrize(("name", "payload", "case"), _cases("cases"))
+def test_to_dict_round_trips_through_action_from_dict(name, payload, case):
+    """``to_dict`` is the eval record, and nothing here used to execute it.
+
+    ``agent._action_record`` serialises every parsed action by probing for a
+    ``to_dict``, so this method's output is the ``parsed_action`` field of every
+    trajectory row — and it was reachable only through that dynamic probe, so a
+    coverage report over ``grammars/`` showed it, and ``Element.to_dict`` and
+    ``Primitive.to_dict`` under it, never running.
+    """
+    codec = _codec(name)
+    parsed = codec.parse(case["text"])
+    assert _action_from_dict(name, parsed.to_dict()) == parsed
+
+
 @pytest.mark.parametrize(("name", "payload", "case"), _cases("format_only"))
 def test_format_only(name, payload, case):
     codec = _codec(name)
