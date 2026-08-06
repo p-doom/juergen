@@ -21,8 +21,8 @@ Everything else is verifiers': task loading, the episode, interception, the
 client, `traces.jsonl`.
 
 **Trials are separate `run_eval` passes, not `num_rollouts`.** Both give N draws
-per cell, but `DesktopHarness._artifact_dir` keys on the task name alone
-(`harness.py:1013-1017`), so N rollouts of one task overwrite each other's frames,
+per cell, but `DesktopHarness._artifact_dir` keys on the task name alone, so N
+rollouts of one task overwrite each other's frames,
 prompts, GIF and `result.json` and the run keeps only the last. A pass per trial
 with its own `artifacts.output_dir` keeps all N. The sglang server and the desktop
 pool are process-global and survive across passes, so the extra passes cost

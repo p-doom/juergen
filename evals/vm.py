@@ -1,10 +1,9 @@
 """The one adapter between pixeldesk's session pool and the harness's session.
 
 `DesktopPoolConfig.pool_target` names a **constructor** and `session_kwargs` is
-handed to it verbatim (`agent/desktop.py:423-449`). Its default target,
-`pixeldesk.vm.pool:DesktopSessionPool`, cannot actually be used that way, for two
-reasons that only show up against a real VM — which is why the test suite is green
-and the gate could not be dispatched:
+handed to it verbatim (`agent.desktop.default_pool_factory`). Its nominal default,
+`pixeldesk.vm.pool:DesktopSessionPool`, cannot be used that way, for two reasons
+that only show up against a real VM:
 
 **1. The constructor is not callable from config.** `DesktopSessionPool.__init__`
 requires a `DesktopPoolConfig` *dataclass* and a `session_factory` *callable*
@@ -20,12 +19,10 @@ dataclass for `config`.
 whatever it gets (`evals/harness.py:76-83`), and the preparers additionally call
 `execute_argv()`. Those live on *two different objects* — `HttpGuiTransport` has
 the input/geometry half, `OSWorldClient` has the pixels-and-guest-commands half —
-and `DesktopSession` holds both without merging them. `tests/juergen_doubles.py`'s
-`FakeSession` is that merged surface, so every test passes against a union that no
-production object provides.
+and `DesktopSession` holds both without merging them.
 
-So this module is the union, and nothing more: no policy, no retries, no provider
-selection by name.
+So `kvm_desktop_pool` is the callable entry point and `DesktopFacade` is the
+union, and nothing more: no policy, no retries, no provider selection by name.
 
 **Reset isolation is explicit here, because the pool does not do it.**
 `DesktopSessionPool.release` returns a session to the `ready` list untouched until
@@ -256,8 +253,8 @@ class DesktopFacade:
     def evaluate(self) -> float:
         """The OSWorld benchmark score for the task this desktop was set up for.
 
-        No arguments, because `harness._evaluate` has none to give
-        (`harness.py:1017`) — see `setup()` for why that is sound. Raises rather
+        No arguments, because `DesktopHarness._evaluate` has none to give — see
+        `setup()` for why that is sound. Raises rather
         than returning 0.0 when there is nothing to score; the harness records a
         raise as a missing reward, and `OSWorldEvaluateOracle` refuses a missing
         reward outright. Infrastructure failure must never be trained as task

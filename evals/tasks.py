@@ -228,16 +228,12 @@ class _GroundingPreparation(_OSWorldPreparation):
     """Grounding targets: OSWorld setup, optional cached-trajectory replay, then a
     deterministic stratified cursor placement.
 
-    Two behaviours here existed in `osworld_grounding_runner.py` alone.
-
     *Replay.* Our labelled bboxes were sampled from `step_001.png` frames sitting
     next to the originating rollout's `traj.jsonl`, so the desktop must be advanced
     from post-setup to post-replay before the bbox means anything. Upstream
-    OSWorld's `_replay_setup` is a `NotImplementedError` stub; the replacement
-    dispatches each cached `action`, which may be either a raw pyautogui
-    expression or one of our grammar's action lines — the codec is tried first and
-    a raw `execute` is the fallback, so one replay step works against either cache
-    origin.
+    OSWorld's `_replay_setup` is a `NotImplementedError` stub; `_replay` below
+    dispatches each cached `action` as a raw pyautogui expression and skips a row
+    it cannot execute rather than killing the run.
 
     *Stratified starts.* `near`/`medium`/`far` are not jitter: they make the
     distance-to-target a controlled variable, and the minimum radius is raised by

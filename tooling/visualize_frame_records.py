@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Viewer for stage 01b (frame-records) datasets — frames + binned actions.
+"""Viewer for stage 03 (frame-records) datasets — frames + binned actions.
 
-The spiritual successor to ``ylli_visualizer`` (the realignment inspector), but
-pointed at the **01b sampler output** instead of raw mp4 + keylogs. 01b has
-already done the work the old inspector re-derived on the fly: target-fps
-sampling, NO_OP head/tail thinning, and per-bin action strings, with each kept
-frame referenced as an ``ar:///…/images.array_record#idx`` URI into the stage
-01a frames-master store. So this viewer is *much* thinner: no ffmpeg, no video
-transcode, no raw-vs-realigned dual clock — just browse the trajectory 01b
-produced, one frame + one action per step.
+Pointed at the **stage-03 output** rather than at raw mp4 + keylogs, because
+stage 03 has already done the work: target-fps sampling, NO_OP head/tail
+thinning, and per-bin action strings, with each kept frame referenced as an
+``ar:///…/images.array_record#idx`` URI into the stage-01a frames-master store.
+So this viewer is thin: no ffmpeg, no video transcode, no raw-vs-realigned dual
+clock — just browse the trajectory stage 03 produced, one frame + one action per
+step.
 
 Input contract (one JSON object per line, the ``frame_records.jsonl`` schema
-that stage 01 emits and 01b is expected to reproduce)::
+that stage 01 emits and stage 03 reproduces)::
 
     {
       "recording_id":    str,
@@ -33,8 +32,8 @@ temporal order. Names are rdev keys (``KeyA``, ``Num1``, ``Space``, ``Backspace`
 parses this to light a keyboard, draw a mouse arrow, and reconstruct typed text.
 
 Records for one segment must be contiguous and in trajectory order (both stage
-01 and 01b stream ``chat.jsonl``/segments in order, so this holds). Any extra
-top-level keys are ignored, so the viewer keeps working if 01b enriches rows.
+Stages 01 and 03 stream ``chat.jsonl``/segments in order, so this holds). Any extra
+top-level keys are ignored, so the viewer keeps working if stage 03 enriches rows.
 
 Frames are resolved through ``pipeline.lib.image_store`` (the same
 ``ar://`` resolver stage 02 uses), so it also renders plain image-file paths.
@@ -54,14 +53,14 @@ Pass several datasets and switch between them in the UI's "dataset" dropdown;
 each is built lazily on first selection (a build failure — e.g. an empty or
 not-yet-generated dir — is reported inline, the others keep working).
 
-``--dataset`` may point at the 01b output directory (a ``frame_records.jsonl``
+``--dataset`` may point at the stage 03 output directory (a ``frame_records.jsonl``
 at its root or one level down is discovered), or directly at a
 ``frame_records.jsonl`` file.
 
 It also opens a stage-01a **frames-master** store directly (auto-detected by its
 ``segment_index.jsonl`` + ``frames/`` layout / ``juergen_annotation_frames_master``
 marker): the raw decoded frames are browsable with no sampler run, but since 01a
-is keylog-free the action HUD stays empty — run 01b to get actions.
+is keylog-free the action HUD stays empty — run stage 03 to get actions.
 
 And it opens a stage-04 **conversations** dataset (auto-detected by a
 ``conversations.jsonl`` / ``juergen_annotation_conversations`` marker): each
@@ -70,7 +69,7 @@ user-turn screenshots are the frames, the following assistant turn is that frame
 action — so the same frame/action/HUD/timeline UI applies, plus a banner with the
 system prompt and (if goal-conditioned) the instruction. The images are ``ar://``
 refs into the same stage-01a master, so frames and the black-frame flag resolve
-just as in the 01b view.
+just as in the stage-03 view.
 """
 from __future__ import annotations
 
@@ -245,9 +244,9 @@ def _is_noop(action: Any) -> bool:
 def _is_black(mean_luma: Any, frac_dark: Any) -> bool:
     """Black-frame flag from the stage-01a luma metrics, using the sampler's
     default thresholds (``pipeline.lib.config``). Mirrors
-    ``sample_frames_actions._is_black`` so both views flag exactly the frames 01b
+    ``stage_03_filter._is_black`` so both views flag exactly the frames stage 03
     would drop under default settings — the master reads its own manifest, the
-    01b sample cross-references the master's. Frames without metrics (older
+    stage-03 output cross-references the master's. Frames without metrics (older
     masters, decode failures) are never flagged (absence of evidence != black)."""
     return (mean_luma is not None and mean_luma <= config.DEFAULT_BLACK_LUMA_MAX) or (
         frac_dark is not None and frac_dark >= config.DEFAULT_BLACK_DARK_FRAC_MIN
@@ -439,7 +438,7 @@ class ConversationsDataset(FrameRecordsDataset):
     Each conversation (one segment's interleaved screenshot->action chat) is one
     Segment: every ``user`` turn's screenshot is a frame, and the ``assistant``
     turn that follows carries that frame's action string. The images are ``ar://``
-    refs into the SAME stage-01a master store the 01b sample used, so frame
+    refs into the SAME stage-01a master store the stage-03 output used, so frame
     fetching and the black-frame cross-reference are inherited unchanged from
     ``FrameRecordsDataset``. Conversation-level context (system prompt, per-segment
     instruction, target fps, alignment) is surfaced in the segment detail.
@@ -556,7 +555,7 @@ class FramesMasterDataset:
 
     The frames-master is keylog-free by design: it holds decoded JPEG frames at
     ``master_fps`` and nothing about the keylog (actions are added later by the
-    01b sampler). So this view shows frames + timing only; the action HUD stays
+    stage 03). So this view shows frames + timing only; the action HUD stays
     empty. Segments are listed from ``segment_index.jsonl`` up front (cheap), and
     each segment's per-frame rows are read lazily from its ``frame_manifest.jsonl``
     on first access — the store can be hundreds of thousands of frames, so nothing
@@ -671,7 +670,7 @@ class FramesMasterDataset:
                     "action": "",          # filled from the keylog overlay if present
                     "is_noop": True,
                     # (near-)black per stage-01a luma metrics + default thresholds;
-                    # what the 01b sampler drops with --drop-black-frames on.
+                    # what stage 03 drops with --drop-black-frames on.
                     "is_black": _is_black(r.get("mean_luma"), r.get("frac_dark")),
                     "ref": r.get("image") or r.get("image_path"),
                 })
@@ -892,7 +891,7 @@ INDEX_HTML = r"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>frame-records viewer — stage 01b</title>
+<title>frame-records viewer — stage 03</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -1244,7 +1243,7 @@ async function loadSegments(){
     note.textContent=`raw frames-master (01a) + keylog overlay — raw events by timestamp at master_fps=${info.master_fps||'?'} (no realignment). Pass --alignment for the dual-clock/trims view.`;
     note.classList.add('show');
   } else if(MODE==='frames_master'){
-    note.textContent=`raw frames-master (01a), master_fps=${info.master_fps||'?'} — no keylog linked, so no actions. Pass --clips-manifest, or run the 01b sampler.`;
+    note.textContent=`raw frames-master (01a), master_fps=${info.master_fps||'?'} — no keylog linked, so no actions. Pass --clips-manifest, or run stage 03.`;
     note.classList.add('show');
   } else if(MODE==='conversations'){
     note.textContent=`stage-04 conversations · ${info.goal_conditioned?'goal-conditioned':'goal-free'}${info.target_fps?` · ${info.target_fps} fps`:''} — each step is one screenshot→action turn (assistant reply = the frame's action). Frames resolve from the linked stage-01a master.`;
@@ -1370,7 +1369,7 @@ function show(i){
     lightKeyboard(st.pressed, st.held); updateRadar(p, st.pressed, st.held); renderTyped(st.chars, cur);
   } else {
     lightKeyboard(EMPTYSET, EMPTYSET); updateRadar(p, EMPTYSET, EMPTYSET);
-    $('#typed').innerHTML='<span class="empty">no actions — run 01b, or link a keylog via --clips-manifest</span>';
+    $('#typed').innerHTML='<span class="empty">no actions — run stage 03, or link a keylog via --clips-manifest</span>';
   }
   if(_lastCell) _lastCell.classList.remove('cur');
   _lastCell=$('#strip').children[cur];
@@ -1398,7 +1397,7 @@ function step(d){ show(cur+d); }
 function frameActive(f){ return (CLOCK==='aligned' && f.action_aln!=null) ? f.action_aln!=='NO_OP' : !f.is_noop; }
 function nextActive(d){ let i=cur+d; while(i>=0&&i<FR.length){ if(frameActive(FR[i])){show(i);return;} i+=d; } }
 // Jump to the prev/next (near-)black frame. Both modes carry is_black (master:
-// from its own luma metrics; 01b sample: cross-referenced from the master).
+// from its own luma metrics; stage-03 output: cross-referenced from the master).
 function nextBlack(d){ let i=cur+d; while(i>=0&&i<FR.length){ if(FR[i].is_black){show(i);return;} i+=d; } }
 // Prev/next black frame that ALSO has an action (is_noop matches the strip's
 // action marking — raw binning). No-op when nothing black carries an action.
@@ -1470,7 +1469,7 @@ def resolve_jsonl_paths(dataset: Path) -> list[Path]:
 
     Handles both shapes:
       * a single combined file (stage-01 style: ``<dir>/frame_records.jsonl``),
-      * the stage-01b annotate layout — one file per segment at
+      * the stage-03 annotate layout — one file per segment at
         ``<dir>/clips/<segment_id>/stage_01/frame_records.jsonl`` (a
         ``run_dataset --phase annotate`` drop-in).
     A path pointing straight at a ``frame_records.jsonl`` is used as-is.
@@ -1486,11 +1485,11 @@ def resolve_jsonl_paths(dataset: Path) -> list[Path]:
         return [root]
     # A stage-03 filter artifact's QC view (qc_view/<segment_id>.jsonl, written
     # with --qc-view-fps): per-segment sampled frames + derived canonical
-    # actions in frame_records field names — browse it like any 01b sample.
+    # actions in frame_records field names — browse it like any stage-03 output.
     qc = sorted((dataset / "qc_view").glob("*.jsonl"))
     if qc:
         return qc
-    # Otherwise gather per-segment files: shallow layout, then the 01b annotate
+    # Otherwise gather per-segment files: shallow layout, then the stage-03 annotate
     # layout, then a bounded recursive sweep. First non-empty match wins.
     for pattern in (
         "*/frame_records.jsonl",

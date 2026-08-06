@@ -39,9 +39,7 @@ sequence. Any difference the gate measures between those two arms is therefore t
 render one intent per step precisely so that asymmetry is exercised honestly rather
 than papered over.
 
-Four control cells + two model arms, one taskset, no forks. `run_suite(mode=...)`
-took `mode` as a whole-run parameter and branched into a different function body
-per arm; here the arm *is* the config.
+Four control arms + two model arms over one taskset: the arm *is* the config.
 """
 
 from __future__ import annotations

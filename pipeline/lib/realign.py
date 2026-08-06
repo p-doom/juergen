@@ -1,9 +1,7 @@
 """Keylog<->video realignment (crowd-cast recorder pause-clock bug).
 
-Self-contained port of the validated ``realignment/align_lib.py`` primitives plus
-the spec-v2 per-recording algorithm (the reference ``realignment/`` scripts only
-implement the creation_time *fallback* and a coarse 4-way category; this module
-adds the frame-exact overhang refinement and the full status taxonomy).
+Self-contained: the alignment primitives, the spec-v2 per-recording algorithm, the
+frame-exact overhang refinement and the full status taxonomy all live here.
 
 Root cause (spec v1): keylog event timestamps come from OBS's global compositor
 clock (``obs_get_video_frame_time() - recording_start_ns``), which keeps advancing

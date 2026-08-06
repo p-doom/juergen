@@ -298,10 +298,12 @@ def _lift(codec: Any, ops: tuple[Any, ...], step: Step, terminate: str | None) -
     The codec owns its coordinate convention, so the codec owns this lift; and it
     owns how it spells termination, so the same call takes ``terminate`` (``None``
     for a normal turn, else ``"success"`` / ``"failure"``, with ``ops`` empty).
-    Six grammars spell a terminal turn six ways — a flag on the Action
-    (``deltatype_v2.fail``, ``diffabs.terminate``, ``ordered_events_v3.terminate``)
-    or a ``terminate`` call inside it (``native_absolute``, ``move_rel``) — so the
-    converter must not reconstruct it by introspecting Action dataclasses.
+    A terminal turn is spelled two ways across the seven grammars — a flag on the
+    Action (``deltatype_v2.fail``, ``diffabs.terminate``,
+    ``ordered_events_v3.terminate``) or a ``terminate`` call inside it
+    (``native_absolute``, ``move_rel``), while ``compact_raw`` and
+    ``native_absolute_control`` cannot express one and raise — so the converter
+    must not reconstruct it by introspecting Action dataclasses.
 
     A grammar that has not implemented this fails HERE, loudly, naming the method
     it must add — never by silently emitting a differently-encoded dataset.
