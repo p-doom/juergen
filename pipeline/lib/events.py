@@ -22,6 +22,10 @@ events.
 Dead-zone label policy (the load-bearing rules):
   * Mouse move / scroll deltas inside a dead zone are discarded from labels
     (counted per zone reason).
+  * When the keylog runs past the video's last frame, those events fall in the
+    trailing ``no_coverage`` zone and are DISCARDED — never folded into the last
+    selected frame's action. Nothing was visible, so nothing is supervised: the
+    final label must not carry deltas the trainee had no frame for.
   * A key/button press+release pair straddling a dead zone is COMPLETED by
     clamping the unseen endpoint to the zone boundary: release in a zone is
     emitted at the zone START (tail of the last visible window — after its
@@ -34,8 +38,11 @@ Dead-zone label policy (the load-bearing rules):
     is discarded. A press in a dead zone that is NEVER released is discarded
     too: clamping it forward would emit a press with no matching release — an
     unbalanced label either way, so the clamp buys nothing.
-  * Every removal/clamp is counted (``PolicyCounters``); zero dangling keys
-    from dead zones by construction. The counters double as a per-segment
+  * Every removal/clamp is counted (``PolicyCounters``); zero dangling keys from
+    dead zones by construction. That guarantee is why the clamp exists rather
+    than a drop: a press whose release is silently dropped leaves the key held
+    for the REST OF THE CONVERSATION, so every later label is wrong in a way
+    nothing downstream can detect. The counters double as a per-segment
     realignment health metric.
 """
 

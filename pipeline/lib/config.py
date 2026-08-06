@@ -39,13 +39,13 @@ NOOP_MODES = ("none", "ends", "all")
 # dropped, keeping KEEP_HEAD_S / KEEP_TAIL_S at each end (a wait's start AND
 # end stay visible).
 #
-# The DEFAULTS byte-mirror the pre-rewrite sampler's defaults (noop head/tail
-# = 1/1 bins at DEFAULT_TARGET_FPS 0.5): idleness is judged with the LEGACY
-# NO_OP predicate ("rounded": a judgment bin is active iff its formatted
-# action is non-NO_OP — deltas round to nonzero or deduped key events) per
-# 2 s judgment bin (= 1/DEFAULT_TARGET_FPS), runs > 4 s (> 2 bins) are
-# thinned, 2 s (1 bin) kept at each end. Set IDLE_ACTIVITY "raw" (any nonzero
-# event counts, per master tick) for the fps-agnostic judgment instead.
+# Idleness is judged with the "rounded" predicate by default: a judgment bin is
+# active iff its FORMATTED action is non-NO_OP (deltas round to nonzero, or the
+# bin carries deduped key events), per 2 s judgment bin (= 1/DEFAULT_TARGET_FPS),
+# runs > 4 s (> 2 bins) thinned, 2 s (1 bin) kept at each end. Rounding is what
+# makes it fps-dependent: sub-round drift seconds read as idle and are dropped.
+# Set IDLE_ACTIVITY "raw" (any nonzero event counts, per master tick) to retain
+# them and make the judgment fps-agnostic.
 DEFAULT_IDLE_MIN_DURATION_S = 4.0
 DEFAULT_IDLE_KEEP_HEAD_S = 2.0
 DEFAULT_IDLE_KEEP_TAIL_S = 2.0

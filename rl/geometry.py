@@ -1,19 +1,9 @@
 """Geometry and rendering shared by every box-target env.
 
-Pre-refactor these were duplicated with quiet inconsistencies that changed scores:
-
-  * two `distance_to_box` implementations, one taking an xyxy tuple and one a
-    `TargetBox` dataclass, with identical bodies;
-  * a **half-open** point test (`in_bbox`, grounding) and a **closed** one
-    (`point_in_box`, target_box), while both envs constructed boxes as
-    `(x1, y1, x1+w-1, y1+h-1)` — so a "150 px" box was a 149 px hit region in one
-    env and 150 px in the other;
-  * three box outlines at widths 5, 3 and 3, and a cursor marker defined once but
-    reached for through two wrappers.
-
-One definition each. `in_bbox` keeps the half-open convention because that is what
-the published grounding numbers were computed under; `BOX_EDGE_INCLUSIVE` names the
-alternative rather than leaving it implicit.
+One definition each, and the inclusivity convention is explicit because it
+silently changes what counts as a hit: boxes are built `(x1, y1, x1+w-1,
+y1+h-1)`, so a 150 px box spans 150 px of pixels, and `in_bbox` is **half-open**
+on the max edge — see `BOX_EDGE_INCLUSIVE`.
 """
 
 from __future__ import annotations
