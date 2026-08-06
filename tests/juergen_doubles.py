@@ -20,22 +20,12 @@ import verifiers.v1 as vf
 from evals.tasks import DesktopState, DesktopTaskData
 
 
-# --------------------------------------------------------------------------- #
-# images
-# --------------------------------------------------------------------------- #
-
-
 def png(width: int = 8, height: int = 6, colour: tuple[int, int, int] = (10, 20, 30)) -> bytes:
     from PIL import Image
 
     buffer = io.BytesIO()
     Image.new("RGB", (width, height), colour).save(buffer, format="PNG")
     return buffer.getvalue()
-
-
-# --------------------------------------------------------------------------- #
-# sessions
-# --------------------------------------------------------------------------- #
 
 
 class FakeSession:
@@ -149,11 +139,6 @@ class FakePool:
         self.closed += 1
 
 
-# --------------------------------------------------------------------------- #
-# model context
-# --------------------------------------------------------------------------- #
-
-
 class FakeClient:
     """A `Client` stand-in for `ContextTransport`. Records every wire body."""
 
@@ -182,11 +167,6 @@ def make_ctx(
         client=FakeClient(replies),  # type: ignore[arg-type]
         sampling=vf.Sampling(**sampling),
     )
-
-
-# --------------------------------------------------------------------------- #
-# traces
-# --------------------------------------------------------------------------- #
 
 
 def make_task_data(**kwargs: Any) -> DesktopTaskData:

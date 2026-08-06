@@ -53,11 +53,6 @@ RESULT_KEY = "episode"
 RESULT_SCHEMA_VERSION = 1
 
 
-# --------------------------------------------------------------------------- #
-# rows and state
-# --------------------------------------------------------------------------- #
-
-
 class DesktopTaskData(vf.TaskData):
     """One desktop episode's row.
 
@@ -121,11 +116,6 @@ class DesktopTask(vf.Task[DesktopTaskData, DesktopState]):
     reward that raises for lack of evidence — one throwing reward inside
     `Task.score`'s `asyncio.gather` drops the whole group's rewards.
     """
-
-
-# --------------------------------------------------------------------------- #
-# preparers
-# --------------------------------------------------------------------------- #
 
 
 @runtime_checkable
@@ -354,11 +344,6 @@ for _preparer in (
     register_preparer(_preparer)
 
 
-# --------------------------------------------------------------------------- #
-# geometry (shared with rl/)
-# --------------------------------------------------------------------------- #
-
-
 def in_bbox(pos: tuple[int, int], bbox: tuple[int, int, int, int]) -> bool:
     """Half-open on the max edge, verbatim from both pre-refactor definitions."""
     return bbox[0] <= pos[0] < bbox[2] and bbox[1] <= pos[1] < bbox[3]
@@ -467,11 +452,6 @@ def cursor_start(
     if furthest in outside:
         return furthest
     return max(outside, key=lambda c: distance_to_box(c, bbox))
-
-
-# --------------------------------------------------------------------------- #
-# tasksets
-# --------------------------------------------------------------------------- #
 
 
 class OSWorldTasksetConfig(vf.TasksetConfig):

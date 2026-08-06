@@ -47,11 +47,6 @@ __all__ = [
 IMAGE_PLACEHOLDER = "Previous screenshot omitted."
 
 
-# --------------------------------------------------------------------------- #
-# image budget
-# --------------------------------------------------------------------------- #
-
-
 @dataclass(frozen=True)
 class ImageBudget:
     """How many images may ride a prompt, and how each is encoded.
@@ -98,11 +93,6 @@ class ImageBudget:
                 return buffer.getvalue(), "image/png"
             frame.save(buffer, format="JPEG", quality=self.quality, optimize=False)
             return buffer.getvalue(), "image/jpeg"
-
-
-# --------------------------------------------------------------------------- #
-# the window
-# --------------------------------------------------------------------------- #
 
 
 @dataclass
@@ -166,11 +156,6 @@ class History:
     @property
     def current(self) -> bytes:
         return self.turns[-1].image
-
-
-# --------------------------------------------------------------------------- #
-# policies
-# --------------------------------------------------------------------------- #
 
 
 @runtime_checkable

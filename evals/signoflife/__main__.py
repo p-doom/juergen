@@ -81,11 +81,6 @@ API_KEY_VAR = "SIGN_OF_LIFE_API_KEY"
 (`clients/config.py:91-102`); it is never a CLI field, so we name our own."""
 
 
-# --------------------------------------------------------------------------- #
-# the model server
-# --------------------------------------------------------------------------- #
-
-
 @contextlib.contextmanager
 def _sglang(
     *,
@@ -184,11 +179,6 @@ def _sglang(
         handle.close()
 
 
-# --------------------------------------------------------------------------- #
-# provenance
-# --------------------------------------------------------------------------- #
-
-
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -221,11 +211,6 @@ def _model_provenance(model_path: Path | None) -> dict[str, Any] | None:
         record[name.strip(".").replace(".json", "")] = json.loads(candidate.read_text())
         record[f"{name.strip('.').replace('.json', '')}_sha256"] = _sha256_file(candidate)
     return record
-
-
-# --------------------------------------------------------------------------- #
-# config assembly
-# --------------------------------------------------------------------------- #
 
 
 def _harness_payload(arm: str, *, artifacts: Path, pool: dict[str, Any]) -> dict[str, Any]:
@@ -270,11 +255,6 @@ def _eval_config(
         rich=False,  # a live dashboard in a batch job is a log full of escape codes
         push=False,  # never upload a gate run to the Prime platform
     )
-
-
-# --------------------------------------------------------------------------- #
-# aggregation
-# --------------------------------------------------------------------------- #
 
 
 def _harness_error(trace: Any) -> dict[str, Any] | None:
@@ -375,11 +355,6 @@ def _aggregate(
             "count; calibration comes from the separate scripted oracle/negative runs."
         ),
     }
-
-
-# --------------------------------------------------------------------------- #
-# main
-# --------------------------------------------------------------------------- #
 
 
 def _atomic_json(path: Path, value: Any) -> None:

@@ -32,11 +32,6 @@ from evals.fixtures.cdp import (
 )
 
 
-# --------------------------------------------------------------------------- #
-# a websocket server that actually speaks the protocol
-# --------------------------------------------------------------------------- #
-
-
 def _accept_key(key: str) -> str:
     return base64.b64encode(
         hashlib.sha1((key + WEBSOCKET_GUID).encode("ascii")).digest()
@@ -171,11 +166,6 @@ def server_factory():
         server.close()
 
 
-# --------------------------------------------------------------------------- #
-# the happy path
-# --------------------------------------------------------------------------- #
-
-
 def test_a_round_trip_returns_the_evaluated_value(server_factory) -> None:
     server = server_factory(lambda r: _ok(r, {"title": "Capability fixture", "n": 3}))
     value = cdp_evaluate(server.url, "document.title", timeout_s=5)
@@ -270,11 +260,6 @@ def test_a_falsy_value_is_returned_not_treated_as_missing(server_factory) -> Non
     for value in (False, 0, "", None):
         server = server_factory(lambda r, v=value: _ok(r, v))
         assert cdp_evaluate(server.url, "x", timeout_s=5) == value
-
-
-# --------------------------------------------------------------------------- #
-# failures are transport failures, never task failures
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize("url", ["http://127.0.0.1:9/x", "wss://host/x", "ws:///x", "nonsense"])
@@ -393,11 +378,6 @@ def test_a_non_object_result_is_reported(server_factory) -> None:
 
     with pytest.raises(CdpError, match="no result object"):
         cdp_evaluate(server_factory(scalar).url, "1", timeout_s=5)
-
-
-# --------------------------------------------------------------------------- #
-# target selection
-# --------------------------------------------------------------------------- #
 
 
 class _TargetList:

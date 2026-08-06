@@ -57,9 +57,6 @@ REMUX_LOCK = threading.Lock()
 VERBOSE = False
 
 
-# ======================================================================
-# index — uploads -> ordered day.json
-# ======================================================================
 def find_user_segments(uploads: Path, user: str, version: str | None = None) -> list[Path]:
     # version=None globs every recorder-version dir; pass e.g. "1.0.5" to restrict to one
     # (a participant can appear under several versions; this isolates a single recorder).
@@ -194,9 +191,6 @@ def cmd_index(args) -> None:
     print(f"\n[index] wrote {out}: {len(out_rows)} segments, {payload['video_seconds']/3600:.2f}h video.")
 
 
-# ======================================================================
-# align — keylog<->video realignment map (see REALIGNMENT.md)
-# ======================================================================
 def input_times(keylog_path: str):
     data = msgpack.unpack(open(keylog_path, "rb"), raw=False)
     span = data[-1][0] / 1e6 if data else 0.0
@@ -329,9 +323,6 @@ def cmd_align(args) -> None:
     print(f"[align] leading idle: {nover} overhang-refined (frame-exact), {ncre} creation-based")
 
 
-# ======================================================================
-# prewarm — parallel faststart remux of a whole day
-# ======================================================================
 def remux(job: dict) -> dict:
     """Stream-copy a segment to a faststart mp4 (moov-first). Picklable for the pool."""
     src, dst = job["src"], Path(job["dst"])
@@ -391,9 +382,6 @@ def cmd_prewarm(args) -> None:
         sys.exit(1)
 
 
-# ======================================================================
-# serve — local annotation viewer
-# ======================================================================
 def faststart_path(seg_idx: int) -> str:
     """Lazily stream-copy one segment to a faststart mp4 (moov-first) and cache it.
     Serialized via REMUX_LOCK so live clicks queue behind one remux. Lossless."""
@@ -677,9 +665,6 @@ def cmd_serve(args) -> None:
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
 
 
-# ======================================================================
-# CLI
-# ======================================================================
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)

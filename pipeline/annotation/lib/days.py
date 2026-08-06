@@ -94,11 +94,6 @@ def segment_actions(view: SegmentView) -> list[str]:
     return result.labels
 
 
-# ---------------------------------------------------------------------------
-# Day index: filter segments -> user-days (wall-clock via mvhd)
-# ---------------------------------------------------------------------------
-
-
 def load_clips_manifest(path: Path) -> dict[str, dict[str, Any]]:
     """{segment_id -> stage-00 row}; needs video_path + user_id per segment."""
     rows = read_jsonl(path)
@@ -181,11 +176,6 @@ def build_day_index(
         "n_days": len(days),
     }
     return days, counters
-
-
-# ---------------------------------------------------------------------------
-# Day stream: one day row -> ordered, chunked frames on the day clock
-# ---------------------------------------------------------------------------
 
 
 def build_day_stream(

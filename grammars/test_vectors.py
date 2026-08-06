@@ -121,11 +121,6 @@ def _action_from_dict(name: str, value: dict):
     return importlib.import_module(f"grammars.{name}.codec").action_from_dict(value)
 
 
-# --------------------------------------------------------------------------
-# the three directions: parse · format · compile
-# --------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(("name", "payload", "case"), _cases("cases"))
 def test_case(name, payload, case):
     codec = _codec(name)
@@ -179,11 +174,6 @@ def test_invalid_compile(name, payload, case):
         _codec(name).compile(case["text"], geometry, cursor)
 
 
-# --------------------------------------------------------------------------
-# the lift: operations -> action -> text -> operations
-# --------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(("name", "payload", "case"), _cases("lift"))
 def test_lift(name, payload, case):
     """The full triangle. ``recompiled`` closes it; where it differs, the case says why."""
@@ -233,11 +223,6 @@ def test_lift_invalid(name, payload, case):
             cursor=cursor,
             terminate=case.get("terminate"),
         )
-
-
-# --------------------------------------------------------------------------
-# the label-construction helpers each grammar owns
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(("name", "payload", "case"), _cases("from_target"))
@@ -329,11 +314,6 @@ def test_every_section_is_executed():
             if not isinstance(value, list) or section in _NOT_CASES:
                 continue
             assert section in executed, f"{name}: nothing executes section {section!r}"
-
-
-# --------------------------------------------------------------------------
-# invariants that are not vector-shaped
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -506,10 +486,6 @@ def test_a_zero_extent_drag_keeps_its_press_and_release():
         assert "mouse_down" in kinds and "mouse_up" in kinds, (name, kinds)
 
 
-# --------------------------------------------------------------------------
-# the normalized grammar's quantisation ceiling
-# --------------------------------------------------------------------------
-
 SCREEN_SIZES = [(1920, 1080), (1280, 720), (2560, 1440), (4000, 2000), (3840, 2160)]
 
 
@@ -619,11 +595,6 @@ def test_move_rel_sub_grid_guard_is_per_axis():
                 geometry=geometry,
                 cursor=(100, 100),
             )
-
-
-# --------------------------------------------------------------------------
-# registry
-# --------------------------------------------------------------------------
 
 
 def test_entry_points_alone_discover_every_grammar():

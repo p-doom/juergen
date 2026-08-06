@@ -59,11 +59,6 @@ MEDIA_EXTS = {".jpg", ".jpeg", ".png", ".mp4"}
 RUN_ROOT = DEFAULT_RUN_ROOT  # overridden in main()
 
 
-# ---------------------------------------------------------------------------
-# Loading / assembly
-# ---------------------------------------------------------------------------
-
-
 def read_json(path: Path, default: Any = None) -> Any:
     if not path.exists():
         return default
@@ -159,11 +154,6 @@ def build_run(name: str) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# Media serving (root-gated)
-# ---------------------------------------------------------------------------
-
-
 def _under_roots(p: Path) -> bool:
     return any(p == r or r in p.parents for r in MEDIA_ROOTS)
 
@@ -193,10 +183,6 @@ def grain_jpeg(ar_uri: str) -> bytes | None:
         return None
     return read_jpeg_bytes(ar_uri)
 
-
-# ---------------------------------------------------------------------------
-# Frontend
-# ---------------------------------------------------------------------------
 
 INDEX_HTML = r"""<!doctype html><html lang="en"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -364,11 +350,6 @@ function renderClip(){
 }
 init().catch(e=>{$('main').innerHTML=`<pre>${esc(e.stack||e.message)}</pre>`;});
 </script></body></html>"""
-
-
-# ---------------------------------------------------------------------------
-# Server
-# ---------------------------------------------------------------------------
 
 
 class Handler(BaseHTTPRequestHandler):

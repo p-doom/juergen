@@ -67,11 +67,6 @@ def _cell(cell_id: str = EXACT_TEXT_CELL):
     return load_suite().by_id(cell_id)
 
 
-# =========================================================================== #
-# ITEM 14 — the contradiction, established from the cell list, fixture, oracle
-# =========================================================================== #
-
-
 def test_14a_the_cell_is_no_longer_classified_no_submit() -> None:
     assert EXACT_TEXT_CELL not in NO_SUBMIT_CELLS
     rows = list(SignOfLifeTaskset(SignOfLifeTasksetConfig()).load())
@@ -287,11 +282,6 @@ def test_14m_the_cell_id_and_kind_coincidence_that_hid_the_coupling() -> None:
     `cell.id in NO_SUBMIT_CELLS` read correctly by coincidence. 14k now closes that."""
     cell = _cell()
     assert cell.id == cell.kind == EXACT_TEXT_CELL
-
-
-# =========================================================================== #
-# ITEM 17 — the 6-config gate
-# =========================================================================== #
 
 
 def test_the_gate_is_four_controls_plus_two_model_arms() -> None:

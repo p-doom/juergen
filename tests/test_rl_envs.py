@@ -56,11 +56,6 @@ def _desktop(**kwargs) -> VirtualDesktop:
     return desktop
 
 
-# =========================================================================== #
-# ITEM 9 — VirtualDesktop
-# =========================================================================== #
-
-
 def test_the_virtual_desktop_has_the_session_surface_the_harness_needs() -> None:
     desktop = _desktop(screen=(200, 150))
     for attribute in (
@@ -211,11 +206,6 @@ def test_a_codec_compiled_action_drives_the_virtual_desktop_end_to_end() -> None
     assert desktop.cursor[1] == 100, "a pure-x delta must not move y"
 
 
-# --------------------------------------------------------------------------- #
-# shared geometry
-# --------------------------------------------------------------------------- #
-
-
 def test_in_bbox_is_half_open_and_the_two_definitions_agree() -> None:
     from rl.geometry import in_bbox as rl_in_bbox
 
@@ -247,11 +237,6 @@ def test_box_center_and_the_renderers_do_not_mutate_their_input() -> None:
     assert base.tobytes() == original, "both draw on a copy"
     assert boxed.tobytes() != original and marked.tobytes() != original
     assert png_bytes(marked)[:8] == b"\x89PNG\r\n\x1a\n"
-
-
-# =========================================================================== #
-# ITEM 12 — the band shuffle
-# =========================================================================== #
 
 
 WEIGHTS = {"near": 0.6, "medium": 0.3, "far": 0.1}
@@ -389,11 +374,6 @@ def test_movebox_scene_sampling_is_reproducible_across_processes() -> None:
         assert proc.returncode == 0, proc.stderr[-2000:]
         outputs.append(json.loads(proc.stdout))
     assert outputs[0] == outputs[1]
-
-
-# =========================================================================== #
-# ITEM 13 — md5-seeded cursor regimes
-# =========================================================================== #
 
 
 def test_the_three_regimes_are_declared() -> None:
@@ -595,11 +575,6 @@ def test_a_builtin_hash_would_have_failed_the_same_check() -> None:
         )
         values.add(proc.stdout.strip())
     assert len(values) > 1, "PYTHONHASHSEED must actually move hash() on this interpreter"
-
-
-# =========================================================================== #
-# the movebox band metric
-# =========================================================================== #
 
 
 def test_the_band_metric_reads_the_band_the_preparer_published() -> None:

@@ -27,9 +27,6 @@ import numpy as np
 from pipeline.lib.image_store import read_jpeg_bytes
 from pipeline.lib.views import SegmentView, ViewFrame
 
-# ---------------------------------------------------------------------------
-# Frame rendering (ar:// store -> in-memory data URLs; no jpegs on disk)
-# ---------------------------------------------------------------------------
 
 
 def resize_to_height(frame: Any, height: int) -> Any:
@@ -84,11 +81,6 @@ def est_frame_tokens(ref: str) -> int:
         raise RuntimeError(f"could not decode frame for token estimate: {ref}")
     h, w = img.shape[:2]
     return math.ceil(h / 28) * math.ceil(w / 28)
-
-
-# ---------------------------------------------------------------------------
-# Submission-aware window planning (ported from annotation_pipeline)
-# ---------------------------------------------------------------------------
 
 
 def frame_activity(action: str | None) -> str:
@@ -176,11 +168,6 @@ def plan_windows(n: int, max_frames: int, overlap: int = 0, *,
         hi = min(n, hi + (overlap if i < len(bounds) - 2 else 0))
         wins.append((lo, hi))
     return wins
-
-
-# ---------------------------------------------------------------------------
-# AnnotationUnit
-# ---------------------------------------------------------------------------
 
 
 @dataclass

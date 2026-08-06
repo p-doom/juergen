@@ -55,11 +55,6 @@ def _step(before, after):
     return {"cursor_before": list(before), "cursor_after": list(after)}
 
 
-# =========================================================================== #
-# ITEM 7 — _never_moved
-# =========================================================================== #
-
-
 def test_never_moved_is_true_when_no_step_changed_the_cursor() -> None:
     assert _never_moved({"steps_detail": [_step((5, 5), (5, 5))]})
     assert _never_moved({"steps_detail": [_step((5, 5), (5, 5)), _step((5, 5), (5, 5))]})
@@ -173,11 +168,6 @@ def test_the_grounding_rewards_are_all_trace_only_so_replay_scores_them() -> Non
         assert not _requires_runtime(getattr(GroundingTask, name)), name
 
 
-# =========================================================================== #
-# grounding dataset + taskset
-# =========================================================================== #
-
-
 def _labels(tmp_path: Path, n: int = 2) -> Path:
     rows = []
     for i in range(n):
@@ -268,11 +258,6 @@ def test_the_grounding_taskset_honours_target_and_regime_filters(tmp_path) -> No
     assert len(rows) == 2 and all(r.data.regime == "near" for r in rows)
 
 
-# =========================================================================== #
-# target_box geometry
-# =========================================================================== #
-
-
 def test_a_sampled_box_sits_inside_the_margins() -> None:
     config = TargetBoxConfig()
     for key in ("a:1", "b:2", "c:3"):
@@ -361,11 +346,6 @@ def test_annotate_draws_the_box_and_no_cursor_marker() -> None:
         pixels = handle.convert("RGB").load()
         assert pixels[20, 20] == (0, 255, 0), "the box outline is drawn"
         assert pixels[160, 130] == (0, 0, 0), "nothing else is"
-
-
-# =========================================================================== #
-# target_box taskset
-# =========================================================================== #
 
 
 def _osworld_tasks(tmp_path: Path, n: int = 2) -> Path:

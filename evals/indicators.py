@@ -51,11 +51,6 @@ healthy relative policy emits arbitrary integers, a collapsed one emits digits."
 _LITERAL_ESCAPES = ("\\n", "\\r", "\\t")
 
 
-# --------------------------------------------------------------------------- #
-# extraction (grammar-agnostic)
-# --------------------------------------------------------------------------- #
-
-
 def step_records(trace: vf.Trace) -> list[dict[str, Any]]:
     result = trace.info.get(RESULT_KEY) or {}
     steps = result.get("steps_detail")
@@ -213,11 +208,6 @@ def delta_histogram(values: Iterable[tuple[int, int]]) -> dict[str, float]:
         bins["delta_median_px"] = ordered[len(ordered) // 2]
         bins["delta_max_px"] = ordered[-1]
     return bins
-
-
-# --------------------------------------------------------------------------- #
-# mixins
-# --------------------------------------------------------------------------- #
 
 
 class FailureModeIndicators:

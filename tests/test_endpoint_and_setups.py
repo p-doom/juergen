@@ -22,11 +22,6 @@ from agent.history import History, ImageBudget, StatelessSingleTurn
 from juergen_doubles import FakeSession, make_ctx, make_task_data, png
 
 
-# --------------------------------------------------------------------------- #
-# a fake OpenAI-shaped endpoint
-# --------------------------------------------------------------------------- #
-
-
 class FakeOpenAI:
     """Serves `/chat/completions` and records every request body."""
 
@@ -110,11 +105,6 @@ def _history() -> History:
     history = History(n_history_frames=4)
     history.start(png())
     return history
-
-
-# --------------------------------------------------------------------------- #
-# EndpointTransport
-# --------------------------------------------------------------------------- #
 
 
 def test_the_endpoint_transport_posts_and_returns_the_content(endpoint) -> None:
@@ -283,11 +273,6 @@ def _geometry():
     return DisplayGeometry(desktop_width=1920, desktop_height=1080)
 
 
-# --------------------------------------------------------------------------- #
-# the remaining three sign-of-life setups
-# --------------------------------------------------------------------------- #
-
-
 _GEOMETRY = "SOLV2_GEOMETRY=" + json.dumps(
     {"window_id": "0x1", "x": 80, "y": 120, "width": 1120, "height": 720, "window_line": "x"}
 )
@@ -401,11 +386,6 @@ def test_the_active_window_probe_refuses_a_zero_window_id() -> None:
 
     script = guest._active_window_script()
     assert 'test "$wid" != "0x0"' in script, "an unmapped desktop must not read as focused"
-
-
-# --------------------------------------------------------------------------- #
-# the RL preparers
-# --------------------------------------------------------------------------- #
 
 
 def test_the_movebox_preparer_installs_the_scene_on_a_virtual_desktop(tmp_path) -> None:
@@ -537,11 +517,6 @@ def test_the_target_box_scene_is_stable_across_prepare_observe_and_probe() -> No
     assert preparer.probe(session, task)["box"] == prepared
 
 
-# --------------------------------------------------------------------------- #
-# movebox background loading
-# --------------------------------------------------------------------------- #
-
-
 def test_list_backgrounds_is_sorted_and_refuses_an_empty_directory(tmp_path) -> None:
     from rl.movebox.dataset import list_backgrounds
 
@@ -578,11 +553,6 @@ def test_load_canvas_resizes_the_background_and_draws_the_box(tmp_path) -> None:
     canvas.save(buffer, format="PNG")
     with Image.open(io.BytesIO(buffer.getvalue())) as handle:
         assert handle.convert("RGB").load()[10, 10] == (0, 255, 0)
-
-
-# --------------------------------------------------------------------------- #
-# the fixture preparers
-# --------------------------------------------------------------------------- #
 
 
 def test_the_web_fixture_preparer_serves_launches_and_reads_back(monkeypatch) -> None:

@@ -66,11 +66,6 @@ def _images(messages) -> int:
     return total
 
 
-# --------------------------------------------------------------------------- #
-# the window
-# --------------------------------------------------------------------------- #
-
-
 def test_the_window_invariant_holds_at_every_step() -> None:
     history = History(n_history_frames=6)
     history.start(_f(0))
@@ -117,11 +112,6 @@ def test_eviction_never_empties_the_window(n: int) -> None:
     assert len(history.turns) <= max(n, 1)
     assert history.current is history.turns[-1].image
     assert len(history.all_outputs) == 40
-
-
-# --------------------------------------------------------------------------- #
-# InterleavedFrames
-# --------------------------------------------------------------------------- #
 
 
 def test_interleaved_alternates_user_and_assistant_turns() -> None:
@@ -179,11 +169,6 @@ def test_persist_instruction_re_anchors_the_goal_every_step() -> None:
             history=fresh, system="S", instruction="GOAL", step=1, budget=ImageBudget()
         )[1]
     )
-
-
-# --------------------------------------------------------------------------- #
-# ProseSummarisedWindow
-# --------------------------------------------------------------------------- #
 
 
 def test_prose_window_keeps_five_images_and_summarises_the_rest() -> None:
@@ -277,11 +262,6 @@ def test_prose_summary_recovers_the_action_description() -> None:
     assert prose_summary("Action:\nline") == "No action description."
 
 
-# --------------------------------------------------------------------------- #
-# LatestImageOnly / StatelessSingleTurn
-# --------------------------------------------------------------------------- #
-
-
 def test_latest_image_only_sends_exactly_one_image() -> None:
     history = History(n_history_frames=32)
     _drive(history, 6)
@@ -306,11 +286,6 @@ def test_stateless_single_turn_has_no_history() -> None:
     assert all("action 1" not in _text_of(m) for m in messages)
 
 
-# --------------------------------------------------------------------------- #
-# the budget itself
-# --------------------------------------------------------------------------- #
-
-
 def test_image_budget_encodes_jpeg_by_default_and_png_when_asked() -> None:
     raw = png(20, 10)
     assert ImageBudget().data_url(raw).startswith("data:image/jpeg;base64,")
@@ -328,11 +303,6 @@ def test_image_budget_downscales_to_max_pixels() -> None:
     with Image.open(io.BytesIO(payload)) as handle:
         assert handle.width * handle.height <= 5000
         assert abs(handle.width / handle.height - 2.0) < 0.1, "aspect is preserved"
-
-
-# --------------------------------------------------------------------------- #
-# registry
-# --------------------------------------------------------------------------- #
 
 
 def test_history_policy_builds_by_name_and_refuses_an_unknown_one() -> None:

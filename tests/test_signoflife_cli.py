@@ -98,11 +98,6 @@ def _run(output: Path, tmp_path: Path, *extra: str) -> tuple[int, dict]:
     return code, json.loads((output / "result.json").read_text())
 
 
-# --------------------------------------------------------------------------- #
-# the whole path
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.slow
 def test_the_dispatcher_runs_all_four_cells_and_writes_the_readers_shape(
     tmp_path,
@@ -224,11 +219,6 @@ def test_the_result_is_written_atomically_and_leaves_no_partial(tmp_path) -> Non
     assert not (output / "result.json.partial").exists()
 
 
-# --------------------------------------------------------------------------- #
-# the four validation paths
-# --------------------------------------------------------------------------- #
-
-
 def test_a_scripted_arm_refuses_a_model_it_would_silently_ignore(tmp_path) -> None:
     """Recorded-and-ignored is the worst shape: the run record would name a
     checkpoint that never answered a single token."""
@@ -325,11 +315,6 @@ def test_a_model_arm_with_too_few_trials_warns_but_runs(tmp_path, caplog) -> Non
     assert not [r for r in caplog.records if "trials=" in r.getMessage()], (
         "a scripted arm has no model to draw from, so the warning must not fire"
     )
-
-
-# --------------------------------------------------------------------------- #
-# the aggregate, read directly
-# --------------------------------------------------------------------------- #
 
 
 def test_controls_ok_is_null_for_a_model_arm_by_construction() -> None:

@@ -55,11 +55,6 @@ def _fixture(template: str = "click", **params) -> WebFixture:
     )
 
 
-# =========================================================================== #
-# ITEM 10 — the state store
-# =========================================================================== #
-
-
 def test_an_unknown_template_is_refused_at_construction() -> None:
     with pytest.raises(FixtureServerError, match="unknown template"):
         WebFixture(id="x", template="telepathy", instruction="i", params={})
@@ -220,11 +215,6 @@ def test_wait_ready_ignores_a_stale_ready() -> None:
         store.wait_ready(fixture.id, timeout_s=0.2)
 
 
-# --------------------------------------------------------------------------- #
-# the HTTP surface
-# --------------------------------------------------------------------------- #
-
-
 def _get(url: str) -> tuple[int, bytes]:
     try:
         with urllib.request.urlopen(url, timeout=5) as response:
@@ -376,11 +366,6 @@ def test_the_instruction_and_labels_are_html_escaped() -> None:
     assert "&lt;b&gt;&amp;&lt;/b&gt;" in html
 
 
-# --------------------------------------------------------------------------- #
-# Chrome launch
-# --------------------------------------------------------------------------- #
-
-
 def test_launch_refuses_a_non_positive_deadline() -> None:
     fixture = _fixture("click")
     server = WebFixtureServer({fixture.id: fixture}, host="127.0.0.1")
@@ -455,11 +440,6 @@ def test_a_relaunch_restarts_chrome_and_bumps_the_generation(monkeypatch) -> Non
 def test_the_restart_budget_refuses_an_attempt_that_cannot_finish() -> None:
     assert BROWSER_RESTART_BUDGET_S > 0
     assert MAX_ATTEMPTS == 3
-
-
-# =========================================================================== #
-# ITEM 11 — probe_app_state
-# =========================================================================== #
 
 
 def _app(app: str = "writer", **params) -> AppFixture:

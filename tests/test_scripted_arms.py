@@ -54,11 +54,6 @@ def _geo():
     return DisplayGeometry(desktop_width=1920, desktop_height=1080)
 
 
-# --------------------------------------------------------------------------- #
-# the renderer table
-# --------------------------------------------------------------------------- #
-
-
 def test_the_renderer_table_is_exact_and_covers_the_four_paired_grammars() -> None:
     assert set(SCRIPT_RENDERERS) == {
         "native_absolute",
@@ -86,11 +81,6 @@ def test_a_grammar_with_no_scripted_arm_is_a_loud_lookup_error(missing: str) -> 
 def test_an_unnamed_codec_object_is_refused() -> None:
     with pytest.raises(LookupError):
         render_step(_session(), _task("terminal_command"), codec=object(), intent=Intent("submit"))
-
-
-# --------------------------------------------------------------------------- #
-# plans are grammar-neutral intents
-# --------------------------------------------------------------------------- #
 
 
 def test_a_plan_is_intents_not_text() -> None:
@@ -137,11 +127,6 @@ def test_the_chrome_negative_clicks_screen_centre_not_the_dock() -> None:
 def test_an_unknown_kind_is_refused_by_the_planner() -> None:
     with pytest.raises(ValueError):
         script_plan(make_task_data(kind="not_a_cell"), negative=False)
-
-
-# --------------------------------------------------------------------------- #
-# the four renderers
-# --------------------------------------------------------------------------- #
 
 
 def test_native_absolute_renders_tool_calls_with_absolute_pixels() -> None:
@@ -276,11 +261,6 @@ def test_a_terminal_click_target_is_recomputed_from_guest_geometry() -> None:
     assert any("wmctrl" in " ".join(argv) for argv in session.argv_log), (
         "the coordinate is read from the guest, not from cached setup evidence"
     )
-
-
-# --------------------------------------------------------------------------- #
-# every rendered step survives the real parse + compile
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize("codec_name", sorted(SCRIPT_RENDERERS))

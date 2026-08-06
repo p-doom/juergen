@@ -25,11 +25,6 @@ from evals.osworld import OSWorldBridge, OSWorldNotAvailable, osworld_root
 from evals.vm import DesktopFacade
 
 
-# --------------------------------------------------------------------------- #
-# fakes for the one seam
-# --------------------------------------------------------------------------- #
-
-
 class _Getters:
     """OSWorld's `evaluators.getters`. Each `get_<type>` takes `(env, config)`."""
 
@@ -108,11 +103,6 @@ def _bridge(tmp_path: Path, **kwargs: Any) -> OSWorldBridge:
     )
 
 
-# --------------------------------------------------------------------------- #
-# $OSWORLD_ROOT
-# --------------------------------------------------------------------------- #
-
-
 def test_an_unset_osworld_root_names_the_variable_not_a_submodule(monkeypatch) -> None:
     monkeypatch.delenv("OSWORLD_ROOT", raising=False)
     with pytest.raises(OSWorldNotAvailable) as excinfo:
@@ -134,11 +124,6 @@ def test_a_real_looking_root_resolves(tmp_path, monkeypatch) -> None:
     (tmp_path / "desktop_env" / "evaluators").mkdir(parents=True)
     monkeypatch.setenv("OSWORLD_ROOT", str(tmp_path))
     assert osworld_root() == tmp_path
-
-
-# --------------------------------------------------------------------------- #
-# binding
-# --------------------------------------------------------------------------- #
 
 
 def test_setup_runs_the_config_steps_and_binds_the_evaluator(tmp_path) -> None:
@@ -189,11 +174,6 @@ def test_a_length_mismatch_between_metrics_and_getters_is_refused(tmp_path) -> N
             }
         )
     assert "result getters" in str(excinfo.value)
-
-
-# --------------------------------------------------------------------------- #
-# the ported arithmetic
-# --------------------------------------------------------------------------- #
 
 
 def test_a_scalar_evaluator_with_an_expected_getter_and_options(tmp_path) -> None:
@@ -371,11 +351,6 @@ def test_a_postconfig_runs_before_the_getters(tmp_path) -> None:
     assert bridge.setup_controller.calls == [[{"type": "launch"}], [{"type": "save"}]]
 
 
-# --------------------------------------------------------------------------- #
-# the FAIL inversion
-# --------------------------------------------------------------------------- #
-
-
 def test_declaring_fail_on_an_infeasible_task_is_the_success_condition(tmp_path) -> None:
     bridge = _bridge(tmp_path)
     bridge.bind({"id": "t", "evaluator": {"func": "infeasible"}})
@@ -400,11 +375,6 @@ def test_a_plain_terminate_is_not_a_fail(tmp_path) -> None:
     bridge.declare_terminal("terminate")
     bridge.declare_terminal(None)
     assert bridge.evaluate() == 0.0
-
-
-# --------------------------------------------------------------------------- #
-# the facade
-# --------------------------------------------------------------------------- #
 
 
 class _Transport:
@@ -564,11 +534,6 @@ def test_the_facade_delegates_the_rest_of_the_surface(tmp_path) -> None:
     facade.execute_pyautogui("pyautogui.moveTo(1, 2)")
     facade.release(failed=True, error="boom")
     assert checkout.released == [(True, "boom")]
-
-
-# --------------------------------------------------------------------------- #
-# the config that uses it
-# --------------------------------------------------------------------------- #
 
 
 def _osworld_tree(tmp_path: Path, *, evaluator: dict[str, Any] | None = None) -> Path:

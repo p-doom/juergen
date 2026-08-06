@@ -89,11 +89,6 @@ def render_frames(
     return image_paths
 
 
-# ---------------------------------------------------------------------------
-# Frame selection
-# ---------------------------------------------------------------------------
-
-
 def frames_to_data_urls(
     records: list[dict[str, Any]],
     target_height: int = 0,

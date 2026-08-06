@@ -45,9 +45,6 @@ from typing import Any
 from pixeldesk.geometry import DisplayGeometry
 from pixeldesk.ir import Operation, scroll_deltas
 
-# --------------------------------------------------------------------------
-# geometry
-# --------------------------------------------------------------------------
 
 # The single point of contact with DisplayGeometry. Its field names are the
 # verbatim Harbor ones — ``desktop_width`` / ``desktop_height`` for the display
@@ -65,11 +62,6 @@ def clamp(point: tuple[int, int], geometry: DisplayGeometry) -> tuple[int, int]:
     width, height = screen_size(geometry)
     x, y = point
     return (max(0, min(width - 1, int(x))), max(0, min(height - 1, int(y))))
-
-
-# --------------------------------------------------------------------------
-# Operation constructors
-# --------------------------------------------------------------------------
 
 
 def move_to(point: tuple[int, int]) -> Operation:
@@ -108,9 +100,7 @@ def wait(seconds: float) -> Operation:
     return Operation("wait", (float(seconds),))
 
 
-# --------------------------------------------------------------------------
 # prompt derivation: the docstring IS the spec (BrowserGym core/action pattern)
-# --------------------------------------------------------------------------
 
 _ORDER = itertools.count()
 
@@ -257,10 +247,6 @@ def drift_report(codec: Any, *, producer: dict[str, str]) -> dict[str, Any]:
     }
 
 
-# --------------------------------------------------------------------------
-# line extraction
-# --------------------------------------------------------------------------
-
 _ACTION_MARKER_RE = re.compile(r"(?im)^\s*action\s*:\s*(.+?)\s*$")
 
 
@@ -286,9 +272,7 @@ def action_line(text: str, *, error: type[Exception] = ValueError) -> str:
     return final_line(text, error=error)
 
 
-# --------------------------------------------------------------------------
 # the bare-token family:  dx dy scroll [ ; elements ]
-# --------------------------------------------------------------------------
 
 BUTTONS = {"LMB": "left", "RMB": "right", "MMB": "middle"}
 
@@ -460,9 +444,7 @@ def lower_transitions(
     return operations
 
 
-# --------------------------------------------------------------------------
 # lifting: Operations -> an action, the training-label direction
-# --------------------------------------------------------------------------
 #
 # ``compile_action`` read backwards. A converter that has absolute Operations —
 # from a recorded trajectory, a scripted oracle, a teacher rollout — needs an
@@ -809,9 +791,7 @@ def terminate_status(
     raise error(f"terminate must be None, 'success' or 'failure', got {value!r}")
 
 
-# --------------------------------------------------------------------------
 # the computer_use tool-call family
-# --------------------------------------------------------------------------
 
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 _FENCE_OPEN_RE = re.compile(r"^```(?:json)?\s*", re.IGNORECASE)
@@ -922,9 +902,7 @@ def normalize_key(value: object, *, error: type[Exception] = ValueError) -> str:
     return raw
 
 
-# --------------------------------------------------------------------------
 # NO HANDLER TABLES LIVE HERE, AND NONE SHOULD BE ADDED
-# --------------------------------------------------------------------------
 #
 # There used to be a ``core_handlers()`` plus a ``handlers.py`` in each grammar,
 # exported as ``dict[str, Handler]``, described as "the dispatch table this
@@ -943,9 +921,7 @@ def normalize_key(value: object, *, error: type[Exception] = ValueError) -> str:
 # is correct and is where it belongs.
 
 
-# --------------------------------------------------------------------------
 # shared prose for the matched pair
-# --------------------------------------------------------------------------
 
 #: The preamble of BOTH bare-line paired-eval arms, ``compact_raw`` and
 #: ``native_absolute_control``, held in ONE string and assigned to both codec

@@ -56,11 +56,6 @@ def is_arrayrecord_image_uri(value: object) -> bool:
     return isinstance(value, str) and value.startswith(f"{ARRAYRECORD_IMAGE_URI_SCHEME}://")
 
 
-# ---------------------------------------------------------------------------
-# Reading
-# ---------------------------------------------------------------------------
-
-
 @lru_cache(maxsize=32)
 def _reader(shard_path: str):
     """Cache one ArrayRecordReader per shard (frames of a segment read together)."""

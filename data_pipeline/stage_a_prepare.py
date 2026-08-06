@@ -77,10 +77,6 @@ flags.DEFINE_integer(
 )
 
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 RECORDING_RE = re.compile(r"^recording_([0-9a-fA-F-]+)_seg(\d+)(_[a-z]+)?\.mp4$")
 
 # rdev's macOS keycode table is incomplete; these codes appear as
@@ -121,11 +117,6 @@ def _resolve_ffmpeg_binary() -> tuple[str, str]:
 _FFMPEG_BIN, _FFPROBE_BIN = _resolve_ffmpeg_binary()
 
 
-# ---------------------------------------------------------------------------
-# Discovery & splits
-# ---------------------------------------------------------------------------
-
-
 def _collect_videos(source_path: Path) -> list[Path]:
     return sorted(p for p in source_path.rglob("*.mp4") if p.is_file())
 
@@ -160,11 +151,6 @@ def _split_videos(
     }
 
 
-# ---------------------------------------------------------------------------
-# Action format
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class FrameEvents:
     move_dx: float = 0.0
@@ -186,10 +172,6 @@ def _format_action(ev: FrameEvents) -> str:
         parts.append(" ".join(markers))
     return " ; ".join(parts)
 
-
-# ---------------------------------------------------------------------------
-# Keylog parsing
-# ---------------------------------------------------------------------------
 
 _UNKNOWN_NAME_RE = re.compile(r"^Unknown\((-?\d+)\)$")
 
@@ -346,10 +328,6 @@ def _aggregate_events(
     stats.n_held_at_end = len(held)
     return per_frame, stats
 
-
-# ---------------------------------------------------------------------------
-# Frame extraction
-# ---------------------------------------------------------------------------
 
 _RES_RE = re.compile(r"Stream #\d+:\d+.*?Video:.*?(\d{2,5})x(\d{2,5})")
 
@@ -596,11 +574,6 @@ def _extract_frames(
     raise ValueError(f"unsupported image_store_format={image_store_format!r}")
 
 
-# ---------------------------------------------------------------------------
-# Per-segment worker
-# ---------------------------------------------------------------------------
-
-
 def _build_messages(image_refs: list[str], action_strings: list[str]) -> list[dict]:
     assert len(image_refs) == len(action_strings), (
         f"image/action count mismatch: {len(image_refs)} images vs "
@@ -723,11 +696,6 @@ def _process_segment(args: dict) -> dict:
     return summary
 
 
-# ---------------------------------------------------------------------------
-# chat.jsonl concatenation
-# ---------------------------------------------------------------------------
-
-
 def _concat_chat_jsonl(split_dir: Path) -> int:
     chat_path = split_dir / "chat.jsonl"
     segment_dirs = sorted(p for p in split_dir.iterdir() if p.is_dir())
@@ -740,11 +708,6 @@ def _concat_chat_jsonl(split_dir: Path) -> int:
             out_f.write(line_path.read_text().rstrip("\n") + "\n")
             n += 1
     return n
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 
 def main(_):

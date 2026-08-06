@@ -74,11 +74,6 @@ def _tool_call(arguments: dict) -> str:
     )
 
 
-# =========================================================================== #
-# ITEM 4 — _control_of
-# =========================================================================== #
-
-
 def test_control_of_reads_nothing_from_a_missing_action() -> None:
     assert _control_of(None) is None
 
@@ -152,11 +147,6 @@ def test_terminated_is_true_for_both_terminate_and_fail(codec_name: str) -> None
     for control, terminated in (("terminate", True), ("fail", True), ("no_op", False), (None, False)):
         decision = Decision(1, "t", "", None, (), control, None, sampling)
         assert decision.terminated is terminated
-
-
-# =========================================================================== #
-# decide(): parse and compile are results, not exceptions
-# =========================================================================== #
 
 
 def _agent(codec_name: str, **kwargs) -> Agent:
@@ -281,11 +271,6 @@ def test_as_record_is_json_serialisable_for_every_grammar() -> None:
         assert record["step"] == 1 and record["raw_model_output"] == text
 
 
-# =========================================================================== #
-# ITEM 15 — sampling authority
-# =========================================================================== #
-
-
 def test_program_sampling_sends_only_what_the_eval_left_unset() -> None:
     ctx = make_ctx(temperature=0.2)
     sent = program_sampling(ctx, {"temperature": 1.0, "max_tokens": 256, "top_p": None})
@@ -407,11 +392,6 @@ def test_the_system_prompt_is_the_codecs_own_description_unless_overridden() -> 
     assert _agent("deltatype_v2", system_prompt="SEALED").system == "SEALED"
 
 
-# =========================================================================== #
-# transports
-# =========================================================================== #
-
-
 def test_build_transport_prefers_the_context_when_asked_or_endpointless() -> None:
     assert isinstance(build_transport(endpoint=None, secret=None), ContextTransport)
     assert isinstance(build_transport(endpoint="", secret="s"), ContextTransport)
@@ -461,11 +441,6 @@ def test_the_session_id_reaches_the_client() -> None:
     assert ctx.client.calls[0]["kwargs"]["session_id"] == "trace-42"
 
 
-# =========================================================================== #
-# prompt sidecar
-# =========================================================================== #
-
-
 def test_dump_prompt_elides_image_bytes() -> None:
     agent = _agent("deltatype_v2")
     body = agent.build_body(history=_one_frame_history(), instruction="G", step=1)
@@ -474,11 +449,6 @@ def test_dump_prompt_elides_image_bytes() -> None:
     payload = json.loads(dumped)
     assert payload["messages"][0]["role"] == "system"
     assert len(dumped) < 4000, "a sidecar must stay small enough to read"
-
-
-# =========================================================================== #
-# codec loading
-# =========================================================================== #
 
 
 def test_load_codec_resolves_every_registered_grammar() -> None:

@@ -48,11 +48,6 @@ ROOT = Path("/tmp/crowdcast_sign_of_life_v2")
 DOCK_CHROME_COORDINATE = (35, 60)
 
 
-# --------------------------------------------------------------------------- #
-# guest plumbing
-# --------------------------------------------------------------------------- #
-
-
 def _stdout(result: dict[str, Any]) -> str:
     value = result.get("output")
     if not isinstance(value, str):
@@ -169,11 +164,6 @@ print({STATE_PREFIX!r}+json.dumps(value,ensure_ascii=False,sort_keys=True))
     if not isinstance(value, dict):
         raise RuntimeError("guest state evidence is not an object")
     return value
-
-
-# --------------------------------------------------------------------------- #
-# per-cell setup
-# --------------------------------------------------------------------------- #
 
 
 def _setup_terminal_command(session: Any, task: DesktopTaskData) -> dict[str, Any]:
@@ -301,11 +291,6 @@ _SETUPS: dict[str, Callable[[Any, DesktopTaskData], dict[str, Any]]] = {
     "open_chrome": _setup_open_chrome,
     "focus_terminal_and_type": _setup_focus_terminal_and_type,
 }
-
-
-# --------------------------------------------------------------------------- #
-# scripted control arms: intents, rendered per step into codec text
-# --------------------------------------------------------------------------- #
 
 
 @dataclass(frozen=True)
@@ -462,11 +447,6 @@ def render_step(
             f"SCRIPT_RENDERERS (known: {sorted(SCRIPT_RENDERERS)})"
         )
     return renderer(intent, session, task)
-
-
-# --------------------------------------------------------------------------- #
-# the preparer
-# --------------------------------------------------------------------------- #
 
 
 class SignOfLifePreparer:

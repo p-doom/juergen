@@ -136,11 +136,6 @@ def _fixture_root(session: Any, fixture: AppFixture) -> PurePosixPath:
     return resolve_guest_root(session) / fixture.id
 
 
-# --------------------------------------------------------------------------- #
-# per-app setup scripts
-# --------------------------------------------------------------------------- #
-
-
 def _writer_script(fixture: AppFixture, root: PurePosixPath) -> str:
     params = fixture.params
     source = root / "initial.txt"

@@ -69,11 +69,6 @@ class SlotExhausted(RuntimeError):
     """The node's VM budget is fully leased. A caller must wait, not oversubscribe."""
 
 
-# --------------------------------------------------------------------------- #
-# node-wide slot leases
-# --------------------------------------------------------------------------- #
-
-
 @dataclass
 class _Slot:
     index: int
@@ -130,11 +125,6 @@ class NodeSlots:
                     f"all {self.max_slots} VM slots under {self.directory} are held"
                 )
             time.sleep(poll_s)
-
-
-# --------------------------------------------------------------------------- #
-# leases
-# --------------------------------------------------------------------------- #
 
 
 @dataclass(eq=False)
@@ -231,11 +221,6 @@ REGISTRY = LeaseRegistry()
 def lease_for_trace(trace_id: str) -> DesktopLease | None:
     """The live desktop for a trace, or None once its grace window has closed."""
     return REGISTRY.get(trace_id)
-
-
-# --------------------------------------------------------------------------- #
-# pools
-# --------------------------------------------------------------------------- #
 
 
 @dataclass(frozen=True)

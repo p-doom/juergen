@@ -39,22 +39,12 @@ SYSTEM = prompts.get("system")
 EXTRACT_SYSTEM = prompts.get("extract_system")
 
 
-# ---------------------------------------------------------------------------
-# Prompts
-# ---------------------------------------------------------------------------
-
-
 def describe_prose_prompt(n_frames: int) -> str:
     return prompts.render("describe_prose", n_frames=n_frames)
 
 
 def extract_prompt(description: str, n_frames: int) -> str:
     return prompts.render("extract", description=description, n_frames=n_frames)
-
-
-# ---------------------------------------------------------------------------
-# Cache
-# ---------------------------------------------------------------------------
 
 
 def _cache(output_dir: Path, name: str) -> Path:
@@ -71,11 +61,6 @@ def refresh_cache(output_dir: Path, prefixes: list[str]) -> int:
             f.unlink()
             n += 1
     return n
-
-
-# ---------------------------------------------------------------------------
-# Goals
-# ---------------------------------------------------------------------------
 
 
 def clean_goals(parsed: dict[str, Any], frame_lo: int | None = None,
@@ -162,11 +147,6 @@ def snap_goal_starts(goals: list[dict[str, Any]], sent: list[dict[str, Any]]) ->
     return goals
 
 
-# ---------------------------------------------------------------------------
-# Passes
-# ---------------------------------------------------------------------------
-
-
 def run_describe_prose(lab: Labeler, imgs: list[Path | str], n: int, output_dir: Path, no_cache: bool,
                        cache_name: str = "describe_prose", image_labels: list[str] | None = None) -> dict[str, Any]:
     prompt = describe_prose_prompt(n)
@@ -198,11 +178,6 @@ def run_extract(lab: Labeler, description: str, imgs: list[Path], n: int, cache_
     except Exception as exc:  # noqa: BLE001
         out.update({"error": f"{type(exc).__name__}: {exc}", "goals": []})
     return out
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 
 def parse_args() -> argparse.Namespace:

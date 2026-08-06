@@ -29,11 +29,6 @@ SIGN_OF_LIFE_KINDS = sorted(ALLOWED_KINDS)
 CORE_KINDS = ["grounding", "none", "osworld", "terminal"]
 
 
-# --------------------------------------------------------------------------- #
-# the registry
-# --------------------------------------------------------------------------- #
-
-
 def test_the_eight_preparers_are_registered() -> None:
     assert set(CORE_KINDS) <= set(PREPARERS)
     assert set(SIGN_OF_LIFE_KINDS) <= set(PREPARERS)
@@ -75,11 +70,6 @@ def test_register_preparer_returns_its_argument_so_it_composes() -> None:
         assert preparer_for("test_only_custom") is instance
     finally:
         PREPARERS.pop("test_only_custom", None)
-
-
-# --------------------------------------------------------------------------- #
-# probe must be read-only
-# --------------------------------------------------------------------------- #
 
 
 class _WitnessSession(FakeSession):
@@ -169,11 +159,6 @@ def test_the_rl_probes_dispatch_no_input_events(kind: str) -> None:
         assert session.input_events == []
 
 
-# --------------------------------------------------------------------------- #
-# `none` and `terminal`
-# --------------------------------------------------------------------------- #
-
-
 def test_the_none_preparer_boots_screenshots_and_goes() -> None:
     session = FakeSession(cursor=(7, 9), screen=(800, 600))
     task = make_task_data(kind="none")
@@ -193,11 +178,6 @@ def test_the_terminal_preparer_launches_a_terminal_and_clears_it() -> None:
     script = session.pyautogui_log[0]
     assert "gnome-terminal" in script and "xfce4-terminal" in script and "xterm" in script
     assert "hotkey('ctrl', 'l')" in script, "the clear is part of the contract"
-
-
-# --------------------------------------------------------------------------- #
-# `osworld`
-# --------------------------------------------------------------------------- #
 
 
 def test_the_osworld_preparer_runs_the_task_configs_setup_commands() -> None:
@@ -255,11 +235,6 @@ def test_an_osworld_task_with_no_config_does_not_call_setup() -> None:
     assert session.task_config is None
 
 
-# --------------------------------------------------------------------------- #
-# `grounding`
-# --------------------------------------------------------------------------- #
-
-
 def test_the_grounding_preparer_places_the_stratified_cursor() -> None:
     session = FakeSession(screen=(1920, 1080))
     task = make_task_data(
@@ -308,11 +283,6 @@ def test_the_grounding_probe_reports_containment_and_distance() -> None:
 def test_the_grounding_probe_reports_no_distance_without_a_bbox() -> None:
     probe = preparer_for("grounding").probe(FakeSession(), make_task_data(kind="grounding"))
     assert probe["distance"] is None and probe["in_bbox"] is False
-
-
-# --------------------------------------------------------------------------- #
-# cached-trajectory replay
-# --------------------------------------------------------------------------- #
 
 
 def _traj(tmp_path: Path, rows: list[dict]) -> Path:
@@ -388,11 +358,6 @@ def test_a_bad_cached_row_is_skipped_not_fatal(tmp_path: Path, monkeypatch) -> N
     session = Picky()
     assert _replay(session, path, n_steps=2) == 1
     assert session.pyautogui_log == ["pyautogui.click(1,1)"]
-
-
-# --------------------------------------------------------------------------- #
-# sign-of-life setup + probe
-# --------------------------------------------------------------------------- #
 
 
 def test_the_sign_of_life_probe_carries_the_verdict_alongside_the_state() -> None:

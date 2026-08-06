@@ -57,10 +57,6 @@ CLOSED_STATUSES = {"aligned", "exact", "benign_idle"}
 _EPOCH_1904 = datetime.datetime(1904, 1, 1)
 
 
-# ---------------------------------------------------------------------------
-# mp4 container header (no frame decode)
-# ---------------------------------------------------------------------------
-
 def _find_box(f, end, target):
     while f.tell() < end:
         start = f.tell()
@@ -115,10 +111,6 @@ def mp4_mvhd(path: str) -> tuple[datetime.datetime | None, float | None]:
         return ctime, du / ts
 
 
-# ---------------------------------------------------------------------------
-# keylog primitives
-# ---------------------------------------------------------------------------
-
 def load_keylog(path: str) -> list[Any]:
     """Raw msgpack event list: [[ts_us, [type, args]], ...]. [] on missing/empty."""
     try:
@@ -146,10 +138,6 @@ def keylog_span_s(events: list[Any]) -> float:
     ts = [e[0] for e in events if isinstance(e, list) and e]
     return (max(ts) / 1e6) if ts else 0.0
 
-
-# ---------------------------------------------------------------------------
-# splice model (spec sec.3-4)
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Splice:
@@ -206,10 +194,6 @@ def closure(splices: list[dict], keylog_span: float, video_dur: float,
         "closed": abs(total - overhang) <= tol,
     }
 
-
-# ---------------------------------------------------------------------------
-# per-recording realignment (spec sec.3, with overhang refinement + sec.5 status)
-# ---------------------------------------------------------------------------
 
 def _classify(splices: list[dict], overhang: float, residual: float,
               corr_end: float, video_dur: float, has_leading: bool,

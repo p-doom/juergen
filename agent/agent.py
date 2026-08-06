@@ -58,11 +58,6 @@ class ModelCallError(RuntimeError):
     scored outcomes of the system under test, this is infrastructure."""
 
 
-# --------------------------------------------------------------------------- #
-# codec
-# --------------------------------------------------------------------------- #
-
-
 class Codec(Protocol):
     """The half of `pixeldesk.codec_protocol.Codec` an episode driver touches.
 
@@ -138,11 +133,6 @@ def load_codec(name: str) -> Codec:
     if callable(loader):
         return loader(name)
     raise LookupError(f"codec {name!r} is not registered")
-
-
-# --------------------------------------------------------------------------- #
-# sampling
-# --------------------------------------------------------------------------- #
 
 
 @dataclass(frozen=True)
@@ -221,11 +211,6 @@ def resolve_sampling(
         wire_body_keys=tuple(sorted(k for k in wire if k != "messages")),
     )
     return wire, effective
-
-
-# --------------------------------------------------------------------------- #
-# transports
-# --------------------------------------------------------------------------- #
 
 
 class Transport(Protocol):
@@ -314,11 +299,6 @@ class ContextTransport:
 
     async def close(self) -> None:
         return None
-
-
-# --------------------------------------------------------------------------- #
-# the agent
-# --------------------------------------------------------------------------- #
 
 
 @dataclass(frozen=True)

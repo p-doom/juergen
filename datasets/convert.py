@@ -143,11 +143,6 @@ _COORD_ACTIONS = frozenset(
 )
 
 
-# ---------------------------------------------------------------------------
-# The grammar-agnostic intermediate
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class Step:
     """One teacher step, normalized, before any grammar is applied.
@@ -169,11 +164,6 @@ class Step:
     terminate_status: str = "success"
     cursor_before: tuple[int, int] | None = None
     intended_target: tuple[int, int] | None = None
-
-
-# ---------------------------------------------------------------------------
-# Teacher absolute computer_use -> the shared absolute-Operation vocabulary
-# ---------------------------------------------------------------------------
 
 
 def step_to_operations(step: Step) -> tuple[Any, ...] | None:
@@ -280,11 +270,6 @@ def _scroll_amount(action: dict[str, Any]) -> int | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Grammar bridge
-# ---------------------------------------------------------------------------
-
-
 def _geometry(screen: tuple[int, int]):
     """A ``DisplayGeometry`` for the rollout's screen size.
 
@@ -368,10 +353,6 @@ def system_prompt(codec: Any, *, thinking: bool) -> str:
     return (THINKING_PREAMBLE + described) if thinking else described
 
 
-# ---------------------------------------------------------------------------
-# Teacher-side parsing (identical across all five originals)
-# ---------------------------------------------------------------------------
-
 _TOOLCALL_RE = re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL | re.IGNORECASE)
 
 
@@ -416,11 +397,6 @@ def _read_slugs(path: str | None, *, flag: str) -> set[str] | None:
     if not slugs:
         raise SystemExit(f"{flag}: {file} lists no slugs")
     return slugs
-
-
-# ---------------------------------------------------------------------------
-# Rollout -> record
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -667,10 +643,6 @@ def _assert_prose_coverage(stats: ConvertStats, keep_prose: bool) -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# Cross-arm prose divergence (the asymmetry the zero-floor cannot see)
-# ---------------------------------------------------------------------------
-
 #: Default relative tolerance for the cross-arm prose-coverage check, on the
 #: PRE-CODEC statistic (see ``_prose_frac_pre_codec``). Anchored on measurement,
 #: not taste: over real collections the legitimate spread of that statistic
@@ -881,11 +853,6 @@ def format_prose_divergence(report: dict[str, Any], codec: str) -> str:
         "meant to be prose-free."
     )
     return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 
 def main(argv: list[str] | None = None) -> int:

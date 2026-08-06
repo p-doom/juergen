@@ -150,11 +150,6 @@ class TpmGovernor:
                 for m in self.models)
 
 
-# ---------------------------------------------------------------------------
-# Per-segment work
-# ---------------------------------------------------------------------------
-
-
 def _unit_actual_tokens(stage02_dir: Path, variants: list[str]) -> int:
     res = stage02_dir / "stage02_result.json"
     if not res.exists():
@@ -298,11 +293,6 @@ def process_segment(row: dict[str, Any], frames_root: Path, run_dirs: dict[Any, 
     return {"n_frames": n, "n_windows": nw, "per_frame_tokens": per_frame,
             "units": unit_summaries,
             "n_goals_prose": sum((u.get("n_goals_prose") or 0) for u in unit_summaries)}
-
-
-# ---------------------------------------------------------------------------
-# Driver
-# ---------------------------------------------------------------------------
 
 
 def parse_args() -> argparse.Namespace:

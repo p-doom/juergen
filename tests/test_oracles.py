@@ -63,11 +63,6 @@ def _gate(*, expected=None, probe=None, name="terminal_exact_text", **result):
     return data, make_trace(data, episode=payload)
 
 
-# =========================================================================== #
-# the runtime-injection contract
-# =========================================================================== #
-
-
 def test_there_is_no_runtime_kwarg_on_the_reward_decorator() -> None:
     parameters = inspect.signature(vf.reward).parameters
     assert set(parameters) == {"func", "weight", "priority"}, sorted(parameters)
@@ -128,11 +123,6 @@ def test_a_runtime_declaring_reward_is_skipped_offline_rather_than_scored_zero()
     asyncio.run(Gate(data).score(trace, None))
     assert "postcondition" not in trace.rewards, "the runtime-backed reward is skipped"
     assert trace.metrics["postcondition_recorded"] == 1.0, "the twin still scores"
-
-
-# =========================================================================== #
-# StateOracle: live vs recorded, and the twin agreement
-# =========================================================================== #
 
 
 def test_the_oracle_reads_the_live_guest_when_the_lease_is_still_open(monkeypatch) -> None:
@@ -251,11 +241,6 @@ def test_the_outcome_dataclass_round_trips_and_defaults_to_recorded() -> None:
     }
 
 
-# =========================================================================== #
-# ReachOracle
-# =========================================================================== #
-
-
 class Reach(ReachOracle, DesktopTask):
     pass
 
@@ -312,11 +297,6 @@ def test_a_missing_result_raises_rather_than_training_a_zero() -> None:
     data = make_task_data(kind="grounding", bbox=(10, 10, 50, 50))
     with pytest.raises(Exception, match="published no result"):
         asyncio.run(Reach(data).score(make_trace(data), _Runtime()))
-
-
-# =========================================================================== #
-# OSWorldEvaluateOracle
-# =========================================================================== #
 
 
 class OSWorld(OSWorldEvaluateOracle, DesktopTask):
@@ -378,11 +358,6 @@ def test_the_osworld_metric_reports_a_missing_reward_without_raising() -> None:
     asyncio.run(OSWorld(data).score(trace, None))
     assert trace.metrics["task_reward_missing"] == 1.0
     assert trace.metrics["full_success"] == 0.0
-
-
-# =========================================================================== #
-# NoOracle / PairedArmDivergence
-# =========================================================================== #
 
 
 def test_the_freeroll_probe_is_deliberately_reward_free() -> None:
@@ -455,11 +430,6 @@ def test_a_single_trace_group_has_no_divergence() -> None:
     one = make_trace(data, episode={"steps_detail": []})
     asyncio.run(Paired(data).score_group([one]))
     assert one.info["paired"]["first_divergence"] is None
-
-
-# =========================================================================== #
-# the gate task's signal set
-# =========================================================================== #
 
 
 def test_the_gate_task_has_exactly_one_reward_and_it_needs_a_runtime() -> None:

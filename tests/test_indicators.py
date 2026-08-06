@@ -65,11 +65,6 @@ def _score(steps, *, no_submit=False, **result):
     return trace
 
 
-# =========================================================================== #
-# extraction, both shapes
-# =========================================================================== #
-
-
 def test_step_records_ignores_a_missing_or_malformed_result() -> None:
     assert step_records(make_trace()) == []
     assert step_records(make_trace(episode={"steps_detail": "nope"})) == []
@@ -149,11 +144,6 @@ def test_the_submit_key_vocabulary_is_case_sensitive() -> None:
                 continue
             for key in submit_keys(parsed):
                 assert key in SUBMIT_KEYS, (name, key)
-
-
-# =========================================================================== #
-# ITEM 5 — A, B, C, D across both grammar families
-# =========================================================================== #
 
 
 @pytest.mark.parametrize(
@@ -261,11 +251,6 @@ def test_the_error_counters_ride_the_same_metric() -> None:
     assert trace.metrics["parse_errors"] == 2.0
     assert trace.metrics["action_errors"] == 1.0
     assert trace.metrics["executor_errors"] == 3.0
-
-
-# =========================================================================== #
-# ITEM 6 — the digit lattice
-# =========================================================================== #
 
 
 def test_the_lattice_is_the_documented_output_support() -> None:
@@ -398,11 +383,6 @@ def test_the_mouse_metric_reads_no_op_parse_error_and_in_bbox_rates() -> None:
     assert trace.metrics["terminate_rate"] == 1.0
 
 
-# =========================================================================== #
-# ITEM 7 — `_never_moved` replaces the distance=-1.0 sentinel
-# =========================================================================== #
-
-
 def test_never_moved_lives_in_the_grounding_taskset_not_in_evals() -> None:
     """Item 7's successor is `rl.grounding.taskset._never_moved`.
 
@@ -431,11 +411,6 @@ def test_the_two_sentinels_the_result_still_carries_are_distinct_fields() -> Non
     assert trace.metrics["in_bbox_rate"] == 0.0
     reached = _score([_step("a", None, probe={"in_bbox": True})], reach_frame=1, best_distance=0.0)
     assert reached.metrics["in_bbox_rate"] == 1.0
-
-
-# =========================================================================== #
-# sampling provenance metric
-# =========================================================================== #
 
 
 def test_the_sampling_metric_reports_the_temperature_and_its_source() -> None:

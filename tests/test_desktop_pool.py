@@ -45,11 +45,6 @@ def _no_pool_leak():
     close_all_pools()
 
 
-# --------------------------------------------------------------------------- #
-# NodeSlots
-# --------------------------------------------------------------------------- #
-
-
 def test_node_slots_admits_exactly_max_slots(tmp_path: Path) -> None:
     slots = NodeSlots(directory=tmp_path, max_slots=3)
     held = [slots.acquire() for _ in range(3)]
@@ -217,11 +212,6 @@ def test_the_sum_over_spawned_workers_cannot_exceed_the_node_budget(tmp_path: Pa
             holder.wait(timeout=30)
 
 
-# --------------------------------------------------------------------------- #
-# LeaseRegistry
-# --------------------------------------------------------------------------- #
-
-
 def _lease(trace_id: str, *, pool) -> DesktopLease:
     class _NullSlot:
         def release(self) -> None:
@@ -275,11 +265,6 @@ def test_a_raising_session_release_does_not_mask_the_rollout_error() -> None:
     lease.release()  # must not raise
     assert _NullSlot.released, "the node slot must come back even if release() throws"
     pool.close()
-
-
-# --------------------------------------------------------------------------- #
-# LeasedDesktopPool
-# --------------------------------------------------------------------------- #
 
 
 def test_acquire_publishes_the_lease_and_finish_starts_the_grace_window(tmp_path: Path) -> None:
@@ -393,11 +378,6 @@ def test_pool_for_refuses_one_key_with_two_specs(tmp_path: Path) -> None:
         close_all_pools()
 
 
-# --------------------------------------------------------------------------- #
-# teardown on both signals
-# --------------------------------------------------------------------------- #
-
-
 _CHILD_TEARDOWN = textwrap.dedent(
     """
     import os, signal, sys, threading, time
@@ -468,11 +448,6 @@ def test_atexit_teardown_closes_the_pool(tmp_path: Path) -> None:
         timeout=60,
     )
     assert "POOL CLOSED" in proc.stdout, (proc.stdout, proc.stderr[-2000:])
-
-
-# --------------------------------------------------------------------------- #
-# runtime construction
-# --------------------------------------------------------------------------- #
 
 
 def test_default_pool_factory_imports_a_constructor_with_explicit_config() -> None:

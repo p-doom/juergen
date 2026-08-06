@@ -799,9 +799,6 @@ class FramesMasterDataset:
         }
 
 
-# --------------------------------------------------------------------------- #
-# HTTP
-# --------------------------------------------------------------------------- #
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 

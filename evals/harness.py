@@ -81,11 +81,6 @@ class Desktop(Protocol):
     def execute_atomic(self, operations: Any) -> Any: ...
 
 
-# --------------------------------------------------------------------------- #
-# config
-# --------------------------------------------------------------------------- #
-
-
 class HistoryConfig(vf.BaseConfig):
     """The injected history policy. This is the whole A/B surface."""
 
@@ -232,11 +227,6 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     """Sample through `ctx.client` instead of posting to `endpoint`."""
 
 
-# --------------------------------------------------------------------------- #
-# budget
-# --------------------------------------------------------------------------- #
-
-
 @dataclass
 class _Budget:
     config: BudgetConfig
@@ -282,11 +272,6 @@ class _Budget:
             "wall_time_s": round(time.monotonic() - self.started, 3),
             "failure": self.failure,
         }
-
-
-# --------------------------------------------------------------------------- #
-# helpers
-# --------------------------------------------------------------------------- #
 
 
 @contextlib.contextmanager
@@ -423,11 +408,6 @@ def _codec(name: str) -> Any:
         codec = load_codec(name)
         _CODECS[name] = codec
     return codec
-
-
-# --------------------------------------------------------------------------- #
-# the harness
-# --------------------------------------------------------------------------- #
 
 
 class DesktopHarness(vf.Harness[DesktopHarnessConfig]):

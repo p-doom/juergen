@@ -44,11 +44,6 @@ def _no_pool_leak():
     dsk.close_all_pools()
 
 
-# --------------------------------------------------------------------------- #
-# a scriptable preparer, registered per test
-# --------------------------------------------------------------------------- #
-
-
 class ScriptablePreparer:
     """A `Preparer` whose probe returns a caller-supplied sequence."""
 
@@ -147,11 +142,6 @@ def _task(**kwargs) -> DesktopTaskData:
     return make_task_data(kind="harness_test", **kwargs)
 
 
-# =========================================================================== #
-# the loop
-# =========================================================================== #
-
-
 def test_a_full_episode_publishes_one_result_shape(tmp_path, preparer) -> None:
     trace, result, _ = _run(_config(tmp_path), _task(max_steps=2), replies=["0 0 0 ;", "0 0 0 ;"])
     assert result["schema_version"] == 1 and result["validity"] == "valid"
@@ -248,11 +238,6 @@ def test_best_distance_keeps_the_minimum_over_the_rollout(tmp_path, preparer) ->
     assert result["reach_frame"] == -1
 
 
-# =========================================================================== #
-# the unsolved-start precondition
-# =========================================================================== #
-
-
 def test_a_cell_that_starts_solved_is_refused(tmp_path, preparer) -> None:
     """A gate that starts solved measures nothing."""
     preparer.probes = [{"postcondition_status": "ok", "postcondition_success": True}]
@@ -317,11 +302,6 @@ def test_a_model_call_failure_is_infrastructure(tmp_path, preparer) -> None:
     result = trace.info[RESULT_KEY]
     assert result["outcome"] == "model_error" and result["validity"] == "infra_invalid"
     assert result["infra_error"]["stage"] == "model"
-
-
-# =========================================================================== #
-# controls_ok
-# =========================================================================== #
 
 
 def test_a_scripted_oracle_arm_that_passes_is_control_conformant(tmp_path, preparer) -> None:
@@ -430,11 +410,6 @@ def test_the_harness_provenance_metric_reports_the_calibration(tmp_path, prepare
     }
 
 
-# =========================================================================== #
-# per-kind settle
-# =========================================================================== #
-
-
 def test_the_per_kind_settle_is_2s_for_chrome_and_0_75s_elsewhere(monkeypatch) -> None:
     slept: list[float] = []
     monkeypatch.setattr("time.sleep", lambda s: slept.append(s))
@@ -473,11 +448,6 @@ def test_stability_asked_for_but_unimplemented_is_refused_not_ignored() -> None:
     settle = SettleConfig(min_delay_s=0.5, stability_timeout_s=5.0, per_kind={})
     with pytest.raises(LookupError, match="stability"):
         _screenshot(FakeSession(), settle, "any")
-
-
-# =========================================================================== #
-# budgets
-# =========================================================================== #
 
 
 def test_the_turn_budget_ends_the_episode(tmp_path, preparer) -> None:
@@ -528,11 +498,6 @@ def test_the_budget_snapshot_is_json_serialisable() -> None:
         "wall_time_s",
         "failure",
     }
-
-
-# =========================================================================== #
-# artifacts
-# =========================================================================== #
 
 
 def test_frames_prompts_and_result_json_are_written(tmp_path, preparer) -> None:
@@ -614,11 +579,6 @@ def test_register_labctl_survives_a_missing_binary(tmp_path) -> None:
     assert _register_labctl("alias", tmp_path) in (True, False)
 
 
-# =========================================================================== #
-# prompt provenance — all raises are gone
-# =========================================================================== #
-
-
 def test_the_prompt_report_never_raises_and_records_the_baseline_caveat(tmp_path) -> None:
     """★ `_assert_prompt_pin` became `_prompt_report` returning data."""
     from agent.agent import load_codec
@@ -683,11 +643,6 @@ def test_a_system_prompt_override_is_honoured_and_hashed(tmp_path) -> None:
     harness = DesktopHarness(_config(tmp_path, system_prompt_override="SEALED PROMPT"))
     report = harness._prompt_report(load_codec("deltatype_v2"))
     assert report["prompt_sha256"] == hashlib.sha256(b"SEALED PROMPT").hexdigest()
-
-
-# =========================================================================== #
-# pool wiring
-# =========================================================================== #
 
 
 def test_the_pool_target_injects_a_fake_and_receives_session_kwargs(tmp_path, preparer) -> None:
@@ -813,11 +768,6 @@ def test_the_gpu_is_hidden_during_boot_when_asked(tmp_path, monkeypatch) -> None
         assert "CUDA_VISIBLE_DEVICES" not in os.environ
 
 
-# =========================================================================== #
-# evaluate_on_finish
-# =========================================================================== #
-
-
 def test_evaluate_on_finish_publishes_the_osworld_score(tmp_path, preparer) -> None:
     session = FakeSession()
     session.evaluate_value = 1.0
@@ -859,11 +809,6 @@ def test_a_session_without_evaluate_refuses_the_flag_it_cannot_honour(
     assert result["validity"] == "infra_invalid"
     assert "evaluate_on_finish" in result["infra_error"]["message"]
     assert result["task_reward"] is None, "0.0 would be trained as a task failure"
-
-
-# =========================================================================== #
-# resume-skip
-# =========================================================================== #
 
 
 def test_the_osworld_taskset_skips_a_task_that_already_has_a_result(tmp_path) -> None:
@@ -986,11 +931,6 @@ def test_a_malformed_image_path_is_refused(tmp_path) -> None:
     )
     with pytest.raises(ValueError, match="unexpected image_path shape"):
         list(GroundingTaskset(GroundingTasksetConfig(bboxes_jsonl=str(bboxes))).load())
-
-
-# =========================================================================== #
-# config surface
-# =========================================================================== #
 
 
 def test_the_harness_declares_message_prompt_support() -> None:

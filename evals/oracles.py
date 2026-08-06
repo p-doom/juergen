@@ -90,11 +90,6 @@ def probe_now(trace: vf.Trace, task: DesktopTaskData) -> tuple[dict[str, Any] | 
     return final_probe(trace), "recorded"
 
 
-# --------------------------------------------------------------------------- #
-# mixins
-# --------------------------------------------------------------------------- #
-
-
 class StateOracle:
     """Mixin: success is decided from realized guest state, never from the trace.
 
@@ -262,11 +257,6 @@ class NoOracle:
             "clicked": 1.0 if result.get("outcome") == "click" else 0.0,
             "terminated": 1.0 if result.get("control_terminate") else 0.0,
         }
-
-
-# --------------------------------------------------------------------------- #
-# paired arms
-# --------------------------------------------------------------------------- #
 
 
 class PairedArmDivergence:
