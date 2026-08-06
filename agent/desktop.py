@@ -440,14 +440,11 @@ def default_pool_factory(
 ) -> Callable[[], Any]:
     """Call pixeldesk's constructor directly with explicit config.
 
-    This is the calling side of the runtime-construction wiring, and it is
-    deliberately *not* a provider-by-name lookup. The previous mechanism asked for a
-    VM provider by name and `install_into_osworld.py` monkeypatched it into a
-    re-clonable OSWorld tree — which caused an outage its own docstring records. So:
-    no name registry, no plugin resolution, no patching of the OSWorld tree. `target`
-    names a **constructor** (`module:attribute`) and `session_kwargs` is passed to it
-    verbatim; overriding it is how a test injects a fake, not how a provider is
-    selected.
+    Deliberately *not* a provider-by-name lookup: no name registry, no plugin
+    resolution, and nothing patched into the OSWorld tree, which is re-clonable and
+    would silently lose the patch. `target` names a **constructor**
+    (`module:attribute`) and `session_kwargs` is passed to it verbatim; overriding
+    it is how a test injects a fake, not how a VM backend is selected.
 
     Imported lazily so a text-only eval never pulls the VM stack in.
     """

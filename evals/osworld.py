@@ -1,19 +1,16 @@
 """OSWorld's task setup and its benchmark scorer, against a desktop **we** own.
 
-`OSWorldEvaluateOracle` says the reward *is* `DesktopEnv.evaluate()`, and until
-now nothing could produce that number: `evals/vm.py`'s `DesktopFacade` — the only
-adapter between the harness and a real VM — exposed neither `setup()` nor
-`evaluate()`, so the whole OSWorld task family (`kind="osworld"`, and
-`kind="grounding"` which inherits its preparer) died at the first preparer call.
-`FakeSession` implemented both, which is why the suite was green over a surface no
-production object provided.
+`OSWorldEvaluateOracle` says the reward *is* `DesktopEnv.evaluate()`. This module
+produces that number without letting OSWorld own the VM: `evals/vm.py`'s
+`DesktopFacade` gets `setup()` and `evaluate()` from here, and the OSWorld task
+family (`kind="osworld"`, and `kind="grounding"` which inherits its preparer)
+reaches the guest through them.
 
 We cannot use `DesktopEnv` itself for this. `DesktopEnv` owns a VM lifecycle
-through its own provider layer, and the whole point of the rearchitecture is that
-the lifecycle is ours (qemu + KVM under `pixeldesk`'s pool) — the apptainer
-provider strips KVM ioctls on the hai-* nodes, which is the outage this replaced.
-What we want from OSWorld is only the two pure-ish pieces that *do* generalise
-across providers:
+through its own provider layer, and the lifecycle is ours (qemu + KVM under
+`pixeldesk`'s pool) — OSWorld's apptainer provider strips KVM ioctls on the hai-*
+nodes. What we want from OSWorld is only the two pure-ish pieces that *do*
+generalise across providers:
 
   * `SetupController`, which turns a task JSON's `config` list into guest side
     effects over the in-VM HTTP agent — the same agent our `HttpGuiTransport`
@@ -45,13 +42,12 @@ playwright, pydrive and requests_toolbelt at module import, and
 `sys.path` and OSWorld's namespace, so a test can substitute it wholesale and
 exercise every line of the binding and the arithmetic without OSWorld installed.
 
-⚠️ **`desktop_env` below is OSWORLD'S package, not ours.** Ours used to claim
-that exact import name, and while it did, `import desktop_env.controllers.setup`
-resolved to *our* already-imported module and died on a missing submodule no
-matter what `OSWORLD_ROOT` said — `sys.path` cannot override an entry already in
-`sys.modules`. That is why the sibling repo is now `pixeldesk`: the rename is a
-correctness fix for THIS module, not housekeeping. Do not "tidy" these names to
-match; they are the other package's.
+⚠️ **`desktop_env` below is OSWORLD'S package, not ours** — ours is `pixeldesk`,
+and it must stay that way: `sys.path` cannot override an entry already in
+`sys.modules`, so any local distribution claiming the name `desktop_env` makes
+`import desktop_env.controllers.setup` resolve to it instead, whatever
+`OSWORLD_ROOT` says. Do not "tidy" these names to match ours; they are the other
+package's.
 """
 
 from __future__ import annotations

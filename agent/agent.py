@@ -1,28 +1,21 @@
 """One sampling path, one parse path, one compile path.
 
-The four pre-refactor harnesses each hand-rolled their own model call
-(`osworld_runtime._call_model`, `compact_relative.call_phaseb_model`,
-`rl/grounding/harness.py`, `rl/osworld/harness_task.py`) and each carried its own
-temperature: 1.0 in the prime-rl train configs, 0.0 in the parity/sign-of-life
-runs, 0.7 in movebox's rollout defaults. Worse, the two that ran under verifiers
-read only `ctx.model` and then passed their own `temperature` in the request body
-— which `Dialect.apply_overrides` (`dialects/base.py:197-200`,
-`dialects/chat.py:349-352`) silently drops, because the eval's sampling is
-authoritative at the wire. The config knob looked live and was not.
+`ModelContext` is read in full:
 
-Here `ModelContext` is read in full:
-
-  * `ctx.model` — the model id, as before;
-  * `ctx.sampling` — **the** temperature source. A harness default is only
-    consulted for a knob the eval left unset, and the resolved value is recorded
-    with its provenance so a run can never again disagree with its own config;
+  * `ctx.model` — the model id;
+  * `ctx.sampling` — **the** temperature source. `Dialect.apply_overrides`
+    (`dialects/base.py:197-200`, `dialects/chat.py:349-352`) silently drops a
+    temperature set in the request body whenever the eval already set one, because
+    the eval's sampling is authoritative at the wire. So a harness default is
+    consulted only for a knob the eval left unset, and the resolved value is
+    recorded with its provenance;
   * `ctx.client` — used directly by `ContextTransport`, so an episode can be
     driven without an interception proxy in front of it (offline scoring,
     single-process gates) while still producing a real `Response`.
 
-The default transport still posts to `endpoint`, because that is what commits the
-turn to the trace graph. Either way the body we log is the body
-`apply_overrides` puts on the wire.
+The default transport posts to `endpoint`, because that is what commits the turn
+to the trace graph. Either way the body we log is the body `apply_overrides` puts
+on the wire.
 """
 
 from __future__ import annotations
