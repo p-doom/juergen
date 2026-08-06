@@ -67,9 +67,13 @@ class DesktopFacade:
     harness must be able to discover is absent.
     """
 
-    def __init__(self, checkout: Any, session: Any) -> None:
+    def __init__(
+        self, checkout: Any, session: Any, *, osworld_cache_dir: str | Path | None = None
+    ) -> None:
         self._checkout = checkout
         self._session = session
+        self._osworld_cache_dir = osworld_cache_dir
+        self._osworld_bridge: Any = None
 
     # -- identity / lifecycle -------------------------------------------- #
 
@@ -167,13 +171,118 @@ class DesktopFacade:
         finally:
             self._touch()
 
+    # -- the OSWorld benchmark half (evals/osworld.py) --------------------- #
+    #
+    # Named, not proxied — same rule as everything above, and here it earns its
+    # keep twice over. `harness._evaluate` probes `getattr(session, "evaluate")`
+    # and the OSWorld preparer calls `session.setup(...)`; under a `__getattr__`
+    # catch-all both would answer yes on a session with no OSWorld tree behind
+    # it and fail mid-episode, after the boot and the guest setup. Absent has to
+    # be discoverable *before* a VM is spent.
+
+    @property
+    def _osworld(self) -> Any:
+        """The bridge, built on first use and kept for the lease's lifetime.
+
+        Lazy for the same reason `kvm_desktop_pool` imports lazily: a freeroll or
+        an RL episode holds this same facade and must not pay for — or fail on —
+        an OSWorld checkout it never touches. Built once because `bind()` is what
+        makes `evaluate()` answerable with no arguments, and a fresh bridge per
+        call would forget the task between setup and scoring.
+        """
+        if self._osworld_bridge is None:
+            from evals.osworld import OSWorldBridge
+
+            transport = self._transport
+            self._osworld_bridge = OSWorldBridge(
+                base_url=transport.base_url,
+                cache_dir=self._osworld_cache_dir,
+                screen_size=transport.screen_size(),
+                **self._guest_ports(),
+            )
+        return self._osworld_bridge
+
+    def _guest_ports(self) -> dict[str, int]:
+        """`chromium_port` / `vlc_port` from the runtime, when it will say.
+
+        `DesktopSession` does not keep the `RuntimeState` it started with — it
+        forwards the ports into the metadata file and drops them — so they are
+        read back off the runtime. `state()` is on `QemuRuntime` and not on the
+        `Runtime` protocol, so a backing that does not offer it falls through to
+        OSWorld's own defaults rather than failing: a task whose evaluator never
+        touches Chrome or VLC does not need them, and refusing to score it would
+        be inventing a dependency.
+        """
+        runtime = getattr(self._session, "runtime", None)
+        state = getattr(runtime, "state", None)
+        if not callable(state):
+            return {}
+        try:
+            ports = state().ports
+        except Exception as exc:  # noqa: BLE001 - defaults are a valid answer
+            _LOGGER.info("runtime will not report guest ports (%r); using defaults", exc)
+            return {}
+        found = {
+            key: int(getattr(ports, key, 0) or 0) for key in ("chromium", "vlc")
+        }
+        return {f"{key}_port": value for key, value in found.items() if value}
+
+    def setup(self, task_config: dict[str, Any]) -> int:
+        """Run an OSWorld task JSON's `config` steps, and bind it for scoring.
+
+        Takes the **whole task config**, not just its `config` list, which is the
+        shape `DesktopEnv.reset(task_config=...)` uses and the only shape that
+        lets `evaluate()` stay argument-free: the evaluator block arrives with the
+        setup, so the desktop is never asked to score a task it was not prepared
+        for.
+        """
+        self._touch()
+        try:
+            return self._osworld.setup(dict(task_config))
+        finally:
+            self._touch()
+
+    def declare_terminal(self, control: str | None) -> None:
+        """Tell the scorer how the episode ended.
+
+        OSWorld inverts the reward on `infeasible` tasks — declaring FAIL *is*
+        success there and forfeits everywhere else — and reads that off its
+        action history, which we do not keep. Optional by design: the harness
+        probes for it, and a session that cannot answer simply never claims a
+        FAIL, which is the same verdict as a model that never declared one.
+        """
+        self._osworld.declare_terminal(control)
+
+    def evaluate(self) -> float:
+        """The OSWorld benchmark score for the task this desktop was set up for.
+
+        No arguments, because `harness._evaluate` has none to give
+        (`harness.py:1017`) — see `setup()` for why that is sound. Raises rather
+        than returning 0.0 when there is nothing to score; the harness records a
+        raise as a missing reward, and `OSWorldEvaluateOracle` refuses a missing
+        reward outright. Infrastructure failure must never be trained as task
+        failure.
+        """
+        self._touch()
+        try:
+            return float(self._osworld.evaluate())
+        finally:
+            self._touch()
+
 
 class _AdaptedPool:
     """`DesktopSessionPool` with the two gaps above closed."""
 
-    def __init__(self, pool: Any, *, reset_on_reuse: bool) -> None:
+    def __init__(
+        self,
+        pool: Any,
+        *,
+        reset_on_reuse: bool,
+        osworld_cache_dir: str | Path | None = None,
+    ) -> None:
         self._pool = pool
         self._reset_on_reuse = reset_on_reuse
+        self._osworld_cache_dir = osworld_cache_dir
         self._seen: set[str] = set()
 
     def start(self) -> None:
@@ -187,7 +296,9 @@ class _AdaptedPool:
             _LOGGER.info("desktop %s: reused, restoring clean checkpoint", session_id)
             session.reset()
         self._seen.add(session_id)
-        return DesktopFacade(checkout, session)
+        return DesktopFacade(
+            checkout, session, osworld_cache_dir=self._osworld_cache_dir
+        )
 
     def close(self) -> None:
         self._pool.close()
@@ -210,6 +321,7 @@ def kvm_desktop_pool(
     lease_timeout_s: float = 1800.0,
     startup_timeout_s: float = 900.0,
     reset_on_reuse: bool = True,
+    osworld_cache_dir: str | Path | None = None,
 ) -> _AdaptedPool:
     """A QEMU-backed pool the harness can drive, from JSON-able arguments only.
 
@@ -222,6 +334,11 @@ def kvm_desktop_pool(
     watchdog reclaims a leased session that has been quiet for that long, and a gate
     cell that waits on a Chrome launch or a model call legitimately is: at 300 s the
     watchdog, not the episode, decides when the VM goes away.
+
+    `osworld_cache_dir` is where OSWorld's getters put the files they pull out of
+    the guest to score. Left unset it is a per-process temp directory, which is
+    right for a gate run and wrong for a 369-task benchmark array on a node whose
+    /tmp is small: name it then, on a filesystem with room.
     """
     from desktop_env.vm.factory import build_desktop_pool
     from desktop_env.vm.pool import DesktopPoolConfig
@@ -251,4 +368,6 @@ def kvm_desktop_pool(
         config=config,
         **runtime_options,
     )
-    return _AdaptedPool(pool, reset_on_reuse=reset_on_reuse)
+    return _AdaptedPool(
+        pool, reset_on_reuse=reset_on_reuse, osworld_cache_dir=osworld_cache_dir
+    )

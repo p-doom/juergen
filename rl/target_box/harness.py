@@ -25,7 +25,7 @@ from evals.harness import (
     ImageBudgetConfig,
     SettleConfig,
 )
-from evals.tasks import DesktopTaskData, register_preparer
+from evals.tasks import DesktopTaskData, osworld_task_config, register_preparer
 from rl.geometry import distance_to_box, in_bbox
 from rl.target_box.geometry import (
     TargetBoxConfig,
@@ -55,9 +55,13 @@ class TargetBoxPreparer:
     kind = "target_box"
 
     def prepare(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
-        config = task.setup.get("config")
-        if config:
-            session.setup(config)
+        if task.setup.get("config"):
+            # One session contract, not two: `setup()` takes the whole OSWorld
+            # task JSON everywhere (`evals/vm.py`), because that is what lets the
+            # `evaluator` block reach the session and `evaluate()` stay
+            # argument-free. target_box has no evaluator and does not want one —
+            # its reward is the declared box — so this is a shape change only.
+            session.setup(osworld_task_config(task))
         box, cursor, screen = _scene(task)
         observed = tuple(session.screen_size())
         if observed != screen:

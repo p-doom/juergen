@@ -205,9 +205,38 @@ def test_the_osworld_preparer_runs_the_task_configs_setup_commands() -> None:
     config = [{"type": "launch", "parameters": {"command": ["true"]}}]
     task = make_task_data(kind="osworld", setup={"config": config})
     evidence = preparer_for("osworld").prepare(session, task)
-    assert evidence == {"prepared": "osworld", "steps": 1}
+    assert evidence == {"prepared": "osworld", "steps": 1, "scorable": False}
     assert session.argv_log[0][0] == "<osworld-setup>"
     assert json.loads(session.argv_log[0][1]) == config
+
+
+def test_the_osworld_preparer_hands_the_session_the_whole_task_config() -> None:
+    """Not just the `config` list. The `evaluator` block has to travel with the
+    setup, because that is the only thing that makes `DesktopFacade.evaluate()`
+    answerable with no arguments — and it not travelling is why the OSWorld family
+    could not be scored through the production adapter at all."""
+    session = FakeSession()
+    evaluator = {"func": "is_expected_active_tab", "result": {"type": "active_tab_info"}}
+    task = make_task_data(
+        kind="osworld",
+        setup={"task_config": {"id": "t", "config": [{"type": "a"}], "evaluator": evaluator}},
+    )
+    evidence = preparer_for("osworld").prepare(session, task)
+    assert evidence == {"prepared": "osworld", "steps": 1, "scorable": True}
+    assert session.task_config is not None
+    assert session.task_config["evaluator"] == evaluator
+
+
+def test_an_osworld_task_that_is_pure_evaluator_still_binds() -> None:
+    """A task with an evaluator and no setup steps has nothing to run and
+    everything to score; returning early on an empty `config` would leave the
+    session unbound and `evaluate()` unanswerable."""
+    session = FakeSession()
+    task = make_task_data(
+        kind="osworld", setup={"task_config": {"id": "t", "evaluator": {"func": "check_include_exclude"}}}
+    )
+    assert preparer_for("osworld").prepare(session, task)["scorable"] is True
+    assert session.task_config is not None
 
 
 def test_the_osworld_preparer_reads_config_from_the_task_path(tmp_path: Path) -> None:
@@ -223,6 +252,7 @@ def test_an_osworld_task_with_no_config_does_not_call_setup() -> None:
     task = make_task_data(kind="osworld")
     assert preparer_for("osworld").prepare(session, task) == {"prepared": "osworld", "steps": 0}
     assert session.argv_log == []
+    assert session.task_config is None
 
 
 # --------------------------------------------------------------------------- #

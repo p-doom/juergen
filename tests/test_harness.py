@@ -826,6 +826,17 @@ def test_evaluate_on_finish_publishes_the_osworld_score(tmp_path, preparer) -> N
     assert result["task_reward"] == 1.0
 
 
+def test_the_declared_terminal_control_reaches_the_scorer(tmp_path, preparer) -> None:
+    """OSWorld inverts the reward on `infeasible` tasks — declaring FAIL is the
+    success condition there and forfeits everywhere else — and reads that off an
+    action history we do not keep. So it is handed over explicitly."""
+    session = FakeSession()
+    session.evaluate_value = 1.0
+    config = _config(tmp_path, evaluate_on_finish=True)
+    _run(config, _task(max_steps=2), replies=["FAIL"], session=session)
+    assert session.declared_terminal == ["fail"]
+
+
 def test_a_failing_evaluate_is_recorded_as_missing_never_as_zero(tmp_path, preparer) -> None:
     session = FakeSession()  # evaluate_value is None -> raises
     config = _config(tmp_path, evaluate_on_finish=True)

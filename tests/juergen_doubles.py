@@ -65,6 +65,8 @@ class FakeSession:
         self.released: list[tuple[bool, str | None]] = []
         self.screenshots = 0
         self.evaluate_value: float | None = None
+        self.task_config: dict[str, Any] | None = None
+        self.declared_terminal: list[str | None] = []
 
     # -- surface -------------------------------------------------------- #
 
@@ -101,8 +103,21 @@ class FakeSession:
                 return {"output": output}
         return {"output": ""}
 
-    def setup(self, config: list[dict[str, Any]]) -> None:
-        self.argv_log.append(["<osworld-setup>", json.dumps(config)])
+    def setup(self, task_config: dict[str, Any]) -> int:
+        """The **whole** OSWorld task JSON, matching `DesktopFacade.setup`.
+
+        It used to take just the `config` list, which is what the preparer used to
+        pass — and that was exactly the reason nothing could implement
+        `evaluate()`: the `evaluator` block never reached the session, so a
+        no-argument scorer had nothing to score.
+        """
+        steps = list(task_config.get("config") or [])
+        self.task_config = dict(task_config)
+        self.argv_log.append(["<osworld-setup>", json.dumps(steps)])
+        return len(steps)
+
+    def declare_terminal(self, control: str | None) -> None:
+        self.declared_terminal.append(control)
 
     def evaluate(self) -> float:
         if self.evaluate_value is None:

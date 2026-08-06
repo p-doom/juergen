@@ -44,6 +44,7 @@ __all__ = [
     "REGIMES",
     "cursor_start",
     "in_bbox",
+    "osworld_task_config",
     "register_preparer",
 ]
 
@@ -218,11 +219,15 @@ class _OSWorldPreparation:
     kind = "osworld"
 
     def prepare(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
-        config = _osworld_config(task)
-        if not config:
+        task_config = osworld_task_config(task)
+        if not task_config.get("config") and not task_config.get("evaluator"):
             return {"prepared": "osworld", "steps": 0}
-        session.setup(config)
-        return {"prepared": "osworld", "steps": len(config)}
+        steps = session.setup(task_config)
+        return {
+            "prepared": "osworld",
+            "steps": len(task_config.get("config") or []) if steps is None else int(steps),
+            "scorable": bool(task_config.get("evaluator")),
+        }
 
     def probe(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
         del task
@@ -289,14 +294,28 @@ class _GroundingPreparation(_OSWorldPreparation):
         }
 
 
-def _osworld_config(task: DesktopTaskData) -> list[dict[str, Any]]:
-    inline = task.setup.get("config")
-    if isinstance(inline, list):
-        return list(inline)
+def osworld_task_config(task: DesktopTaskData) -> dict[str, Any]:
+    """The **whole** OSWorld task JSON a row stands for.
+
+    Whole, not just its `config` list, because the `evaluator` block travels with
+    it: `DesktopFacade.setup()` binds both at once so `evaluate()` can stay
+    argument-free (`evals/vm.py`). Precedence is inline row -> file on disk, so a
+    synthetic row still works and a benchmark row does not need its 369 JSONs
+    copied into the taskset.
+    """
+    inline = task.setup.get("task_config")
+    if isinstance(inline, dict):
+        return dict(inline)
     if task.task_path:
         payload = json.loads(Path(task.task_path).read_text())
-        return list(payload.get("config", []))
-    return []
+        if isinstance(payload, dict):
+            return payload
+    config = task.setup.get("config")
+    return {
+        "id": task.name or f"task_{task.idx:04d}",
+        "instruction": task.instruction,
+        "config": list(config) if isinstance(config, list) else [],
+    }
 
 
 def _replay(session: Any, trajectory: Path, n_steps: int, sleep_s: float = 0.5) -> int:
@@ -510,7 +529,14 @@ class OSWorldTaskset(vf.Taskset[DesktopTask, OSWorldTasksetConfig]):
                     app=app_name,
                     snapshot=str(payload.get("snapshot") or "") or None,
                     task_path=str(path),
-                    setup={"config": list(payload.get("config", []))},
+                    # The whole JSON, not just `config`: the `evaluator` block is
+                    # what `DesktopFacade.evaluate()` scores, and re-reading the
+                    # file inside the preparer would make the row and the score
+                    # disagree the moment the checkout moves under a running array.
+                    setup={
+                        "task_config": payload,
+                        "config": list(payload.get("config", [])),
+                    },
                 ),
                 self.config.task,
             )

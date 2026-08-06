@@ -712,7 +712,9 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             state.reach_frame = reach_frame
             state.best_distance = best_distance
             if self.config.evaluate_on_finish and infra_error is None:
-                state.task_reward = await self._evaluate(session)
+                state.task_reward = await self._evaluate(
+                    session, declared=state.control_terminate
+                )
         except ModelCallError as exc:
             infra_error = {"stage": "model", "type": type(exc).__name__, "message": str(exc)}
             outcome = "model_error"
@@ -1006,13 +1008,21 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             return False
         return bool(state.success) is not state.negative_control
 
-    async def _evaluate(self, session: Any) -> float | None:
+    async def _evaluate(self, session: Any, *, declared: str | None = None) -> float | None:
         evaluate = getattr(session, "evaluate", None)
         if not callable(evaluate):
             raise LookupError(
                 "evaluate_on_finish asks for the OSWorld scorer, which "
                 f"{type(session).__name__} does not implement"
             )
+        # OSWorld inverts the reward on its `infeasible` tasks: declaring FAIL is
+        # the success condition there and forfeits everywhere else. The scorer
+        # cannot see our control tokens, so the verdict is handed over
+        # explicitly. Optional — a session that does not offer it simply never
+        # claims a FAIL, which is what a model that never declared one produces.
+        declare = getattr(session, "declare_terminal", None)
+        if callable(declare):
+            declare(declared)
         try:
             score = float(await asyncio.to_thread(evaluate))
         except Exception as exc:  # noqa: BLE001 - recorded as missing, never as 0.0
