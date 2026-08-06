@@ -1,7 +1,7 @@
 [project]
 name = "juergen"
 version = "0.1.0"
-description = "Crowd-cast SFT supply-chain monorepo: data pipeline and eval harnesses. The model trainer (omegalax) is a separate generic library, kept as its own repo."
+description = "Crowd-cast SFT supply-chain monorepo: data pipeline, action grammars, and the closed-loop eval harness. The model trainer (omegalax) is a separate generic library, kept as its own repo."
 requires-python = ">=3.12,<3.13"
 dependencies = [
     # grammars/ hard-imports pixeldesk: `_support.py` takes Operation and
@@ -48,23 +48,21 @@ native_absolute_control = "grammars.native_absolute_control.codec:CODEC"
 ordered_events_v3 = "grammars.ordered_events_v3.codec:CODEC"
 
 [tool.uv.workspace]
-members = ["data_pipeline", "eval"]
+members = ["data_pipeline"]
 
 [tool.uv]
 prerelease = "allow"
 override-dependencies = [
     "openai>=2.26.0",
-    "nvidia-cudnn-cu12>=9.16",
 ]
 
-# Force the torch stack to come from PyTorch's cu128 wheel index. The hai
-# nodes have NVIDIA driver 12080 (CUDA 12.8); the default PyPI/PyTorch
-# index for torch 2.11.0 ships +cu130 wheels that the driver rejects with
-# "No accelerator available". cu128 wheels are runtime-compatible.
-[[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
-explicit = true
+# The torch stack is NOT resolved here any more. It entered only through the
+# `eval` workspace member's sglang[all] extra, which was deleted 2026-08-06
+# along with the member; with it went the `pytorch-cu128` explicit index (the
+# hai nodes' driver 12080 rejects the default +cu130 wheels), the four
+# torch/torchaudio/torchvision/torchcodec source redirects onto it, and the
+# nvidia-cudnn-cu12 override. Resolution went 382 -> 124 packages. Restore all
+# of it together if anything here ever depends on torch again.
 
 [tool.uv.sources]
 # pixeldesk is a sibling checkout with NO REMOTE AND NO INDEX PRESENCE, so a
@@ -102,11 +100,6 @@ explicit = true
 # version pin that replaces it will behave. Developers working on both do
 # `uv pip install -e ../pixeldesk` explicitly, and that overrides this.
 pixeldesk = { path = "../pixeldesk" }
-
-torch = { index = "pytorch-cu128" }
-torchaudio = { index = "pytorch-cu128" }
-torchvision = { index = "pytorch-cu128" }
-torchcodec = { index = "pytorch-cu128" }
 
 [build-system]
 requires = ["setuptools>=68"]
