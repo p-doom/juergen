@@ -190,7 +190,7 @@ def test_an_unreadable_probe_raises_instead_of_reporting_zero() -> None:
 
 @pytest.mark.parametrize("passing", [True, False])
 def test_the_reward_and_its_trace_only_twin_agree_on_a_replayed_trace(passing: bool) -> None:
-    """★ Item 16's second half: the twin must return the same verdict."""
+    """The twin must return the same verdict."""
     probe = _probe_ok("terminal_exact_text")
     if not passing:
         probe = {**probe, "captured_text": "something else"}

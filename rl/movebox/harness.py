@@ -81,8 +81,8 @@ register_preparer(MoveBoxPreparer())
 class MoveBoxHarnessConfig(DesktopHarnessConfig):
     id: str = "rl_movebox"
     codec: str = "move_rel"
-    """`move_rel` owns the normalized 0-999 relative convention. The env no longer
-    knows the convention exists — `compile` hands it absolute pixels."""
+    """`move_rel` owns the normalized 0-999 relative convention. The env does not
+    know the convention exists — `compile` hands it absolute pixels."""
     history: HistoryConfig = HistoryConfig(name="stateless_single_turn")
     """Stateless by design: a fresh single-turn prompt each step makes the per-step
     grounding decision identifiable, which is the point of this env."""

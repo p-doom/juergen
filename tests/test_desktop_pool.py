@@ -67,9 +67,9 @@ def test_node_slots_records_the_holding_pid(tmp_path: Path) -> None:
 
 
 def test_a_slot_that_cannot_be_stamped_gives_its_lock_back(tmp_path: Path, monkeypatch) -> None:
-    """The flock is taken before the pid is written. A raise in between used to leave
-    the lock held by a `_Slot` nobody has, burning one of the node's tickets until the
-    process exits."""
+    """The flock is taken before the pid is written, so a raise in between must give
+    the lock back — otherwise it stays held by a `_Slot` nobody has, burning one of
+    the node's tickets until the process exits."""
     slots = NodeSlots(directory=tmp_path, max_slots=1)
     real = Path.open
 
@@ -155,7 +155,7 @@ def _spawn_holder(directory: Path, max_slots: int, count: int) -> subprocess.Pop
 
 
 def test_sigkilled_worker_returns_its_slots_with_no_reaper(tmp_path: Path) -> None:
-    """★ The claim the whole module rests on.
+    """The claim the whole module rests on.
 
     No reaper runs here and nothing in this process knows the child existed. The
     slots come back because the kernel drops the `flock` when the process dies —

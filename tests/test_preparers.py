@@ -1,9 +1,7 @@
-"""Item 2 — the `Preparer` seam and its 8 preparers.
+"""The `Preparer` seam and its 8 preparers.
 
-The seam's contract: `prepare` may drive the guest, `probe` must not. The
-pre-refactor runner asserted exactly that (`read_only is True`,
-`input_events == []`), so a `probe` that dispatched input would be a regression in
-the property the oracle depends on.
+The seam's contract: `prepare` may drive the guest, `probe` must not. A `probe`
+that dispatched input would break the read-only property the oracle depends on.
 
 Eight preparers are registered: `none`, `terminal`, `osworld`, `grounding`, the four
 sign-of-life kinds, plus the fixture and RL ones that register on import.
@@ -427,7 +425,7 @@ def test_sign_of_life_setup_is_hermetic_per_cell() -> None:
 def test_the_per_kind_settle_is_2s_for_chrome_and_0_75s_elsewhere() -> None:
     """One source of truth: the arms' `SettleConfig`, which is what the harness reads.
 
-    `SignOfLifePreparer.settle_s()` used to be a second, unread copy of this profile.
+    A per-preparer `settle_s()` would be a second copy the harness never reads.
     """
     from evals.signoflife.cells import CONTROL_ARMS
 

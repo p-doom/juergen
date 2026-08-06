@@ -1,11 +1,9 @@
 """Diagnostics that ride the trace instead of being recomputed by ad-hoc scripts.
 
 Cell pass/fail is not sufficient: a cell can flip for the wrong reason. The four
-failure-mode indicators below decide whether a defect is actually gone, and they
-were previously a standalone script
-(`experiments/phaseb_return_remediation_20260804/indicators.py`) that walked a
-tree of `result.json` files after the fact. As `@vf.metric` they are computed once,
-in-process, from the same step records the harness already writes — so a run can
+failure-mode indicators below decide whether a defect is actually gone. As
+`@vf.metric` they are computed once, in-process, from the same step records the
+harness already writes — so a run can
 never again be reported without them, and offline `traces.jsonl` re-scoring gets
 them for free (a metric declares no `runtime`, so it is never skipped).
 
@@ -96,8 +94,8 @@ def _calls(parsed: Any) -> list[dict[str, Any]]:
 
     Each call serialises to its `computer_use` arguments dict, so `action`, `text`,
     `keys` and `coordinate` read the same way whether the turn carried one call or
-    several. The pre-refactor indicator only understood the bare-token shape, which
-    is why the identical defect in a native-grammar arm went unmeasured.
+    several, so the same defect is measurable in a native-grammar arm and in a
+    bare-token one.
     """
     if not isinstance(parsed, dict):
         return []
@@ -296,10 +294,9 @@ class MouseIndicators:
 class SamplingProvenance:
     """Assert on the trace what sampling actually reached the wire.
 
-    Three temperatures used to coexist (1.0 train, 0.0 parity, 0.7 movebox) and two
-    of the three harnesses passed theirs in a request body that
-    `Dialect.apply_overrides` then discarded. Recording the resolved value *and*
-    where it came from makes that class of silent disagreement a visible metric.
+    A program-set temperature is discarded by `Dialect.apply_overrides` whenever
+    the eval set one, so recording the resolved value *and* where it came from is
+    what keeps a run from silently disagreeing with its own config.
     """
 
     @vf.metric

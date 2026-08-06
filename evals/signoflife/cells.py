@@ -104,9 +104,8 @@ def _sha256_file(path: Path) -> str:
 def verify_phaseb_provenance(model_path: Path) -> dict[str, Any]:
     """Fail closed unless the checkpoint is the registered step-900 export.
 
-    The harness no longer launches the server, so this can no longer run as a
-    side effect of starting one — it has to be called at dispatch. Keeping it is
-    not ceremony: the compact arm's whole claim is "this specific checkpoint reads
+    Called at dispatch, because the harness does not launch the server. Not
+    ceremony: the compact arm's whole claim is "this specific checkpoint reads
     2/4", and a silently substituted export invalidates that sentence.
     """
     root = model_path.parent

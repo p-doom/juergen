@@ -199,13 +199,10 @@ def test_prose_window_says_none_when_nothing_has_been_evicted() -> None:
 
 
 def test_prose_window_survives_the_window_evicting() -> None:
-    """DEFECT (fixed, `agent/history.py:329-334`).
-
-    The invariant was `len(all_outputs) == len(images) - 1`, but `all_outputs` is
-    global (evicted + in-window) while `images` is in-window only. The moment
-    `History` block-evicts the two live in different index spaces: the check raised —
-    and had it not, `outputs[first:]` would have paired the wrong action with each
-    visible frame. `len(history.evicted)` is the missing term.
+    """`all_outputs` is global (evicted + in-window) while `images` is in-window
+    only, so the two live in different index spaces the moment `History`
+    block-evicts. `len(history.evicted)` is the term that reconciles them; without
+    it `outputs[first:]` pairs the wrong action with each visible frame.
 
     Harmless for the sign-of-life gate, whose `max_steps <= 12` never reaches the
     default `n_history_frames=16` — so the published Phase-B-compact 2/4 is unaffected.

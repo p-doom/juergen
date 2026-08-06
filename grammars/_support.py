@@ -494,9 +494,9 @@ def group_operations(
     transition spellings the collapse and the expansion are exact inverses.
 
     EVERY CANONICAL OPERATION KIND IS ACCEPTED HERE, because a converter does not
-    choose what a recording contains. Three of pixeldesk's own kinds used to
-    fall through to "unknown Operation kind", which made a whole recorded
-    trajectory unliftable in every grammar at once:
+    choose what a recording contains. A kind that falls through to "unknown
+    Operation kind" makes a whole recorded trajectory unliftable in every grammar
+    at once, so these are handled explicitly:
 
     * ``click(button)`` — pixeldesk's executor SYNTHESISES this itself
       (``guest_program.lower_guest_operations``), so it appears in any stream
@@ -904,15 +904,8 @@ def normalize_key(value: object, *, error: type[Exception] = ValueError) -> str:
 
 # NO HANDLER TABLES LIVE HERE, AND NONE SHOULD BE ADDED
 #
-# There used to be a ``core_handlers()`` plus a ``handlers.py`` in each grammar,
-# exported as ``dict[str, Handler]``, described as "the dispatch table this
-# grammar contributes to pixeldesk's engine". No such engine existed: nothing
-# in pixeldesk ever read those tables, and the ``Handler`` they were annotated
-# with (``Callable[..., tuple[Operation, ...]]``, a parsed call -> Operations) is
-# the opposite direction from what they actually were (a backend plus args ->
-# None).
-#
-# The reason the fiction was seductive is worth keeping. A shared ``match`` over
+# There is no dispatch engine in pixeldesk for a grammar to contribute a
+# ``dict[str, Handler]`` to. The temptation is worth naming: a shared ``match`` over
 # GRAMMAR-specific action names would be wrong, because that set is open. But a
 # codec's job ends at ``compile``, and the Operation vocabulary on the far side is
 # closed by physics: a pointer moves, a button transitions, a wheel turns, text

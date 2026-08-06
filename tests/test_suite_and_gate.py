@@ -1,6 +1,6 @@
 """Items 14 + 17 — the correctness of the gate itself.
 
-★ Item 14 is RESOLVED, per franz's ruling: `terminal_exact_text` is a **submit** cell
+`terminal_exact_text` is a **submit** cell
 by its own instruction, so listing it in `NO_SUBMIT_CELLS` was the bug and indicator D
 must not fire there.
 

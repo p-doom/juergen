@@ -1,12 +1,9 @@
 """The one sign-of-life taskset.
 
-Four fixed cells, one row each. What used to be six `--mode` values over one
-`run_suite(...)` is now six `DesktopHarnessConfig`s over this one taskset (see
-`cells.py`), so an arm can never quietly redefine the suite.
+Four fixed cells, one row each. The six arms are six `DesktopHarnessConfig`s over
+this one taskset (see `cells.py`), so an arm can never quietly redefine the suite.
 
-Reset isolation is unchanged in substance. The old GPU arms fanned out with
-`--task-index`, one process per cell, each owning a `KvmFixtureSession` and calling
-`reset_to_ready()` per task. verifiers shards a taskset across `spawn`-ed pool
+Reset isolation comes from the pool: verifiers shards a taskset across `spawn`-ed
 workers and each worker checks out its own desktop, so the isolation property
 survives without a fan-out flag.
 """

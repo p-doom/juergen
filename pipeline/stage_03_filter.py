@@ -21,7 +21,7 @@ trains at x fps, each via the shared selector (``lib/views.build_view``),
 bounded only by the master fps. Re-running with different thresholds is
 metadata-only — no decode, no JPEG bytes.
 
-Two inputs, joined by ``segment_id`` (same as the old sampler):
+Two inputs, joined by ``segment_id``:
   --frames-master-dir  stage 01 output: segment_index.jsonl + frames/<seg>/…
   --clips-manifest     stage 00/02 realigned clips_manifest.jsonl (keylog_path
                        repointed to the corrected keylog, alignment_status).
@@ -136,8 +136,8 @@ def _rounded_activity_mask(
     code (``aggregate_actions`` + ``format_action``), so every legacy subtlety
     (delta rounding, scroll fallback, held-set dedup of autorepeats/dangling
     releases) is inherited byte-for-byte. With ``--idle-min-duration-s 0`` and
-    zero head/tail this reproduces the old sampler's ``noop_mode=none`` frame
-    set exactly at the judgment fps (0 NO_OP frames)."""
+    zero head/tail this keeps every frame at the judgment fps (0 NO_OP
+    frames)."""
     active = [False] * n_records
     if keylog_path is None or not keylog_path.exists():
         return active

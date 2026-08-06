@@ -269,11 +269,8 @@ class PairedArmDivergence:
     `score_group` receives `{"task", "traces"}` and runs after every rollout in the
     group finishes (`episode.py:47-49`).
 
-    Note what is *not* preserved: the receipt chain that made the old comparison
-    auditable across process boundaries (binding receipts, compiled-segment hashes,
-    executed-segment receipts, successor validation). Those existed because an
-    untrusted runtime process produced the evidence; one in-process harness and one
-    codec removes the untrusted producer.
+    There is no receipt chain here: one in-process harness and one codec means
+    there is no untrusted evidence producer to defend against.
     """
 
     @vf.group_reward(weight=0.0)

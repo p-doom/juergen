@@ -1,8 +1,5 @@
 """`python -m evals.signoflife` — the gate's dispatcher.
 
-The 6->1 driver collapse produced a `Harness`, a `Taskset` and six
-`DesktopHarnessConfig`s, and no way to run any of them: `run_suite(mode=...)` and
-its `argparse` main went away with the old runner, and nothing replaced them.
 `verifiers`' own `vf eval` CLI cannot stand in, because three things this gate
 needs are not expressible as CLI flags —
 

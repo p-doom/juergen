@@ -96,10 +96,8 @@ class FakeSession:
     def setup(self, task_config: dict[str, Any]) -> int:
         """The **whole** OSWorld task JSON, matching `DesktopFacade.setup`.
 
-        It used to take just the `config` list, which is what the preparer used to
-        pass — and that was exactly the reason nothing could implement
-        `evaluate()`: the `evaluator` block never reached the session, so a
-        no-argument scorer had nothing to score.
+        The **whole** JSON, not just the `config` list: the `evaluator` block has
+        to reach the session, or a no-argument `evaluate()` has nothing to score.
         """
         steps = list(task_config.get("config") or [])
         self.task_config = dict(task_config)

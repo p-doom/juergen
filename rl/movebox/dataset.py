@@ -1,19 +1,11 @@
 """movebox scene sampling: a background screenshot, a green box, a cursor start.
 
-What changed relative to the pre-refactor module, and why:
+No relative-delta arithmetic lives here: the codec hands the env `Operation`s in
+absolute pixels.
 
-  * `apply_move_rel` is **gone**. It carried the comment *"Apply a NORMALIZED
-    0-999 relative delta to the cursor (px), clamp to screen"* and divided by a
-    literal `1000.0` — the same arithmetic appeared verbatim in
-    `rl/osworld/tasks/target_box/actions.py` and, wrongly (raw pixels), in
-    `rl/grounding/inspect.py`, whose reported hit/miss therefore disagreed with the
-    reward it claimed to reproduce. The convention now lives in the codec, which
-    hands the env `Operation`s in absolute pixels.
-  * `MoveBoxTasksetConfig.max_steps` is gone: it was never read (the harness's own
-    `max_steps` won), so it was a config field that looked live and was not.
-  * `band_weights` keeps the curriculum shape but the band list is no longer
-    dict-insertion ordered, because that correlated task index with difficulty —
-    any prefix or shard of the taskset was then a biased sample.
+`band_weights` carries the curriculum shape, and the band list is deliberately NOT
+dict-insertion ordered — that would correlate task index with difficulty, making
+any prefix or shard of the taskset a biased sample.
 """
 
 from __future__ import annotations
@@ -61,9 +53,9 @@ class MoveBoxScene:
     screen_h: int
     band: str
     start_distance: float
-    """Distance to the box **centre**, the sampler's own control variable. Note it
-    is not the reward's distance, which is to the nearest box *edge*; keeping both
-    names distinct avoids the silent unit mismatch the old field invited."""
+    """Distance to the box **centre**, the sampler's own control variable. NOT the
+    reward's distance, which is to the nearest box *edge* — the two names stay
+    distinct so the units cannot be silently confused."""
 
 
 def list_backgrounds(backgrounds_dir: str = DEFAULT_BACKGROUNDS_DIR) -> list[str]:

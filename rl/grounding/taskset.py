@@ -12,9 +12,7 @@ and GRPO finds it. The `-0.15` makes not moving worse than any miss.
 Shaping parameters are module constants, not config fields: inside a `vf.Task`,
 `self.config` is the per-task `TaskConfig` with no custom fields, so reading one
 raises `AttributeError`, and a single throwing reward inside `Task.score`'s
-`asyncio.gather` drops the whole group's rewards. The pre-refactor config declared
-`shaping_weight`/`shaping_scale`/`no_move_penalty` fields that were never read —
-they are not carried over.
+`asyncio.gather` drops the whole group's rewards.
 """
 
 from __future__ import annotations

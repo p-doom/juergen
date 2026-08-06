@@ -15,15 +15,15 @@ each because it was found broken:
   ``@runtime_checkable``, so that is a gate a caller may legitimately write, and
   it returned False for every grammar while ``Codec`` demanded a ``handlers``
   table no codec had and a ``stop_sequences`` method no codec had.
-* The matched pair's shared prose is byte-identical. It had drifted by a
-  line-wrap, which is a different token sequence in the two arms of an A/B whose
-  whole premise is byte-equal prose.
-* Every canonical Operation kind can be grouped. ``drag``, ``click`` and
-  ``ascii_type`` used to fall through to "unknown Operation kind", which made any
-  recorded trajectory containing them unliftable in all seven grammars at once.
-* The normalized grammar's quantisation ceiling. The vectors deliberately use
-  deltas that round-trip exactly, so the lossy region — most of it — was pinned
-  nowhere, and that region is precisely where a relative label is silently wrong.
+* The matched pair's shared prose is byte-identical. A line-wrap alone is a
+  different token sequence in the two arms of an A/B whose whole premise is
+  byte-equal prose.
+* Every canonical Operation kind can be grouped. A kind that falls through to
+  "unknown Operation kind" makes any recorded trajectory containing it unliftable
+  in all seven grammars at once.
+* The normalized grammar's quantisation ceiling. The vectors elsewhere use deltas
+  that round-trip exactly, so the lossy region — most of it — needs its own
+  coverage: that region is precisely where a relative label is silently wrong.
 """
 
 from __future__ import annotations
@@ -61,10 +61,9 @@ def _vectors(name: str) -> dict:
 def _geometry(payload: dict) -> DisplayGeometry:
     """Vector geometry -> ``DisplayGeometry``, using pixeldesk's own field names.
 
-    The vectors used to say ``width``/``height`` at the top level and
-    ``desktop_width``/``desktop_height`` in the one per-case override — residue of
-    the stub these were written against, and the exact drift that made the first
-    real integration run interesting. One spelling now, and it is the package's.
+    One spelling throughout, and it is the package's: a vector saying
+    ``width``/``height`` at the top level and ``desktop_width``/``desktop_height``
+    in a per-case override would drift silently.
     """
     return DisplayGeometry(
         desktop_width=int(payload["desktop_width"]),
@@ -142,7 +141,7 @@ def test_canonical_is_a_fixpoint(name, payload, case):
 
 @pytest.mark.parametrize(("name", "payload", "case"), _cases("cases"))
 def test_to_dict_round_trips_through_action_from_dict(name, payload, case):
-    """``to_dict`` is the eval record, and nothing here used to execute it.
+    """``to_dict`` is the eval record, so it is executed here.
 
     ``agent._action_record`` serialises every parsed action by probing for a
     ``to_dict``, so this method's output is the ``parsed_action`` field of every
@@ -424,10 +423,10 @@ CANONICAL_PROBES = {
 def test_every_canonical_kind_is_groupable():
     """A converter does not get to choose what a recording contains.
 
-    ``drag``, ``click`` and ``ascii_type`` are all kinds pixeldesk's own
-    executor handles — it SYNTHESISES ``click`` — and all three used to fall
-    through to "unknown Operation kind", which made any stream containing one
-    unliftable in every grammar simultaneously.
+    ``drag``, ``click`` and ``ascii_type`` are all kinds pixeldesk's own executor
+    handles — it SYNTHESISES ``click`` — so a stream containing one must not fall
+    through to "unknown Operation kind", which would make it unliftable in every
+    grammar simultaneously.
     """
     expected = set(ir.CANONICAL_KINDS) - {"raise_for_test"}
     assert set(CANONICAL_PROBES) == expected, "probe table is out of date"

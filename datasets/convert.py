@@ -386,9 +386,9 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 def _read_slugs(path: str | None, *, flag: str) -> set[str] | None:
     """The slug set from a caller-named file. ``None`` only when no file was named.
 
-    A named-but-absent file used to read as "no filter", which silently disables
-    the OSWorld eval-leak drop (``--exclude_slugs``) or the quality keep
-    (``--keep_slugs``) and produces a dataset the caller believes is filtered.
+    A named-but-absent file RAISES. Reading it as "no filter" would silently
+    disable the OSWorld eval-leak drop (``--exclude_slugs``) or the quality keep
+    (``--keep_slugs``) and produce a dataset the caller believes is filtered.
     """
     if path is None:
         return None
@@ -608,7 +608,7 @@ def _assert_prose_coverage(stats: ConvertStats, keep_prose: bool) -> None:
     is measured by :func:`prose_divergence`.
     """
     # An EMPTY result is never a legitimate build. It is also how the prose guard
-    # gets bypassed: ``n_turns == 0`` used to return early, so pointing the
+    # gets bypassed if ``n_turns == 0`` returns early: pointing the
     # converter at a rollout collection whose trajectory file / result schema it
     # cannot read (e.g. the ``traj.jsonl`` + nested-``params`` layout of
     # rollouts/teacher_8b_osworld_train_v1, which is where all three arms in the

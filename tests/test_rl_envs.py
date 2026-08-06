@@ -5,13 +5,13 @@ so movebox/grounding run under the shared driver. The load-bearing rule is that 
 applies **absolute pixel** operations only — there is deliberately no relative move,
 because every convention is resolved inside the codec.
 
-Item 12: `band_sequence` fixes a real defect — the old builder emitted repeats in
-dict-insertion order, so any prefix, shard or `max_tasks` cut was a biased curriculum
-sample.
+`band_sequence` decorrelates task index from difficulty: emitting band repeats in
+dict-insertion order would make any prefix, shard or `max_tasks` cut a biased
+curriculum sample.
 
-Item 13: cursor regimes are md5-seeded. They previously used `hash()`, which is
-PYTHONHASHSEED-randomised, so old runs were not reproducible across processes. That is
-asserted against two real subprocesses with different `PYTHONHASHSEED`.
+Cursor regimes are md5-seeded, not `hash()`-seeded, because `hash()` is
+PYTHONHASHSEED-randomised and would differ between processes. That is asserted
+against two real subprocesses with different `PYTHONHASHSEED`.
 """
 
 from __future__ import annotations
@@ -250,8 +250,8 @@ def test_band_sequence_has_the_requested_length_and_the_requested_mix() -> None:
 
 
 def test_band_sequence_decorrelates_index_from_difficulty() -> None:
-    """★ The defect it fixes: the old builder put every easy task first, so any
-    prefix, shard or `max_tasks` cut was a biased curriculum sample."""
+    """Emitting every easy task first would make any prefix, shard or `max_tasks`
+    cut a biased curriculum sample."""
     n = 600
     bands = band_sequence(WEIGHTS, n, seed=0)
     order = {"near": 0, "medium": 1, "far": 2}
@@ -270,7 +270,7 @@ def test_band_sequence_decorrelates_index_from_difficulty() -> None:
     mean2 = sum(d2) / len(d2)
     cov2 = sum((i - mean_i) * (d - mean2) for i, d in enumerate(d2))
     var2 = sum((d - mean2) ** 2 for d in d2)
-    assert cov2 / math.sqrt(var_i * var2) > 0.8, "the old shape was strongly correlated"
+    assert cov2 / math.sqrt(var_i * var2) > 0.8, "insertion order IS strongly correlated"
 
 
 def test_every_prefix_of_the_shuffled_sequence_is_a_representative_sample() -> None:
@@ -440,31 +440,21 @@ def test_every_regime_start_is_on_screen() -> None:
 
 
 def test_the_far_regime_starts_OUTSIDE_the_box() -> None:
-    """★ FIXED — was the inverse of this test (`evals/tasks.py`, the `far` branch).
+    """Every regime, `far` included, must start OUTSIDE the box.
 
-    `near` and `medium` always retried over eight deterministic angles until the
-    sample was outside the box; `far` used to return the bare screen mirror
-    `(sw-cx, sh-cy)` with **no containment check at all**. For any target whose centre
-    sits near the screen centre the mirror landed inside the target, so the cell
-    started already solved: `in_bbox` true at step 0, `reach_frame` 1, reward 1.0
-    before the model had acted — exactly the "degenerate reach-at-step-0" the minimum
-    radius exists to prevent, with the guard simply not applied to `far`. Grounding's
-    `require_unsolved_start` is False (`rl/grounding/harness.py:77`, because refusing
-    edge cells "would silently drop the hardest targets"), so those episodes WERE
-    scored.
+    `far` tries the screen mirror `(sw-cx, sh-cy)` first and falls through to the
+    same eight-angle ladder as `near`/`medium` when the mirror is inside the box.
+    Without that fallthrough, a target whose centre sits near the screen centre
+    starts already solved — `in_bbox` true at step 0, `reach_frame` 1, reward 1.0
+    before the model acts — and grounding runs with `require_unsolved_start=False`
+    (`rl/grounding/harness.py:77`, because refusing edge cells would silently drop
+    the hardest targets), so such an episode scores.
 
-    Measured incidence of the old defect over random targets at 1920x1080:
+    Incidence over random targets at 1920x1080:
         20-60 px elements     0.02%
         60-200 px widgets     0.11%
         200-600 px panels     2.10%
         600-1400 px windows  42.90%
-
-    `far` now tries the mirror first and falls through to the shared angle ladder when
-    the mirror is inside the box, so the far start MOVES for exactly those targets:
-    this RE-BASELINES every published far-regime reach number, the same caution
-    `rl/geometry.py:37-41` records for `BOX_EDGE_INCLUSIVE`. Starts that were already
-    admissible are byte-unchanged in all three regimes, so the re-baseline is confined
-    to the previously-degenerate cells.
     """
     centred = (1920 // 2 - 100, 1080 // 2 - 100, 1920 // 2 + 100, 1080 // 2 + 100)
     assert in_bbox((960, 540), centred), "precondition: the bare mirror WOULD land inside"
@@ -475,7 +465,7 @@ def test_the_far_regime_starts_OUTSIDE_the_box() -> None:
 
 
 def test_no_regime_can_return_an_in_box_start_at_any_target_size() -> None:
-    """★ The invariant the `far` fix buys: not one regime, every regime.
+    """Not one regime — every regime starts outside the box.
 
     Sweeps the four size bands whose old far-mirror degeneracy rates were 0.02% /
     0.11% / 2.10% / 42.90%. Any in-box start here is a silently-scored reward-1.0
@@ -529,8 +519,8 @@ def test_the_near_regime_is_closer_than_the_medium_regime_on_average() -> None:
 
 
 def test_cursor_regimes_are_reproducible_across_two_pythonhashseeds() -> None:
-    """★ Item 13. `hash()` is PYTHONHASHSEED-randomised, so the pre-refactor regimes
-    silently differed between processes; md5 does not."""
+    """`hash()` is PYTHONHASHSEED-randomised and would differ between processes;
+    md5 does not."""
     script = textwrap.dedent(
         """
         import json
@@ -578,12 +568,9 @@ def test_a_builtin_hash_would_have_failed_the_same_check() -> None:
 
 
 def test_the_band_metric_reads_the_band_the_preparer_published() -> None:
-    """DEFECT (fixed, `rl/movebox/taskset.py:72`).
-
-    The metric read `result["band_index"]`, a key nothing in the tree ever publishes,
-    so `band` was the constant -1.0 — and `band` is the one dimension this env's
-    results must be sliced by, since the whole point of the curriculum is comparing
-    near/medium/far.
+    """`band` is the one dimension this env's results must be sliced by, since the
+    curriculum exists to compare near/medium/far. A metric reading a key nothing
+    publishes would report it as a constant.
     """
     import asyncio
 

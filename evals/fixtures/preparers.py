@@ -45,10 +45,9 @@ def web_fixture_server(fixture: WebFixture) -> WebFixtureServer:
     asked for, and a rollout's page is identified by fixture id, so two concurrent
     rollouts of different cells cannot collide.
 
-    `server.store.fixtures` is the one registry. There used to be a module-level dict
-    as well, handed to the constructor for the first fixture and then written to in
-    parallel forever after — and `FixtureStateStore` copies what it is given, so the
-    two diverged by construction.
+    `server.store.fixtures` is the one registry — `FixtureStateStore` copies what
+    it is given at construction, so a second dict of fixtures would diverge from
+    it.
     """
     global _SERVER
     with _SERVER_LOCK:

@@ -77,7 +77,7 @@ def test_typed_texts_reads_the_bare_token_element_shape() -> None:
 
 
 def test_typed_texts_reads_the_tool_call_shape() -> None:
-    """Item 5: previously compact-only, so the identical defect went unmeasured natively."""
+    """The same defect must be measurable in a tool-call arm, not compact-only."""
     for name in ("native_absolute", "move_rel"):
         parsed = _parsed(name, _tool_call({"action": "type", "text": "hello"}))
         assert typed_texts(parsed) == ["hello"], name
@@ -401,8 +401,8 @@ def test_never_moved_lives_in_the_grounding_taskset_not_in_evals() -> None:
 
 def test_the_two_sentinels_the_result_still_carries_are_distinct_fields() -> None:
     """`reach_frame == -1` means "never entered the bbox"; `best_distance == -1.0`
-    means "distance undefined". Two fields, so neither has to double as the other —
-    which is what the single shared `-1.0` used to be asked to do."""
+    means "distance undefined". Two fields, so neither has to double as the
+    other."""
     from evals.tasks import DesktopState
 
     state = DesktopState()

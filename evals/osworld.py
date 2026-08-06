@@ -82,10 +82,9 @@ class OSWorldNotAvailable(RuntimeError):
 def osworld_root() -> Path:
     """`$OSWORLD_ROOT`, validated as an actual OSWorld checkout.
 
-    Validated rather than trusted because the failure it prevents already
-    happened: the Jul-23 `$OSWORLD_ROOT` re-clone left a tree whose provider
-    layer no longer matched, and every downstream error named a submodule
-    instead of the environment variable that chose it.
+    Validated rather than trusted: a re-clone or a wrong path otherwise surfaces
+    as an ImportError naming a submodule, instead of naming the environment
+    variable that chose it.
     """
     raw = os.environ.get("OSWORLD_ROOT", "").strip()
     if not raw:

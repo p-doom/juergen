@@ -46,8 +46,9 @@ NO_SUBMIT_CELLS: frozenset[str] = frozenset()
 """Cells whose success must not depend on pressing Return, read by failure-mode
 indicator D.
 
-**Empty, and that is the resolved state — not an oversight.** `terminal_exact_text`
-used to be listed here, and it was the only entry. The classification was the bug:
+**Empty, and that is the resolved state, not an oversight.** No cell in this suite
+qualifies. `terminal_exact_text`, the only plausible candidate, requires submission
+four ways over:
 
   * the cell's own instruction ends *"and press Enter"*;
   * its guest fixture (`guest._setup_terminal_exact_text`) completes an
@@ -111,8 +112,7 @@ def _check_no_submit_consistency(tasks: list["DevelopmentTask"]) -> None:
       * a cell listed in `NO_SUBMIT_CELLS` whose instruction says "press Enter" — the
         exact contradiction that made indicator D fire on the gold control arm;
       * an entry in `NO_SUBMIT_CELLS` naming no cell in the suite, which is how a
-        rename silently stops applying the flag (the id happens to equal the kind for
-        the cell that used to be listed, so the coincidence hid the coupling).
+        rename silently stops applying the flag.
     """
     by_id = {task.id: task for task in tasks}
     unknown = sorted(NO_SUBMIT_CELLS - set(by_id))

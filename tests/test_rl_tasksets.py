@@ -1,6 +1,6 @@
 """Item 7 (`_never_moved`) plus the `grounding` / `target_box` tasksets and geometry.
 
-★ Item 7: `_never_moved` lives in `rl/grounding/taskset.py:70`, and it replaces a
+`_never_moved` lives in `rl/grounding/taskset.py:69`, and it replaces a
 `distance = -1.0` sentinel that conflated three different things — no target, no
 movement, and a target one pixel away. It exists because a model that emits `wait`,
 `terminate` or a coordinate-less click never moves and therefore can never *miss*:
@@ -97,7 +97,7 @@ def _ground(**result):
 
 
 def test_the_reward_ordering_is_no_move_below_miss_below_hit() -> None:
-    """★ The ordering the negative term exists to create."""
+    """The ordering the negative term exists to create."""
     hit = _ground(reach_frame=1, best_distance=0.0, steps_detail=[_step((0, 0), (20, 20))])
     near_miss = _ground(
         reach_frame=-1, best_distance=15.0, steps_detail=[_step((0, 0), (60, 20))]

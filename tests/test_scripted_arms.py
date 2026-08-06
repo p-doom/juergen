@@ -157,7 +157,7 @@ def test_native_absolute_renders_type_and_submit() -> None:
 
 
 def test_the_native_absolute_renderer_emits_bare_line_ABSOLUTE_coordinates() -> None:
-    """★ `native_absolute_control` — the new renderer. No cursor read at all."""
+    """`native_absolute_control` reads no cursor at all."""
     codec = load_codec("native_absolute_control")
     task = _task("open_chrome")
     for cursor in [(0, 0), (900, 900), (1919, 1079)]:
@@ -184,7 +184,7 @@ def test_the_relative_renderer_resolves_the_click_against_the_live_cursor() -> N
 
 
 def test_the_same_bytes_mean_different_actions_in_the_paired_arms() -> None:
-    """★ The deliberate semantic trap the paired grammars share.
+    """The deliberate semantic trap the paired grammars share.
 
     `0 0 0 ; +LMB -LMB` is a click at the top-left corner in the absolute arm and
     "don't move, click here" in `compact_raw`. This is exactly why a control arm must

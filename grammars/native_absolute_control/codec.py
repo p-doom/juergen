@@ -12,30 +12,18 @@ the absolute-versus-relative question the program exists to answer.
 ``prompts/native_absolute_control.txt``); the name is kept so receipts,
 recipes and prompt digests still line up with what is on disk.
 
-Collapses into one codec:
+Semantics, chosen so the arm is never weaker than its relative twin — an
+asymmetry between the two would confound the comparison:
 
-* ``paired_runtime/runtime.py::_native_action`` (which read the line with
-  ``parse_compact_raw`` and then reinterpreted its ``dx``/``dy`` as an absolute
-  ``coordinate``) and its half of ``_expected_cursor_after``,
-* ``paired_runtime/prompts/native_absolute_control.txt``.
-
-Semantics chosen where the old lowering was asymmetric with its relative twin:
-
-* **Keyboard transitions are accepted.** ``_native_action`` raised "native raw
-  response contains an unsupported key event" on any element that was not a
-  mouse button or ``type()``, because it lowered into
-  ``native_absolute_sequence_v1``, whose only keyboard operation was a whole
-  ``key_chord``. Lowering straight to the IR has ``key_down`` / ``key_up``, so
-  the restriction is gone. It made the absolute arm strictly weaker than the
-  relative arm and would have confounded the comparison.
-* **The coordinates are unconditional.** ``_native_action`` emitted a move only
-  when the action also carried a mouse button, a scroll, or a non-zero
-  coordinate, so ``0 0 0 ; type("x")`` silently ignored the named position — a
-  relative reading inside the absolute arm. Here x and y always name a position;
-  the move is skipped only when that position IS the current cursor, which is
-  exactly when ``compact_raw`` skips its own move. So the matched action for
-  "type without moving" is ``<cursor_x> <cursor_y> 0 ; type("x")``, and both
-  arms lower to the same operations.
+* **Keyboard transitions are accepted.** Lowering straight to the IR gives
+  ``key_down`` / ``key_up``, so an element that is neither a mouse button nor
+  ``type()`` is not a parse error.
+* **The coordinates are unconditional.** x and y always name a position, even in
+  ``0 0 0 ; type("x")``; the move is skipped only when that position IS the
+  current cursor, which is exactly when ``compact_raw`` skips its own move. So
+  the matched action for "type without moving" is
+  ``<cursor_x> <cursor_y> 0 ; type("x")``, and both arms lower to the same
+  operations.
 * **``0 0 0`` is the top-left corner**, not "do not move". That is the whole
   semantic difference from ``compact_raw`` and it has its own vector.
 * Like ``compact_raw``: the action is the LAST non-empty line, there is no

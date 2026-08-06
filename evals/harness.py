@@ -1,26 +1,16 @@
 """The one episode driver.
 
-Six drivers became this file:
-
-| replaced                                          | LOC   | what it now is                                    |
-|---------------------------------------------------|-------|---------------------------------------------------|
-| `proper_vm_capability_ladder/paired_eval/runner.py` | 1331 | two arms = two rollouts of one task; the cross-arm comparison is `@vf.group_reward` |
-| `sign_of_life_v2/runner.py`                        |  840 | one taskset + four `DesktopHarnessConfig`s        |
-| `eval/osworld_grounding_runner.py`                 |  856 | `GroundingTaskset` + the `grounding` preparer      |
-| `eval/freeroll.py`                                 |  646 | `FreerollTaskset` + the `none`/`terminal` preparers |
-| `eval/osworld_one_task_runner.py`                  |  394 | `OSWorldTaskset(task_paths=[...])`                |
-| `eval/osworld_fullbench_runner.py`                 |  351 | `OSWorldTaskset(split_path=...)`                   |
-
-The loop they all were:
+The loop:
 
     screenshot -> prompt from codec.describe() + history policy -> sample
     -> codec.parse -> codec.compile -> desktop executes -> oracle -> repeat
 
-What is deliberately *not* here any more: sglang lifecycle (verifiers owns the
-endpoint), qemu boot and port allocation (the desktop pool owns VMs), `absl`/
-`argparse` CLIs (verifiers owns config), per-runner `AsyncOpenAI` construction
-(`agent.Agent` owns sampling), and the paired-eval receipt chain (one in-process
-harness has no untrusted evidence producer to defend against).
+A task family is a taskset plus a `Preparer`; an arm is a `DesktopHarnessConfig`.
+
+What this file deliberately does NOT own, and who does: the sglang lifecycle and
+the endpoint (verifiers), qemu boot and port allocation (the desktop pool), the
+CLI and config (verifiers), and `AsyncOpenAI` construction and sampling
+(`agent.Agent`).
 """
 
 from __future__ import annotations
@@ -135,11 +125,10 @@ class ScriptedConfig(vf.BaseConfig):
 
 
 class BudgetConfig(vf.BaseConfig):
-    """Hard per-episode ceilings, carried over from `paired_eval`'s budget tracker.
+    """Hard per-episode ceilings: model turns, dispatched operations, output
+    tokens, wall time.
 
-    Kept: model turns, dispatched operations, output tokens, wall time. Dropped:
-    `logical_semantic_steps` and `primitive_actions`, which counted progress against
-    a per-task semantic-step curriculum that no longer exists — a budget nobody can
+    Each is computable from what the episode already records. A budget nobody can
     compute is a budget that silently never fires.
     """
 
@@ -157,8 +146,7 @@ class ArtifactConfig(vf.BaseConfig):
     write_result_json: bool = True
     register_labctl: bool = False
     """`labctl register-external --kind eval_result`, so the run shows up in the
-    RolloutViewer. Only the grounding runner did this; it is 20 lines and this team
-    is labctl-native, so it survives as a flag rather than a fork."""
+    RolloutViewer."""
     labctl_alias: str = ""
 
 
@@ -179,13 +167,12 @@ class DesktopPoolConfig(vf.BaseConfig):
     pool_target: str = "pixeldesk.vm.pool:DesktopSessionPool"
     """The session-pool **constructor**, as `module:attribute`.
 
-    A constructor, not a provider name: provider-by-name resolution and patching the
-    OSWorld tree are both deliberately gone (the latter caused an outage). Override
-    this to inject a fake pool, never to select a VM backend."""
+    A constructor, not a provider name. Override this to inject a fake pool, never
+    to select a VM backend."""
     hide_gpu_during_boot: bool = True
-    """Blank `CUDA_VISIBLE_DEVICES` while the VM boots. The sign-of-life runner
-    needed this because the process that forks qemu also holds a GPU, and a child
-    that inherits the visible device can wedge the allocation."""
+    """Blank `CUDA_VISIBLE_DEVICES` while the VM boots: the process that forks
+    qemu may also hold a GPU, and a child that inherits the visible device can
+    wedge the allocation."""
 
 
 class DesktopHarnessConfig(vf.HarnessConfig):
@@ -195,9 +182,9 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     system_prompt_sha256: str | None = None
     """A checkpoint's sealed training-prompt digest, **recorded, never enforced.**
 
-    `codec.describe()` is docstring-derived and is deliberately NOT byte-identical
-    to the sealed prompts it replaces, so a hash gate here would fail every run. The
-    digests ride `trace.info["prompt"]` as data alongside the codec's own
+    `codec.describe()` is docstring-derived and deliberately NOT byte-identical to
+    a checkpoint's sealed training prompt, so a hash gate here would fail every
+    run. The digests ride `trace.info["prompt"]` as data alongside the codec's own
     `report()`; a run that must not be compared across the prompt boundary is
     identifiable from the record rather than blocked by an exception."""
     history: HistoryConfig = HistoryConfig()
@@ -941,12 +928,8 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
     def _prompt_report(self, codec: Any) -> dict[str, Any]:
         """Prompt provenance as data. Never raises.
 
-        The pre-refactor gates raised on digest mismatch in two places
-        (`compact_relative.verify_sealed_contract` and
-        `paired_runtime/runtime.py:845`), which made editing a prompt in place trip
-        the check and forking a worktree cheaper than fixing it. Both are removed,
-        and nothing replaces them: what a reader needs is which prompt produced a
-        number, not a refusal to produce one.
+        A digest mismatch is recorded, never enforced: what a reader needs is
+        which prompt produced a number, not a refusal to produce one.
 
         **Baseline warning, recorded on every run:** the off-the-shelf
         Qwen3-VL-8B = 33.9% OSWorld-Verified figure is our only calibrated
@@ -979,8 +962,8 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         """Calibration conformance for a control arm; `None` for a model arm.
 
         Oracle arm: must pass. Negative arm: must fail. A model arm has no expected
-        value, so there is nothing here to conform to — it used to return True, and a
-        field that cannot fail reads as a green light while measuring nothing.
+        value, so there is nothing to conform to — a field that cannot fail would
+        read as a green light while measuring nothing.
         """
         if not state.scripted:
             return None

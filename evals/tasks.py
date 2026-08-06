@@ -124,8 +124,7 @@ class Preparer(Protocol):
 
     `prepare` may drive the guest (launch a terminal, run OSWorld setup commands,
     replay a cached trajectory, move the cursor). `probe` must not: it is the
-    read-only path the oracle depends on, and the pre-refactor runner asserted
-    exactly that (`read_only is True`, `input_events == []`).
+    read-only path the oracle depends on: no input events, no state mutation.
     """
 
     kind: str
@@ -341,7 +340,7 @@ for _preparer in (
 
 
 def in_bbox(pos: tuple[int, int], bbox: tuple[int, int, int, int]) -> bool:
-    """Half-open on the max edge, verbatim from both pre-refactor definitions."""
+    """Half-open on the max edge."""
     return bbox[0] <= pos[0] < bbox[2] and bbox[1] <= pos[1] < bbox[3]
 
 
@@ -365,8 +364,8 @@ def cursor_start(
       far:    the screen mirror (sw-cx, sh-cy), when that lands outside the bbox
 
     Seeded from an md5 of `(key, regime)` rather than `hash()`, which is
-    PYTHONHASHSEED-randomised and silently made the old runs unreproducible across
-    processes. The minimum radius rises with the bbox half-diagonal (+30 px) so the
+    PYTHONHASHSEED-randomised and so not reproducible across processes. The
+    minimum radius rises with the bbox half-diagonal (+30 px) so the
     unclipped sample is outside the box at any angle; eight deterministic angles
     are tried before falling back to the far screen corner, which handles targets
     against a screen edge whose clipped samples land back inside.
@@ -379,28 +378,14 @@ def cursor_start(
     model has acted. Same ladder-then-raise shape as `rl.target_box.geometry.
     sample_cursor_start`.
 
-    ⚠️ RE-BASELINES EVERY PUBLISHED FAR-REGIME REACH NUMBER. `far` used to return the
-    bare mirror with no containment check at all, so for a target whose centre sits
-    near the screen centre the start landed inside the target and the cell was already
-    solved at step 0. Grounding runs with `require_unsolved_start=False`
-    (`rl/grounding/harness.py:77`), so those episodes WERE scored. Measured incidence
-    at 1920x1080 — 20-60 px elements 0.02%, 60-200 px widgets 0.11%, 200-600 px panels
-    2.10%, 600-1400 px windows 42.90% (the defect is analytic; the rates are
-    Monte-Carlo over synthetic target distributions). Correcting it moves the `far`
-    start for exactly those targets. Far starts whose mirror was already outside the
-    box are byte-unchanged, and `near`/`medium` are byte-unchanged except where the old
-    corner fallback itself returned an in-box start. This is the same caution
-    `rl/geometry.py:37-41` records for `BOX_EDGE_INCLUSIVE`: do not compare a
-    far-regime reach number across this commit.
-
-    MEASURED BLAST RADIUS, though: on the grounding set actually shipped —
-    `/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/osworld_grounding_eval_v0/
-    bboxes.jsonl`, 29 targets, of which only 2 exceed 600 px — **zero** far starts were
-    degenerate under the old code, zero move under the new one, and nothing raises. So
-    the 42.90% figure is a property of large-window synthetic distributions, not of
-    that eval set, and the published far-regime numbers *on those 29 targets* need no
-    re-baseline. Re-check this whenever the target set grows toward window-sized
-    targets, which is where the defect lived.
+    ⚠️ A BARE MIRROR DEGENERATES FOR WINDOW-SIZED TARGETS, which is why `far` goes
+    through the ladder too. Without a containment check, a target whose centre sits
+    near the screen centre gets a start inside itself, and grounding runs with
+    `require_unsolved_start=False` (`rl/grounding/harness.py:77`), so such an
+    episode scores rather than raising. Incidence at 1920x1080 — 20-60 px elements
+    0.02%, 60-200 px widgets 0.11%, 200-600 px panels 2.10%, 600-1400 px windows
+    42.90% (analytic defect; Monte-Carlo rates over synthetic target distributions).
+    Re-check whenever the target set grows toward window-sized targets.
     """
     import hashlib
 

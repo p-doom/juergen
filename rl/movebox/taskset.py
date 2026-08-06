@@ -1,10 +1,8 @@
 """movebox: multi-step move-the-cursor-into-the-box, container-free.
 
-Reward is **pure sparse task success** — 1.0 iff the cursor entered the box. The
-pre-refactor module kept `STEP_PENALTY`, `REPEAT_PENALTY`, `NO_OP_PENALTY` and a
-dense shaping term all present and all set to 0/off, which is a trap: the constants
-read as tunable while `efficiency` was identically `-0.0`. They are gone, and the
-one remaining knob is named.
+Reward is **pure sparse task success** — 1.0 iff the cursor entered the box. One
+named knob, and no dense shaping term: a constant that reads as tunable while
+contributing identically `-0.0` is a trap.
 
 Shaping parameters stay **module constants, never config fields.** Inside a
 `vf.Task`, `self.config` is the per-task `TaskConfig`, which has no custom fields —
@@ -88,8 +86,8 @@ class MoveBoxTasksetConfig(vf.TasksetConfig):
     screen_h: int = SCREEN_H
     band_weights: dict[str, float] = {"near": 0.6, "medium": 0.3, "far": 0.1}
     max_steps: int = 8
-    """Read here and passed onto the row, unlike the pre-refactor field of the same
-    name which was silently ignored in favour of the harness's."""
+    """Read here and passed onto the row. The harness has a `max_steps` of its own;
+    this one is the taskset's and must not be silently shadowed by it."""
 
 
 class MoveBoxTaskset(vf.Taskset[MoveBoxTask, MoveBoxTasksetConfig]):

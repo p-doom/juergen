@@ -333,13 +333,10 @@ def test_a_scripted_arm_records_its_sampling_source_as_scripted(tmp_path, prepar
 
 
 def test_an_exhausted_script_does_not_erase_the_sampling_provenance(tmp_path, preparer) -> None:
-    """DEFECT (fixed, `evals/harness.py:575`).
-
-    `_decide` returns `(None, {})` once the script runs out, and the empty dict was
-    assigned straight over `sampling_record`. `script_exhausted` is the *normal* end
-    of every negative control (all four compact_negative cells in the surviving
-    traces stop that way), so the whole arm published `sampling: {}` and
-    `SamplingProvenance` reported temperature -1.0 with no source.
+    """`_decide` returns `(None, {})` once the script runs out, and `script_exhausted`
+    is the *normal* end of every negative control. Assigning that empty dict over
+    `sampling_record` would publish `sampling: {}` for the whole arm, leaving
+    `SamplingProvenance` with no temperature and no source.
     """
     preparer.plan = ["0 0 0 ;"]  # one intent, two steps allowed
     config = _config(tmp_path, scripted=ScriptedConfig(enabled=True, negative=True))
@@ -561,7 +558,7 @@ def test_register_labctl_survives_a_missing_binary(tmp_path) -> None:
 
 
 def test_the_prompt_report_never_raises_and_records_the_baseline_caveat(tmp_path) -> None:
-    """★ `_assert_prompt_pin` became `_prompt_report` returning data."""
+    """`_prompt_report` returns data; it never raises on a digest mismatch."""
     from agent.agent import load_codec
     from evals import harness as harness_module
 
@@ -680,13 +677,11 @@ def test_the_grace_window_keeps_the_vm_readable_for_scoring(tmp_path, preparer, 
 
 
 def test_an_infra_invalid_episode_retires_the_vm(tmp_path, preparer, monkeypatch) -> None:
-    """DEFECT (fixed, `evals/harness.py:486`).
-
-    `failed=True` is what makes pixeldesk retire a session instead of returning it
+    """`failed=True` is what makes pixeldesk retire a session instead of returning it
     to the pool as `ready` (`vm/pool.py:509-519`). `_run` publishes every episode
-    exception as `infra_invalid` rather than re-raising, so `launch`'s `failed` flag
-    only ever saw an `acquire` failure — and a wedged guest (dead executor transport,
-    unreadable state) was recycled into the next rollout as healthy.
+    exception as `infra_invalid` rather than re-raising, so `launch` must set
+    `failed` from that too — otherwise a wedged guest (dead executor transport,
+    unreadable state) is recycled into the next rollout as healthy.
     """
     captured = _captured_lease(monkeypatch)
     preparer.probes = [{"postcondition_status": "ok", "postcondition_success": True}]
@@ -778,8 +773,8 @@ def test_a_failing_evaluate_is_recorded_as_missing_never_as_zero(tmp_path, prepa
 def test_a_session_without_evaluate_refuses_the_flag_it_cannot_honour(
     tmp_path, preparer
 ) -> None:
-    """`evaluate_on_finish` used to be silently ignored here and the missing score
-    resurfaced as `OSWorldEvaluateOracle` complaining about a non-numeric reward, one
+    """`evaluate_on_finish` must not be silently ignored: the missing score would
+    resurface as `OSWorldEvaluateOracle` complaining about a non-numeric reward, one
     layer away from the config that caused it."""
 
     class NoEval(FakeSession):
@@ -953,8 +948,8 @@ def test_the_image_budget_config_validates_quality_and_pixels() -> None:
 
 
 def test_the_image_budget_config_refuses_a_media_it_cannot_encode() -> None:
-    """`media` used to be a bare `str` coerced to jpeg by anything but the word png,
-    so `media="webp"` silently produced JPEG."""
+    """A bare `str` coerced to jpeg by anything but the word png would make
+    `media="webp"` silently produce JPEG."""
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):

@@ -53,11 +53,10 @@ USABLE_FILTER_STATUSES = {"ok", "cached"}
 #             perfectly even spacing. The loud default.
 #   nearest — any fps <= master_fps; slot j sits at the master tick NEAREST its
 #             ideal time j/fps, so spacing jitters by up to half a master tick
-#             (e.g. 4 fps on a 15 fps master picks ticks 0,4,8,11,15,...). The
-#             old sampler's behavior — but causally CORRECT here, because a
-#             frame's label window starts AT its actual tick ([tick_i,
-#             tick_{i+1})), so no action ever precedes its observation frame
-#             (the old nearest-pick smeared up to half a tick).
+#             (e.g. 4 fps on a 15 fps master picks ticks 0,4,8,11,15,...).
+#             Causally correct: a frame's label window starts AT its actual tick
+#             ([tick_i, tick_{i+1})), so no action ever precedes its observation
+#             frame. A nearest-pick would smear up to half a tick.
 FPS_MODES = ("exact", "nearest")
 
 

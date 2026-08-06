@@ -353,8 +353,8 @@ def _control_of(action: Any) -> str | None:
     premature-terminate indicator would count a self-declared failure as a claimed
     success.
 
-    Reads attributes only. `codec.parse` returns an action object in every grammar;
-    the dict fork that used to sit here fired for nothing but its own tests.
+    Reads attributes only: `codec.parse` returns an action object in every
+    grammar.
     """
     if action is None:
         return None
@@ -370,11 +370,8 @@ def _control_of(action: Any) -> str | None:
 def _action_record(action: Any) -> Any:
     """`parsed_action`, straight from the grammar's own serialiser.
 
-    One name, called directly. It used to probe `to_dict` / `as_dict` / `model_dump` /
-    `_asdict` and then fall back to `dataclasses.asdict` and `repr`: all seven in-tree
-    action types define `to_dict` and none define any of the others, so five of the six
-    arms were unreachable — and because the reachable one was reached by string, every
-    `to_dict` in `grammars/` read as 0% covered while writing every trajectory row.
+    One name, called directly: every in-tree action type defines `to_dict`, and a
+    grammar that does not is a contract violation rather than a fallback case.
     """
     if action is None:
         return None

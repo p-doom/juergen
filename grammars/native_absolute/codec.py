@@ -77,12 +77,11 @@ BUTTON_NAMES = ("left", "right", "middle")
 MAX_WAIT_SECONDS = 10.0
 
 #: ``left_click_drag`` lowers to a TIMED stroke, not an instant jump. The
-#: historical lowering (sol_v2 and rung1 alike) was
-#: ``mouse_down, move_to, mouse_up``, which many toolkits do not register as a
-#: drag at all — the same class of defect as degrading a drag into a stationary
-#: click. ``glide_to`` is an optional backend capability whose documented
-#: fallback is ``move_to``, so a backend without it reproduces the old behaviour
-#: explicitly instead of the codec choosing it silently.
+#: A bare ``mouse_down, move_to, mouse_up`` is not registered as a drag by many
+#: toolkits — the same class of defect as degrading a drag into a stationary
+#: click. ``glide_to`` is an optional backend capability whose documented fallback
+#: is ``move_to``, so a backend without it degrades explicitly rather than the
+#: codec choosing it silently.
 DRAG_SECONDS = 0.5
 
 

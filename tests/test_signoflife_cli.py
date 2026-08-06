@@ -128,7 +128,7 @@ def test_the_dispatcher_runs_all_four_cells_and_writes_the_readers_shape(
 def test_the_pool_adapter_is_the_production_one(tmp_path) -> None:
     """`pool_target` names `evals.vm:kvm_desktop_pool`, and that is what runs:
     the JSON-able arguments become a `DesktopPoolConfig`, and every checkout comes
-    back as a `DesktopFacade` — the union `FakeSession` used to stand in for."""
+    back as a `DesktopFacade`, the merged surface an episode needs."""
     output = tmp_path / "run"
     code, _ = _run(output, tmp_path, "--vm-smp", "4", "--vm-mem", "8G")
     assert code == 0
@@ -356,7 +356,7 @@ def test_a_cell_with_no_valid_draw_has_a_null_pass_rate_not_a_zero() -> None:
 def test_an_episode_that_publishes_nothing_still_records_why(tmp_path) -> None:
     """A raise *before* `DesktopHarness._run` — a bad pool spec, an unknown
     grammar, an unregistered kind — never reaches the code that publishes
-    `infra_error`, and the row used to read `validity: null, infra_error: null`.
+    `infra_error`, so the row must not read `validity: null, infra_error: null`.
     Exit 3 with no reason anywhere a reader looks is the worst kind of red light.
 
     Provoked here the way it actually happens: the same arm dispatched twice in

@@ -90,7 +90,7 @@ def test_control_of_reads_bare_token_flags(codec_name: str, line: str, expected:
 
 @pytest.mark.parametrize("codec_name", TOOL_CALL_GRAMMARS)
 def test_control_of_normalises_a_tool_call_failure_to_fail(codec_name: str) -> None:
-    """★ The new normalisation. `terminate(status="failure")` is a bare-token `FAIL`."""
+    """`terminate(status="failure")` normalises to a bare-token `FAIL`."""
     codec = load_codec(codec_name)
     success = codec.parse(_tool_call({"action": "terminate", "status": "success"}))
     failure = codec.parse(_tool_call({"action": "terminate", "status": "failure"}))
@@ -126,8 +126,8 @@ def test_an_unknown_status_is_not_silently_a_failure(codec_name: str) -> None:
 
 
 def test_control_of_reads_attributes_and_never_a_dict() -> None:
-    """`codec.parse` returns an action object in all seven grammars, so the dict fork
-    `_control_of` used to carry fired for nothing but its own tests."""
+    """`codec.parse` returns an action object in all seven grammars, so `_control_of`
+    needs no dict branch."""
     assert _control_of({"no_op": True}) is None
     assert _control_of({"terminate": True, "status": "failure"}) is None
 
@@ -321,9 +321,9 @@ def test_the_effective_temperature_source_has_exactly_three_values() -> None:
 
 @pytest.mark.parametrize("historical", [1.0, 0.0, 0.7])
 def test_a_historical_temperature_cannot_reappear_once_the_eval_has_spoken(historical: float) -> None:
-    """1.0 (train), 0.0 (parity), 0.7 (movebox) all used to ride the request body and
-    be silently dropped. Whatever the harness default is, the eval's value is what
-    reaches the wire AND what gets recorded."""
+    """A harness default riding the request body is silently dropped. Whatever that
+    default is, the eval's value is what reaches the wire AND what gets
+    recorded."""
     ctx = make_ctx(temperature=0.25)
     agent = _agent("deltatype_v2", temperature=historical, max_tokens=128)
     body = agent.build_body(history=_one_frame_history(), instruction="G", step=1)
@@ -452,13 +452,11 @@ def test_dump_prompt_elides_image_bytes() -> None:
 
 
 def test_load_codec_resolves_every_registered_grammar() -> None:
-    """DEFECT (fixed, `agent/agent.py:112`).
-
-    The in-tree fallback probed `pixeldesk.codec_protocol.CODECS` and
-    `.load_codec`, and pixeldesk has **neither** — it is deliberately grammar-free.
-    So on any interpreter where juergen's entry points are not installed, every
-    `load_codec` raised `LookupError` while `grammars.load` worked. The fallback now
-    goes through `grammars.load`, which has its own peer-directory scan.
+    """pixeldesk exposes neither `CODECS` nor `load_codec` — it is deliberately
+    grammar-free — so the in-tree fallback goes through `grammars.load`, which has
+    its own peer-directory scan. Probing pixeldesk instead would raise
+    `LookupError` on any interpreter where juergen's entry points are not
+    installed.
     """
     import grammars
 

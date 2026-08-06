@@ -11,10 +11,8 @@ A grammar is a peer, not a case in a switch. Each directory holds
 A grammar contributes NO dispatch table. It ``compile``s to ``Operation``s and
 stops there: the Operation vocabulary is closed by physics rather than open per
 grammar, so lowering one is a fixed ``if kind ==`` chain inside pixeldesk
-(``execute/guest_program.py``) over a set no grammar extends. The seven
-``handlers.py`` modules that used to live here described a second dispatch engine
-that no code in pixeldesk ever consumed, and their ``dict[str, Handler]``
-annotation named a ``Handler`` with the opposite signature.
+(``execute/guest_program.py``) over a set no grammar extends. There is no
+per-grammar dispatch table, and none should be added: see ``_support.py``.
 
 ``parse`` (eval and RL rollout) and ``format`` (training-target construction)
 are members of the same object, because that round-trip is what stops the
@@ -78,16 +76,12 @@ _WRONG_PIXELDESK = "pixeldesk."
 def _explain_pixeldesk(exc: ImportError) -> ImportError:
     """Turn a wrong-package import failure into a sentence that says so.
 
-    **The collision this guard was written for is gone, and the guard is not.**
-    The VM layer used to be called ``desktop-env`` / ``desktop_env``, which is
-    TAKEN ON PyPI by ``xlang-ai/desktop_env`` (OSWorld) — same distribution name
-    AND same import name, entirely different package. ``pip install .`` resolved
-    the dependency from PyPI (only ``uv`` reads ``[tool.uv.sources]``), installed
-    OSWorld's package, and the first codec import died on a bare
-    ``No module named 'desktop_env.geometry'``. It is ``pixeldesk`` now, which
-    nobody else owns, so that exact substitution can no longer happen.
+    ``pixeldesk`` is a name nobody else owns, so the VM layer cannot be silently
+    substituted by a same-named PyPI package the way a dependency called
+    ``desktop_env`` would be — that name belongs to ``xlang-ai/desktop_env``
+    (OSWorld), a different package entirely.
 
-    What has NOT gone away is the failure *shape*. ``pixeldesk`` has no index
+    The failure *shape* remains, though. ``pixeldesk`` has no index
     presence at all, so the dependency is still resolved by a path entry that
     only ``uv`` reads; a ``pip install .`` now fails to resolve it, and a stale
     wheel, a half-renamed ``.egg-info`` whose ``top_level.txt`` still says

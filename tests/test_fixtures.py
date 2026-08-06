@@ -103,7 +103,7 @@ def test_the_initial_state_is_per_template(template: str, expected: dict) -> Non
 
 
 def test_a_stale_generation_post_is_dropped() -> None:
-    """★ The guard: a page still unloading must not write into the new episode."""
+    """The guard: a page still unloading must not write into the new episode."""
     fixture = _fixture("scroll")
     store = FixtureStateStore(fixtures={fixture.id: fixture})
     store.reset(fixture)
@@ -264,14 +264,12 @@ def test_the_guest_url_points_at_the_host_through_qemu_user_networking() -> None
 
 
 def test_a_second_fixture_registered_after_start_is_still_served() -> None:
-    """DEFECT (fixed, `evals/fixtures/web.py:326,353`).
-
-    `WebFixtureServer.__init__` captured `registry = dict(fixtures)` and `do_GET`
-    looked the fixture up there, while `preparers.web_fixture_server` registers later
-    fixtures into `self.store.fixtures`. The two never reconverged, so every fixture
-    after the first 404'd — and because the failure is a page that never loads, it
-    surfaced as `wait_ready` burning the full 120 s deadline over three Chrome
-    relaunches, per rollout. `do_GET` now reads the store.
+    """`preparers.web_fixture_server` registers later fixtures into
+    `self.store.fixtures`, so `do_GET` must read the store. A private
+    `dict(fixtures)` snapshot taken in `__init__` would 404 every fixture
+    registered after the first — and because the failure is a page that never
+    loads, it surfaces as `wait_ready` burning the full 120 s deadline over three
+    Chrome relaunches, per rollout.
     """
     first, second = _fixture("click"), _fixture("scroll")
     with WebFixtureServer({first.id: first}, host="127.0.0.1") as server:
