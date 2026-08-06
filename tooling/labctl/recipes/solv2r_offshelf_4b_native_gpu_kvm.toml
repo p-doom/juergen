@@ -71,6 +71,9 @@ type = "external"
 path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/sign_of_life_eval_v2_venv/.venv"
 
 [inputs.model]
+# Raw HF hub cache snapshot: config.json etc. live directly under this dir, unlike
+# the labctl checkpoint exports the other arms point at (which nest the HF-format
+# files under `hf/`). Do NOT append `/hf` to model-path below for this input.
 type = "external"
 path = "/fast/project/HFMI_SynergyUnit/p-doom_shared/huggingface/hub/models--Qwen--Qwen3-VL-4B-Instruct/snapshots/ebb281ec70b05090aa6165b016eac8ec08e71b17"
 
@@ -87,7 +90,7 @@ qcow = "{inputs.vm.path}/Ubuntu.qcow2"
 qemu = "{inputs.qemu.path}/bin/qemu-system-x86_64-wrapped"
 vm-smp = "4"
 vm-mem = "8G"
-model-path = "{inputs.model.path}/hf"
+model-path = "{inputs.model.path}"
 sglang-python = "{inputs.sglang.path}/bin/python"
 sglang-port = "0"
 sglang-mem-fraction = "0.65"
