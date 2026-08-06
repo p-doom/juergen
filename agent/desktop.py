@@ -149,7 +149,7 @@ class DesktopLease:
     interchangeable, the registry keys by `trace_id`, and `forget` discards the object
     it was handed.
 
-    `session` is whatever `desktop_env.vm.pool.DesktopSessionPool` checks out. The
+    `session` is whatever `pixeldesk.vm.pool.DesktopSessionPool` checks out. The
     episode driver never releases directly — it calls `finish()`, which starts the
     grace window during which a runtime-declaring reward may still probe live VM
     state. The reaper does the actual release.
@@ -447,13 +447,13 @@ def _install_teardown() -> None:
             pass
 
 
-DEFAULT_POOL_TARGET = "desktop_env.vm.pool:DesktopSessionPool"
+DEFAULT_POOL_TARGET = "pixeldesk.vm.pool:DesktopSessionPool"
 
 
 def default_pool_factory(
     session_kwargs: dict[str, Any], target: str = DEFAULT_POOL_TARGET
 ) -> Callable[[], Any]:
-    """Call desktop-env's constructor directly with explicit config.
+    """Call pixeldesk's constructor directly with explicit config.
 
     This is the calling side of the runtime-construction wiring, and it is
     deliberately *not* a provider-by-name lookup. The previous mechanism asked for a

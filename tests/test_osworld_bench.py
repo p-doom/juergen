@@ -130,6 +130,7 @@ def test_a_root_that_is_not_an_osworld_checkout_is_rejected(tmp_path, monkeypatc
 
 
 def test_a_real_looking_root_resolves(tmp_path, monkeypatch) -> None:
+    # OSWorld's own layout, not ours: `desktop_env/` here is xlang-ai's.
     (tmp_path / "desktop_env" / "evaluators").mkdir(parents=True)
     monkeypatch.setenv("OSWORLD_ROOT", str(tmp_path))
     assert osworld_root() == tmp_path

@@ -118,4 +118,4 @@ class TargetBoxHarnessConfig(DesktopHarnessConfig):
 
 
 class TargetBoxHarness(DesktopHarness):
-    """Uses the inherited `pool_factory` — real VMs from `desktop_env.vm.pool`."""
+    """Uses the inherited `pool_factory` — real VMs from `pixeldesk.vm.pool`."""

@@ -1,7 +1,7 @@
 """Import bootstrap and pytest fixtures.
 
 The doubles live in `juergen_doubles.py` rather than here because
-`desktop-env/tests/` is also importable as `tests` on this cluster's layout, and
+`pixeldesk/tests/` is also importable as `tests` on this cluster's layout, and
 `from tests.conftest import ...` resolves to the wrong package. A unique module
 name makes the import unambiguous regardless of sys.path order.
 """
@@ -15,13 +15,13 @@ import pytest
 
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parent
-_DESKTOP_ENV = _REPO.parent / "desktop-env"
+_PIXELDESK = _REPO.parent / "pixeldesk"
 
 for candidate in (_HERE, _REPO):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
-if str(_DESKTOP_ENV) not in sys.path:
-    sys.path.append(str(_DESKTOP_ENV))
+if str(_PIXELDESK) not in sys.path:
+    sys.path.append(str(_PIXELDESK))
 
 from juergen_doubles import FakeSession, png  # noqa: E402
 

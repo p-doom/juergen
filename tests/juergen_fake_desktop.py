@@ -1,10 +1,10 @@
-"""A desktop-env pool that boots nothing, so the whole dispatcher can be run.
+"""A pixeldesk pool that boots nothing, so the whole dispatcher can be run.
 
 `evals/signoflife/__main__.py` and `evals/vm.py` were both at **zero** coverage —
 the CLI, the taskset load, the harness construction and the pool adapter, which is
 the exact path every real gate run takes, and exactly where P1's missing
 `evaluate()` was hiding. Nothing could exercise it because the one thing standing
-between the dispatcher and a booted VM was `desktop_env.vm.factory.build_desktop_pool`.
+between the dispatcher and a booted VM was `pixeldesk.vm.factory.build_desktop_pool`.
 
 So this substitutes *that*, and only that. `evals.vm.kvm_desktop_pool` runs for
 real — argument assembly, `DesktopPoolConfig`, `_AdaptedPool`, reset-on-reuse,

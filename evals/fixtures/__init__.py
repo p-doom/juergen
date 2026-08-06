@@ -1,6 +1,6 @@
 """Task fixtures: a task that needs Chrome brings its own Chrome.
 
-desktop-env is grammar-free *and* task-free: it owns isolation and port locking,
+pixeldesk is grammar-free *and* task-free: it owns isolation and port locking,
 reset attestation, a process-**group** reaper, the guest JSON-marker protocol
 (`GuestScript`) and `reset_to_checkpoint`. It deliberately does not know what a
 checkbox, a spreadsheet cell or a Nautilus window is. Those are task knowledge, so

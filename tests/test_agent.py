@@ -61,7 +61,7 @@ here rather than quietly skip the `to_dict` contract check below."""
 
 
 def _geometry(width: int = 1920, height: int = 1080):
-    from desktop_env.geometry import DisplayGeometry
+    from pixeldesk.geometry import DisplayGeometry
 
     return DisplayGeometry(desktop_width=width, desktop_height=height)
 
@@ -484,8 +484,8 @@ def test_dump_prompt_elides_image_bytes() -> None:
 def test_load_codec_resolves_every_registered_grammar() -> None:
     """DEFECT (fixed, `agent/agent.py:112`).
 
-    The in-tree fallback probed `desktop_env.codec_protocol.CODECS` and
-    `.load_codec`, and desktop-env has **neither** — it is deliberately grammar-free.
+    The in-tree fallback probed `pixeldesk.codec_protocol.CODECS` and
+    `.load_codec`, and pixeldesk has **neither** — it is deliberately grammar-free.
     So on any interpreter where juergen's entry points are not installed, every
     `load_codec` raised `LookupError` while `grammars.load` worked. The fallback now
     goes through `grammars.load`, which has its own peer-directory scan.

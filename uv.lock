@@ -927,9 +927,9 @@ wheels = [
 ]
 
 [[package]]
-name = "desktop-env"
+name = "pixeldesk"
 version = "0.1.0"
-source = { directory = "../desktop-env" }
+source = { directory = "../pixeldesk" }
 dependencies = [
     { name = "pillow" },
 ]
@@ -1921,7 +1921,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "av" },
-    { name = "desktop-env" },
+    { name = "pixeldesk" },
     { name = "verifiers" },
 ]
 
@@ -1933,7 +1933,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "av", specifier = ">=16.1.0" },
-    { name = "desktop-env", directory = "../desktop-env" },
+    { name = "pixeldesk", directory = "../pixeldesk" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "verifiers", specifier = "==0.2.1" },
 ]

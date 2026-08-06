@@ -8,7 +8,7 @@ own rollout loops — which is where their divergences came from (movebox reset 
 prompt every step, grounding sent exactly one turn, and the two disagreed about
 whether a coordinate-less click was a no-op or a parse failure).
 
-The operation vocabulary is `desktop_env.ir.Operation`, in **absolute screen
+The operation vocabulary is `pixeldesk.ir.Operation`, in **absolute screen
 pixels**. This class never divides by 1000: the normalized 0-999 convention is the
 codec's business, and every copy of `round(delta/1000 * screen_dim)` that used to
 live in an env is gone.

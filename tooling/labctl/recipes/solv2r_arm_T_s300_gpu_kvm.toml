@@ -4,7 +4,7 @@
 # race the cell is flagged for. That is what these trials are for.
 #
 # `provenance.repo_path`, NOT the staged snapshot: labctl stages one repo and this
-# one has a sibling path dependency (`desktop-env = { path = "../desktop-env" }`,
+# one has a sibling path dependency (`pixeldesk = { path = "../pixeldesk" }`,
 # no remote, no recorded commit) that cannot resolve inside a snapshot. See
 # tooling/labctl/recipes/README.md before changing this.
 name = "solv2r_arm_T_s300_gpu_kvm"
@@ -12,7 +12,7 @@ repo = "juergen"
 command = ["bash", "-c", '''
 set -euo pipefail
 SOURCE="$(jq -er '.provenance.repo_path' "$LABCTL_CONTEXT")"
-DESKTOP_ENV="$(jq -er '.inputs[] | select(.role == "desktop_env") | .resolved_path' "$LABCTL_CONTEXT")"
+PIXELDESK="$(jq -er '.inputs[] | select(.role == "pixeldesk") | .resolved_path' "$LABCTL_CONTEXT")"
 RUNTIME="$(jq -er '.inputs[] | select(.role == "runtime") | .resolved_path' "$LABCTL_CONTEXT")"
 cd "$SOURCE"
 [[ -r /dev/kvm && -w /dev/kvm ]] || { echo "FATAL /dev/kvm unavailable" >&2; exit 2; }
@@ -27,10 +27,10 @@ for arg in "$@"; do
   esac
 done
 # labctl records juergen's HEAD and diff; it records NOTHING about the sibling
-# checkout, so the only place desktop-env's identity exists is this line.
+# checkout, so the only place pixeldesk's identity exists is this line.
 echo "PROVENANCE juergen     $(git -C "$SOURCE" rev-parse HEAD) dirty=$(git -C "$SOURCE" status --porcelain | wc -l)"
-echo "PROVENANCE desktop-env $(git -C "$DESKTOP_ENV" rev-parse HEAD) dirty=$(git -C "$DESKTOP_ENV" status --porcelain | wc -l)"
-export PYTHONPATH="$SOURCE:$DESKTOP_ENV"
+echo "PROVENANCE pixeldesk $(git -C "$PIXELDESK" rev-parse HEAD) dirty=$(git -C "$PIXELDESK" status --porcelain | wc -l)"
+export PYTHONPATH="$SOURCE:$PIXELDESK"
 export XDG_CACHE_HOME="$LABCTL_RUN_DIR/.cache"
 mkdir -p "$XDG_CACHE_HOME"
 mkdir -p "$XDG_CACHE_HOME/inductor" "$XDG_CACHE_HOME/triton"
@@ -52,11 +52,11 @@ partition = "standard"
 # so control conformance was never established on the measurement node.
 sbatch_extra = ["--no-requeue", "--ntasks=1", "--ntasks-per-node=1", "--nodelist=hai003"]
 
-[inputs.desktop_env]
+[inputs.pixeldesk]
 # The sibling checkout labctl cannot stage. Declared so the resolved path is in the
 # run context; the commit itself only reaches the record via the PROVENANCE line.
 type = "external"
-path = "/fast/home/franz.srambical/desktop-env"
+path = "/fast/home/franz.srambical/pixeldesk"
 
 [inputs.vm]
 type = "external"

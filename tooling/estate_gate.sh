@@ -5,14 +5,17 @@
 # needs a DIFFERENT interpreter, which is the whole reason a single `pytest`
 # cannot stand in:
 #
-#   juergen/tests + juergen/grammars   verifiers + Pillow, and desktop-env on
+#   juergen/tests + juergen/grammars   verifiers + Pillow, and pixeldesk on
 #                                      sys.path (juergen/tests/conftest.py adds
 #                                      the sibling checkout).
 #   juergen/data_pipeline/tests        needs cv2 (opencv-python-headless), which
 #                                      the testgate venv deliberately does not
 #                                      have -- so it runs under its own.
-#   desktop-env                        Pillow and nothing else. Its one runtime
-#                                      dependency is the point of that repo.
+#   pixeldesk                          Pillow and nothing else. Its one runtime
+#                                      dependency is the point of that repo. It
+#                                      was `desktop-env` until 2026-08-06; if the
+#                                      checkout is still under the old name, set
+#                                      PIXELDESK_ROOT.
 #   env-fleet                          its own .venv.
 #   omegalax-rearch                    jax + tokamax + transformers + a CPU torch
 #                                      (transformers' AutoImageProcessor needs
@@ -31,16 +34,16 @@
 #
 #   JUERGEN_PYTHON          tests + grammars        (default: shared testgate venv)
 #   DATA_PIPELINE_PYTHON    data_pipeline/tests     (default: juergen/.venv)
-#   DESKTOP_ENV_PYTHON      desktop-env             (default: shared testgate venv)
+#   PIXELDESK_PYTHON        pixeldesk               (default: shared testgate venv)
 #   ENV_FLEET_PYTHON        env-fleet               (default: env-fleet/.venv)
 #   OMEGALAX_PYTHON         omegalax-rearch         (default: shared rearch venv)
 #
 # Four checkouts, located as siblings of this repository and overridable:
 #
-#   JUERGEN_ROOT  DESKTOP_ENV_ROOT  ENV_FLEET_ROOT  OMEGALAX_REARCH_ROOT
+#   JUERGEN_ROOT  PIXELDESK_ROOT  ENV_FLEET_ROOT  OMEGALAX_REARCH_ROOT
 #
 # `--list` prints the plan and the preflight verdict without running anything.
-# `--only <name>` runs one suite (juergen | data_pipeline | desktop_env |
+# `--only <name>` runs one suite (juergen | data_pipeline | pixeldesk |
 # env_fleet | omegalax_rearch).
 #
 # NOTE ON omegalax-rearch: only the three test files the rearchitecture touches
@@ -53,14 +56,14 @@ set -uo pipefail
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 : "${JUERGEN_ROOT:=$(cd -- "$HERE/.." && pwd)}"
 SIBLINGS="$(cd -- "$JUERGEN_ROOT/.." && pwd)"
-: "${DESKTOP_ENV_ROOT:=$SIBLINGS/desktop-env}"
+: "${PIXELDESK_ROOT:=$SIBLINGS/pixeldesk}"
 : "${ENV_FLEET_ROOT:=$SIBLINGS/env-fleet}"
 : "${OMEGALAX_REARCH_ROOT:=$SIBLINGS/omegalax-rearch}"
 
 VENVS=/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/venvs
 : "${JUERGEN_PYTHON:=$VENVS/juergen-testgate-venv/bin/python}"
 : "${DATA_PIPELINE_PYTHON:=$JUERGEN_ROOT/.venv/bin/python}"
-: "${DESKTOP_ENV_PYTHON:=$VENVS/juergen-testgate-venv/bin/python}"
+: "${PIXELDESK_PYTHON:=$VENVS/juergen-testgate-venv/bin/python}"
 : "${ENV_FLEET_PYTHON:=$ENV_FLEET_ROOT/.venv/bin/python}"
 : "${OMEGALAX_PYTHON:=$VENVS/omegalax-rearch-testgate-venv/bin/python}"
 
@@ -76,7 +79,7 @@ OMEGALAX_TESTS=(
 SUITES=(
   "juergen|$JUERGEN_ROOT|$JUERGEN_PYTHON|verifiers|tests grammars"
   "data_pipeline|$JUERGEN_ROOT|$DATA_PIPELINE_PYTHON|cv2|data_pipeline/tests"
-  "desktop_env|$DESKTOP_ENV_ROOT|$DESKTOP_ENV_PYTHON|PIL|tests"
+  "pixeldesk|$PIXELDESK_ROOT|$PIXELDESK_PYTHON|PIL|tests"
   "env_fleet|$ENV_FLEET_ROOT|$ENV_FLEET_PYTHON|pytest|"
   "omegalax_rearch|$OMEGALAX_REARCH_ROOT|$OMEGALAX_PYTHON|jax|${OMEGALAX_TESTS[*]}"
 )

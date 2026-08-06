@@ -60,7 +60,7 @@ echo "[viewer] node=$(hostname) port=$PORT login=$LOGIN data=$DATA"
 # (`uv run python annotator.py`) discards that inline metadata and falls back to
 # whatever PROJECT uv discovers by walking up from the cwd — which the directory
 # move silently changed: from here it finds the workspace root (juergen: deps
-# desktop-env + av, so a sync PRUNES msgpack — `uv sync --dry-run` here prints
+# pixeldesk + av, so a sync PRUNES msgpack — `uv sync --dry-run` here prints
 # `- msgpack`), and from the viewer's old home under data_pipeline/ it found
 # crowdcast-data-pipeline (msgpack but no av). NEITHER project declares both, so
 # no pyproject can be the right answer here; the script's own metadata already

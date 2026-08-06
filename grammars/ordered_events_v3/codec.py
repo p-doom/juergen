@@ -31,8 +31,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from desktop_env.geometry import DisplayGeometry
-from desktop_env.ir import Operation
+from pixeldesk.geometry import DisplayGeometry
+from pixeldesk.ir import Operation
 
 from .. import _support
 

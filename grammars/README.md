@@ -5,7 +5,7 @@
 Create a peer directory `grammars/<name>/` holding `codec.py` — a class with
 `parse` · `format` · `compile` · `describe` and a `stop_sequences` tuple,
 exported as `CODEC` — and `vectors/<name>.json` pinning both directions and the
-lowering. `CODEC` must satisfy `desktop_env.codec_protocol.Codec`, and
+lowering. `CODEC` must satisfy `pixeldesk.codec_protocol.Codec`, and
 `grammars/test_vectors.py` asserts `isinstance` for every registered grammar, so
 that is checked rather than assumed. Write the
 grammar's spec as docstrings on the codec: the class docstring is the prompt's
@@ -70,8 +70,8 @@ scanners and helpers the bare-token and tool-call families share — a new
 grammar may use them or ignore them, but adding one never edits them.
 
 Codecs *emit* that subset, but the lift **accepts every kind in
-`desktop_env.ir.CANONICAL_KINDS`**, because a converter does not choose what a
-recording contains. `drag`, `click` and `ascii_type` are desktop-env's — it
+`pixeldesk.ir.CANONICAL_KINDS`**, because a converter does not choose what a
+recording contains. `drag`, `click` and `ascii_type` are pixeldesk's — it
 synthesises `click` itself — and while they fell through to "unknown Operation
 kind" no recorded trajectory containing one could be lifted in any grammar at
 all. `group_operations` decomposes `drag` into move · press · stroke · release,
@@ -85,8 +85,8 @@ than left invisible.
 
 A grammar contributes no handler table, and there is deliberately no place to put
 one. Each grammar used to ship a `handlers.py` exporting
-`HANDLERS: dict[str, Handler]`, described as its contribution to desktop-env's
-dispatch engine. No such engine existed — nothing in desktop-env ever read those
+`HANDLERS: dict[str, Handler]`, described as its contribution to pixeldesk's
+dispatch engine. No such engine existed — nothing in pixeldesk ever read those
 tables — and the `Handler` they were annotated with runs in the opposite
 direction (a parsed call to Operations, not a backend plus args to `None`).
 
@@ -95,7 +95,7 @@ shared `match` over *grammar-specific* action names would be wrong, because that
 set is open per grammar. But a codec's job ends at `compile`, and the Operation
 vocabulary on the far side is closed by physics — a pointer moves, a button
 transitions, a wheel turns, text arrives. Lowering *that* set is a literal
-`if kind ==` chain in `desktop_env.execute.guest_program`, over something no
+`if kind ==` chain in `pixeldesk.execute.guest_program`, over something no
 grammar extends, and that is where it belongs.
 
 ## Registry

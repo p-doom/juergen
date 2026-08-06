@@ -42,8 +42,8 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from desktop_env.geometry import DisplayGeometry
-from desktop_env.ir import Operation, scroll_deltas
+from pixeldesk.geometry import DisplayGeometry
+from pixeldesk.ir import Operation, scroll_deltas
 
 # --------------------------------------------------------------------------
 # geometry
@@ -512,11 +512,11 @@ def group_operations(
     transition spellings the collapse and the expansion are exact inverses.
 
     EVERY CANONICAL OPERATION KIND IS ACCEPTED HERE, because a converter does not
-    choose what a recording contains. Three of desktop-env's own kinds used to
+    choose what a recording contains. Three of pixeldesk's own kinds used to
     fall through to "unknown Operation kind", which made a whole recorded
     trajectory unliftable in every grammar at once:
 
-    * ``click(button)`` — desktop-env's executor SYNTHESISES this itself
+    * ``click(button)`` — pixeldesk's executor SYNTHESISES this itself
       (``guest_program.lower_guest_operations``), so it appears in any stream
       that has been through that lowering. It is one press/release pair, and a
       pair spelled this way coalesces with pairs spelled as
@@ -632,7 +632,7 @@ def group_operations(
             groups.append(Group("type", text=str(args[0])))
             index += 1
         elif kind == "scroll":
-            # Both arities, disambiguated by desktop-env's own scroll_deltas --
+            # Both arities, disambiguated by pixeldesk's own scroll_deltas --
             # the one function ir.py declares as the only place that decides,
             # so a producer and a consumer cannot drift apart silently.
             dx, dy = scroll_deltas(args)
@@ -928,8 +928,8 @@ def normalize_key(value: object, *, error: type[Exception] = ValueError) -> str:
 #
 # There used to be a ``core_handlers()`` plus a ``handlers.py`` in each grammar,
 # exported as ``dict[str, Handler]``, described as "the dispatch table this
-# grammar contributes to desktop-env's engine". No such engine existed: nothing
-# in desktop-env ever read those tables, and the ``Handler`` they were annotated
+# grammar contributes to pixeldesk's engine". No such engine existed: nothing
+# in pixeldesk ever read those tables, and the ``Handler`` they were annotated
 # with (``Callable[..., tuple[Operation, ...]]``, a parsed call -> Operations) is
 # the opposite direction from what they actually were (a backend plus args ->
 # None).
@@ -939,7 +939,7 @@ def normalize_key(value: object, *, error: type[Exception] = ValueError) -> str:
 # codec's job ends at ``compile``, and the Operation vocabulary on the far side is
 # closed by physics: a pointer moves, a button transitions, a wheel turns, text
 # arrives. Lowering THAT set is a fixed ``if kind ==`` chain in
-# ``desktop_env.execute.guest_program`` over something no grammar extends, which
+# ``pixeldesk.execute.guest_program`` over something no grammar extends, which
 # is correct and is where it belongs.
 
 

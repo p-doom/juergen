@@ -9,14 +9,14 @@ all against `python -m evals.signoflife` at this repo's HEAD.
 
 `labctl` stages **one** repo, by copying that repo's `git ls-files` into
 `<run_dir>/source/<repo>`. It has no notion of sibling checkouts. This repo's
-`desktop-env` dependency is a path source with no remote and no index presence:
+`pixeldesk` dependency is a path source with no remote and no index presence:
 
 ```toml
 # pyproject.toml
-desktop-env = { path = "../desktop-env" }
+pixeldesk = { path = "../pixeldesk" }
 ```
 
-`../desktop-env` does not exist inside a staged snapshot, and nothing records
+`../pixeldesk` does not exist inside a staged snapshot, and nothing records
 which commit of it a run used — a path source resolves to whatever is on disk. So
 a staged run cannot resolve the dependency and, worse, would not be able to say so.
 
@@ -33,7 +33,7 @@ the thing that runs — an honest trade, because the alternative does not run at
 There is no `// .source_path` alternative in that expression. `repo_path` is
 non-optional in labctl's `RepoProvenance`, so the fallback could never fire; had
 it fired it would have run the snapshot's code instead of the registered
-checkout's, silently, since `desktop-env` reaches the interpreter through
+checkout's, silently, since `pixeldesk` reaches the interpreter through
 `PYTHONPATH` either way. `jq -er` under `set -e` is the assertion.
 
 Two consequences to hold onto:
@@ -42,11 +42,11 @@ Two consequences to hold onto:
   `git_diff_head` are the only record of what executed; a dirty tree records the
   diff, an *untracked* file records nothing (this is how the arm-T sweep of record
   ended up with its recipe TOMLs unrecorded).
-* **`desktop-env`'s commit is not recorded by labctl at all**, so each recipe
-  declares it as an explicit `[inputs.desktop_env]` and the command prints
-  `git -C "$DESKTOP_ENV" rev-parse HEAD` into the job log. Read it from there.
+* **`pixeldesk`'s commit is not recorded by labctl at all**, so each recipe
+  declares it as an explicit `[inputs.pixeldesk]` and the command prints
+  `git -C "$PIXELDESK" rev-parse HEAD` into the job log. Read it from there.
 
-The durable fix is to give `desktop-env` a remote and replace the path source with
+The durable fix is to give `pixeldesk` a remote and replace the path source with
 `{ git = ..., rev = ... }`, at which point the staged snapshot resolves and this
 whole section becomes unnecessary.
 
@@ -63,7 +63,7 @@ input, which retroactively changes what those runs mean. Building a single 14 GB
 combined venv would work too, and is what to do if the subprocess split ever gets
 in the way.
 
-`desktop-env` reaches the runtime through `PYTHONPATH`, not an install, for the
+`pixeldesk` reaches the runtime through `PYTHONPATH`, not an install, for the
 same reason as §1: it is a sibling checkout whose identity is its commit.
 
 ### 3. Node pinning is a measurement decision

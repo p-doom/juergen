@@ -10,7 +10,7 @@ production object provided.
 
 We cannot use `DesktopEnv` itself for this. `DesktopEnv` owns a VM lifecycle
 through its own provider layer, and the whole point of the rearchitecture is that
-the lifecycle is ours (qemu + KVM under `desktop-env`'s pool) — the apptainer
+the lifecycle is ours (qemu + KVM under `pixeldesk`'s pool) — the apptainer
 provider strips KVM ioctls on the hai-* nodes, which is the outage this replaced.
 What we want from OSWorld is only the two pure-ish pieces that *do* generalise
 across providers:
@@ -30,7 +30,8 @@ are handed: OSWorld's getters take `(env, config)` and read `env.controller`,
 those is a plain attribute here, named and set in `__init__` or `bind()`. That is
 the whole trick: a duck that quacks for 106 call sites, and nothing else.
 
-`evaluate()` is a faithful port of `DesktopEnv.evaluate` (`desktop_env.py:458-524`)
+`evaluate()` is a faithful port of `DesktopEnv.evaluate`
+(OSWorld's `desktop_env/desktop_env.py:458-524`)
 — the postconfig pass, the `infeasible` inversion, the FAIL short-circuit, the
 `and`/`or` conjunction, the mean-vs-max, and `FileNotFoundError` counting as 0
 under `and`. It is a port and not a call because `DesktopEnv.evaluate` is a method
@@ -44,12 +45,13 @@ playwright, pydrive and requests_toolbelt at module import, and
 `sys.path` and OSWorld's namespace, so a test can substitute it wholesale and
 exercise every line of the binding and the arithmetic without OSWorld installed.
 
-⚠️ **The import needs this workspace's VM package NOT to be called `desktop_env`.**
-OSWorld's package has that name too, so as long as ours claims it, `import
-desktop_env.controllers.setup` resolves to *our* already-imported module and dies
-on a missing submodule no matter what `OSWORLD_ROOT` says. `sys.path` cannot fix
-an entry already in `sys.modules`. See the rename in `pixeldesk/` — this module is
-the reason that rename is a correctness fix and not housekeeping.
+⚠️ **`desktop_env` below is OSWORLD'S package, not ours.** Ours used to claim
+that exact import name, and while it did, `import desktop_env.controllers.setup`
+resolved to *our* already-imported module and died on a missing submodule no
+matter what `OSWORLD_ROOT` said — `sys.path` cannot override an entry already in
+`sys.modules`. That is why the sibling repo is now `pixeldesk`: the rename is a
+correctness fix for THIS module, not housekeeping. Do not "tidy" these names to
+match; they are the other package's.
 """
 
 from __future__ import annotations
@@ -336,7 +338,7 @@ class OSWorldBridge:
     # -- the score ----------------------------------------------------------- #
 
     def evaluate(self) -> float:
-        """`DesktopEnv.evaluate()` (`desktop_env.py:458-524`), ported verbatim."""
+        """`DesktopEnv.evaluate()` (OSWorld's `desktop_env.py:458-524`), ported verbatim."""
         if self.evaluator is None:
             raise OSWorldNotAvailable(
                 f"task {self.task_id!r} has no `evaluator` block, so there is no "
@@ -364,7 +366,7 @@ class OSWorldBridge:
                     # Two deliberate deviations, both in the `or` branch, both
                     # places where upstream cannot produce a number at all:
                     # OSWorld falls through to use an unbound `result_state`
-                    # (`desktop_env.py:491-495` — an UnboundLocalError, not a
+                    # (OSWorld's `desktop_env.py:491-495` — an UnboundLocalError, not a
                     # score), and an all-missing `or` list then divides by zero.
                     # Skipping the metric and returning 0.0 for "no metric could
                     # be read" is the same verdict its `and` branch already

@@ -4,13 +4,13 @@ version = "0.1.0"
 description = "Crowd-cast SFT supply-chain monorepo: data pipeline, eval harnesses, and the opd-slime venv builder. The model trainer (omegalax) is a separate generic library, kept as its own repo."
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    # grammars/ hard-imports desktop_env: `_support.py` takes Operation and
+    # grammars/ hard-imports pixeldesk: `_support.py` takes Operation and
     # DisplayGeometry from it, and every codec's `compile` signature names
     # DisplayGeometry. Without this line `import grammars` raised
     # ModuleNotFoundError on a clean install of this package, which is the worst
     # shape of packaging bug -- the wheel builds, installs, and then fails at the
     # first import.
-    "desktop-env",
+    "pixeldesk",
     "av>=16.1.0",
     # `verifiers.v1` is the framework this repo's agent/, evals/ and rl/ are
     # written against: fifteen modules do `import verifiers.v1 as vf`, every
@@ -30,7 +30,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Test-only. `pytest grammars/` runs the grammar conformance vectors, which need
-# nothing but desktop-env; keep this extra that cheap so the gate is runnable
+# nothing but pixeldesk; keep this extra that cheap so the gate is runnable
 # without resolving the training stack.
 dev = ["pytest>=8"]
 
@@ -67,31 +67,41 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.uv.sources]
-# desktop-env is a sibling checkout with NO REMOTE AND NO INDEX PRESENCE, so a
+# pixeldesk is a sibling checkout with NO REMOTE AND NO INDEX PRESENCE, so a
 # path is the only way to resolve it. It is not a workspace member: it is its own
 # repository, deliberately, because its whole design constraint is one runtime
 # dependency (Pillow) and folding it into this workspace would put the training
 # stack's resolver in the same room as the VM layer.
 #
-# The path IS the pin for now. THE MOMENT desktop-env HAS A REMOTE, replace this
+# The path IS the pin for now. THE MOMENT pixeldesk HAS A REMOTE, replace this
 # with `{ git = ..., rev = ... }` or a version specifier: a path source resolves
 # to whatever is on disk, so two checkouts of juergen at the same commit can
-# install different desktop-env code and nothing records which.
+# install different pixeldesk code and nothing records which.
 #
-# AND WHEN IT GETS THAT REMOTE, CONSIDER RENAMING IT. `desktop-env` is already
-# taken on PyPI by xlang-ai/desktop_env (OSWorld) -- same distribution name AND
-# same import name, different package. This source entry is only read by uv, so
-# `pip install .` resolves the dependency from PyPI instead, installs OSWorld's
-# package, and the first codec import fails on a missing `desktop_env.geometry`.
-# `grammars/_support.py` catches that and says what actually happened, but the
-# durable fix is a name nobody else owns.
+# RENAMED 2026-08-06, from `desktop-env`. That name was already taken on PyPI by
+# xlang-ai/desktop_env (OSWorld) -- same distribution name AND same import name,
+# different package. This source entry is only read by uv, so `pip install .`
+# resolved the dependency from PyPI instead, installed OSWorld's package, and the
+# first codec import failed on a missing `desktop_env.geometry`.
+#
+# It was a CORRECTNESS bug, not just a packaging one: `evals/osworld.py` imports
+# OSWorld's `desktop_env.controllers.setup` and `desktop_env.evaluators` to score
+# the benchmark, and while our package owned that import name, that import
+# resolved to ours and no $OSWORLD_ROOT could fix it -- sys.path cannot override
+# an entry already in sys.modules. `pixeldesk` is unclaimed (pypi.org 404, and so
+# are the `pixel-desk` / `pixel_desk` normalisations PyPI folds into it).
+#
+# The guard in `grammars/load()` stays, retargeted: the collision is gone but the
+# failure SHAPE is not. pixeldesk still has no index presence, so a `pip install`
+# still cannot resolve it, and a leftover `desktop_env.egg-info` still shadows it
+# -- both surface as the same bare missing-submodule error.
 #
 # Not editable on purpose. An editable path source makes this package's installed
 # behaviour change when a sibling directory is edited, which is convenient while
 # developing both and wrong as a default -- it is also the opposite of how the
 # version pin that replaces it will behave. Developers working on both do
-# `uv pip install -e ../desktop-env` explicitly, and that overrides this.
-desktop-env = { path = "../desktop-env" }
+# `uv pip install -e ../pixeldesk` explicitly, and that overrides this.
+pixeldesk = { path = "../pixeldesk" }
 
 torch = { index = "pytorch-cu128" }
 torchaudio = { index = "pytorch-cu128" }

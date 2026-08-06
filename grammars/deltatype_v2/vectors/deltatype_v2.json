@@ -1246,7 +1246,7 @@
           ]
         ]
       ],
-      "documents": "desktop-env's own `drag` kind, which no grammar emits but every recorder can produce. It decomposes into move, press, stroke, release, so it lands in this grammar's one drag form. Lossy in one direction only: the grammar fixes the stroke at DRAG_SECONDS, so the recompiled stroke is a glide_to and not the original single `drag` operation. The press and the release survive, which is the point."
+      "documents": "pixeldesk's own `drag` kind, which no grammar emits but every recorder can produce. It decomposes into move, press, stroke, release, so it lands in this grammar's one drag form. Lossy in one direction only: the grammar fixes the stroke at DRAG_SECONDS, so the recompiled stroke is a glide_to and not the original single `drag` operation. The press and the release survive, which is the point."
     },
     {
       "name": "zero_extent_drag_keeps_its_press_and_release",
@@ -1428,7 +1428,7 @@
           ]
         ]
       ],
-      "documents": "desktop-env's executor SYNTHESISES `click` from an adjacent mouse_down/mouse_up pair, so a stream that has been through its lowering carries this spelling. Two click pairs are a double click, and pairs spelled either way coalesce together."
+      "documents": "pixeldesk's executor SYNTHESISES `click` from an adjacent mouse_down/mouse_up pair, so a stream that has been through its lowering carries this spelling. Two click pairs are a double click, and pairs spelled either way coalesce together."
     }
   ],
   "lift_invalid": [

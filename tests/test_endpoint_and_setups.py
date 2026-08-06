@@ -278,7 +278,7 @@ def test_an_empty_completion_is_an_empty_string_not_none(endpoint) -> None:
 
 
 def _geometry():
-    from desktop_env.geometry import DisplayGeometry
+    from pixeldesk.geometry import DisplayGeometry
 
     return DisplayGeometry(desktop_width=1920, desktop_height=1080)
 

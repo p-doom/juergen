@@ -30,15 +30,17 @@ from __future__ import annotations
 
 import importlib
 import json
+import pathlib
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 import grammars
-from desktop_env import ir
-from desktop_env.codec_protocol import Codec
-from desktop_env.geometry import DisplayGeometry
+from pixeldesk import ir
+from pixeldesk.codec_protocol import Codec
+from pixeldesk.geometry import DisplayGeometry
 
 from . import _support
 
@@ -57,7 +59,7 @@ def _vectors(name: str) -> dict:
 
 
 def _geometry(payload: dict) -> DisplayGeometry:
-    """Vector geometry -> ``DisplayGeometry``, using desktop-env's own field names.
+    """Vector geometry -> ``DisplayGeometry``, using pixeldesk's own field names.
 
     The vectors used to say ``width``/``height`` at the top level and
     ``desktop_width``/``desktop_height`` in the one per-case override — residue of
@@ -340,7 +342,7 @@ def test_codec_satisfies_the_protocol(name):
 
     ``Codec`` is ``@runtime_checkable``; a caller writing this gate got a false
     negative on every grammar while the protocol required a ``handlers`` table
-    that described a dispatch engine desktop-env does not have.
+    that described a dispatch engine pixeldesk does not have.
     """
     codec = _codec(name)
     assert isinstance(codec, Codec)
@@ -442,7 +444,7 @@ CANONICAL_PROBES = {
 def test_every_canonical_kind_is_groupable():
     """A converter does not get to choose what a recording contains.
 
-    ``drag``, ``click`` and ``ascii_type`` are all kinds desktop-env's own
+    ``drag``, ``click`` and ``ascii_type`` are all kinds pixeldesk's own
     executor handles — it SYNTHESISES ``click`` — and all three used to fall
     through to "unknown Operation kind", which made any stream containing one
     unliftable in every grammar simultaneously.
@@ -650,37 +652,64 @@ def test_a_dropped_grammar_fails_loudly(dropped):
             call(dropped)
 
 
-def test_the_installed_desktop_env_is_ours():
-    """The dependency is resolved by path, and the name is contested on PyPI.
+def test_the_installed_pixeldesk_is_ours():
+    """The dependency is resolved by path, and it has no index presence at all.
 
-    ``desktop-env`` on PyPI is xlang-ai/desktop_env (OSWorld) — same import name,
-    different package — so an installer that does not read
-    ``[tool.uv.sources]`` (plain ``pip``) silently installs the wrong one. This
-    asserts the right one is present, so the suite cannot pass against a
-    ``desktop_env`` that merely happens to expose what these tests touch.
+    It was called ``desktop-env`` until 2026-08-06, which IS contested on PyPI:
+    ``xlang-ai/desktop_env`` (OSWorld) is the same distribution name and the same
+    import name, a different package, so plain ``pip`` — which does not read
+    ``[tool.uv.sources]`` — silently installed the wrong one. Under the new name
+    that substitution is impossible, but a stale wheel or a leftover
+    ``desktop_env.egg-info`` still shadows it, so this asserts the right module is
+    what answers.
     """
-    import desktop_env
+    import pixeldesk
 
-    assert desktop_env.__version__ == "0.1.0"
+    assert pixeldesk.__version__ == "0.1.0"
     for member in ("codec_protocol", "geometry", "ir"):
-        importlib.import_module(f"desktop_env.{member}")
+        importlib.import_module(f"pixeldesk.{member}")
 
 
-def test_a_wrong_desktop_env_is_explained_not_just_reported():
+def test_the_import_name_no_longer_collides_with_osworlds():
+    """The rename is a correctness fix, not hygiene.
+
+    ``evals/osworld.py`` imports OSWorld's ``desktop_env.controllers.setup`` and
+    ``desktop_env.evaluators`` to score the benchmark. While this workspace owned
+    that import name, that import resolved to *our* already-imported module and no
+    ``$OSWORLD_ROOT`` could fix it — ``sys.path`` cannot override an entry already
+    in ``sys.modules``. So: importing ours must not put anything under
+    ``desktop_env`` into ``sys.modules``.
+    """
+    import pixeldesk  # noqa: F401
+    import pixeldesk.geometry  # noqa: F401
+    import pixeldesk.ir  # noqa: F401
+
+    ours = pathlib.Path(sys.modules["pixeldesk"].__file__).resolve().parent
+    assert ours.name == "pixeldesk"
+    stolen = sys.modules.get("desktop_env")
+    if stolen is not None:  # OSWorld may legitimately be imported by something else
+        assert ours not in pathlib.Path(stolen.__file__).resolve().parents
+
+
+def test_a_wrong_pixeldesk_is_explained_not_just_reported():
     """The guard in ``load()``, without needing the wrong package installed.
 
-    A bare ``No module named 'desktop_env.geometry'`` sends the reader looking
-    for a missing file when the real fault is a wrong package — and
+    A bare ``No module named 'pixeldesk.geometry'`` sends the reader looking
+    for a missing file when the real fault is a wrong or missing install — and
     ``available()`` lists all seven beforehand regardless, because it reads
-    metadata and imports nothing.
+    metadata and imports nothing. The guard survives the rename with a retargeted
+    message; the failure shape it explains did not go away with the collision.
     """
-    explained = grammars._explain_desktop_env(
-        ImportError("No module named 'desktop_env.geometry'", name="desktop_env.geometry")
+    explained = grammars._explain_pixeldesk(
+        ImportError("No module named 'pixeldesk.geometry'", name="pixeldesk.geometry")
     )
     message = str(explained)
+    assert "pixeldesk.geometry" in message
+    assert "[tool.uv.sources]" in message
+    assert "uv pip install -e ../pixeldesk" in message
+    # The history stays in the message: a leftover desktop_env egg-info produces
+    # exactly this error, and that is the first thing to check.
     assert "xlang-ai/desktop_env" in message
-    assert "desktop_env.geometry" in message
-    assert "uv pip install -e ../desktop-env" in message
 
     # And it must not dress up an unrelated ImportError as a packaging problem.
     original = grammars._from_entry_points
@@ -701,9 +730,9 @@ def test_no_handler_table_comes_back():
     """The deleted fiction, pinned deleted.
 
     Each grammar exported a ``handlers.py`` describing "the dispatch table it
-    contributes to desktop-env's engine". No such engine existed, and the
+    contributes to pixeldesk's engine". No such engine existed, and the
     ``Handler`` those tables were annotated with runs in the opposite direction.
-    Lowering an ``Operation`` belongs in desktop-env, over a kind vocabulary that
+    Lowering an ``Operation`` belongs in pixeldesk, over a kind vocabulary that
     is closed by physics.
     """
     root = Path(grammars.__file__).parent

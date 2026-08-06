@@ -1,15 +1,15 @@
-"""The one adapter between desktop-env's session pool and the harness's session.
+"""The one adapter between pixeldesk's session pool and the harness's session.
 
 `DesktopPoolConfig.pool_target` names a **constructor** and `session_kwargs` is
 handed to it verbatim (`agent/desktop.py:423-449`). Its default target,
-`desktop_env.vm.pool:DesktopSessionPool`, cannot actually be used that way, for two
+`pixeldesk.vm.pool:DesktopSessionPool`, cannot actually be used that way, for two
 reasons that only show up against a real VM — which is why the test suite is green
 and the gate could not be dispatched:
 
 **1. The constructor is not callable from config.** `DesktopSessionPool.__init__`
 requires a `DesktopPoolConfig` *dataclass* and a `session_factory` *callable*
 (`pool.py:373-382`). Neither survives a recipe, a TOML file or a JSON
-`session_kwargs`. `desktop_env.vm.factory:build_desktop_pool` is the
+`session_kwargs`. `pixeldesk.vm.factory:build_desktop_pool` is the
 plain-arguments entry point that exists for exactly this, but it still takes the
 dataclass for `config`.
 
@@ -330,7 +330,7 @@ def kvm_desktop_pool(
     the function for the same reason `default_pool_factory` is: a text-only eval
     must not pull the VM stack in.
 
-    `lease_timeout_s` defaults to 1800 s rather than desktop-env's 300 s. The pool's
+    `lease_timeout_s` defaults to 1800 s rather than pixeldesk's 300 s. The pool's
     watchdog reclaims a leased session that has been quiet for that long, and a gate
     cell that waits on a Chrome launch or a model call legitimately is: at 300 s the
     watchdog, not the episode, decides when the VM goes away.
@@ -340,8 +340,8 @@ def kvm_desktop_pool(
     right for a gate run and wrong for a 369-task benchmark array on a node whose
     /tmp is small: name it then, on a filesystem with room.
     """
-    from desktop_env.vm.factory import build_desktop_pool
-    from desktop_env.vm.pool import DesktopPoolConfig
+    from pixeldesk.vm.factory import build_desktop_pool
+    from pixeldesk.vm.pool import DesktopPoolConfig
 
     config = DesktopPoolConfig(
         min_ready_sessions=min_ready_sessions,

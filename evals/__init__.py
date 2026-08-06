@@ -4,13 +4,13 @@
 the same loop six times:
 
     screenshot -> prompt from codec.describe() + history policy -> sample
-    -> codec.parse -> codec.compile -> desktop-env executes -> oracle -> repeat
+    -> codec.parse -> codec.compile -> pixeldesk executes -> oracle -> repeat
 
 `tasks.py` holds the task data/state and the tasksets that enumerate them.
 `oracles.py` holds the state oracles as rewards that declare `runtime` and so
 keep reading real VM state. `indicators.py` holds the diagnostics that used to be
 recomputed by ad-hoc scripts over `result.json` trees and now ride the trace.
-`fixtures/` holds the task-specific fixtures desktop-env deliberately left out
+`fixtures/` holds the task-specific fixtures pixeldesk deliberately left out
 because they are tasks, not VM plumbing: the browser pages and their host server, the
 CDP client, Chrome launch, and the Writer / Calc / Files guest scripts. They attach to
 tasks through the same `Preparer` seam, so a task that needs Chrome brings its own

@@ -26,7 +26,7 @@ that out.
 `_causal_post_window_marker_sequences`, `wait_for_causal_post_window_heartbeat`,
 `wait_for_browser_quiescence`) — roughly 700 of the original 1489 lines. It refused to
 proceed unless observed event ordering matched one preregistered click experiment.
-That is the same enforcement anti-pattern desktop-env just relaxed by ~900 LOC: the
+That is the same enforcement anti-pattern pixeldesk just relaxed by ~900 LOC: the
 page still *reports* its events, and a caller that wants ordering evidence reads
 `state["events"]`. Nothing refuses to run.
 """
