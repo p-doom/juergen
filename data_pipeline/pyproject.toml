@@ -13,16 +13,12 @@ requires-python = ">=3.11"
 #
 # Several scripts in this repo deliberately run inside OTHER venvs and
 # therefore do NOT contribute to this dep set:
-#   * filter_truncated.py — runs under omegalax's uv venv (uses its pinned
-#     transformers + Qwen3-VL fast tokenizer).
 #   * stage_c_grain_payload.py / stage_d_chunk_index.py — subprocess-wrap
 #     omegalax scripts via ``uv run --project <omegalax_repo>``.
-#   * generate_onpolicy_completions{,_mm}.py / _smoke_mm_sglang.py — run
-#     under the crowdcast-eval venv (sglang + openai client live there).
 dependencies = [
     "absl-py>=2.0",                # flag-based entrypoints across every stage_*.py / prep_*.py
     "msgpack>=1.0",                # stage A: parse per-recording keylog msgpacks
-    "Pillow>=11.3.0",              # stage A JPEG encode + prep_finevision image materialization
+    "Pillow>=11.3.0",              # stage A JPEG encode
     "numpy>=2.0",                  # stage A frame-array math
     "array-record>=0.5.1",         # ArrayRecord (grain) JPEG image store: stage_01 pack + migration + ar:// decode
     # Floor at 0.5.1 (not 0.6.0) so sglang's diffusion extra — which pins ==0.5.1 — can co-resolve in the workspace lock. Only a PATH fallback; minor version doesn't matter.
@@ -32,13 +28,6 @@ dependencies = [
     "openai>=2.26.0",              # VLM labeler (Azure/OpenAI-compatible) + local Qwen: annotation_pipeline/labeler.py, pipeline/annotation/lib/labeler.py
     "PyYAML>=6.0",                 # prompts.yaml loaders: annotation_pipeline/prompts.py, pipeline/annotation/lib/prompts.py
     "opencv-python-headless>=4.10.0.84",  # video probing / frame decode: pipeline/stage_00_clip_manifest.py + pipeline/lib, annotation_pipeline/frames_render.py; matches sglang workspace pin
-    "datasets>=3.0",               # prep_{finevision,smoltalk2,tulu3_persona_if} + preprocess_smoltalk_prompts HF loaders
-    # tokenizer for prompt-length filtering in preprocess_smoltalk_prompts.py
-    # (Qwen3-VL-2B chat template).
-    "transformers>=4.45",
-    # transformers' chat-template renderer pulls jinja2 lazily; needed so
-    # apply_chat_template doesn't ImportError on first call.
-    "jinja2>=3.1",
 ]
 
 [build-system]
@@ -102,13 +91,6 @@ known-first-party = [
     "annotation_pipeline",
     # repo-root packages reached via sys.path (see conftest.py / stage entrypoints)
     "pipeline",
-    "filter_truncated",
-    "generate_onpolicy_completions",
-    "generate_onpolicy_completions_mm",
-    "prep_finevision",
-    "prep_smoltalk2",
-    "prep_tulu3_persona_if",
-    "preprocess_smoltalk_prompts",
     "stage_a_prepare",
     "stage_b_run_length_cap",
     "stage_c_grain_payload",
