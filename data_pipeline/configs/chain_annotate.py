@@ -6,14 +6,11 @@ annotation fps K is independent of any training fps (bounded only by the
 master fps, integer stride).
 
 STUB status — adjust before launching:
-  * MASTER_DIR / CLIPS_MANIFEST point at the ccast0618d artifacts; swap for
-    your dataset family. As written they name the ``_v1`` / ``_master_fps_15_
-    sharded`` generation, which no longer exists on disk — the live generation
-    is ``ccast0618d_dataset_full_v3_stage_01_master_frames_fps_15`` and
-    ``ccast0618d_dataset_full_v3_stage_02_realign_manifest/clips_manifest.jsonl``.
-  * PROJECT_REPO is NOT a placeholder any more: it is derived from this file's
-    own location and validated (see below), so it follows whichever checkout you
-    launch from instead of rotting into a stale absolute path.
+  * MASTER_DIR / CLIPS_MANIFEST name the ccast0618d v3 generation and are
+    asserted to exist at ``get_config()``; swap them for your dataset family.
+  * PROJECT_REPO is derived from this file's own location and validated, so it
+    follows whichever checkout you launch from instead of rotting into a stale
+    absolute path.
   * pmanager injects ``--output_dir``; the downstream stage's ``--filter_dir``
     is derived statically from the datasets root + version here (the stages
     accept pmanager's ``--foo_bar=value`` arg form via
@@ -31,14 +28,17 @@ from pmanager.configs.schema import pipeline_task
 def _resolve_project_repo() -> str:
     """Repo root whose tree pmanager stages for the job.
 
-    Derived from this file's own location (``<repo>/data_pipeline/configs/``)
-    rather than hardcoded. The hardcoded absolute path this replaces kept
-    resolving to a checkout that still carried the pre-rearchitecture
-    ``data_pipeline/realigned_pipeline/`` layout and had no root ``pipeline/`` at
-    all — so every ``pipeline/...`` entrypoint below resolved silently at
-    config-build time and only failed once the job was already scheduled on a
-    node. Fail here instead, and let ``JUERGEN_REPO`` name a different checkout
-    for anyone who does want to dispatch a tree other than this one.
+    Every config in this package derives the same thing -- the juergen checkout,
+    from this file's location or from ``JUERGEN_REPO`` -- and then names the
+    subtree it stages. This one stages the checkout itself, because its
+    entrypoints are ``pipeline/...``; the stage_[a-d] configs stage
+    ``data_pipeline/``.
+
+    The hardcoded absolute path this replaces kept resolving to a checkout that
+    still carried the pre-rearchitecture ``data_pipeline/realigned_pipeline/``
+    layout and had no root ``pipeline/`` at all — so every ``pipeline/...``
+    entrypoint below resolved silently at config-build time and only failed once
+    the job was already scheduled on a node.
     """
     root = Path(os.environ.get("JUERGEN_REPO") or Path(__file__).resolve().parents[2])
     if not (root / "pipeline").is_dir():
@@ -71,7 +71,8 @@ DATASETS_ROOT = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/datasets/yl
 # (``..._full_master_fps_15_sharded`` and
 # ``..._full_v1_stage_02_realign_manifest``) do not exist on disk any more, so
 # stage_03_filter() -- which reads both below -- was broken. v3 is the current
-# lineage and the only one present; verified both paths exist.
+# lineage and the only one present. Asserted by _source(), not just verified
+# once by hand: a repointed constant rots the same way the last one did.
 MASTER_DIR = (
     "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/datasets/alfred.nguyen/"
     "ccast0618d_dataset_full_v3_stage_01_master_frames_fps_15"
@@ -85,6 +86,22 @@ TAG = "ccast0618d_v2"
 ANNOTATE_FPS = 0.5
 FILTER_VERSION = f"{TAG}_stage_03_filter"
 GOALS_VERSION = f"{TAG}_stage_03b_goals_describe_extract_fps_{ANNOTATE_FPS}"
+
+
+def _source(path: str) -> str:
+    """Return ``path`` after asserting it exists.
+
+    Same contract as :func:`_entrypoint`, applied to the dataset paths. Both of
+    these were stale until 2026-08-05 and nothing said so: the config built
+    cleanly, ``labctl validate`` passed, and stage 03 failed on the node. This is
+    the check stage_a_v1_5fps_360p already applies to its own source.
+    """
+    if not Path(path).exists():
+        raise RuntimeError(
+            f"dataset path does not exist: {path}. Repoint MASTER_DIR / "
+            "CLIPS_MANIFEST at the current generation of your dataset family."
+        )
+    return path
 
 
 def _as_child(child_cfg, trigger: str = "on_complete") -> dict:
@@ -102,8 +119,8 @@ def stage_03_filter():
     cfg.resources.cpus = 32
     cfg.entrypoint.repo_paths = {"berlin": PROJECT_REPO}
     cfg.entrypoint.path = _entrypoint("pipeline/stage_03_filter.py")
-    cfg.entrypoint.args.frames_master_dir = MASTER_DIR
-    cfg.entrypoint.args.clips_manifest = CLIPS_MANIFEST
+    cfg.entrypoint.args.frames_master_dir = _source(MASTER_DIR)
+    cfg.entrypoint.args.clips_manifest = _source(CLIPS_MANIFEST)
     cfg.entrypoint.args.num_workers = 32
     # Idle knobs (seconds; identical semantics on any master fps). These are
     # the stage defaults, restated for auditability: the legacy rounded NO_OP
@@ -114,7 +131,7 @@ def stage_03_filter():
     cfg.entrypoint.args.idle_min_duration_s = 4.0
     cfg.entrypoint.args.idle_keep_head_s = 2.0
     cfg.entrypoint.args.idle_keep_tail_s = 2.0
-    cfg.inputs.source = {"kind": "path", "path_per_cluster": {"berlin": MASTER_DIR}}
+    cfg.inputs.source = {"kind": "path", "path_per_cluster": {"berlin": _source(MASTER_DIR)}}
     cfg.output.dataset_version = FILTER_VERSION
     cfg.dataset = ""
     return cfg

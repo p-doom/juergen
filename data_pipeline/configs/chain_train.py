@@ -31,14 +31,17 @@ from pmanager.configs.schema import pipeline_task
 def _resolve_project_repo() -> str:
     """Repo root whose tree pmanager stages for the job.
 
-    Derived from this file's own location (``<repo>/data_pipeline/configs/``)
-    rather than hardcoded. The hardcoded absolute path this replaces kept
-    resolving to a checkout that still carried the pre-rearchitecture
-    ``data_pipeline/realigned_pipeline/`` layout and had no root ``pipeline/`` at
-    all — so every ``pipeline/...`` entrypoint below resolved silently at
-    config-build time and only failed once the job was already scheduled on a
-    node. Fail here instead, and let ``JUERGEN_REPO`` name a different checkout
-    for anyone who does want to dispatch a tree other than this one.
+    Every config in this package derives the same thing -- the juergen checkout,
+    from this file's location or from ``JUERGEN_REPO`` -- and then names the
+    subtree it stages. This one stages the checkout itself, because its
+    entrypoints are ``pipeline/...``; the stage_[a-d] configs stage
+    ``data_pipeline/``.
+
+    The hardcoded absolute path this replaces kept resolving to a checkout that
+    still carried the pre-rearchitecture ``data_pipeline/realigned_pipeline/``
+    layout and had no root ``pipeline/`` at all — so every ``pipeline/...``
+    entrypoint below resolved silently at config-build time and only failed once
+    the job was already scheduled on a node.
 
     Duplicated verbatim in chain_annotate.py, matching the existing ``_as_child``
     duplication: each config stays standalone-launchable with no cross-import at
@@ -67,6 +70,24 @@ def _entrypoint(rel_path: str) -> str:
             f"entrypoint {rel_path!r} does not exist under PROJECT_REPO={PROJECT_REPO}"
         )
     return rel_path
+
+
+def _omegalax_repo(path: str) -> str:
+    """Return ``path`` after asserting it is an omegalax checkout on disk.
+
+    Same contract as :func:`_entrypoint`, applied to the other path this config
+    hands a stage. Without it a stale OMEGALAX_REPO passes ``labctl validate``
+    and the job dies on a node after being scheduled -- which is exactly what
+    the entrypoint check exists to prevent, so leaving this one unchecked made
+    the guarantee only half true.
+    """
+    if not (Path(path) / "pyproject.toml").is_file():
+        raise RuntimeError(
+            f"OMEGALAX_REPO={path} is not an omegalax checkout (no pyproject.toml). "
+            "The stage subprocess-wraps a script from this tree, so dispatching "
+            "would schedule a job that dies on the node."
+        )
+    return path
 
 
 PROJECT_REPO = _resolve_project_repo()
@@ -132,7 +153,7 @@ def stage_05_measure():
     cfg.entrypoint.repo_paths = {"berlin": PROJECT_REPO}
     cfg.entrypoint.path = _entrypoint("pipeline/stage_05_measure_lengths.py")
     cfg.entrypoint.args.source_path = f"{DATASETS_ROOT}/{CONV_VERSION}"
-    cfg.entrypoint.args.omegalax_repo = OMEGALAX_REPO
+    cfg.entrypoint.args.omegalax_repo = _omegalax_repo(OMEGALAX_REPO)
     cfg.entrypoint.args.model_id = MODEL_ID
     cfg.entrypoint.args.processor = MODEL_ID
     cfg.entrypoint.args.num_workers = 32
@@ -153,7 +174,7 @@ def stage_06_records():
     cfg.entrypoint.path = _entrypoint("pipeline/stage_06_training_records.py")
     cfg.entrypoint.args.source_path = f"{DATASETS_ROOT}/{CONV_VERSION}"
     cfg.entrypoint.args.message_lengths_path = f"{DATASETS_ROOT}/{MEASURE_VERSION}"
-    cfg.entrypoint.args.omegalax_repo = OMEGALAX_REPO
+    cfg.entrypoint.args.omegalax_repo = _omegalax_repo(OMEGALAX_REPO)
     cfg.entrypoint.args.model_id = MODEL_ID
     cfg.entrypoint.args.processor = MODEL_ID
     cfg.entrypoint.args.max_length = 32768
