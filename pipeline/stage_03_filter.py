@@ -8,12 +8,11 @@ downstream consumer, and writes a compact survivor mask:
   * black:  per master record, from the stage-01 luma metrics
     (``mean_luma``/``frac_dark`` vs thresholds) — already master-resolution.
   * idle:   the realigned keylog is judged per ``--idle-judgment-bin-s`` bin
-    (default: the legacy 2 s bin with the legacy rounded NO_OP predicate, see
+    (default: a 2 s bin with the rounded NO_OP predicate, see
     ``--idle-activity``); the INTERIOR of any inactive run longer than
     ``--idle-min-duration-s`` is dropped, keeping ``--idle-keep-head-s``/
     ``--idle-keep-tail-s`` at each end. All knobs are in SECONDS, so a 4 fps
-    and a 15 fps master behave identically; the defaults byte-mirror the
-    pre-rewrite sampler's default thinning (noop head/tail = 1/1 @ 0.5 fps).
+    and a 15 fps master behave identically.
 
 Because the output is a mask at master resolution (not a sampled dataset),
 nothing here caps downstream fps: stage 03b annotates at k fps and stage 04
@@ -132,10 +131,11 @@ def _rounded_activity_mask(
 ) -> list[bool]:
     """Legacy-predicate activity at judgment-bin granularity: a bin is active
     iff its FORMATTED action is non-NO_OP — i.e. summed deltas round to
-    nonzero, or it carries deduped key events. Runs the actual legacy binning
-    code (``aggregate_actions`` + ``format_action``), so every legacy subtlety
-    (delta rounding, scroll fallback, held-set dedup of autorepeats/dangling
-    releases) is inherited byte-for-byte. With ``--idle-min-duration-s 0`` and
+    nonzero, or it carries deduped key events. Runs the real binning code
+    (``aggregate_actions`` + ``format_action``) rather than reimplementing the
+    predicate, so delta rounding, scroll fallback and held-set dedup of
+    autorepeats/dangling releases all behave identically to the emitted label.
+    With ``--idle-min-duration-s 0`` and
     zero head/tail this keeps every frame at the judgment fps (0 NO_OP
     frames)."""
     active = [False] * n_records
@@ -213,19 +213,71 @@ def _compress_reasons(reasons: list[int]) -> tuple[list[list[int]], list[dict[st
     return kept, dropped
 
 
-def _params_dict(task: dict[str, Any]) -> dict[str, Any]:
+def filter_params(
+    *,
+    drop_black_frames: Any,
+    black_luma_max: Any,
+    black_dark_frac_min: Any,
+    idle_min_duration_s: Any,
+    idle_keep_head_s: Any,
+    idle_keep_tail_s: Any,
+    idle_judgment_bin_s: Any,
+    idle_activity: Any,
+) -> dict[str, Any]:
+    """The ONE definition of a filter's judgment parameters.
+
+    These knobs decide which frames survive, so exactly one function normalises
+    and validates them. Every caller passes all eight: there is no default here,
+    because the CLI is the one place defaults are applied (from ``lib.config``),
+    and a second default would let the same run judge differently depending on
+    which entry point built it.
+
+    ``idle_judgment_bin_s`` falsy means "no binning" and normalises to ``None``,
+    so a run that passes ``0`` and a run that passes nothing record the same
+    value in the per-segment artifact AND in the run manifest.
+
+    ``rounded`` needs a bin to evaluate the NO_OP predicate over; that pairing is
+    refused here rather than reaching a worker and failing on ``None * fps``.
+
+    ``qc_view_fps`` is deliberately NOT part of this set: it only affects the
+    diagnostic view, and including it would invalidate the resume cache of every
+    artifact already on disk.
+    """
+    activity = str(idle_activity)
+    if activity not in config.IDLE_ACTIVITIES:
+        raise ValueError(
+            f"idle_activity must be one of {list(config.IDLE_ACTIVITIES)}, got {activity!r}"
+        )
+    bin_s = float(idle_judgment_bin_s) if idle_judgment_bin_s else None
+    if activity == "rounded" and bin_s is None:
+        raise ValueError(
+            "idle_activity 'rounded' needs a nonzero idle_judgment_bin_s: it is the "
+            "granularity the NO_OP predicate is evaluated at"
+        )
     return {
-        "drop_black_frames": bool(task["drop_black_frames"]),
-        "black_luma_max": float(task["black_luma_max"]),
-        "black_dark_frac_min": float(task["black_dark_frac_min"]),
-        "idle_min_duration_s": float(task["idle_min_duration_s"]),
-        "idle_keep_head_s": float(task["idle_keep_head_s"]),
-        "idle_keep_tail_s": float(task["idle_keep_tail_s"]),
-        "idle_judgment_bin_s": (
-            float(task["idle_judgment_bin_s"]) if task.get("idle_judgment_bin_s") else None
-        ),
-        "idle_activity": str(task.get("idle_activity") or "raw"),
+        "drop_black_frames": bool(drop_black_frames),
+        "black_luma_max": float(black_luma_max),
+        "black_dark_frac_min": float(black_dark_frac_min),
+        "idle_min_duration_s": float(idle_min_duration_s),
+        "idle_keep_head_s": float(idle_keep_head_s),
+        "idle_keep_tail_s": float(idle_keep_tail_s),
+        "idle_judgment_bin_s": bin_s,
+        "idle_activity": activity,
     }
+
+
+#: The task-dict keys ``filter_params`` consumes, so one list drives both the
+#: worker's read and the CLI's build.
+FILTER_PARAM_KEYS = (
+    "drop_black_frames",
+    "black_luma_max",
+    "black_dark_frac_min",
+    "idle_min_duration_s",
+    "idle_keep_head_s",
+    "idle_keep_tail_s",
+    "idle_judgment_bin_s",
+    "idle_activity",
+)
 
 
 def _write_qc_view(qc_dir: Path, filter_seg: dict[str, Any], qc_fps: float) -> int:
@@ -265,7 +317,7 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
     mrow = task["manifest_row"]
     master_row = task["master_row"]
     seg = str(mrow["segment_id"])
-    params = _params_dict(task)
+    params = filter_params(**{k: task[k] for k in FILTER_PARAM_KEYS})
     out_path = Path(task["filter_dir"]) / f"{seg}.json"
 
     base = {
@@ -407,16 +459,15 @@ def parse_args() -> argparse.Namespace:
                    help="Seconds kept at the end of each thinned idle run.")
     p.add_argument("--idle-judgment-bin-s", type=float, default=config.DEFAULT_IDLE_JUDGMENT_BIN_S,
                    help="Judge idleness at this granularity (seconds). Default 2 s = the "
-                        "pre-rewrite sampler's default bin (1/0.5 fps). Pass 0 for per-master-"
+                        "default judgment bin. Pass 0 for per-master-"
                         "tick judgment (raw mode only).")
-    p.add_argument("--idle-activity", choices=("raw", "rounded"),
+    p.add_argument("--idle-activity", choices=config.IDLE_ACTIVITIES,
                    default=config.DEFAULT_IDLE_ACTIVITY,
-                   help="What counts as activity. 'rounded' (default) = the legacy NO_OP "
+                   help="What counts as activity. 'rounded' (default) = the NO_OP "
                         "predicate per judgment bin — the bin's FORMATTED action is non-NO_OP "
                         "(deltas round to nonzero, or deduped key events survive); with the "
-                        "default duration knobs this byte-mirrors the pre-rewrite sampler's "
-                        "default thinning, and with min-duration/head/tail 0 it reproduces "
-                        "noop_mode=none exactly. 'raw' = any nonzero-delta or key event "
+                        "min-duration/head/tail 0 it keeps every frame at the judgment "
+                        "fps. 'raw' = any nonzero-delta or key event "
                         "(sub-pixel drift is activity; fps-agnostic).")
     p.add_argument("--qc-view-fps", type=float, default=None,
                    help="Also emit qc_view/<seg>.jsonl: a sampled view at this fps with derived "
@@ -430,9 +481,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if args.idle_activity == "rounded" and not args.idle_judgment_bin_s:
-        raise SystemExit("--idle-activity rounded needs --idle-judgment-bin-s "
-                         "(the granularity the legacy NO_OP predicate is evaluated at)")
+    try:
+        params = filter_params(**{k: getattr(args, k) for k in FILTER_PARAM_KEYS})
+    except ValueError as exc:
+        raise SystemExit(f"bad filter parameters: {exc}") from exc
 
     master_dir = args.frames_master_dir
     index_path = master_dir / "segment_index.jsonl"
@@ -508,17 +560,7 @@ def main() -> None:
     index_out.sort(key=lambda r: str(r["segment_id"]))
     write_jsonl(out_dir / "filter_index.jsonl", index_out)
 
-    params = {
-        "drop_black_frames": bool(args.drop_black_frames),
-        "black_luma_max": args.black_luma_max,
-        "black_dark_frac_min": args.black_dark_frac_min,
-        "idle_min_duration_s": args.idle_min_duration_s,
-        "idle_keep_head_s": args.idle_keep_head_s,
-        "idle_keep_tail_s": args.idle_keep_tail_s,
-        "idle_judgment_bin_s": args.idle_judgment_bin_s,
-        "idle_activity": args.idle_activity,
-        "qc_view_fps": args.qc_view_fps,
-    }
+    recorded_params = {**params, "qc_view_fps": args.qc_view_fps}
     summary = {
         "master_fps": master_fps,
         "n_segments": len(tasks),
@@ -529,7 +571,7 @@ def main() -> None:
         "n_idle_interior_total": totals["n_idle_interior"],
         "frames_master_dir": str(master_dir),
         "source_clips_manifest": str(args.clips_manifest),
-        **params,
+        **recorded_params,
     }
     write_json(out_dir / "filter_summary.json", summary)
     write_json(out_dir / "manifest.json", {
@@ -539,7 +581,7 @@ def main() -> None:
         "master_store_id": make_artifact_id(master_dir),
         "filter_index": "filter_index.jsonl",
         "filter_layout": "filter/<segment_id>.json",
-        "params": params,
+        "params": recorded_params,
         **summary,
     })
     print(

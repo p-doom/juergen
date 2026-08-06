@@ -75,6 +75,7 @@ from pipeline.annotation.lib.registry import (  # noqa: E402
     load_method,
 )
 from pipeline.annotation.lib.units import build_units  # noqa: E402
+from pipeline.lib import config  # noqa: E402
 from pipeline.lib.action_format import get_formatter  # noqa: E402
 from pipeline.lib.common import (  # noqa: E402
     ensure_dir,
@@ -228,9 +229,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-frames-per-window", type=int, default=0,
                    help="0 = derive from the context budget and measured frame size.")
     # Rendering / labeler
-    p.add_argument("--vlm-frame-height", type=int, default=720,
+    p.add_argument("--vlm-frame-height", type=int, default=config.DEFAULT_VLM_FRAME_HEIGHT,
                    help="Height fed to the labeler (<= stored height; downscales in memory).")
-    p.add_argument("--jpeg-quality", type=int, default=80)
+    p.add_argument("--jpeg-quality", type=int, default=config.DEFAULT_JPEG_QUALITY)
     p.add_argument("--reasoning-effort", default=None,
                    help="Unset: the method's LABELER_DEFAULTS (if any), else env.")
     p.add_argument("--temperature", type=float, default=None,

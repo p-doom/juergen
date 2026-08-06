@@ -49,8 +49,10 @@ NOOP_MODES = ("none", "ends", "all")
 DEFAULT_IDLE_MIN_DURATION_S = 4.0
 DEFAULT_IDLE_KEEP_HEAD_S = 2.0
 DEFAULT_IDLE_KEEP_TAIL_S = 2.0
-DEFAULT_IDLE_JUDGMENT_BIN_S = 1.0 / DEFAULT_TARGET_FPS  # 2 s (legacy default bin)
-DEFAULT_IDLE_ACTIVITY = "rounded"  # legacy NO_OP predicate; "raw" = fps-agnostic
+DEFAULT_IDLE_JUDGMENT_BIN_S = 1.0 / DEFAULT_TARGET_FPS  # 2 s
+IDLE_ACTIVITIES = ("raw", "rounded")
+DEFAULT_IDLE_ACTIVITY = "rounded"  # "raw" = fps-agnostic
+assert DEFAULT_IDLE_ACTIVITY in IDLE_ACTIVITIES
 
 # --- Black-frame filtering --------------------------------------------------
 # Detection (per-frame luma metrics) is computed ONCE in stage 01a and written to
