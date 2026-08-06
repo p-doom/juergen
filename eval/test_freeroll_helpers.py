@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 _install_import_stubs()
 
 import freeroll  # noqa: E402
+import osworld_runtime  # noqa: E402
 import osworld_vm_client  # noqa: E402
 from action_parser import (  # noqa: E402
     OrderedPrimitive,
@@ -371,7 +372,7 @@ class RelativeStepParserTests(unittest.TestCase):
                 parse_computer_use_rel_step_action(text)
 
     def test_fresh_context_has_no_assistant_history(self) -> None:
-        messages = freeroll.build_loggable_messages(
+        messages = osworld_runtime.build_loggable_messages(
             system_prompt="system",
             instruction="GOAL: click save",
             recent_actions=["old model action"],

@@ -61,6 +61,7 @@ from realigned_pipeline.annotation.lib.days import (  # noqa: E402
     build_day_index,
     build_day_stream,
     fmt_t,
+    load_clips_manifest,
 )
 from realigned_pipeline.annotation.lib.driver import model_slug, run_driver  # noqa: E402
 from realigned_pipeline.annotation.lib.labeler import (  # noqa: E402
@@ -69,6 +70,7 @@ from realigned_pipeline.annotation.lib.labeler import (  # noqa: E402
     labeler_model,
 )
 from realigned_pipeline.annotation.lib.registry import (  # noqa: E402
+    DatasetFinalizeContext,
     Method,
     MethodContext,
     discover_methods,
@@ -216,6 +218,25 @@ def parse_args() -> argparse.Namespace:
                    help="Day mode: cache file for the day index (the mvhd probe of "
                         "every segment video costs minutes per invocation). Reused "
                         "only when its recorded filter_id matches --filter-dir.")
+    p.add_argument("--pilot-review", type=Path, default=None,
+                   help="Approval JSON required before a full run of methods that declare "
+                        "REQUIRES_PILOT_REVIEW. --limit/--day-filter/--day-t1 runs are pilots.")
+    # Checkpoint packing (sequential_goal_memory pass 03c): checkpoints are
+    # projected at exactly the anchors the Stage 04 packer cuts on, so these must
+    # match the Stage 04 invocation. Forwarded verbatim into ctx.params.
+    p.add_argument("--checkpoint-capacity", type=int, default=None,
+                   help="Runtime screenshot capacity the checkpoint anchors are computed "
+                        "for. REQUIRED by sequential_goal_memory (no default); pass the "
+                        "same value as Stage 04 --capacity.")
+    p.add_argument("--checkpoint-fraction-low", type=float, default=None,
+                   help="Low end of the per-segment compaction-trigger jitter (default 0.5).")
+    p.add_argument("--checkpoint-fraction-high", type=float, default=None,
+                   help="High end of that jitter (default 0.85; the runtime holds 0.7).")
+    p.add_argument("--packing-seed", type=int, default=None,
+                   help="Seed for the per-segment jitter draws (default 0).")
+    p.add_argument("--n-packings", type=int, default=None,
+                   help="Number of independent packings whose anchors all get a "
+                        "checkpoint (default 1).")
     # Windowing (frames methods)
     p.add_argument("--context-limit", type=int, default=262144)
     p.add_argument("--window-safety-margin", type=int, default=28000)
@@ -265,6 +286,14 @@ def main() -> None:
     art = FilterArtifact(args.filter_dir)
     stride = art.stride_for(args.fps, args.fps_mode)
     method = load_method(args.method)
+    if method.input_kind == "days" and args.clips_manifest is None:
+        source = art.manifest.get("source_clips_manifest")
+        if source:
+            args.clips_manifest = Path(source)
+    is_partial = (args.limit is not None or bool(args.day_filter)
+                  or args.day_t1 is not None or bool(args.shard))
+    if method.requires_pilot_review and not is_partial:
+        _require_pilot_review(args.pilot_review)
     # Resolve the env default to its actual name so provenance (goal rows,
     # cache dirs) never records a placeholder.
     models: list[str | None] = (
@@ -307,6 +336,15 @@ def main() -> None:
         if not sep or not key.strip():
             raise SystemExit(f"--param must be KEY=VALUE, got {spec!r}")
         method_params[key.strip()] = value.strip()
+    # Dedicated flags win over the generic --param form (a method that needs
+    # them raises when they are absent; the stage stays method-agnostic).
+    for key, value in (("checkpoint_capacity", args.checkpoint_capacity),
+                       ("checkpoint_fraction_low", args.checkpoint_fraction_low),
+                       ("checkpoint_fraction_high", args.checkpoint_fraction_high),
+                       ("packing_seed", args.packing_seed),
+                       ("n_packings", args.n_packings)):
+        if value is not None:
+            method_params[key] = value
 
     def ctx_for(model: str | None, unit_id: str,
                 extra_params: dict[str, Any] | None = None) -> MethodContext:
@@ -355,7 +393,31 @@ def main() -> None:
           f"fps={args.fps} ({args.fps_mode}, stride {stride:g}) prompt_pack={method.prompts.sha} "
           f"| {len(items)} items", flush=True)
 
-    run_driver(
+    source_manifests = {
+        "filter": str(art.dir / "manifest.json"),
+        "master": str(art.master_dir / "manifest.json"),
+    }
+    if args.clips_manifest is not None:
+        source_manifests["realigned_events"] = str(args.clips_manifest)
+        source_manifest = args.clips_manifest.parent / "manifest.json"
+        if source_manifest.is_file():
+            source_manifests["realigned_events_manifest"] = str(source_manifest)
+    method_finalize: dict[str, Any] = {}
+
+    def finalize_dataset() -> dict[str, Any] | None:
+        if method.finalize_dataset is None or args.shard:
+            return None
+        model = models[0]
+        result = method.finalize_dataset(DatasetFinalizeContext(
+            output_dir=out_dir, units_dir=units_dir, calls_dir=calls_dir,
+            method=method, labeler=labelers[model], model=model,
+            no_cache=args.no_cache, source_manifests=source_manifests,
+            params=method_params,
+        ))
+        method_finalize.update(result or {})
+        return result
+
+    driver_counts = run_driver(
         items,
         item_id=lambda it: str(it["id"]),
         est_tokens=est_fn,
@@ -369,7 +431,13 @@ def main() -> None:
         start_limit=args.start_limit,
         max_limit=args.max_limit,
         force=args.force,
+        dataset_finalize=finalize_dataset if method.finalize_dataset is not None else None,
     )
+    if method.finalize_dataset is not None and driver_counts["fail"]:
+        raise SystemExit(
+            f"annotation stopped with {driver_counts['fail']} failed unit(s); "
+            "dataset finalization and publication were skipped"
+        )
 
     # ---- finalize: units/ ledger -> one uniform goals.jsonl ----------------
     all_goals: list[dict[str, Any]] = []
@@ -405,11 +473,12 @@ def main() -> None:
         "tz": args.tz if method.input_kind == "days" else None,
         "gap_cut_s": args.gap_cut_s if method.input_kind == "days" else None,
         "day_t1": args.day_t1,
+        **method_finalize,
     }
     write_json(out_dir / "annotate_summary.json", summary)
     write_json(out_dir / "manifest.json", {
         "artifact_type": "realigned_goals",
-        "schema_version": 1,
+        "schema_version": 2 if method.finalize_dataset is not None else 1,
         "goals": "goals.jsonl",
         "master_store_id": art.master_store_id,
         "filter_id": art.filter_id,
@@ -417,6 +486,26 @@ def main() -> None:
         **summary,
     })
     print(f"[annotate] {len(all_goals)} goals from {n_units} units -> {out_dir}", flush=True)
+
+
+def _require_pilot_review(path: Path | None) -> None:
+    gates = (
+        "goal_grounding", "causal_thoughts", "cross_day_links", "checkpoints",
+        "action_provenance", "parser_validity",
+    )
+    if path is None or not path.is_file():
+        raise SystemExit(
+            "full sequential_goal_memory run blocked: pass a reviewed --pilot-review JSON"
+        )
+    try:
+        review = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"invalid --pilot-review: {exc}") from exc
+    missing = [gate for gate in gates if review.get(gate) is not True]
+    if missing or not str(review.get("reviewed_by") or "").strip():
+        raise SystemExit(
+            f"pilot review lacks reviewed_by or passing gates: {missing}"
+        )
 
 
 def _frames_mode(args, art: FilterArtifact, method: Method, rows, units_dir: Path,
@@ -513,6 +602,7 @@ def _days_mode(args, art: FilterArtifact, method: Method, units_dir: Path,
             raise SystemExit(f"--day-filter tags not in the day index: {sorted(missing)}")
         day_rows = [d for d in day_rows if d["day_tag"] in wanted]
     memory_dir = ensure_dir(out_dir / "memory")
+    clips_by_segment = load_clips_manifest(args.clips_manifest)
     items = [{"id": d["day_tag"], "row": d} for d in day_rows]
 
     def est_tokens(item) -> float:
@@ -536,10 +626,19 @@ def _days_mode(args, art: FilterArtifact, method: Method, units_dir: Path,
             "memory_path": memory_dir / f"{day_tag}.jsonl",
             "force": args.force,
             "report_tokens": report_tokens,
+            "filter_artifact": art,
+            "clips_by_segment": clips_by_segment,
+            "day_t1": args.day_t1,
         })
         result = method.run_unit({"id": day_tag, "day": day, "row": item["row"]}, ctx)
-        goal_rows = _goal_rows_from_day(day_tag, result.get("thoughts", []),
-                                        method=method, model=model, fps=args.fps)
+        if method.goal_rows_from_result is not None:
+            goal_rows = method.goal_rows_from_result(
+                day_tag, result, method=method, model=model, fps=args.fps)
+            for row in goal_rows:
+                validate_goal_row(row)
+        else:
+            goal_rows = _goal_rows_from_day(day_tag, result.get("thoughts", []),
+                                            method=method, model=model, fps=args.fps)
         write_json(unit_path, {
             "unit_id": day_tag,
             "day_tag": day_tag,
@@ -557,6 +656,11 @@ def _days_mode(args, art: FilterArtifact, method: Method, units_dir: Path,
             "verify_mode": result.get("verify_mode"),
             "selftest": result.get("selftest"),
             "actual_tokens": result.get("actual_tokens"),
+            "n_semantic_events": result.get("n_semantic_events"),
+            "n_goal_nodes": result.get("n_goal_nodes"),
+            "n_decisions": result.get("n_decisions"),
+            "n_checkpoints": result.get("n_checkpoints"),
+            "n_memory_snapshots": result.get("n_memory_snapshots"),
             "goals": goal_rows,
         })
         return {"n_clips": result.get("n_clips"), "n_thoughts": result.get("n_thoughts"),

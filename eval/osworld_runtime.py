@@ -13,6 +13,7 @@ import io
 import logging
 import subprocess
 import time
+import math
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,87 @@ _DEFAULT_QEMU_BIN = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin
 # `uv run` (in the labctl recipe command) uses the same path; keeping it
 # as a module constant survives the sys.path-shim removal in juergen 39d6d5f.
 _EVAL_DIR = Path(__file__).resolve().parent
+
+
+class ScreenshotCheckpointController:
+    """Trigger compaction near a configured screenshot-context capacity.
+
+    The controller counts screenshots in the current segment (starting at 1 for
+    the frame already in context) and is ``due`` once the count reaches
+    ``ceil(capacity * fraction)``. ``reset_to_current`` restarts the count at 1
+    because the boundary screenshot carries over into the next segment — it is
+    the last frame of the compacted record and the first frame of the resumed
+    one (see ``sequential_packing.boundary_events`` /
+    ``segments_from_boundaries``, which mirror these semantics exactly).
+
+    Jitter note: the runtime keeps a FIXED ``fraction`` (0.7 by default), while
+    training deliberately covers a jittered range — Stage 04 draws a per-segment
+    fraction uniformly from ``[PackingConfig.fraction_low,
+    PackingConfig.fraction_high]`` = ``[0.5, 0.85]``, seeded per
+    (seed, day_tag, packing_index). The training distribution therefore brackets
+    the single runtime fraction on both sides, so the model sees compaction
+    requested anywhere in that band and the deployed 0.7 is in-distribution. No
+    runtime change is needed to match training; the only hard requirement is the
+    single-eviction guarantee below (``validate_single_eviction``).
+    """
+
+    def __init__(self, capacity: int, fraction: float = 0.7):
+        if capacity <= 0:
+            raise ValueError("checkpoint capacity must be positive")
+        if not 0 < fraction <= 1:
+            raise ValueError("checkpoint fraction must be in (0, 1]")
+        self.capacity = int(capacity)
+        self.fraction = float(fraction)
+        self.threshold = max(1, math.ceil(self.capacity * self.fraction))
+        self.screenshots = 1
+
+    @property
+    def due(self) -> bool:
+        return self.screenshots >= self.threshold
+
+    def note_screenshot(self) -> None:
+        self.screenshots += 1
+
+    def reset_to_current(self) -> None:
+        self.screenshots = 1
+
+
+def validate_single_eviction(
+    *,
+    n_history_frames: int,
+    controller: ScreenshotCheckpointController,
+) -> None:
+    """Fail fast unless the controller is the FIRST thing that drops a frame.
+
+    Two independent mechanisms can shrink the runtime image window: this
+    controller (a checkpoint request, then a full compaction down to the
+    boundary frame) and ``append_turn``'s StreamingLLM block eviction (keep the
+    newest ``n_history_frames // 2``). A training record contains every frame
+    since the last compaction, so on the sequential path block eviction must
+    never fire first — if it did, the model would be conditioned on a window
+    with a hole in it that no training segment ever contains.
+
+    The controller counts screenshots 1:1 with the frames ``append_turn``
+    accumulates, so ``threshold <= capacity <= n_history_frames`` is exactly the
+    condition that makes the controller strictly earlier (``threshold`` is
+    reached at ``threshold`` frames; eviction needs ``n_history_frames + 1``).
+
+    Residual case, deliberately left as the bounded fallback: if a checkpoint
+    reply fails to parse the caller resets the controller without compacting, so
+    the window keeps growing and block eviction can eventually fire. That run has
+    no valid checkpoint and is already out of distribution; bounded eviction is
+    preferable to an unbounded prompt.
+    """
+    if n_history_frames < controller.capacity:
+        raise ValueError(
+            "single-eviction violation: rolling image window "
+            f"n_history_frames={n_history_frames} is smaller than checkpoint "
+            f"capacity={controller.capacity}, so append_turn block eviction "
+            f"would drop frames before the controller fires at "
+            f"{controller.threshold} screenshots; a training segment contains "
+            "every frame since the last compaction, so the runtime must too "
+            "(raise n_history_frames to at least the capacity)"
+        )
 
 
 def _pil_to_data_url(img: Image.Image, *, quality: int = 85) -> str:
@@ -64,6 +146,10 @@ def append_turn(
     append-only (full cache reuse) and only the ~``N/2`` frames retained on a
     slide are re-prefilled, roughly once every ``N/2`` steps. Slide-by-one would
     instead invalidate the whole window on every step past ``N``.
+
+    On the sequential goal-memory path a ``ScreenshotCheckpointController`` owns
+    compaction instead, and this eviction must never preempt it — the caller
+    enforces that at setup via ``validate_single_eviction``.
     """
     recent_actions.append(action_text)
     recent_frames.append(frame)
@@ -74,11 +160,33 @@ def append_turn(
         recent_actions[:] = recent_actions[-(len(recent_frames) - 1):] if len(recent_frames) > 1 else []
 
 
+def compact_to_current(
+    recent_frames: list[Image.Image],
+    recent_actions: list[str],
+) -> None:
+    """Drop everything but the current screenshot after a stored checkpoint.
+
+    The image-window twin of ``ScreenshotCheckpointController.reset_to_current``:
+    the boundary screenshot stays (it is the last frame of the record just
+    closed and the first frame of the one being opened), every older frame and
+    every replayed assistant action go, and the causal state they carried lives
+    on only in the checkpoint text now folded into the goal conditioning.
+
+    Deliberately NOT bundled with ``reset_to_current``: the caller resets the
+    controller whether or not the checkpoint reply parsed, but compacts only on
+    success — an unparseable checkpoint must not silently discard the context it
+    failed to summarize.
+    """
+    recent_frames[:] = recent_frames[-1:]
+    recent_actions.clear()
+
+
 def _interleave_messages(
     system_prompt: str,
     instruction: str | None,
     image_parts: list[Any],
     recent_actions: list[str] | None,
+    current_text: str | None = None,
 ) -> list[dict[str, Any]]:
     """Assemble the interleaved chat message list from per-frame ``image_parts``.
 
@@ -95,6 +203,8 @@ def _interleave_messages(
         content: list[Any] = []
         if i == 0 and instruction:
             content.append({"type": "text", "text": instruction})
+        if i == len(image_parts) - 1 and current_text:
+            content.append({"type": "text", "text": current_text})
         content.append(part)
         messages.append({"role": "user", "content": content})
         if i < len(recent_actions):
@@ -106,6 +216,7 @@ def _fresh_visual_messages(
     system_prompt: str,
     instruction: str | None,
     image_parts: list[Any],
+    current_text: str | None = None,
 ) -> list[dict[str, Any]]:
     """One decision record: system + one user turn containing goal and images.
 
@@ -116,6 +227,8 @@ def _fresh_visual_messages(
     content: list[Any] = []
     if instruction:
         content.append({"type": "text", "text": instruction})
+    if current_text:
+        content.append({"type": "text", "text": current_text})
     content.extend(image_parts)
     return [
         {"role": "system", "content": system_prompt},
@@ -143,6 +256,7 @@ def build_loggable_messages(
     recent_actions: list[str] | None,
     frame_labels: list[str],
     fresh_visual_context: bool = False,
+    current_text: str | None = None,
 ) -> list[dict[str, Any]]:
     """The message list as sent, but with each image replaced by ``<image name>``.
 
@@ -153,8 +267,41 @@ def build_loggable_messages(
     """
     parts = [{"type": "image", "image": f"<image {lbl}>"} for lbl in frame_labels]
     if fresh_visual_context:
-        return _fresh_visual_messages(system_prompt, instruction, parts)
-    return _interleave_messages(system_prompt, instruction, parts, recent_actions)
+        return _fresh_visual_messages(system_prompt, instruction, parts, current_text)
+    return _interleave_messages(
+        system_prompt, instruction, parts, recent_actions, current_text)
+
+
+def step_messages(
+    *,
+    system_prompt: str,
+    instruction: str | None,
+    step: int,
+    n_frames: int,
+    recent_actions: list[str] | None,
+    current_text: str | None = None,
+    fresh_visual_context: bool = False,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """One turn's ``(frame_labels, loggable_messages)`` pair.
+
+    Pure composition of ``window_frame_labels`` and ``build_loggable_messages``
+    — the two are always used together (the labels both name the images in the
+    message list and identify the current frame for logging), and every runner
+    that assembles a turn needs the same pair. Factored out so the assembled
+    turn sequence is testable without a VM or an sglang server: see
+    ``eval/test_sequential_reply_contract.py``, which replays a whole
+    goal → actions → checkpoint → resume flow through this function and asserts
+    turn-by-turn identity with the Stage-04 record shape.
+    """
+    labels = window_frame_labels(step, n_frames)
+    return labels, build_loggable_messages(
+        system_prompt=system_prompt,
+        instruction=instruction,
+        recent_actions=recent_actions,
+        frame_labels=labels,
+        fresh_visual_context=fresh_visual_context,
+        current_text=current_text,
+    )
 
 
 def _call_model(
@@ -167,6 +314,7 @@ def _call_model(
     recent_frames: list[Image.Image],
     recent_actions: list[str] | None = None,
     fresh_visual_context: bool = False,
+    current_text: str | None = None,
     sampling: SamplingParams,
     request_timeout_s: float = 120.0,
 ) -> tuple[str, str | None]:
@@ -209,9 +357,10 @@ def _call_model(
         for f in recent_frames
     ]
     messages = (
-        _fresh_visual_messages(system_prompt, instruction, image_parts)
+        _fresh_visual_messages(system_prompt, instruction, image_parts, current_text)
         if fresh_visual_context
-        else _interleave_messages(system_prompt, instruction, image_parts, recent_actions)
+        else _interleave_messages(
+            system_prompt, instruction, image_parts, recent_actions, current_text)
     )
     r = requests.post(
         sglang_url.rstrip("/") + "/chat/completions",

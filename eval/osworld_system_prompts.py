@@ -336,3 +336,11 @@ _CUA_OEV2_THINKING_FILE = (
     / "data_pipeline/realigned_pipeline/system_prompts/cua_oev2_thinking.txt"
 )
 SYSTEM_PROMPTS["cua_oev2_thinking"] = _CUA_OEV2_THINKING_FILE.read_text().strip()
+
+# Standalone sequential goal-memory recipe.  Deliberately do not strip: Stage
+# 04 and evaluation load the exact same bytes from this one versioned file.
+_SEQUENTIAL_GOAL_MEMORY_FILE = (
+    _Path(__file__).resolve().parents[1]
+    / "data_pipeline/realigned_pipeline/system_prompts/sequential_goal_memory_v1.txt"
+)
+SYSTEM_PROMPTS["sequential_goal_memory_v1"] = _SEQUENTIAL_GOAL_MEMORY_FILE.read_text()

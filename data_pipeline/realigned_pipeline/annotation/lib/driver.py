@@ -150,6 +150,7 @@ def run_driver(
     start_limit: int = 24,
     max_limit: int = 80,
     force: bool = False,
+    dataset_finalize: Callable[[], dict[str, Any] | None] | None = None,
 ) -> dict[str, int]:
     """Run ``run_item(item, model)`` over all items under the governor.
 
@@ -180,6 +181,8 @@ def run_driver(
           f"| models={[m or 'env' for m in models]} target_tpm: {targets_s} "
           f"workers={max_workers}", flush=True)
     if not todo:
+        if dataset_finalize is not None:
+            dataset_finalize()
         return counters
 
     queue = list(todo)
@@ -240,6 +243,8 @@ def run_driver(
     for t in threads:
         t.join()
     stop.set()
+    if dataset_finalize is not None and counters["fail"] == 0:
+        dataset_finalize()
     print(f"[driver] finished: {counters['ok']} ok, {counters['fail']} failed. "
           f"tokens/model: { {model_slug(m): gov.tokens[m] for m in models} }", flush=True)
     return counters

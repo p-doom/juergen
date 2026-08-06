@@ -1,0 +1,220 @@
+goal_tree_system: |-
+  You infer grounded hierarchical work goals from a completed screen-recording day. You may
+  use hindsight to segment the day, but every goal must describe intent visibly supported by
+  the screenshots and real human actions. Goal text must be an objective, never a future
+  outcome or a claim of success. Never invent a computer action.
+
+goal_tree: |-
+  Infer a properly nested goal tree for user ${user_id} on ${date}. Use exactly three levels:
+  long, mid, short. Every mid node has a long parent; every short node has a mid parent.
+  Cover every semantic event with an active long → mid → short path.
+  A short goal is a stable user-visible outcome or meaningful strategy step, not a motor
+  operation. Never create goals merely to click, focus, position the cursor, scroll, hover,
+  or select text. Group those routine events under the outcome they serve, and do not start
+  a new short goal merely because the input modality changes.
+  Write every `text` as a short imperative task statement addressed to whoever must do the
+  work — the way a task is handed to an assistant ("Rename the exported invoice to
+  2026-01.pdf"), never a description of the user or of the recording ("the user renames the
+  export", "watching the user rename a file"). No second person, no narration, no outcome
+  claim.
+  Bound each node with inclusive semantic-event ids from the ordered list. Mark provenance
+  `explicit` only when the work is visibly requested or stated; mark `proactive` for a
+  grounded continuation supported by prior visible work.
+
+  Ordered semantic events:
+  ${event_block}
+
+  Reply with only JSON:
+  {"goals":[{"node_key":"L1","parent_key":null,"level":"long","text":"...",
+  "provenance":"explicit"|"proactive","grounding":"...",
+  "start_event_id":"sem_...","end_event_id":"sem_..."}, ...]}
+
+causal_system: |-
+  You causally replay a human computer-use trajectory. At each event you immediately update
+  the user's rolling memory, and — only when this request offers a thought field — write the
+  natural first-person thought that belongs just before the supplied real action. Use only the
+  rolling memory, chronological screenshots, already-executed action trace, active grounded
+  goal path, and upcoming real action supplied in this request. Never use or predict a later
+  event. Never invent or change an action.
+
+causal_event: |-
+  Current causal anchor: semantic event ${event_id} at ${time_label}. Attached screenshots are
+  chronological; the final screenshot is the current visible state before the upcoming action.
+
+  Active grounded goal path (intent labels, not evidence of outcomes):
+  ${goal_path}
+
+  Rolling memory before the current screenshot:
+  ${memory_before}
+
+  Recent real actions already executed before the current screenshot:
+  ${prior_actions}
+
+  The real Stage 02 action packet about to execute (do not alter it) is:
+  ${tool_calls}
+
+  Immediately write one concise, natural first-person thought only when it would materially
+  improve orientation or action correctness: for example, reconciling the visible state with
+  remembered progress, interpreting the outcome of a prior action, choosing a strategy,
+  respecting an exact-input constraint, switching goals, or recovering from an error. Mention
+  useful screen observations naturally, without headings, field labels, a checklist, or a
+  restatement of the whole plan. The thought must agree with the supplied upcoming action and
+  stay within ${max_words} words. Routine motor execution receives an empty thought.
+
+  Regardless of whether a thought is useful, write memory_after as a compact free-form causal
+  memory for the next event. Preserve relevant completed progress, current visible state,
+  unresolved intent, and critical exact details. It describes only what is known through the
+  current screenshot; the upcoming action may be recorded as intended but never as completed.
+  Do not use the seven checkpoint headings in memory_after.
+
+  References may name only supplied semantic-event ids.
+
+  Reply with only JSON:
+  {"thought":"", "memory_after":"...", "references":["sem_..."]}
+  or
+  {"thought":"...", "memory_after":"...", "references":["sem_..."]}
+
+causal_event_motor: |-
+  Current causal anchor: semantic event ${event_id} at ${time_label}. Attached screenshots are
+  chronological; the final screenshot is the current visible state before the upcoming action.
+
+  Active grounded goal path (intent labels, not evidence of outcomes):
+  ${goal_path}
+
+  Rolling memory before the current screenshot:
+  ${memory_before}
+
+  Recent real actions already executed before the current screenshot:
+  ${prior_actions}
+
+  The real Stage 02 action packet about to execute (do not alter it) is:
+  ${tool_calls}
+
+  This event needs no reasoning: only the rolling memory. Write memory_after as a compact
+  free-form causal memory for the next event. Preserve relevant completed progress, current
+  visible state, unresolved intent, and critical exact details. It describes only what is
+  known through the current screenshot; the upcoming action may be recorded as intended but
+  never as completed. Do not use the seven checkpoint headings in memory_after, and do not
+  write a thought or any reasoning commentary.
+
+  References may name only supplied semantic-event ids.
+
+  Reply with only JSON:
+  {"memory_after":"...", "references":["sem_..."]}
+
+causal_event_reveal: |-
+  Current causal anchor: semantic event ${event_id} at ${time_label}. Attached screenshots are
+  chronological; the final screenshot is the current visible state before the upcoming action.
+
+  Active grounded goal path (intent labels, not evidence of outcomes):
+  ${goal_path}
+
+  Rolling memory before the current screenshot:
+  ${memory_before}
+
+  Recent real actions already executed before the current screenshot:
+  ${prior_actions}
+
+  The real Stage 02 action packet about to execute (do not alter it) is:
+  ${tool_calls}
+
+  A predictor with exactly your context, but WITHOUT this action, guessed a different action.
+  Something visible or remembered here is decisive and easy to miss, so a thought is REQUIRED.
+  Write one concise, natural first-person thought of at most ${max_words} words that names the
+  visible evidence or remembered constraint that forces this action instead of the obvious
+  alternative. Never restate or paraphrase the action, never narrate the mechanics of clicking
+  or typing, and never use headings, field labels, or a plan recap. It must agree with the
+  supplied upcoming action and rely only on what is visible or remembered here.
+
+  Also write memory_after as a compact free-form causal memory for the next event. Preserve
+  relevant completed progress, current visible state, unresolved intent, and critical exact
+  details. It describes only what is known through the current screenshot; the upcoming action
+  may be recorded as intended but never as completed. Do not use the seven checkpoint headings
+  in memory_after.
+
+  References may name only supplied semantic-event ids.
+
+  Reply with only JSON:
+  {"thought":"...", "memory_after":"...", "references":["sem_..."]}
+
+predict_system: |-
+  You operate a desktop computer through the `computer_use` tool. Given the current
+  screenshots, the rolling memory, the active goal path, and the actions already executed, you
+  predict the single next action packet you would execute. Reply with tool-call JSON only.
+  Never invent an action outside the supplied action list.
+
+predict_action: |-
+  Predict the next action at semantic event ${event_id} (${time_label}). Attached screenshots
+  are chronological; the final screenshot is the current visible state. No later information
+  exists.
+
+  Active grounded goal path (intent labels, not evidence of outcomes):
+  ${goal_path}
+
+  Rolling memory before the current screenshot:
+  ${memory_before}
+
+  Recent real actions already executed before the current screenshot:
+  ${prior_actions}
+
+  Emit the ordered `computer_use` calls you would execute NEXT — the immediate next packet
+  only, not a plan for the rest of the task. Mouse movement is relative and normalized:
+  `mouse_move_rel` takes `delta: [dx, dy]` in thousandths of the screen from the current
+  cursor. The available actions are exactly: mouse_move_rel, left_click, right_click,
+  middle_click, double_click, triple_click, button_down, button_up, key, key_down, key_up,
+  type, scroll, hscroll, wait, terminate.
+
+  Reply with only JSON:
+  {"calls":[{"name":"computer_use","arguments":{"action":"..."}}, ...]}
+
+checkpoint_system: |-
+  You compact a computer-use trajectory's rolling memory into the stored checkpoint an agent
+  will resume from. The checkpoint is the ONLY thing that survives compaction, so it must be
+  factual, self-contained, and short. Use only the supplied memory, goal path, and previous
+  checkpoint. Never add outcomes, never speculate, never invent an action.
+
+checkpoint_projection: |-
+  Project the rolling memory at semantic event ${event_id} (${time_label}) into the stored
+  checkpoint. The upcoming action at this event has NOT happened: it is intent, never a
+  completed step.
+
+  Active grounded goal path (intent labels, not evidence of outcomes):
+  ${goal_path}
+
+  Rolling memory through the current screenshot:
+  ${memory_after}
+
+  Previous checkpoint (the last compaction of this same trajectory):
+  ${previous_checkpoint}
+
+  Rules:
+  - Exactly the seven fields below, every one non-empty.
+  - At most ${max_words} words TOTAL across the seven field bodies. Be telegraphic.
+  - `Completed` must FOLD the previous checkpoint's `Completed` into at most
+    ${max_sentences} sentences total: a compressed digest of everything before it plus what
+    was accomplished since. Never restate the full history, never list every step, and never
+    let it grow checkpoint after checkpoint.
+  - `Long-term goal`, `Mid-term objective`, and `Short-term objective` restate the active goal
+    path as objectives.
+  - `Current state` is what the final screenshot shows now.
+  - `Next step` states intent only — what is about to be attempted, never its outcome.
+  - `Critical details` keeps exact strings, names, numbers, and constraints that would be
+    unrecoverable after compaction. Write "None." if there are none.
+  - Nothing beyond what the supplied memory and goal path already know.
+
+  Reply with only JSON:
+  {"checkpoint":{"Long-term goal":"...","Mid-term objective":"...",
+  "Short-term objective":"...","Completed":"...","Current state":"...",
+  "Next step":"...","Critical details":"..."}}
+
+mission_system: |-
+  You link long-term work missions across different days for one user. Link only clearly
+  continuing missions grounded in the supplied goal texts. Never link across users.
+
+mission_link: |-
+  User ${user_id} has these ordered long-term goals:
+  ${goal_block}
+
+  Reply with only JSON:
+  {"links":[{"from_goal_id":"goal_...","to_goal_id":"goal_...",
+  "relation":"continues"|"resumes"|"refines","evidence":"..."}]}

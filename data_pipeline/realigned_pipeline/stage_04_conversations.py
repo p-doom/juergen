@@ -2,7 +2,7 @@
 """Stage 04 (conversations): the single injection point that joins frames
 (stage 01, through the stage-03 filter mask), actions (stage 02's realigned
 keylogs, formatted via lib/action_format's FORMATTERS), and optionally goals
-(stage 03b), and emits training conversations. One script, two modes:
+(stage 03b), and emits training conversations. One script, three modes:
 
 ``--mode action`` (per-segment, fps-selected windows — the historical
 build_conversations):
@@ -30,7 +30,18 @@ artifact — the former thinking_conversations):
     ``<think>`` before the anchored action, earlier same-chunk thoughts as
     context, ``--terminal-token`` glued to the final action.
 
-Both modes emit the canonical chat.jsonl schema (content blocks, instruction/
+``--mode sequential_goal_memory`` consumes the standalone Stage 03b artifact and
+PACKS it the way the eval runtime manages context (lib/sequential_packing +
+lib/sequential_conversations): chronological semantic decisions accumulate until
+the screenshot-capacity trigger of ``--capacity`` fires, the record closes with
+the checkpoint-control turn and the annotated seven-field checkpoint, and the
+continuation record re-opens with the same GOAL, that same checkpoint, and the
+same boundary screenshot. Segment length is capacity-driven and jittered
+(``--fraction-low/--fraction-high``), never a fixed decision count; explicit vs
+proactive GOAL rendering is sampled per segment (``--mode-weights``) from the
+goal levels that actually cover it.
+
+All modes emit the canonical chat.jsonl schema (content blocks, instruction/
 goal TEXT before the image on the first user turn, one assistant turn per
 frame) with the same manifest join-guards, so stages 05/06 run unchanged.
 
@@ -46,6 +57,11 @@ Run::
         --filter-dir <stage-03> --clips-manifest <stage-00/02 manifest> \\
         --day-index-cache <cache.json> --goals-dir <lumine_thinking(-goals)> \\
         --fps 0.5 --window-frames 30 --output-dir <dest>
+
+    uv run python realigned_pipeline/stage_04_conversations.py \\
+        --mode sequential_goal_memory --filter-dir <stage-03> \\
+        --clips-manifest <stage-00/02 manifest> --day-index-cache <cache.json> \\
+        --goals-dir <sequential_goal_memory 03b> --capacity 16 --output-dir <dest>
 """
 from __future__ import annotations
 
@@ -103,6 +119,19 @@ from realigned_pipeline.lib.goals import (  # noqa: E402
     project_goals,
 )
 from realigned_pipeline.lib.manifest import make_artifact_id  # noqa: E402
+from realigned_pipeline.lib.sequential_conversations import (  # noqa: E402
+    build_sequential_conversations,
+)
+from realigned_pipeline.lib.sequential_goal_memory_contract import (  # noqa: E402
+    ACTION_SPEC as SEQUENTIAL_ACTION_SPEC,
+    METHOD as SEQUENTIAL_METHOD,
+    system_prompt as sequential_system_prompt,
+)
+from realigned_pipeline.lib.sequential_packing import (  # noqa: E402
+    DEFAULT_MODE_WEIGHTS,
+    MODES,
+    PackingConfig,
+)
 from realigned_pipeline.lib.views import (  # noqa: E402
     FPS_MODES,
     FilterArtifact,
@@ -113,6 +142,15 @@ from realigned_pipeline.lib.views import (  # noqa: E402
 # body reads like the originals and both modes share one block schema.
 _text = text_block
 _image = image_block
+
+
+def _sequential_parser():
+    """Load the evaluator's parser, so train and freeroll validate identically."""
+    eval_dir = Path(__file__).resolve().parents[2] / "eval"
+    if str(eval_dir) not in sys.path:
+        sys.path.insert(0, str(eval_dir))
+    from action_parser import parse_sequential_reply
+    return parse_sequential_reply
 
 
 # ===========================================================================
@@ -1612,6 +1650,134 @@ def run_thinking(args: argparse.Namespace) -> None:
 
 
 # ===========================================================================
+# MODE: sequential_goal_memory (capacity-packed semantic decisions, no fixed-FPS
+# generation)
+# ===========================================================================
+
+
+def sequential_mode_weights(raw: str | None) -> dict[str, float]:
+    """Parse --mode-weights JSON into a goal-rendering weight map.
+
+    An unknown mode name is an error rather than a silently ignored key: the
+    packer renormalizes over the modes a segment is eligible for, so a typo
+    would quietly shift the whole mixture."""
+    if raw is None:
+        return dict(DEFAULT_MODE_WEIGHTS)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"--mode-weights is not valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict) or not parsed:
+        raise SystemExit("--mode-weights must be a non-empty JSON object of mode -> weight")
+    unknown = sorted(set(parsed) - set(MODES))
+    if unknown:
+        raise SystemExit(f"--mode-weights has unknown mode(s) {unknown}; "
+                         f"expected a subset of {list(MODES)}")
+    weights: dict[str, float] = {}
+    for mode, value in parsed.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise SystemExit(f"--mode-weights[{mode!r}] must be a non-negative number, "
+                             f"got {value!r}")
+        weights[mode] = float(value)
+    if sum(weights.values()) <= 0:
+        raise SystemExit("--mode-weights must carry positive total mass")
+    return weights
+
+
+def sequential_packing_config(args: argparse.Namespace) -> PackingConfig:
+    """The packing geometry Stage 04 simulates; --capacity has no default."""
+    if args.capacity is None:
+        raise SystemExit(
+            "--mode sequential_goal_memory requires --capacity (the runtime screenshot "
+            "capacity the packer simulates; it must match the eval "
+            "ScreenshotCheckpointController and the --checkpoint-capacity of annotation "
+            "pass 03c)")
+    try:
+        return PackingConfig(
+            capacity=args.capacity, fraction_low=args.fraction_low,
+            fraction_high=args.fraction_high, seed=args.packing_seed,
+            n_packings=args.n_packings,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"invalid packing config: {exc}") from exc
+
+
+def run_sequential_goal_memory(args: argparse.Namespace) -> None:
+    cfg = sequential_packing_config(args)  # before any I/O: --capacity has no default
+    mode_weights = sequential_mode_weights(args.mode_weights)
+    art = FilterArtifact(args.filter_dir)
+    if args.goals_dir is None:
+        raise SystemExit("--mode sequential_goal_memory requires --goals-dir")
+    manifest_path = args.goals_dir / "manifest.json"
+    days_path = args.goals_dir / "days.jsonl"
+    if not manifest_path.is_file() or not days_path.is_file():
+        raise SystemExit("sequential_goal_memory artifact needs manifest.json and days.jsonl")
+    gm = json.loads(manifest_path.read_text())
+    if gm.get("method") != SEQUENTIAL_METHOD:
+        raise SystemExit(
+            f"--goals-dir is method {gm.get('method')!r}; expected {SEQUENTIAL_METHOD!r}"
+        )
+    assert_same_artifact(str(gm.get("master_store_id")), art.master_store_id,
+                         what="master_store_id")
+    assert_same_artifact(str(gm.get("filter_id")), art.filter_id, what="filter_id")
+    if args.action_format != SEQUENTIAL_ACTION_SPEC:
+        raise SystemExit(
+            f"sequential_goal_memory locks --action-format to {SEQUENTIAL_ACTION_SPEC}"
+        )
+    if args.no_system_prompt or args.system_prompt is not None or args.system_prompt_file is not None:
+        raise SystemExit(
+            "sequential_goal_memory uses its versioned shared system prompt; overrides are forbidden"
+        )
+
+    days = read_jsonl(days_path)
+    selected = {str(day["day_tag"]) for day in days}
+    if args.day_filter:
+        missing = set(args.day_filter) - selected
+        if missing:
+            raise SystemExit(f"--day-filter tags absent from annotation artifact: {sorted(missing)}")
+        selected &= set(args.day_filter)
+    if args.day_exclude:
+        selected -= set(args.day_exclude)
+    days = [day for day in days if str(day["day_tag"]) in selected]
+    if args.limit is not None:
+        days = days[:args.limit]
+    if not days:
+        raise SystemExit("no annotated days selected")
+
+    links_path = args.goals_dir / "mission_links.jsonl"
+    mission_links = read_jsonl(links_path) if links_path.is_file() else []
+
+    prompt = sequential_system_prompt()
+    records, summary = build_sequential_conversations(
+        days, system_prompt=prompt, parse_reply=_sequential_parser(), cfg=cfg,
+        mode_weights=mode_weights, mission_links=mission_links)
+    summary.update({
+        "mode": SEQUENTIAL_METHOD, "goal_conditioned": True,
+        "has_system_prompt": True, "system_prompt_sha256": hashlib.sha256(
+            prompt.encode()).hexdigest(),
+        "fps": None, "continuous_action_hz": 0.0,
+        "filter_dir": str(art.dir), "goals_dir": str(args.goals_dir),
+        "n_days": len(days), "n_mission_links": len(mission_links),
+    })
+    goals_id = make_artifact_id(args.goals_dir)
+    out_dir = write_conversation_artifact(
+        args.output_dir, records, summary,
+        master_store_id=art.master_store_id, filter_id=art.filter_id,
+        goals_id=goals_id,
+    )
+    print(
+        f"[conversations] mode={SEQUENTIAL_METHOD} capacity={cfg.capacity} "
+        f"{summary['n_episodes']} episodes / {summary['n_segments']} segments "
+        f"(+{summary['n_cross_day_records']} cross-day), "
+        f"{summary['mean_segment_events']:.1f} decisions per segment, "
+        f"{summary['n_semantic_events']} source decisions, "
+        f"{summary['n_checkpoint_turns']} checkpoint turns, "
+        f"modes {summary['mode_counts']} -> {out_dir}",
+        flush=True,
+    )
+
+
+# ===========================================================================
 # CLI
 # ===========================================================================
 
@@ -1620,10 +1786,14 @@ def parse_args() -> argparse.Namespace:
     normalize_dashed_argv()  # accept pmanager's --foo_bar=value arg form
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--mode", choices=("action", "thinking"), required=True,
+    p.add_argument("--mode", choices=("action", "thinking", "sequential_goal_memory"),
+                   required=True,
                    help="'action': per-segment fps-selected windows (the historical "
                         "build_conversations). 'thinking': day-stream windows from a "
-                        "lumine_thinking(-goals) 03b artifact (goal/memory/terminate).")
+                        "lumine_thinking(-goals) 03b artifact (goal/memory/terminate). "
+                        "'sequential_goal_memory': capacity-packed semantic decisions — "
+                        "records end where the runtime would compact (--capacity), not at "
+                        "a fixed decision count.")
 
     # ---- shared ----
     p.add_argument("--filter-dir", type=Path, required=True,
@@ -1751,6 +1921,33 @@ def parse_args() -> argparse.Namespace:
                         "'<action>\\n<token>'). Legacy thinking mode: same (the literal "
                         "TERMINATE resolves through the formatter). Goal thinking mode "
                         "ignores this — TERMINATE is --terminate-boundaries policy.")
+
+    # ---- sequential_goal_memory mode ----
+    q = p.add_argument_group("sequential_goal_memory mode")
+    q.add_argument("--capacity", type=int, default=None,
+                   help="REQUIRED in sequential_goal_memory mode (no default): the runtime "
+                        "screenshot capacity the packer simulates. A record ends at the "
+                        "compaction the eval ScreenshotCheckpointController would trigger, "
+                        "so it must be the deployment capacity AND the "
+                        "--checkpoint-capacity annotation pass 03c projected checkpoints "
+                        "for. There are no fixed five-decision windows any more.")
+    q.add_argument("--fraction-low", type=float, default=0.5,
+                   help="Low end of the per-segment capacity-trigger jitter (the runtime "
+                        "holds a fixed 0.7; training covers a band so the model sees "
+                        "compactions at many context fills).")
+    q.add_argument("--fraction-high", type=float, default=0.85,
+                   help="High end of the per-segment capacity-trigger jitter.")
+    q.add_argument("--packing-seed", type=int, default=0,
+                   help="Seed for the boundary jitter and the goal-mode draw; keyed by "
+                        "day_tag/packing_index/segment_index, so the same value "
+                        "reproduces the artifact byte for byte. Must match pass 03c.")
+    q.add_argument("--n-packings", type=int, default=1,
+                   help="Alternative packings of each day (different boundaries, same "
+                        "events). Every packing partitions the day exactly once.")
+    q.add_argument("--mode-weights", type=str, default=None, metavar="JSON",
+                   help="Goal-rendering mixture as a JSON object, renormalized over the "
+                        "modes each segment is eligible for. Default "
+                        f"{json.dumps(DEFAULT_MODE_WEIGHTS)}.")
     return p.parse_args()
 
 
@@ -1758,14 +1955,21 @@ def main() -> None:
     args = parse_args()
     check_day_selection_args(args.day_filter, args.day_exclude)
     if args.action_format is None:
-        args.action_format = "canonical" if args.mode == "action" else "computer_use_rel_v1"
+        if args.mode == "action":
+            args.action_format = "canonical"
+        elif args.mode == "thinking":
+            args.action_format = "computer_use_rel_v1"
+        else:
+            args.action_format = SEQUENTIAL_ACTION_SPEC
     if args.mode == "thinking" and args.window_frames is None:
         raise SystemExit("--mode thinking requires --window-frames "
                          f"(a positive multiple of the clip stride {CLIP_STRIDE})")
     if args.mode == "action":
         run_action(args)
-    else:
+    elif args.mode == "thinking":
         run_thinking(args)
+    else:
+        run_sequential_goal_memory(args)
 
 
 if __name__ == "__main__":

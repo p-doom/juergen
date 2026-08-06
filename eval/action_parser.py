@@ -100,6 +100,16 @@ class ComputerUseCall:
     arguments: dict
 
 
+@dataclass(frozen=True)
+class SequentialReply:
+    """Strict reply used by the sequential goal-memory recipe."""
+
+    kind: str  # "action" | "checkpoint"
+    action: "OrderedAction | None" = None
+    thought: str | None = None
+    checkpoint: dict[str, str] | None = None
+
+
 _EVENT_RE = re.compile(r"^([+-])([A-Za-z_][A-Za-z_0-9]*)$")
 
 
@@ -734,6 +744,83 @@ def parse_computer_use_action_tolerant(text: str) -> OrderedAction:
         primitives=tuple(_parse_cua_v4_block(m.group(1)) for m in matches),
         no_op=False,
     )
+
+
+# --------------------------------------------------------------------------
+# sequential_goal_memory_v1 — strict action-or-checkpoint replies.
+# --------------------------------------------------------------------------
+
+_CHECKPOINT_FIELDS = (
+    "Long-term goal", "Mid-term objective", "Short-term objective",
+    "Completed", "Current state", "Next step", "Critical details",
+)
+
+
+def _parse_checkpoint_block(text: str) -> dict[str, str]:
+    lines = text.strip().splitlines()
+    expected_len = 1 + len(_CHECKPOINT_FIELDS) * 3
+    if len(lines) != expected_len or lines[0] != "<checkpoint>" or lines[-1] != "</checkpoint>":
+        raise ValueError("checkpoint reply does not have the exact required block shape")
+    values: dict[str, str] = {}
+    cursor = 1
+    for index, field in enumerate(_CHECKPOINT_FIELDS):
+        if lines[cursor] != f"## {field}":
+            raise ValueError(f"checkpoint field {index + 1} must be '## {field}'")
+        value = lines[cursor + 1].strip()
+        if not value:
+            raise ValueError(f"checkpoint field {field!r} is empty")
+        values[field] = value
+        if index < len(_CHECKPOINT_FIELDS) - 1 and lines[cursor + 2] != "":
+            raise ValueError(f"checkpoint field {field!r} must be followed by a blank line")
+        cursor += 3
+    return values
+
+
+def parse_sequential_reply(text: str, *, expected: str | None = None) -> SequentialReply:
+    """Parse the versioned sequential recipe without any prose tolerance.
+
+    Action replies are an optional, single *leading* ``<think>`` block followed
+    only by strict ``computer_use`` tool calls.  Checkpoint replies are exactly
+    one seven-field checkpoint block.  Normalized relative deltas are checked
+    here because the older ``computer_use_rel_v1`` grammar uses pixel deltas.
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"parse_sequential_reply expects str, got {type(text)!r}")
+    if expected not in (None, "action", "checkpoint"):
+        raise ValueError(f"invalid expected reply kind {expected!r}")
+    stripped = text.strip()
+    if stripped.startswith("<checkpoint>"):
+        if expected == "action":
+            raise ValueError("expected an action reply, got a checkpoint")
+        return SequentialReply(kind="checkpoint", checkpoint=_parse_checkpoint_block(stripped))
+    if expected == "checkpoint":
+        raise ValueError("expected a checkpoint reply")
+
+    thought: str | None = None
+    action_text = stripped
+    if action_text.startswith("<think>"):
+        close = action_text.find("</think>")
+        if close < 0:
+            raise ValueError("unterminated leading <think> block")
+        thought = action_text[len("<think>"):close].strip()
+        if not thought:
+            raise ValueError("leading <think> block is empty")
+        action_text = action_text[close + len("</think>"):].strip()
+    if "<think>" in action_text or "</think>" in action_text:
+        raise ValueError("thought must be one optional leading <think> block")
+    action = parse_computer_use_action(action_text)
+    for index, match in enumerate(_CUA_V4_TOOL_CALL_RE.finditer(action_text), 1):
+        payload = json.loads(match.group(1))
+        arguments = payload["arguments"]
+        if arguments.get("action") == "mouse_move_rel":
+            delta = arguments["delta"]
+            if any(float(value) < -1000 or float(value) > 1000 for value in delta):
+                raise ValueError(
+                    f"tool call {index}: normalized delta must be in [-1000, 1000], got {delta!r}"
+                )
+        if arguments.get("action") == "wait" and float(arguments["time"]) < 0:
+            raise ValueError(f"tool call {index}: wait time must be non-negative")
+    return SequentialReply(kind="action", action=action, thought=thought)
 
 
 # --------------------------------------------------------------------------

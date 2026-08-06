@@ -50,6 +50,9 @@ class Method:
     prompts: PromptPack
     dir: Path
     labeler_defaults: dict[str, Any]
+    goal_rows_from_result: Callable[..., list[dict[str, Any]]] | None = None
+    finalize_dataset: Callable[..., dict[str, Any]] | None = None
+    requires_pilot_review: bool = False
 
 
 @dataclass
@@ -62,6 +65,21 @@ class MethodContext:
     vlm_frame_height: int
     jpeg_quality: int
     no_cache: bool = False
+    params: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class DatasetFinalizeContext:
+    """Inputs for an optional method-owned cross-unit reduce/finalize pass."""
+
+    output_dir: Path
+    units_dir: Path
+    calls_dir: Path
+    method: Method
+    labeler: Labeler
+    model: str | None
+    no_cache: bool
+    source_manifests: dict[str, str]
     params: dict[str, Any] = field(default_factory=dict)
 
 
@@ -100,4 +118,10 @@ def load_method(name: str) -> Method:
         prompts=PromptPack(prompts_path),
         dir=available[name],
         labeler_defaults=labeler_defaults,
+        goal_rows_from_result=(getattr(module, "goal_rows_from_result", None)
+                               if callable(getattr(module, "goal_rows_from_result", None))
+                               else None),
+        finalize_dataset=(getattr(module, "finalize_dataset", None)
+                          if callable(getattr(module, "finalize_dataset", None)) else None),
+        requires_pilot_review=bool(getattr(module, "REQUIRES_PILOT_REVIEW", False)),
     )

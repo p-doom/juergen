@@ -18,6 +18,7 @@ import signal
 import subprocess
 import sys
 import time
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -34,18 +35,25 @@ from PIL import Image
 _JUERGEN_EVAL = str(Path(__file__).resolve().parent)
 if _JUERGEN_EVAL not in sys.path:
     sys.path.insert(0, _JUERGEN_EVAL)
+_JUERGEN_DATA_PIPELINE = str(Path(__file__).resolve().parents[1] / "data_pipeline")
+if _JUERGEN_DATA_PIPELINE not in sys.path:
+    sys.path.insert(0, _JUERGEN_DATA_PIPELINE)
 
 from action_parser import (  # noqa: E402
     OrderedAction, parse_action_tolerant, parse_computer_use_action_tolerant,
     parse_computer_use_rel_step_action, parse_computer_use_tool_call,
-    parse_ordered_action_tolerant,
+    parse_ordered_action_tolerant, parse_sequential_reply,
 )
 from osworld_vm_client import OSWorldClient  # noqa: E402
 from osworld_system_prompts import SYSTEM_PROMPTS  # noqa: E402
 from osworld_runtime import (  # noqa: E402
     _DEFAULT_QCOW2, _DEFAULT_QEMU_BIN, _EVAL_DIR,
-    _call_model, _pil_to_data_url, _wait_for, append_turn,
-    build_loggable_messages, window_frame_labels,
+    _call_model, _pil_to_data_url, _wait_for, append_turn, compact_to_current,
+    ScreenshotCheckpointController, step_messages, validate_single_eviction,
+)
+from realigned_pipeline.lib.sequential_goal_memory_contract import (  # noqa: E402
+    CHECKPOINT_CONTROL_REQUEST as _CHECKPOINT_CONTROL_REQUEST,
+    goal_conditioning as _goal_conditioning,
 )
 import sampling as sampling_mod  # noqa: E402
 from sampling import SamplingParams  # noqa: E402
@@ -89,6 +97,7 @@ _PROMPT_ACTION_FORMATS = {
     "cua_v4_thinking_norm": _NATIVE_NORM_FORMAT,
     "cua_rel_step_v1_thinking": _NATIVE_STEP_FORMAT,
     "cua_oev2_thinking": "ordered_events_v2",
+    "sequential_goal_memory_v1": _NATIVE_NORM_FORMAT,
 }
 # Prompts whose training data conditions on "GOAL: {goal}" as the first
 # user-turn text (stage_04t goal conditioning).
@@ -99,8 +108,8 @@ _GOAL_CONDITIONED_PROMPT_IDS = frozenset({
     "cua_v4_thinking_norm",
     "cua_oev2_thinking",
     "cua_rel_step_v1_thinking",
+    "sequential_goal_memory_v1",
 })
-
 
 def _resolve_action_format(explicit: str | None, system_prompt_id: str) -> str:
     """--action_format wins; otherwise infer from the system prompt id."""
@@ -337,6 +346,8 @@ def _run_rollout(
     settle_stable_timeout_s: float,
     settle_poll_s: float,
     model_resolution: tuple[int, int] | None = None,
+    context_capacity_screenshots: int | None = None,
+    checkpoint_fraction: float = 0.7,
 ) -> dict:
     steps_dir = output_dir / "steps"
     if save_frames:
@@ -344,6 +355,7 @@ def _run_rollout(
     traj_path = output_dir / "trajectory.jsonl"
     conv_path = output_dir / "conversation.jsonl"
     gif_path = output_dir / "rollout.gif"
+    checkpoint_path = output_dir / "checkpoints.jsonl"
 
     client = OSWorldClient(osworld_url)
     client.wait_ready()
@@ -351,20 +363,60 @@ def _run_rollout(
     _LOGGER.info("VM screen %dx%d; max_steps=%d; instruction=%r", sw, sh, max_steps, instruction)
     _prepare_desktop(client, desktop_setup)
 
-    # Goal-conditioned prompts (cua_v3_thinking) train with the first user
-    # turn reading exactly "GOAL: {goal}"; persist_instruction re-anchors the
-    # SAME formatted text on the earliest in-window user turn every step.
-    instr_text = _instruction_text(
-        instruction,
-        goal_conditioned=system_prompt_id in _GOAL_CONDITIONED_PROMPT_IDS,
-    )
     use_ordered = action_format in _ORDERED_FORMATS
     use_native = action_format in _NATIVE_FORMATS
     use_rel_step = action_format == _NATIVE_STEP_FORMAT
+    use_sequential = system_prompt_id == "sequential_goal_memory_v1"
+    if use_sequential and not instruction:
+        raise ValueError("sequential_goal_memory_v1 requires a non-empty instruction")
+    if use_sequential and action_format != _NATIVE_NORM_FORMAT:
+        raise ValueError(
+            "sequential_goal_memory_v1 requires computer_use_rel_norm_v1"
+        )
+    if use_sequential and not persist_instruction:
+        # The goal conditioning is also the carrier for the stored checkpoint
+        # (see _goal_conditioning below): with goal-on-step-1 only, every
+        # post-compaction turn would drop BOTH the goal and the checkpoint, so
+        # the resumed segment has no memory at all — no training record looks
+        # like that.
+        raise ValueError(
+            "sequential_goal_memory_v1 requires --persist_instruction: the "
+            "goal conditioning carries the stored checkpoint into every "
+            "post-compaction turn"
+        )
+    # Goal-conditioned prompts (cua_v3_thinking) train with the first user
+    # turn reading exactly "GOAL: {goal}"; persist_instruction re-anchors the
+    # SAME formatted text on the earliest in-window user turn every step. The
+    # sequential recipe formats it through the shared contract helper instead —
+    # the same bytes Stage 04 writes into the record's opening user turn, and
+    # the same function that later folds in the checkpoint on resume.
+    instr_text = (
+        _goal_conditioning(str(instruction))
+        if use_sequential
+        else _instruction_text(
+            instruction,
+            goal_conditioned=system_prompt_id in _GOAL_CONDITIONED_PROMPT_IDS,
+        )
+    )
     # Rel-step training examples are independent decision records containing
     # the goal and at most four chronological screenshots in one user turn.
     # Keep deployment exactly in-distribution and never replay model actions.
     history_frames = min(max(1, n_history_frames), 4) if use_rel_step else n_history_frames
+    if use_sequential:
+        history_frames = context_capacity_screenshots or n_history_frames
+    checkpoint_controller = (
+        ScreenshotCheckpointController(
+            context_capacity_screenshots or n_history_frames, checkpoint_fraction)
+        if use_sequential else None
+    )
+    if checkpoint_controller is not None:
+        # Single-eviction guarantee: the controller, never append_turn's block
+        # eviction, is what first drops a frame on this path. Trivially true as
+        # wired above (both read the same capacity expression) — asserted here
+        # so a future rewiring fails at setup instead of silently shipping
+        # windows with holes no training segment contains.
+        validate_single_eviction(
+            n_history_frames=history_frames, controller=checkpoint_controller)
 
     # The ONLY delta scaling in the dispatch path: a 0-1000 screen fraction
     # back to VM pixels. Depends on the VM screen, never on the model view.
@@ -407,13 +459,16 @@ def _run_rollout(
                 action_text,
                 n_history_frames=history_frames,
             )
+        if checkpoint_controller is not None:
+            checkpoint_controller.note_screenshot()
 
     t_start = time.time()
     steps: list[StepLog] = []
     stop_reason = "max_steps"
     parse_errors = 0
 
-    with traj_path.open("w") as traj_f, conv_path.open("w") as conv_f:
+    checkpoint_cm = checkpoint_path.open("w") if use_sequential else nullcontext(None)
+    with traj_path.open("w") as traj_f, conv_path.open("w") as conv_f, checkpoint_cm as checkpoint_f:
         traj_f.write(json.dumps({
             "step_num": 0, "action": "<reset>", "response": "<reset>",
             "reward": 0.0, "done": False, "info": {},
@@ -422,6 +477,51 @@ def _run_rollout(
 
         for step in range(1, max_steps + 1):
             t0 = time.time()
+            if checkpoint_controller is not None and step > 1 and checkpoint_controller.due:
+                control_instruction = _instruction_for_step(
+                    instr_text, step, persist_instruction)
+                control_labels, control_messages = step_messages(
+                    system_prompt=system_prompt, instruction=control_instruction,
+                    step=step, n_frames=len(recent_frames),
+                    recent_actions=recent_actions,
+                    current_text=_CHECKPOINT_CONTROL_REQUEST,
+                )
+                try:
+                    checkpoint_text, checkpoint_finish = _call_model(
+                        sglang_url=sglang_url, api_key=api_key, model=model,
+                        system_prompt=system_prompt, instruction=control_instruction,
+                        recent_frames=recent_frames, recent_actions=recent_actions,
+                        current_text=_CHECKPOINT_CONTROL_REQUEST, sampling=sampling,
+                    )
+                except Exception as e:
+                    _LOGGER.error("step %d: checkpoint model call failed: %s", step, e)
+                    stop_reason = "model_error"
+                    break
+                conv_f.write(json.dumps({
+                    "step": step, "kind": "checkpoint", "messages": control_messages,
+                    "response": checkpoint_text, "finish_reason": checkpoint_finish,
+                }) + "\n")
+                conv_f.flush()
+                try:
+                    if checkpoint_finish == "length":
+                        raise ValueError("checkpoint response truncated at max_tokens")
+                    parsed_checkpoint = parse_sequential_reply(
+                        checkpoint_text, expected="checkpoint")
+                    checkpoint_f.write(json.dumps({
+                        "step": step, "frame": control_labels[-1],
+                        "checkpoint": checkpoint_text,
+                        "values": parsed_checkpoint.checkpoint,
+                    }) + "\n")
+                    checkpoint_f.flush()
+                    instr_text = _goal_conditioning(str(instruction), checkpoint_text)
+                    # Compaction keeps the current observation and causal state,
+                    # while discarding all older images and action turns.
+                    compact_to_current(recent_frames, recent_actions)
+                    _LOGGER.info("step %d: stored checkpoint and compacted image history", step)
+                except (TypeError, ValueError) as e:
+                    parse_errors += 1
+                    _LOGGER.warning("step %d: invalid checkpoint reply: %s", step, e)
+                checkpoint_controller.reset_to_current()
             instr_used = (
                 instr_text
                 if use_rel_step
@@ -431,11 +531,10 @@ def _run_rollout(
             # with each frame replaced by a <image step_NNN.png> placeholder
             # (see build_loggable_messages). Built once and reused for both the
             # per-step prompt sidecar and the conversation.jsonl transcript.
-            frame_labels = window_frame_labels(step, len(recent_frames))
-            loggable_messages = build_loggable_messages(
+            frame_labels, loggable_messages = step_messages(
                 system_prompt=system_prompt, instruction=instr_used,
+                step=step, n_frames=len(recent_frames),
                 recent_actions=None if use_rel_step else recent_actions,
-                frame_labels=frame_labels,
                 fresh_visual_context=use_rel_step,
             )
             if save_frames:
@@ -477,12 +576,28 @@ def _run_rollout(
             # Truncation guard + think-strip. A truncated reply is never
             # terminate-checked or dispatched (recorded as a parse error below).
             clean_text, trunc_err = _dispatch_plan(action_text, finish_reason)
+            sequential_reply = None
+            if use_sequential and trunc_err is None:
+                try:
+                    sequential_reply = parse_sequential_reply(
+                        action_text, expected="action")
+                except (TypeError, ValueError):
+                    # The dispatch block below re-parses to preserve the exact
+                    # validation error in the trajectory log.
+                    pass
 
             # Terminate detection. computer_use_rel_v1 terminates on a parsed
             # terminate TOOL CALL anywhere in the reply — never on a TERMINATE
             # line; the line detection stays for every other format.
             if clean_text is None:
                 computer_use_status = None
+            elif use_sequential:
+                computer_use_status = next(
+                    (primitive.status for primitive in (
+                        sequential_reply.action.primitives if sequential_reply else ())
+                     if primitive.kind == "terminate"),
+                    None,
+                )
             elif use_native:
                 computer_use_status = _computer_use_rel_terminate_status(
                     clean_text, strict_rel_step=use_rel_step
@@ -547,11 +662,16 @@ def _run_rollout(
                     sr = None
                     if use_native or use_ordered:
                         if use_native:
-                            action = (
-                                parse_computer_use_rel_step_action(clean_text)
-                                if use_rel_step
-                                else parse_computer_use_action_tolerant(clean_text)
-                            )
+                            if use_sequential:
+                                reply = sequential_reply or parse_sequential_reply(
+                                    action_text, expected="action")
+                                action = reply.action
+                            else:
+                                action = (
+                                    parse_computer_use_rel_step_action(clean_text)
+                                    if use_rel_step
+                                    else parse_computer_use_action_tolerant(clean_text)
+                                )
                             # parsed/logs keep the model's own frame of reference.
                             parsed = {
                                 "no_op": all(
@@ -687,7 +807,14 @@ def _run_rollout(
         "system_prompt_id": system_prompt_id,
         "action_format": action_format,
         "n_history_frames": n_history_frames,
+        "effective_history_frames": history_frames,
         "persist_instruction": persist_instruction,
+        "context_capacity_screenshots": (
+            context_capacity_screenshots or n_history_frames
+            if use_sequential else None
+        ),
+        "checkpoint_fraction": checkpoint_fraction if use_sequential else None,
+        "checkpoint_path": str(checkpoint_path) if use_sequential else None,
         "sampling": sampling.to_dict(),
         # per-field provenance: 'flag' | 'qwen:<mode>' | 'greedy' (see
         # sampling.source_map) — tells an explicit override from a regime default
@@ -794,6 +921,16 @@ def main() -> int:
     # defaults to 256 (was 64, which truncated native tool-calls).
     sampling_mod.add_sampling_cli(p, default_max_tokens=256)
     p.add_argument("--n_history_frames", type=int, default=16)
+    p.add_argument(
+        "--context_capacity_screenshots", type=int, default=None,
+        help="Sequential goal-memory only: configured screenshot context capacity; "
+             "defaults to --n_history_frames.",
+    )
+    p.add_argument(
+        "--checkpoint_fraction", type=float, default=0.7,
+        help="Sequential goal-memory only: request checkpoint control at this "
+             "fraction of screenshot context capacity.",
+    )
     p.add_argument(
         "--persist_instruction", action=argparse.BooleanOptionalAction, default=True,
         help="Re-anchor the natural-language goal on the earliest in-window user "
@@ -974,6 +1111,8 @@ def main() -> int:
                 settle_s=args.settle_s,
                 settle_stable_timeout_s=args.settle_stable_timeout_s,
                 settle_poll_s=args.settle_poll_s,
+                context_capacity_screenshots=args.context_capacity_screenshots,
+                checkpoint_fraction=args.checkpoint_fraction,
             )
             with (run_dir / "result.json").open("w") as f:
                 json.dump(result, f, indent=2)
