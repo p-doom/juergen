@@ -1,22 +1,12 @@
 """The Phase-B compact deltatype-v2 grammar.
 
-Collapses four parsers of one grammar into one codec:
+One codec owns the whole grammar: parse, format, the ordered plan, and the
+lowering.
 
-* ``experiments/phaseb_deltatype_raw_v2/action_v2.py`` (parse / format /
-  ordered_plan / dispatch),
-* ``osworld_parity/sign_of_life_v2/compact_relative.py`` (a near-clone of it:
-  byte-identical private ``_scan_elements`` and ``_validate_ordered_move``),
-* the ``parse_deltatype`` / ``format_deltatype`` half of ``eval/action_parser.py``
-  (same grammar, coalesced ``type()``, TERMINATE / FAIL),
-* the ``compile_compact_relative`` lowering that used to live beside the sealed
-  sign-of-life prompt.
-
-``compact_relative.verify_sealed_contract`` raised ``RuntimeError`` when the
-inlined ``SYSTEM_PROMPT`` no longer hashed to its recorded digest — while that
-prompt was inlined in the same module, so editing the grammar in place tripped
-the check and forking a worktree was cheaper. ``report()`` below returns the
-same three digests as data with a ``matches_producer`` boolean. It cannot raise,
-and there is no replacement gate.
+``report()`` below returns the prompt and action digests as DATA, with a
+``matches_producer`` boolean. It cannot raise: a digest mismatch is recorded, not
+enforced, because what a reader needs is which prompt produced a number, not a
+refusal to produce one.
 """
 
 from __future__ import annotations

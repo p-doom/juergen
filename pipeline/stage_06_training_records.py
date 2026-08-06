@@ -1,8 +1,8 @@
 """Training-record stage (payload-free): build inline SFT records from chat.jsonl.
 
-Wrapper around omegalax/scripts/build_sft_records_from_chat.py. Payload-free
-variant of stage_d_chunk_index.py: reads the stage-04 conversations dataset's
-single <source>/chat.jsonl directly (NO grain payload) and writes self-contained
+Wrapper around omegalax/scripts/build_sft_records_from_chat.py. Reads the
+stage-04 conversations dataset's single <source>/chat.jsonl directly (NO grain
+payload) and writes self-contained
 inline records per split under <output_dir>/<split>/. Each record IS a training
 example (message slice with ar:// image refs preserved), not a pointer into a
 shared payload; the stage 01 master image store is unchanged.

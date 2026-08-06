@@ -1,9 +1,8 @@
 """Measure stage (payload-free): tokenize chat.jsonl into a per-message cache.
 
-Wrapper around omegalax/scripts/measure_message_lengths_from_chat.py. Payload-free
-variant of stage_measure_lengths.py: reads the stage-04 conversations dataset's
-single <source>/chat.jsonl directly (NO grain payload) and measures it ONCE ->
-<output_dir>/message_lengths.jsonl.
+Wrapper around omegalax/scripts/measure_message_lengths_from_chat.py. Reads the
+stage-04 conversations dataset's single <source>/chat.jsonl directly (NO grain
+payload) and measures it ONCE -> <output_dir>/message_lengths.jsonl.
 
 The train/val split is applied downstream at the records stage (stage 06), so
 this cache is split-agnostic and is reused across every split / val_fraction --

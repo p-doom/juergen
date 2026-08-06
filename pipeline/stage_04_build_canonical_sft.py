@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Build a portable canonical SFT artifact from an annotation pipeline run.
 
-Stage 04, ``stage_03_assemble`` lineage. The SECOND stage-04 variant in this
-package, and the only one that emits the labctl-facing ``juergen_canonical_sft``
-contract (``message_policy.owner = "labctl"``, ``split_manifest.jsonl`` +
-``sample_manifest.jsonl``, a grouped train/val split decided HERE, and the full
-``terminal_mode`` matrix incl. ``replace_final_assistant``). Input is a run dir
-holding ``stage_03_assemble/trajectories.jsonl``.
+One of two stage-04 variants, and the only one that emits the labctl-facing
+``juergen_canonical_sft`` contract (``message_policy.owner = "labctl"``,
+``split_manifest.jsonl`` + ``sample_manifest.jsonl``, a grouped train/val split
+decided HERE, and the full ``terminal_mode`` matrix incl.
+``replace_final_assistant``). Input is a run dir holding
+``stage_03_assemble/trajectories.jsonl``.
 
 The other variant — ``stage_04_build_conversations.py`` — is the current
 generation's single injection point: it joins the stage-03 filter mask with the
@@ -16,10 +16,6 @@ always rides the final assistant turn, and emits
 applied downstream in stage 06 (``--val_fraction``). Neither subsumes the other:
 this file owns the canonical-SFT artifact contract and the terminal-mode matrix;
 that file owns the filter+goals join. Prefer that one for new datasets.
-
-Ported out of ``data_pipeline/annotation_pipeline/`` unchanged apart from the
-image-store import (``pipeline.lib.image_store`` is the same module, modulo two
-quoted type annotations); the old path re-exports from here.
 
     PYTHONPATH=. python3 -m pipeline.stage_04_build_canonical_sft \\
         --run-dir <run with stage_03_assemble/> --output-dir <dest>
@@ -262,8 +258,8 @@ def transform_messages(
             if role == "user" and not first_user_seen:
                 new_blocks.append({"type": "text", "text": instruction})
                 new_blocks.extend(image_blocks)
-                # Drop duplicate instruction text from the old stage-03 first
-                # user turn, but preserve any extra non-identical text blocks.
+                # Drop instruction text duplicated from the stage-03 first user
+                # turn, but preserve any extra non-identical text blocks.
                 new_blocks.extend(block for block in text_blocks if block.get("text") != instruction)
                 first_user_seen = True
             else:
