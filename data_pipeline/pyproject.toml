@@ -1,33 +1,31 @@
 [project]
 name = "crowdcast-data-pipeline"
 version = "0.1.0"
-description = "Crowd-cast SFT data pipeline (stages: prepare, run_length_cap, grain_payload, chunk_index). Configs consumed by pmanager."
+description = "Crowd-cast SFT data pipeline: pmanager launch configs and tests for the stages in ../pipeline."
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.11"
-# Entrypoints only — pmanager itself is loaded by the *outer* process (the
-# `pmanager launch` invocation), not by these stage scripts. Configs in
-# this project use ``from pmanager.configs.schema import …``, but those
-# imports resolve in pmanager's own venv, not here.
+# This dep set is the one the STAGES need — they live at ../pipeline and are
+# run from this venv. pmanager itself is loaded by the *outer* process (the
+# `pmanager launch` invocation), not by the stages. The configs here use
+# ``from pmanager.configs.schema import …``, but those imports resolve in
+# pmanager's own venv, not this one.
 #
-# Several scripts in this repo deliberately run inside OTHER venvs and
-# therefore do NOT contribute to this dep set:
-#   * pipeline/stage_05_measure_lengths.py / stage_06_training_records.py —
-#     subprocess-wrap omegalax scripts via ``uv run --project <omegalax_repo>``.
+# Two stages deliberately run work in ANOTHER venv and so do not contribute
+# here: pipeline/stage_05_measure_lengths.py and stage_06_training_records.py
+# subprocess-wrap omegalax scripts via ``uv run --project <omegalax_repo>``.
 dependencies = [
-    "absl-py>=2.0",                # flag-based entrypoints across every stage_*.py / prep_*.py
-    "msgpack>=1.0",                # stage A: parse per-recording keylog msgpacks
-    "Pillow>=11.3.0",              # stage A JPEG encode
-    "numpy>=2.0",                  # stage A frame-array math
-    "array-record>=0.5.1",         # ArrayRecord (grain) JPEG image store: stage_01 pack + migration + ar:// decode
+    "absl-py>=2.0",                # flag-based entrypoints: pipeline/stage_05_measure_lengths.py + stage_06_training_records.py
+    "msgpack>=1.0",                # parse per-recording keylog msgpacks: pipeline/lib/{realign,common}.py + stage_02_realign.py
+    "Pillow>=11.3.0",              # JPEG encode/decode: pipeline/stage_01_master_frames.py + pipeline/lib/image_store.py
+    "numpy>=2.0",                  # frame-array math: pipeline/lib/image_store.py + pipeline/annotation/lib/units.py
+    "array-record>=0.5.1",         # ArrayRecord (grain) JPEG image store: pipeline/stage_01_master_frames.py + pipeline/lib/{frames_actions,image_store}.py
     # Floor at 0.5.1 (not 0.6.0) so sglang's diffusion extra — which pins ==0.5.1 — can co-resolve in the workspace lock. Only a PATH fallback; minor version doesn't matter.
-    "imageio-ffmpeg>=0.5.1",
-    # The next three are needed by BOTH annotation_pipeline (legacy) and
-    # pipeline/ (current), so none of them dies with the legacy package.
-    "openai>=2.26.0",              # VLM labeler (Azure/OpenAI-compatible) + local Qwen: annotation_pipeline/labeler.py, pipeline/annotation/lib/labeler.py
-    "PyYAML>=6.0",                 # prompts.yaml loaders: annotation_pipeline/prompts.py, pipeline/annotation/lib/prompts.py
-    "opencv-python-headless>=4.10.0.84",  # video probing / frame decode: pipeline/stage_00_clip_manifest.py + pipeline/lib, annotation_pipeline/frames_render.py; matches sglang workspace pin
+    "imageio-ffmpeg>=0.5.1",       # ffmpeg binary lookup: pipeline/lib/config.py
+    "openai>=2.26.0",              # VLM labeler (Azure/OpenAI-compatible) + local Qwen: pipeline/annotation/lib/labeler.py
+    "PyYAML>=6.0",                 # prompts.yaml loaders: pipeline/annotation/lib/prompts.py
+    "opencv-python-headless>=4.10.0.84",  # video probing / frame decode: pipeline/stage_00_clip_manifest.py + pipeline/lib; matches sglang workspace pin
 ]
 
 [build-system]
@@ -41,18 +39,11 @@ build-backend = "setuptools.build_meta"
 # `goal_timeline_viewer/` moved to ../tooling/ WITHOUT affecting this list — it
 # has no __init__.py, so it was never a subpackage and was never installed.
 #
-# `annotation_pipeline` is the SUPERSEDED generation and is on notice. Nothing
-# outside it imports it any more: the three modules that were duplicates of, or
-# ported to, `pipeline/` are now thin aliases over the single implementation
-#   annotation_pipeline.build_manifest                -> pipeline.stage_00_clip_manifest
-#   annotation_pipeline.stage_00_realign              -> pipeline.stage_02_realign
-#   annotation_pipeline.stage_04_build_canonical_sft  -> pipeline.stage_04_build_canonical_sft
-# and exist only so recorded labctl `submit.sh` scripts and the in-package
-# `build_sft.py` driver keep resolving. It stays in `packages` (a) because it is
-# still on disk and importable by design, and (b) because configs/stage_[a-d]_v1_*
-# assert `annotation_pipeline/` exists as their "this is a data_pipeline root"
-# sentinel — retarget that sentinel before dropping this entry.
-packages = ["annotation_pipeline", "configs"]
+# `configs` is all that is left to package: the annotation_pipeline generation
+# was deleted 2026-08-06 and the stage_[a-d] configs that used its directory as
+# a repo-root sentinel went with it. chain_annotate.py and chain_train.py assert
+# a root `pipeline/` instead, which is where the stages actually live.
+packages = ["configs"]
 py-modules = []
 
 [tool.ruff]
@@ -87,7 +78,6 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = [
     "configs",
-    "annotation_pipeline",
-    # repo-root packages reached via sys.path (see conftest.py / stage entrypoints)
+    # repo-root package reached via sys.path (see conftest.py / stage entrypoints)
     "pipeline",
 ]

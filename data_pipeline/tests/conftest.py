@@ -1,9 +1,9 @@
 """Make both source roots importable for the tests.
 
-``pipeline`` now lives at the REPO ROOT (moved out of ``data_pipeline`` in the
-data-layer restructure); ``annotation_pipeline`` and ``configs`` still live under
-``data_pipeline``. Neither is an installed package (the stage scripts sys.path-hack
-their own root when run directly), so both roots go on ``sys.path``.
+``pipeline`` lives at the REPO ROOT (moved out of ``data_pipeline`` in the
+data-layer restructure); ``configs`` still lives under ``data_pipeline``.
+Neither is an installed package (the stage scripts sys.path-hack their own root
+when run directly), so both roots go on ``sys.path``.
 """
 
 import sys
