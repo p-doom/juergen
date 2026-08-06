@@ -1,65 +1,85 @@
 # crowdcast-data-pipeline
 
-SFT data pipeline for crowd-cast: turns raw S3-synced screen recordings + keylogs into omegalax-ingestable Grain ArrayRecord shards.
+pmanager/labctl launch configs and tests for the crowd-cast SFT data pipeline.
 
-Consumed by [`pmanager`][pmanager]/[`labctl`][labctl] recipes that inject params via `absl` flags and poll `<output_dir>/manifest.json` for stage completion.
+**The stages themselves live at the repo root, in [`pipeline/`](../pipeline).**
+This directory holds only the two chain configs that schedule them and the test
+suite that covers them; it exists as a separate uv project because those tests
+need `opencv-python-headless`, which the training venv deliberately does not
+carry.
+
+Consumed by [`pmanager`][pmanager]/[`labctl`][labctl] recipes that inject params
+as `--flag=value` args and poll `<output_dir>/manifest.json` for stage
+completion.
 
 [pmanager]: https://github.com/anthropics/pmanager
 [labctl]: https://github.com/anthropics/labctl
 
 ## Layout
 
-### Crowd-cast 4-stage chain (`stage_*`)
+### Chains (`configs/`)
 
-| Stage | Script | Role |
-| --- | --- | --- |
-| A | `stage_a_prepare.py` | S3 sync → per-segment JPEG frames at target fps/height + per-frame action strings + per-split `chat.jsonl`. Pass `--image_store_format=arrayrecord` to store each segment's JPEGs as records in `images.array_record` and emit `ar:///...#idx` image refs instead of `frames/frame_*.jpg` files. |
-| B | `stage_b_run_length_cap.py` | Cap NO_OP runs (`k = round(k_seconds · target_fps)`). Rewrites `chat_line.json` only — frames are referenced in place. |
-| C | `stage_c_grain_payload.py` | Compile per-split `chat.jsonl` → Grain ArrayRecord shards. Wraps `omegalax/scripts/compile_sft_dataset.py` (one subprocess per split, in omegalax's uv venv). |
-| D | `stage_d_chunk_index.py` | Build the offline chunk index from the Grain payload. Wraps `omegalax/scripts/build_sft_chunk_index.py`. |
-
-Chain configs in `configs/chain_v1.py` (full) and `configs/chain_smoke.py` (10 segments — end-to-end pmanager validation without burning ~17 h of cluster time).
-
-### Misc
-
-| Script | Role |
+| Config | Stages |
 | --- | --- |
-| `_manifest.py` | `write_manifest()` — shared helper for the `<output_dir>/manifest.json` completion marker that pmanager polls for. |
+| `chain_annotate.py` | `pipeline/stage_03_filter.py` → `pipeline/annotation/stage_annotate.py` (goal annotation at K fps) |
+| `chain_train.py` | `pipeline/stage_03_filter.py` → `pipeline/stage_04_build_conversations.py` → `pipeline/stage_05_measure_lengths.py` → `pipeline/stage_06_training_records.py` |
 
-> Dataset browsing (contributor index, day-grouped segments, timeline heatmap, frame-by-frame viewer) lives in the labctl UI's artifact panel — open any `dataset` artifact and use the **Browse** section.
+Each stage is nested as its parent's `on_complete` child, so launching the head
+runs the whole chain. `chain_train` imports `stage_03_filter` from
+`chain_annotate`, which makes that one function the single place a dataset
+family is named (`MASTER_DIR` / `CLIPS_MANIFEST`).
+
+Both configs derive `PROJECT_REPO` from their own location (override with
+`JUERGEN_REPO`) and assert a root `pipeline/` directory exists, so a
+pre-rearchitecture checkout fails at config-build time rather than after the job
+is already scheduled.
+
+### Tests (`tests/`)
+
+Cover `pipeline.*` — the action formatter, filter, views, dead zones, goal
+projection, annotation-method registry, and the stage-04 conversation builder.
+
+> Dataset browsing (contributor index, day-grouped segments, timeline heatmap,
+> frame-by-frame viewer) lives in the labctl UI's artifact panel — open any
+> `dataset` artifact and use the **Browse** section.
 
 ## Setup
 
 ```bash
-uv sync  # creates .venv with msgpack, Pillow, opencv, ...
+uv sync  # creates .venv with msgpack, Pillow, opencv, array-record, ...
 ```
 
-Scripts that run in *other* venvs (see `pyproject.toml` notes):
-
-| Script(s) | Venv |
-| --- | --- |
-| `stage_c_*`, `stage_d_*` | omegalax — `uv run --project <omegalax_repo>` |
+`pipeline/stage_05_measure_lengths.py` and `stage_06_training_records.py`
+subprocess-wrap omegalax scripts, which run in omegalax's own venv via
+`uv run --project <omegalax_repo>`.
 
 ## Running
 
-### The chain (via pmanager)
-
 ```bash
-pmanager launch /fast/home/franz.srambical/data_pipeline/configs/chain_smoke.py   # 10-segment smoke
-pmanager launch /fast/home/franz.srambical/data_pipeline/configs/chain_v1.py      # full
+pmanager launch <checkout>/data_pipeline/configs/chain_annotate.py
+pmanager launch <checkout>/data_pipeline/configs/chain_train.py
 ```
 
-Each stage's `cfg.children` triggers the next on `on_complete`. To launch a single stage standalone, point pmanager at e.g. `configs/stage_a_v1_5fps_360p.py`.
+Both are STUBs: the dataset paths at the top of each file name one specific
+generation and are asserted to exist at `get_config()`. Point them at your own
+family before launching.
 
 ## Output contract
 
-Every stage entrypoint writes `<output_dir>/manifest.json` before exiting (per `pipeline_task()` in `pmanager.configs.schema`). pmanager polls for this file to mark the dataset complete and register it. Schema is owned by `_manifest.write_manifest()` and captures: stage name, every flag the entrypoint received, input fingerprints (paths + key file hashes), and output statistics.
+Every stage entrypoint writes `<output_dir>/manifest.json` before exiting (per
+`pipeline_task()` in `pmanager.configs.schema`). pmanager polls for this file to
+mark the dataset complete and register it. The schema captures the stage name,
+every flag the entrypoint received, input fingerprints (paths + key file
+hashes), and output statistics.
 
 ## Development
 
 ```bash
 uvx ruff check .       # lint
 uvx ruff format .      # format
+uv run pytest tests    # 89 tests
 ```
 
-`pyproject.toml` carries the strict rule set (pycodestyle, pyflakes, isort, bugbear, pyupgrade, simplify, ruff, pylint, tidy-imports, use-pathlib, return, comprehensions, pep8-naming).
+`pyproject.toml` carries the strict rule set (pycodestyle, pyflakes, isort,
+bugbear, pyupgrade, simplify, ruff, pylint, tidy-imports, use-pathlib, return,
+comprehensions, pep8-naming).

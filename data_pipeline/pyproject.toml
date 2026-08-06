@@ -13,8 +13,8 @@ requires-python = ">=3.11"
 #
 # Several scripts in this repo deliberately run inside OTHER venvs and
 # therefore do NOT contribute to this dep set:
-#   * stage_c_grain_payload.py / stage_d_chunk_index.py — subprocess-wrap
-#     omegalax scripts via ``uv run --project <omegalax_repo>``.
+#   * pipeline/stage_05_measure_lengths.py / stage_06_training_records.py —
+#     subprocess-wrap omegalax scripts via ``uv run --project <omegalax_repo>``.
 dependencies = [
     "absl-py>=2.0",                # flag-based entrypoints across every stage_*.py / prep_*.py
     "msgpack>=1.0",                # stage A: parse per-recording keylog msgpacks
@@ -86,13 +86,8 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = [
-    "_manifest",
     "configs",
     "annotation_pipeline",
     # repo-root packages reached via sys.path (see conftest.py / stage entrypoints)
     "pipeline",
-    "stage_a_prepare",
-    "stage_b_run_length_cap",
-    "stage_c_grain_payload",
-    "stage_d_chunk_index",
 ]

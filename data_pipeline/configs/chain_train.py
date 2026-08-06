@@ -1,8 +1,8 @@
 """Realigned-pipeline training chain STUB: 03 filter -> 04 conversations @x fps
 -> 05 measure -> 06 records.
 
-Follows the chain_v1 pattern (each stage nested as its parent's on_complete
-child). The filter is shared with chain_annotate (same master + realigned
+Each stage is nested as its parent's on_complete child. The filter is shared
+with chain_annotate (same master + realigned
 manifest family); the training fps X is independent of the annotation fps.
 Goal-conditioned training: point ``GOALS_DIR`` at a finished chain_annotate
 artifact (leave None for the goal-free path).
@@ -31,11 +31,9 @@ from pmanager.configs.schema import pipeline_task
 def _resolve_project_repo() -> str:
     """Repo root whose tree pmanager stages for the job.
 
-    Every config in this package derives the same thing -- the juergen checkout,
-    from this file's location or from ``JUERGEN_REPO`` -- and then names the
-    subtree it stages. This one stages the checkout itself, because its
-    entrypoints are ``pipeline/...``; the stage_[a-d] configs stage
-    ``data_pipeline/``.
+    Both configs in this package derive the same thing -- the juergen checkout,
+    from this file's location or from ``JUERGEN_REPO`` -- and stage the checkout
+    itself, because their entrypoints are ``pipeline/...``.
 
     The hardcoded absolute path this replaces kept resolving to a checkout that
     still carried the pre-rearchitecture ``data_pipeline/realigned_pipeline/``
