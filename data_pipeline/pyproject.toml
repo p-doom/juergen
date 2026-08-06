@@ -36,8 +36,13 @@ build-backend = "setuptools.build_meta"
 # Not a published package — pyproject anchors a uv venv at this directory.
 # `pipeline/`, `tooling/` and `datasets/` live at the REPO ROOT and are
 # deliberately NOT packaged (sys.path-hacked entrypoints, as before);
-# `goal_timeline_viewer/` moved to ../tooling/ WITHOUT affecting this list — it
-# has no __init__.py, so it was never a subpackage and was never installed.
+# `goal_timeline_viewer/` (manual-annotation tooling, never ground truth) has
+# since moved out of this repo entirely, to the slurm repo
+# (dev/franz/berlin/crowd-cast-bc/goal_timeline_viewer/) — same for
+# `visualize_run.py` and `tooling/labctl/recipes/` (dispatch, not code; see
+# dev/franz/berlin/crowd-cast-bc/labctl/recipes/eval/). None had an
+# __init__.py, so none were ever subpackages and this list needed no change
+# for any of these moves.
 #
 # `configs` is all that is left to package: the annotation_pipeline generation
 # was deleted 2026-08-06 and the stage_[a-d] configs that used its directory as
