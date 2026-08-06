@@ -156,7 +156,7 @@ def test_native_absolute_renders_type_and_submit() -> None:
     codec.parse(submit)
 
 
-def test_the_new_fourth_renderer_emits_bare_line_ABSOLUTE_coordinates() -> None:
+def test_the_native_absolute_renderer_emits_bare_line_ABSOLUTE_coordinates() -> None:
     """★ `native_absolute_control` — the new renderer. No cursor read at all."""
     codec = load_codec("native_absolute_control")
     task = _task("open_chrome")

@@ -82,25 +82,6 @@ def preparer():
         PREPARERS.pop("harness_test", None)
 
 
-class _Pool:
-    """Module-level so `pool_target` can import it by `module:attribute`."""
-
-    session: FakeSession | None = None
-
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-        self.closed = 0
-
-    def start(self):
-        return None
-
-    def checkout(self):
-        return _Pool.session or FakeSession()
-
-    def close(self):
-        self.closed += 1
-
-
 def _config(tmp_path: Path, **kwargs) -> DesktopHarnessConfig:
     base = dict(
         id="test_harness",

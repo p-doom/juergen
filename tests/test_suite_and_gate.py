@@ -148,13 +148,10 @@ def _cell_data():
     )
 
 
-def test_14f_INDICATOR_D_NO_LONGER_FIRES_ON_THE_GOLD_PLAN() -> None:
-    """★ The fix, asserted directly.
-
-    The same Return that the cell's instruction demands, that its fixture requires,
+def test_indicator_D_does_not_fire_on_the_gold_plan() -> None:
+    """The Return that the cell's instruction demands, that its fixture requires,
     that its oracle scores as the only pass, and that its own oracle control arm
-    emits, is no longer counted as over-generalisation. Before the fix this asserted
-    `== 1.0`.
+    emits, must not be counted as over-generalisation.
     """
     task_data = _cell_data()
     steps = []
@@ -424,12 +421,6 @@ def test_the_suite_json_copy_is_byte_identical_to_its_source() -> None:
 def test_the_loader_refuses_drift() -> None:
     raw = json.loads(SUITE_PATH.read_text())
     assert {t["kind"] for t in raw["tasks"]} == ALLOWED_KINDS
-
-    def written(mutate) -> Path:
-        value = json.loads(SUITE_PATH.read_text())
-        mutate(value)
-        path = Path(pytest.__file__).parent  # placeholder, replaced below
-        return value
 
     import tempfile
 

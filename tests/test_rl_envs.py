@@ -439,7 +439,7 @@ def test_every_regime_start_is_on_screen() -> None:
                 assert 0 <= start[0] < 1920 and 0 <= start[1] < 1080, (regime, box, start)
 
 
-def test_the_far_regime_can_no_longer_start_INSIDE_the_box() -> None:
+def test_the_far_regime_starts_OUTSIDE_the_box() -> None:
     """★ FIXED — was the inverse of this test (`evals/tasks.py`, the `far` branch).
 
     `near` and `medium` always retried over eight deterministic angles until the

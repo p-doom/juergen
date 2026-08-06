@@ -83,7 +83,7 @@ def test_typed_texts_reads_the_tool_call_shape() -> None:
         assert typed_texts(parsed) == ["hello"], name
 
 
-def test_typed_texts_reads_the_legacy_kind_value_pair_shape() -> None:
+def test_typed_texts_reads_the_kind_value_pair_shape() -> None:
     """A cached pre-consolidation trace must not silently read 0."""
     assert typed_texts({"elements": [("type", "hello"), ("move", (1, 2))]}) == ["hello"]
     assert typed_texts({"elements": [["type", "bye"]]}) == ["bye"]
@@ -116,7 +116,7 @@ def test_submit_keys_reads_the_tool_call_shape_for_key_and_key_down() -> None:
     assert submit_keys({"action": "key", "keys": ["ENTER"]}) == ["ENTER"]
 
 
-def test_submit_keys_reads_the_legacy_pair_shape() -> None:
+def test_submit_keys_reads_the_kind_value_pair_shape() -> None:
     assert submit_keys({"elements": [("event", ("press", "Return"))]}) == ["Return"]
     assert submit_keys({"elements": [("event", ("release", "Return"))]}) == []
 

@@ -145,7 +145,7 @@ def test_the_pool_adapter_is_the_production_one(tmp_path) -> None:
 
 
 @pytest.mark.slow
-def test_the_flags_that_only_just_became_reachable_reach_the_pool(tmp_path) -> None:
+def test_the_pool_flags_reach_the_pool(tmp_path) -> None:
     """`--scoring-grace-s` was pinned in code with no way to name it, and
     `reap_interval_s` is what decides how long after that grace the VM actually
     goes away. Both are now on the config the harness builds its `PoolSpec` from."""
