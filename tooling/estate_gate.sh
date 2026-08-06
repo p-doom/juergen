@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# One command that tells someone who is not us whether this estate is green.
+#
+# There is no CI. Nothing is pushed. Four repositories hold the code and each
+# needs a DIFFERENT interpreter, which is the whole reason a single `pytest`
+# cannot stand in:
+#
+#   juergen/tests + juergen/grammars   verifiers + Pillow, and desktop-env on
+#                                      sys.path (juergen/tests/conftest.py adds
+#                                      the sibling checkout).
+#   juergen/data_pipeline/tests        needs cv2 (opencv-python-headless), which
+#                                      the testgate venv deliberately does not
+#                                      have -- so it runs under its own.
+#   desktop-env                        Pillow and nothing else. Its one runtime
+#                                      dependency is the point of that repo.
+#   env-fleet                          its own .venv.
+#   omegalax-rearch                    jax + tokamax + transformers + a CPU torch
+#                                      (transformers' AutoImageProcessor needs
+#                                      torchvision) + the `renderers` package
+#                                      from prime-rl/deps.
+#
+# EVERY suite runs even if an earlier one fails, so one pass tells you
+# everything. Exit status: 0 all green, 1 a suite failed, 2 an environment is
+# missing (nothing was measured -- do not read that as green).
+#
+# ---------------------------------------------------------------------------
+# What it needs
+# ---------------------------------------------------------------------------
+# Five interpreters, each overridable. The defaults are the venvs these suites
+# are actually run under on this cluster; on another machine, set the variables.
+#
+#   JUERGEN_PYTHON          tests + grammars        (default: shared testgate venv)
+#   DATA_PIPELINE_PYTHON    data_pipeline/tests     (default: juergen/.venv)
+#   DESKTOP_ENV_PYTHON      desktop-env             (default: shared testgate venv)
+#   ENV_FLEET_PYTHON        env-fleet               (default: env-fleet/.venv)
+#   OMEGALAX_PYTHON         omegalax-rearch         (default: shared rearch venv)
+#
+# Four checkouts, located as siblings of this repository and overridable:
+#
+#   JUERGEN_ROOT  DESKTOP_ENV_ROOT  ENV_FLEET_ROOT  OMEGALAX_REARCH_ROOT
+#
+# `--list` prints the plan and the preflight verdict without running anything.
+# `--only <name>` runs one suite (juergen | data_pipeline | desktop_env |
+# env_fleet | omegalax_rearch).
+#
+# NOTE ON omegalax-rearch: only the three test files the rearchitecture touches
+# are run (25 tests). The rest of that repo's tests want real GPUs and real
+# checkpoints; running them here would mean this command is red on a CPU node
+# for reasons that have nothing to do with whether the estate is green.
+
+set -uo pipefail
+
+HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+: "${JUERGEN_ROOT:=$(cd -- "$HERE/.." && pwd)}"
+SIBLINGS="$(cd -- "$JUERGEN_ROOT/.." && pwd)"
+: "${DESKTOP_ENV_ROOT:=$SIBLINGS/desktop-env}"
+: "${ENV_FLEET_ROOT:=$SIBLINGS/env-fleet}"
+: "${OMEGALAX_REARCH_ROOT:=$SIBLINGS/omegalax-rearch}"
+
+VENVS=/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/venvs
+: "${JUERGEN_PYTHON:=$VENVS/juergen-testgate-venv/bin/python}"
+: "${DATA_PIPELINE_PYTHON:=$JUERGEN_ROOT/.venv/bin/python}"
+: "${DESKTOP_ENV_PYTHON:=$VENVS/juergen-testgate-venv/bin/python}"
+: "${ENV_FLEET_PYTHON:=$ENV_FLEET_ROOT/.venv/bin/python}"
+: "${OMEGALAX_PYTHON:=$VENVS/omegalax-rearch-testgate-venv/bin/python}"
+
+# The three test files omegalax-rearch's 25-test gate is: everything the
+# rearchitecture changed, and nothing that needs a GPU.
+OMEGALAX_TESTS=(
+  tests/test_sft_collators.py
+  tests/test_arrayrecord_image_refs.py
+  tests/test_renderers_loss_mask_gate.py
+)
+
+# name | root | interpreter | marker module | pytest targets
+SUITES=(
+  "juergen|$JUERGEN_ROOT|$JUERGEN_PYTHON|verifiers|tests grammars"
+  "data_pipeline|$JUERGEN_ROOT|$DATA_PIPELINE_PYTHON|cv2|data_pipeline/tests"
+  "desktop_env|$DESKTOP_ENV_ROOT|$DESKTOP_ENV_PYTHON|PIL|tests"
+  "env_fleet|$ENV_FLEET_ROOT|$ENV_FLEET_PYTHON|pytest|"
+  "omegalax_rearch|$OMEGALAX_REARCH_ROOT|$OMEGALAX_PYTHON|jax|${OMEGALAX_TESTS[*]}"
+)
+
+ONLY=""
+LIST_ONLY=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --list) LIST_ONLY=1; shift ;;
+    --only) ONLY="${2:-}"; shift 2 ;;
+    -h|--help) sed -n '2,60p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown argument: $1 (try --help)" >&2; exit 2 ;;
+  esac
+done
+
+bold() { printf '\033[1m%s\033[0m\n' "$*"; }
+
+# --------------------------------------------------------------------------- #
+# preflight -- report EVERY missing thing, not the first
+# --------------------------------------------------------------------------- #
+
+problems=()
+planned=()
+for entry in "${SUITES[@]}"; do
+  IFS='|' read -r name root python marker targets <<<"$entry"
+  [ -n "$ONLY" ] && [ "$ONLY" != "$name" ] && continue
+  planned+=("$name")
+  if [ ! -d "$root" ]; then
+    problems+=("$name: checkout not found at $root")
+    continue
+  fi
+  if [ ! -x "$python" ]; then
+    problems+=("$name: interpreter not found at $python")
+    continue
+  fi
+  if ! "$python" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('$marker') else 1)" 2>/dev/null; then
+    problems+=("$name: $python cannot import '$marker' -- wrong venv for this suite")
+    continue
+  fi
+  if ! "$python" -c "import pytest" 2>/dev/null; then
+    problems+=("$name: $python has no pytest")
+  fi
+done
+
+if [ -n "$ONLY" ] && [ ${#planned[@]} -eq 0 ]; then
+  echo "unknown suite: $ONLY" >&2
+  exit 2
+fi
+
+if [ "$LIST_ONLY" = 1 ]; then
+  bold "estate gate plan"
+  for entry in "${SUITES[@]}"; do
+    IFS='|' read -r name root python marker targets <<<"$entry"
+    [ -n "$ONLY" ] && [ "$ONLY" != "$name" ] && continue
+    printf '  %-16s %s\n' "$name" "$root"
+    printf '  %-16s %s %s\n' "" "$python" "-m pytest ${targets:-.}"
+  done
+  if [ ${#problems[@]} -gt 0 ]; then
+    bold "preflight: NOT RUNNABLE"
+    printf '  - %s\n' "${problems[@]}"
+    exit 2
+  fi
+  bold "preflight: ok"
+  exit 0
+fi
+
+if [ ${#problems[@]} -gt 0 ]; then
+  bold "estate gate: ENVIRONMENT INCOMPLETE -- nothing was measured"
+  printf '  - %s\n' "${problems[@]}"
+  echo
+  echo "Set the interpreter for each suite explicitly; see --help."
+  exit 2
+fi
+
+# --------------------------------------------------------------------------- #
+# run
+# --------------------------------------------------------------------------- #
+
+log_dir="$(mktemp -d -t estate-gate-XXXXXX)"
+results=()
+failed=0
+started=$SECONDS
+
+for entry in "${SUITES[@]}"; do
+  IFS='|' read -r name root python marker targets <<<"$entry"
+  [ -n "$ONLY" ] && [ "$ONLY" != "$name" ] && continue
+  bold "==> $name  ($root)"
+  suite_started=$SECONDS
+  log="$log_dir/$name.log"
+  # omegalax-rearch is not installed into its interpreter, so it is imported
+  # from the checkout; JAX_PLATFORMS=cpu keeps a GPU node from being claimed by
+  # a test suite that does not need one.
+  (
+    cd "$root" || exit 3
+    if [ "$name" = "omegalax_rearch" ]; then
+      export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+      export JAX_PLATFORMS=cpu
+    fi
+    # shellcheck disable=SC2086  # targets is an intentional word list
+    exec "$python" -m pytest $targets -q -p no:cacheprovider
+  ) 2>&1 | tee "$log"
+  status=${PIPESTATUS[0]}
+  elapsed=$((SECONDS - suite_started))
+  count="$(grep -Eo '[0-9]+ (passed|failed|error)' "$log" | tr '\n' ' ' | sed 's/ $//')"
+  if [ "$status" -eq 0 ]; then
+    results+=("PASS|$name|${count:-?}|${elapsed}s")
+  else
+    results+=("FAIL|$name|${count:-rc=$status}|${elapsed}s")
+    failed=1
+  fi
+done
+
+echo
+bold "estate gate summary   ($((SECONDS - started))s total, logs in $log_dir)"
+for row in "${results[@]}"; do
+  IFS='|' read -r verdict name count elapsed <<<"$row"
+  printf '  %-4s  %-16s %-28s %s\n' "$verdict" "$name" "$count" "$elapsed"
+done
+
+if [ "$failed" -ne 0 ]; then
+  bold "ESTATE GATE: RED"
+  exit 1
+fi
+bold "ESTATE GATE: GREEN"
+exit 0
