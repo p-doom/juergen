@@ -4,6 +4,9 @@ These knobs decide which frames survive, and they are read from two places: the 
 builds them from `argparse`, and the pool worker reads them off its task dict. Two
 assemblies is what let the two disagree, so `filter_params` is the only one — it
 normalises and validates, and neither caller may supply a default of its own.
+
+The worker's read goes through `filter_params_from_task`, which only checks that the
+task dict carries the whole set before handing it over. It resolves nothing.
 """
 
 from __future__ import annotations
@@ -14,7 +17,12 @@ from pathlib import Path
 import pytest
 
 from pipeline.lib import config
-from pipeline.stage_03_filter import FILTER_PARAM_KEYS, filter_params, parse_args
+from pipeline.stage_03_filter import (
+    FILTER_PARAM_KEYS,
+    filter_params,
+    filter_params_from_task,
+    parse_args,
+)
 
 
 def _args(*extra: str):
@@ -40,7 +48,8 @@ def _from_cli(*extra: str) -> dict:
 
 
 def _from_task(task: dict) -> dict:
-    return filter_params(**{key: task[key] for key in FILTER_PARAM_KEYS})
+    """The worker's own reader, so these exercise the path a pool takes."""
+    return filter_params_from_task(task)
 
 
 def test_filter_params_declares_no_default_of_its_own() -> None:
@@ -57,12 +66,22 @@ def test_filter_params_declares_no_default_of_its_own() -> None:
 
 
 def test_a_task_dict_missing_a_knob_fails_loudly() -> None:
-    """Silently substituting anything here changes which frames survive."""
+    """Silently substituting anything here changes which frames survive.
+
+    And the failure has to name the contract, not just whichever key the reader
+    reached first: this aborts a pool, so the message is what the operator gets.
+    """
     task = dict.fromkeys(FILTER_PARAM_KEYS, 0)
     task["idle_activity"] = "raw"
-    del task["idle_activity"]
-    with pytest.raises(KeyError):
+    del task["idle_judgment_bin_s"]
+    del task["idle_keep_tail_s"]
+    with pytest.raises(KeyError) as raised:
         _from_task(task)
+    message = str(raised.value)
+    assert "idle_judgment_bin_s" in message, "the message names only some of the missing knobs"
+    assert "idle_keep_tail_s" in message, "the message names only some of the missing knobs"
+    for key in FILTER_PARAM_KEYS:
+        assert key in message, f"the message does not state that {key} is required"
 
 
 def test_both_entry_points_resolve_the_same_parameters() -> None:

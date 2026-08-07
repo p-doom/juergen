@@ -264,6 +264,12 @@ class FilterSegmentTest(unittest.TestCase):
             "idle_min_duration_s": 3.0,
             "idle_keep_head_s": 1.0,
             "idle_keep_tail_s": 1.0,
+            # All of FILTER_PARAM_KEYS, spelled out: defaults are applied once,
+            # in the CLI, so a task dict that omits a knob is refused rather
+            # than guessed at. Raw per-master-tick judgment (no binning) is the
+            # mode the assertions below are written against.
+            "idle_judgment_bin_s": None,
+            "idle_activity": "raw",
             "qc_view_fps": None,
             "qc_dir": None,
             "force": False,

@@ -274,6 +274,25 @@ FILTER_PARAM_KEYS = (
 )
 
 
+def filter_params_from_task(task: dict[str, Any]) -> dict[str, Any]:
+    """The one reader of ``FILTER_PARAM_KEYS`` out of a pool task dict.
+
+    A task dict must carry all eight knobs; defaults are applied once, in the
+    CLI, so there is nothing to fall back to here. Reading them with a bare
+    comprehension reported ``KeyError: '<whichever key came first>'``, which
+    names one key but not the contract it belongs to nor the rest of what is
+    missing — so the check is explicit and states both.
+    """
+    missing = [key for key in FILTER_PARAM_KEYS if key not in task]
+    if missing:
+        raise KeyError(
+            "filter task dict is missing judgment knob(s): "
+            f"{', '.join(missing)}; all of {', '.join(FILTER_PARAM_KEYS)} are required "
+            "(defaults are applied once, in the CLI, so none can be inferred here)"
+        )
+    return filter_params(**{key: task[key] for key in FILTER_PARAM_KEYS})
+
+
 def _write_qc_view(qc_dir: Path, filter_seg: dict[str, Any], qc_fps: float) -> int:
     """Diagnostic sampled view with derived canonical actions (realignment
     eyeballing only; nothing downstream reads it)."""
@@ -306,12 +325,22 @@ def _write_qc_view(qc_dir: Path, filter_seg: dict[str, Any], qc_fps: float) -> i
 
 def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
     """Worker: judge one segment's mask and write ``filter/<seg>.json``.
-    Picklable; no shared state; failures are captured, never raised, so one
-    bad segment cannot abort the pool."""
+
+    Picklable; no shared state. Per-SEGMENT failures are captured and returned
+    as a ``failed`` status, so one bad segment cannot abort the pool.
+
+    The judgment knobs are read FIRST, outside that capture, and a task dict
+    missing one raises. That is deliberate: every task in a pool is built from
+    one ``argparse`` namespace by one ``main()``, so a missing knob is a wiring
+    bug affecting all of them equally, not this segment's data. Capturing it
+    would turn one bug into N identical ``failed`` rows and a run that exits 0
+    having judged nothing. Same reasoning put the ``rounded``-needs-a-bin check
+    in ``filter_params`` rather than in here.
+    """
     mrow = task["manifest_row"]
     master_row = task["master_row"]
     seg = str(mrow["segment_id"])
-    params = filter_params(**{k: task[k] for k in FILTER_PARAM_KEYS})
+    params = filter_params_from_task(task)
     out_path = Path(task["filter_dir"]) / f"{seg}.json"
 
     base = {
