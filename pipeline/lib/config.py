@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 
-# --- Stage 01: sampling -----------------------------------------------------
+# Stage 01: sampling.
 # Base rate (frames + keylog action bins). At 0.5 fps we send the VLM one frame
 # every 2 s; each kept frame's action bin aggregates ~2 s of input. Idle is
 # thinned by the NO_OP head/tail keep below.
@@ -21,7 +21,7 @@ DEFAULT_TARGET_HEIGHT = 720          # training frame height (stage 01)
 # annotation.
 DEFAULT_JPEG_QUALITY = 80
 # In each maximal run of consecutive NO_OP frames keep the first HEAD and the
-# last TAIL, drop the middle — so a wait's start AND end (e.g. an agent
+# last TAIL, drop the middle — so a wait's start and end (e.g. an agent
 # finishing) stay visible without the whole idle stretch. Set both to 0 (via the
 # run-time override) to drop NO_OPs entirely.
 DEFAULT_NOOP_KEEP_HEAD = 1
@@ -33,14 +33,14 @@ DEFAULT_NOOP_KEEP_TAIL = 1
 # Unset (None) falls back to DEFAULT_NOOP_KEEP_HEAD/TAIL (legacy interface).
 NOOP_MODES = ("none", "ends", "all")
 
-# --- Stage 03: idle filtering (duration-based, master-fps-agnostic) ----------
-# The filter judges idleness in SECONDS so a 4 fps and a 15 fps master behave
+# Stage 03: idle filtering (duration-based, master-fps-agnostic).
+# The filter judges idleness in seconds so a 4 fps and a 15 fps master behave
 # identically: the interior of any inactive run longer than MIN_DURATION_S is
-# dropped, keeping KEEP_HEAD_S / KEEP_TAIL_S at each end (a wait's start AND
+# dropped, keeping KEEP_HEAD_S / KEEP_TAIL_S at each end (a wait's start and
 # end stay visible).
 #
 # Idleness is judged with the "rounded" predicate by default: a judgment bin is
-# active iff its FORMATTED action is non-NO_OP (deltas round to nonzero, or the
+# active iff its formatted action is non-NO_OP (deltas round to nonzero, or the
 # bin carries deduped key events), per 2 s judgment bin (= 1/DEFAULT_TARGET_FPS),
 # runs > 4 s (> 2 bins) thinned, 2 s (1 bin) kept at each end. Rounding is what
 # makes it fps-dependent: sub-round drift seconds read as idle and are dropped.
@@ -54,9 +54,9 @@ IDLE_ACTIVITIES = ("raw", "rounded")
 DEFAULT_IDLE_ACTIVITY = "rounded"  # "raw" = fps-agnostic
 assert DEFAULT_IDLE_ACTIVITY in IDLE_ACTIVITIES
 
-# --- Black-frame filtering --------------------------------------------------
-# Detection (per-frame luma metrics) is computed ONCE in stage 01a and written to
-# the frame manifest; the DROP decision runs in the sampler (01b), so these
+# Black-frame filtering.
+# Detection (per-frame luma metrics) is computed once in stage 01a and written to
+# the frame manifest; the drop decision runs in the sampler (01b), so these
 # thresholds are tunable without re-decoding. A frame is dropped if its mean luma
 # is at/below LUMA_MAX *or* the near-black pixel fraction is at/above DARK_FRAC_MIN.
 DEFAULT_DROP_BLACK_FRAMES = True
@@ -64,7 +64,7 @@ DEFAULT_BLACK_LUMA_MAX = 6.0         # mean luma (0-255) at/below this -> black
 DEFAULT_BLACK_DARK_FRAC_MIN = 0.999  # fraction of pixels below BLACK_DARK_CUTOFF
 BLACK_DARK_CUTOFF = 16               # a pixel is "near-black" if its luma < this
 
-# --- Stage 02: VLM annotation ----------------------------------------------
+# Stage 02: VLM annotation.
 # Frames fed to the labeler come straight from the stage-01 array_record (no
 # re-render). At 720p a wide ~150-frame clip can overflow the model's 262K
 # context (input + LABELER_MAX_TOKENS completion) — that one clip fails and is
@@ -74,7 +74,7 @@ BLACK_DARK_CUTOFF = 16               # a pixel is "near-black" if its luma < thi
 DEFAULT_VLM_FRAME_HEIGHT = 720       # height fed to the labeler (<= stored height)
 DEFAULT_NAME_IMAGE_MAX = 24          # frames per label / verify request
 
-# --- Stage 04/05: token accounting -----------------------------------------
+# Stage 04/05: token accounting.
 DEFAULT_TRAINEE_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
 DEFAULT_TOKEN_OVERHEAD = 180
 BUCKET_LIMITS = {

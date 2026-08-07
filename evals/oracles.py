@@ -1,31 +1,28 @@
 """State oracles as rewards that read real VM state.
 
-The objection this module answers — *"verifiers rewards can only see the message
-trace, so a state oracle cannot live there"* — is false.
 `Task.score(self, trace, runtime)` (`v1/task.py:269-313`) builds
 `available = {"task": self.data, "trace": trace, "runtime": runtime}` and
-`decorators.invoke` (`v1/decorators.py:28-30`) passes only the keys whose *names*
-appear in the callee's signature. So a reward asks for what it needs by declaring
-a parameter, and `_requires_runtime` (`task.py:70-73`) partitions the signals:
+`decorators.invoke` (`v1/decorators.py:28-30`) passes only the keys whose names
+appear in the callee's signature, so a reward asks for what it needs by declaring
+a parameter. `_requires_runtime` (`task.py:70-73`) partitions the signals:
 
     runtime declared without a default  ->  runtime-dependent, skipped offline
     runtime absent (or defaulted)       ->  trace-only, always scored
 
-Note there is no `@vf.reward(runtime=...)` kwarg; the decorator takes `weight` and
+There is no `@vf.reward(runtime=...)` kwarg; the decorator takes `weight` and
 `priority` only. Runtime is requested by parameter name.
 
-So `_state_check(task, transport)` becomes `postcondition(self, trace, runtime)`
-and keeps reading the guest. Two probe sources, both real:
+Two probe sources, both real:
 
-  * **live** — the rollout's desktop lease is still open (the harness extends it
-    past `launch` by `scoring_grace_s` exactly for this), so the oracle re-reads
-    the guest at scoring time;
-  * **recorded** — the grace window closed, so the oracle uses the final probe the
+  * live — the rollout's desktop lease is still open (the harness extends it past
+    `launch` by `scoring_grace_s` for this), so the oracle re-reads the guest at
+    scoring time;
+  * recorded — the grace window closed, so the oracle uses the final probe the
     harness took inside the episode, which is the same read-only extraction one
     settle-interval earlier.
 
-Which one was used is recorded as a metric, because a run whose oracles all fell
-back to `recorded` is a run whose grace window is mistuned.
+Which one was used is recorded as a metric: a run whose oracles all fell back to
+`recorded` is a run whose grace window is mistuned.
 """
 
 from __future__ import annotations
@@ -57,7 +54,7 @@ class OracleOutcome:
     """A postcondition verdict.
 
     `status` is `"ok"` or `"error"`: an oracle that could not read its evidence is
-    NOT a failed task, and collapsing the two is how a broken probe turns into a
+    not a failed task, and collapsing the two is how a broken probe turns into a
     silent 0/4. `evidence` carries every clause separately so a partial pass is
     diagnosable without re-running the VM.
     """
@@ -93,9 +90,9 @@ def probe_now(trace: vf.Trace, task: DesktopTaskData) -> tuple[dict[str, Any] | 
 class StateOracle:
     """Mixin: success is decided from realized guest state, never from the trace.
 
-    A subclass implements `evaluate_state`. That keeps the *judgement* in the task
-    (verifiers' single judgement authority) while the *extraction* stays in the
-    family's `Preparer.probe`.
+    A subclass implements `evaluate_state`. The judgement stays in the task
+    (verifiers' single judgement authority); the extraction stays in the family's
+    `Preparer.probe`.
     """
 
     def evaluate_state(
@@ -153,10 +150,10 @@ class StateOracle:
 class ReachOracle:
     """Grounding: did the cursor enter the labelled bbox at any frame?
 
-    The headline number is reach-at-any-frame, not final-frame containment — a
+    The headline number is reach-at-any-frame, not final-frame containment: a
     cursor that passes through the target and overshoots has still demonstrated the
-    grounding. `reach_frame` (the first hit, or -1) is the ordering statistic and
-    the shaped term is a bounded function of the closest approach, so a miss still
+    grounding. `reach_frame` (the first hit, or -1) is the ordering statistic, and
+    the shaped term is a bounded function of the closest approach so a miss still
     carries gradient.
     """
 
@@ -200,12 +197,12 @@ class ReachOracle:
 
 
 class OSWorldEvaluateOracle:
-    """OSWorld benchmark tasks: the reward IS `DesktopEnv.evaluate()`.
+    """OSWorld benchmark tasks: the reward is `DesktopEnv.evaluate()`.
 
     No shaping and no curriculum, so a lift here is a lift on the benchmark. A
-    missing, non-finite or out-of-range score raises rather than returning 0 —
-    infrastructure failure must never be trained as task failure. It needs a live
-    guest, hence `runtime`.
+    missing, non-finite or out-of-range score raises rather than returning 0, so
+    infrastructure failure is never trained as task failure. It needs a live guest,
+    hence `runtime`.
     """
 
     full_success_threshold: float = 0.999
@@ -243,9 +240,7 @@ class OSWorldEvaluateOracle:
 class NoOracle:
     """freeroll: a qualitative probe with no realized-state postcondition.
 
-    Deliberately reward-free. The old runner reported `stop_reason` and a
-    `click` boolean and nothing else, and dressing that up as a reward would
-    manufacture a number nobody validated.
+    Reward-free: there is no validated number to report, only the metrics below.
     """
 
     @vf.metric
@@ -262,24 +257,17 @@ class NoOracle:
 class PairedArmDivergence:
     """Cross-arm comparison as a `@vf.group_reward`.
 
-    `paired_eval/runner.py` ran two grammars over one task inside one process and
-    asserted they started from an identical live cursor, geometry and reset
-    signature, then reported the first turn where they diverged. Two arms are two
-    rollouts of one task under verifiers, so the comparison belongs here:
-    `score_group` receives `{"task", "traces"}` and runs after every rollout in the
-    group finishes (`episode.py:47-49`).
-
-    There is no receipt chain here: one in-process harness and one codec means
-    there is no untrusted evidence producer to defend against.
+    Two arms are two rollouts of one task: `score_group` receives
+    `{"task", "traces"}` and runs after every rollout in the group finishes
+    (`episode.py:47-49`). It reports the first turn at which the arms diverged.
     """
 
     @vf.group_reward(weight=0.0)
     async def arm_agreement(self, traces: list[vf.Trace]) -> list[float]:
         """1.0 for every trace in a group whose arms agree turn-for-turn.
 
-        Weight 0 by design: this is a diagnostic recorded per trace, not a training
-        signal. Turning it on would reward two grammars for being identical, which
-        is the opposite of what an A/B is for.
+        Weight 0: a diagnostic recorded per trace, not a training signal. Turning it
+        on would reward two grammars for being identical.
         """
         divergence = _first_divergence(traces)
         agree = 0.0 if divergence is not None else 1.0

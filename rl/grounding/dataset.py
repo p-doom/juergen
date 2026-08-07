@@ -1,16 +1,14 @@
 """grounding scene loading: a labelled screenshot, a target bbox, a cursor start.
 
-Container-free: the observation is the *cached* labelled screenshot with a
-synthetic cursor marker composited on it, so the env needs no VM. That is what
-makes this the cheap single-step probe; the VM-backed variant is
+Container-free: the observation is the cached labelled screenshot with a synthetic
+cursor marker composited on it, so the env needs no VM. The VM-backed variant is
 `evals.tasks.GroundingTaskset` + the `grounding` preparer.
 
 `to_norm` / `from_norm` are gone. They implemented the normalized 0-999 round trip
 (`from_norm(to_norm(cursor) + delta)`) that decided whether a move landed in the
-bbox, and the offline inspector re-implemented the same step in **raw pixels** —
-so its rendered vectors and reported hit/miss disagreed with the reward by ~1.9x in
-x and ~1.08x in y at 1920x1080. One conversion, inside the codec, removes the
-possibility.
+bbox, while the offline inspector re-implemented the same step in raw pixels — so
+its rendered vectors and reported hit/miss disagreed with the reward by ~1.9x in x
+and ~1.08x in y at 1920x1080. The conversion now happens once, inside the codec.
 """
 
 from __future__ import annotations
@@ -72,7 +70,7 @@ def cursor_start(
     """Deterministic start by regime — see `evals.tasks.cursor_start` for the rule.
 
     Delegates so the container-free and VM-backed grounding evals cannot drift
-    apart on the one variable the whole eval controls.
+    apart on it.
     """
     from evals.tasks import cursor_start as shared
 

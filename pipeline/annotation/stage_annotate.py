@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Stage 03b (annotate): pluggable hindsight annotation over a filter view.
 
-A fully decoupled side branch of the realigned pipeline: it reads the stage-03
-filter mask, selects frames at ``--fps k`` via the shared selector
-(lib/views), hands ``AnnotationUnit``s to the chosen method, and writes ONE
-uniform artifact regardless of method:
+A side branch of the realigned pipeline: it reads the stage-03 filter mask,
+selects frames at ``--fps k`` via the shared selector (lib/views), hands
+``AnnotationUnit``s to the chosen method, and writes one uniform artifact
+regardless of method:
 
   goals.jsonl     rows {goal_id, segment_id, recording_id, start_master_idx,
                   end_master_idx, instruction, instruction_variants, anchor,
                   grounding, plan?, plan_flags?, method, model,
-                  prompt_pack_sha, unit_id} — goals are half-open MASTER-tick
+                  prompt_pack_sha, unit_id} — goals are half-open master-tick
                   intervals; view-local indices are never persisted.
   describe/       per-unit narration sidecars (reused by enrichment methods).
   units/          per-unit result records (the resume ledger + audit trail).
@@ -111,7 +111,7 @@ def _segment_actions(view, keylog_path: str | None) -> list[str]:
 def _goal_rows_from_unit(unit, result: dict[str, Any], *, method: Method,
                          model: str | None, fps: float) -> tuple[list[dict[str, Any]], int]:
     """Convert a frames-method's view-local goal spans to master-interval rows
-    (the ONLY place view indices become coordinates on disk)."""
+    (the only place view indices become coordinates on disk)."""
     rows: list[dict[str, Any]] = []
     n_unbounded = 0
     for k, g in enumerate(result.get("goals", [])):
@@ -143,7 +143,7 @@ def _goal_rows_from_unit(unit, result: dict[str, Any], *, method: Method,
 
 def _goal_rows_from_day(day_tag: str, thoughts: list[dict[str, Any]], *, method: Method,
                         model: str | None, fps: float) -> list[dict[str, Any]]:
-    """Compose uniform goal rows from a day method's VERIFIED thoughts (the
+    """Compose uniform goal rows from a day method's verified thoughts (the
     artifact only ever contains passes; raw verdicts live in the units/
     records). A thought anchors to a single master tick: [m, m+1)."""
     rows: list[dict[str, Any]] = []
@@ -372,7 +372,7 @@ def main() -> None:
         force=args.force,
     )
 
-    # ---- finalize: units/ ledger -> one uniform goals.jsonl ----------------
+    # Finalize: units/ ledger -> one uniform goals.jsonl.
     all_goals: list[dict[str, Any]] = []
     n_units = 0
     for upath in sorted(units_dir.glob("*.json")):
@@ -485,8 +485,8 @@ def _days_mode(args, art: FilterArtifact, method: Method, units_dir: Path,
                out_dir: Path, ctx_for):
     """Items = user-days (lib/days: wall-clock groups of the filter's usable
     segments). A day is inherently sequential — the method carries memory
-    call-to-call — so the driver's parallelism axis is ACROSS days; the item
-    estimate is ONE clip call (a day never has more than one call in flight)
+    call-to-call — so the driver's parallelism axis is across days; the item
+    estimate is one clip call (a day never has more than one call in flight)
     and live TPM comes from the per-call report hook."""
     cache = args.day_index_cache
     cached = None
@@ -517,7 +517,7 @@ def _days_mode(args, art: FilterArtifact, method: Method, units_dir: Path,
     items = [{"id": d["day_tag"], "row": d} for d in day_rows]
 
     def est_tokens(item) -> float:
-        # Admission cost of ONE in-flight call, not the whole day: the day's
+        # Admission cost of one in-flight call, not the whole day: the day's
         # calls run strictly one at a time.
         return 30 * EST_TOKENS_PER_FRAME + 16000
 

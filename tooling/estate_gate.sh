@@ -1,24 +1,21 @@
 #!/usr/bin/env bash
-# One command that tells someone who is not us whether this estate is green.
+# Run every test suite in the estate, each under the interpreter it needs.
 #
 # There is no CI. Nothing is pushed. Four repositories hold the code and each
-# needs a DIFFERENT interpreter, which is the whole reason a single `pytest`
-# cannot stand in:
+# needs a different interpreter, so a single `pytest` cannot cover them:
 #
 #   juergen/tests + juergen/grammars   verifiers + Pillow, and pixeldesk on
 #                                      sys.path (juergen/tests/conftest.py adds
 #                                      the sibling checkout).
 #   juergen/data_pipeline/tests        needs cv2 (opencv-python-headless), which
-#                                      the testgate venv deliberately does not
-#                                      have -- so it runs under its own. NOT
-#                                      `juergen/.venv`: that one is uv's project
-#                                      environment, so any `uv sync` without the
-#                                      `dev` extra prunes pytest out from under a
-#                                      run in progress. Observed doing exactly
-#                                      that mid-gate.
-#   pixeldesk                          Pillow and nothing else. Its one runtime
-#                                      dependency is the point of that repo. It
-#                                      was `desktop-env` until 2026-08-06; if the
+#                                      the testgate venv does not have -- so it
+#                                      runs under its own. Not `juergen/.venv`:
+#                                      that one is uv's project environment, so
+#                                      any `uv sync` without the `dev` extra
+#                                      prunes pytest out from under a run in
+#                                      progress (observed mid-gate).
+#   pixeldesk                          Pillow and nothing else. It was
+#                                      `desktop-env` until 2026-08-06; if the
 #                                      checkout is still under the old name, set
 #                                      PIXELDESK_ROOT.
 #   env-fleet                          its own .venv.
@@ -27,15 +24,12 @@
 #                                      torchvision) + the `renderers` package
 #                                      from prime-rl/deps.
 #
-# EVERY suite runs even if an earlier one fails, so one pass tells you
-# everything. Exit status: 0 all green, 1 a suite failed, 2 an environment is
-# missing (nothing was measured -- do not read that as green).
+# Every suite runs even if an earlier one fails. Exit status: 0 all green, 1 a
+# suite failed, 2 an environment is missing (nothing was measured -- do not read
+# that as green).
 #
-# ---------------------------------------------------------------------------
-# What it needs
-# ---------------------------------------------------------------------------
 # Five interpreters, each overridable. The defaults are the venvs these suites
-# are actually run under on this cluster; on another machine, set the variables.
+# are run under on this cluster; on another machine, set the variables.
 #
 #   JUERGEN_PYTHON          tests + grammars        (default: shared testgate venv)
 #   DATA_PIPELINE_PYTHON    data_pipeline/tests     (default: shared data-pipeline
@@ -52,10 +46,9 @@
 # `--only <name>` runs one suite (juergen | data_pipeline | pixeldesk |
 # env_fleet | omegalax_rearch).
 #
-# NOTE ON omegalax-rearch: only the three test files the rearchitecture touches
-# are run (25 tests). The rest of that repo's tests want real GPUs and real
-# checkpoints; running them here would mean this command is red on a CPU node
-# for reasons that have nothing to do with whether the estate is green.
+# omegalax-rearch: only the three test files the rearchitecture touches are run
+# (25 tests). The rest of that repo's tests want real GPUs and real checkpoints
+# and would fail on a CPU node.
 
 set -uo pipefail
 
@@ -73,8 +66,7 @@ VENVS=/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/venvs
 : "${ENV_FLEET_PYTHON:=$ENV_FLEET_ROOT/.venv/bin/python}"
 : "${OMEGALAX_PYTHON:=$VENVS/omegalax-rearch-testgate-venv/bin/python}"
 
-# The three test files omegalax-rearch's 25-test gate is: everything the
-# rearchitecture changed, and nothing that needs a GPU.
+# omegalax-rearch's 25-test gate: what the rearchitecture changed, nothing GPU-bound.
 OMEGALAX_TESTS=(
   tests/test_sft_collators.py
   tests/test_arrayrecord_image_refs.py
@@ -96,17 +88,14 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --list) LIST_ONLY=1; shift ;;
     --only) ONLY="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,60p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,51p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 
-# --------------------------------------------------------------------------- #
-# preflight -- report EVERY missing thing, not the first
-# --------------------------------------------------------------------------- #
-
+# preflight: report every missing thing, not just the first.
 problems=()
 planned=()
 for entry in "${SUITES[@]}"; do
@@ -159,10 +148,6 @@ if [ ${#problems[@]} -gt 0 ]; then
   echo "Set the interpreter for each suite explicitly; see --help."
   exit 2
 fi
-
-# --------------------------------------------------------------------------- #
-# run
-# --------------------------------------------------------------------------- #
 
 log_dir="$(mktemp -d -t estate-gate-XXXXXX)"
 results=()

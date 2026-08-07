@@ -13,7 +13,7 @@ keylog, and emits the rows stage 01 needs:
     video_duration_s, video_fps, video_frame_count, video_width, video_height,
     video_ok  (+ version / user_id for provenance)
 
-Segments WITHOUT a keylog are skipped by default: stage 01's NO_OP head/tail
+Segments without a keylog are skipped by default: stage 01's NO_OP head/tail
 thinning relies on per-frame action labels derived from the keylog, so a
 keylog-less clip collapses to ~4 frames. Pass ``--keep-missing-keylog`` to
 include them anyway.

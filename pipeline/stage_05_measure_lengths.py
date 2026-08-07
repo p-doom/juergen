@@ -1,8 +1,8 @@
 """Measure stage (payload-free): tokenize chat.jsonl into a per-message cache.
 
 Wrapper around omegalax/scripts/measure_message_lengths_from_chat.py. Reads the
-stage-04 conversations dataset's single <source>/chat.jsonl directly (NO grain
-payload) and measures it ONCE -> <output_dir>/message_lengths.jsonl.
+stage-04 conversations dataset's single <source>/chat.jsonl directly (no grain
+payload) and measures it once -> <output_dir>/message_lengths.jsonl.
 
 The train/val split is applied downstream at the records stage (stage 06), so
 this cache is split-agnostic and is reused across every split / val_fraction --
@@ -91,10 +91,6 @@ def main(_) -> None:
     source_path = Path(FLAGS.source_path)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Stage 04 writes a single split-agnostic <source>/chat.jsonl; measure it ONCE
-    # -> <output_dir>/message_lengths.jsonl. The train/val split is applied at the
-    # records stage, so this cache is reused across every split / val_fraction and
-    # never needs re-running when the split changes.
     src_chat = source_path / "chat.jsonl"
     if not src_chat.is_file():
         raise FileNotFoundError(

@@ -3,19 +3,18 @@
 Everything family-specific about the four cells lives here, behind the `Preparer`
 seam, so the harness never branches on task kind.
 
-Three properties are load-bearing and preserved verbatim:
+Three properties are load-bearing:
 
-  * **Setup is hermetic per cell.** Each cell wipes and rebuilds
+  * Setup is hermetic per cell. Each cell wipes and rebuilds
     `/tmp/crowdcast_sign_of_life_v2/<cell>`, launches its own terminal with its own
     rcfile (own `HISTFILE`, own `PS1`, `tee`'d transcript), and positions the window
     at a fixed geometry. Two cells that shared a shell would share history.
-  * **Extraction is read-only and input-free.** `probe` runs one `python3 -c`
+  * Extraction is read-only and input-free. `probe` runs one `python3 -c`
     inside the guest and prints a single `SOLV2_STATE=` line; missing or ambiguous
     evidence raises rather than degrading to `success=False`.
-  * **The control arms go through the codec.** `render_step` produces *codec text*,
-    not operations, so the oracle (expected 4/4) and negative (expected 0/4) arms
-    exercise the same `parse` and `compile` the model arm does. A control that
-    bypassed the grammar would certify nothing about the grammar. It renders one
+  * The control arms go through the codec. `render_step` produces codec text, not
+    operations, so the oracle (expected 4/4) and negative (expected 0/4) arms
+    exercise the same `parse` and `compile` the model arm does. It renders one
     intent at a time, because the relative encodings resolve a click against a
     cursor read that must be fresh.
 """
@@ -297,10 +296,9 @@ _SETUPS: dict[str, Callable[[Any, DesktopTaskData], dict[str, Any]]] = {
 class Intent:
     """One scripted step, grammar-neutral.
 
-    `kind` is `click` (at `target`, a *screen* coordinate), `type` (`text`) or
-    `submit`. Keeping the plan neutral is what lets one control arm exist per
-    grammar without one control arm per grammar: the plan is the cell's gold (or
-    plausibly-wrong) behaviour, the renderer is the encoding.
+    `kind` is `click` (at `target`, a screen coordinate), `type` (`text`) or
+    `submit`. The plan is the cell's gold (or plausibly-wrong) behaviour; the
+    renderer is the encoding.
     """
 
     kind: str
@@ -323,10 +321,9 @@ def _click_target(session: Any, task: DesktopTaskData) -> tuple[int, int]:
 def script_plan(task: DesktopTaskData, *, negative: bool) -> list[Intent]:
     """The gold plan for a cell, or the negative control's wrong-but-real plan.
 
-    The negatives are chosen to be *plausible actions that cannot succeed*, not
-    no-ops: `pwd` instead of the required command, the wrong paragraph, a click at
-    screen centre instead of the dock icon, and typing without focusing first. A
-    no-op negative would prove only that doing nothing fails.
+    The negatives are plausible actions that cannot succeed, not no-ops: `pwd`
+    instead of the required command, the wrong paragraph, a click at screen centre
+    instead of the dock icon, and typing without focusing first.
     """
     if task.kind == "terminal_command":
         return [
@@ -377,17 +374,15 @@ def _render_native_absolute(
 def _render_native_absolute_control(
     intent: Intent, session: Any, task: DesktopTaskData
 ) -> str:
-    """`native_absolute_control` — the bare-line ABSOLUTE arm: `x y scroll ; EVENTS`.
+    """`native_absolute_control` — the bare-line absolute arm: `x y scroll ; EVENTS`.
 
     `from_target` here needs only element geometry: no cursor read, so nothing about
-    this rendering can go stale. That is precisely the asymmetry against
-    `compact_raw` below, and it is one of the things a native-vs-compact comparison
-    measures.
+    this rendering can go stale. That is the asymmetry against `compact_raw` below.
 
-    Note the deliberate semantic trap the paired grammars share: `0 0 0 ; +LMB -LMB`
-    is a click at **the top-left corner** in this arm and "don't move, click here" in
-    `compact_raw`. Same bytes, different action — which is why a control arm must be
-    rendered per grammar and never copied between them.
+    The paired grammars share a semantic trap: `0 0 0 ; +LMB -LMB` is a click at the
+    top-left corner in this arm and "don't move, click here" in `compact_raw`. Same
+    bytes, different action, so a control arm must be rendered per grammar and never
+    copied between them.
     """
     if intent.kind == "type":
         return "0 0 0 ; type(" + json.dumps(intent.text, ensure_ascii=False) + ")"
@@ -400,9 +395,9 @@ def _render_native_absolute_control(
 
 
 def _render_relative(intent: Intent, session: Any, task: DesktopTaskData) -> str:
-    """`deltatype_v2` / `compact_raw` — bare-line RAW RELATIVE pixels.
+    """`deltatype_v2` / `compact_raw` — bare-line raw relative pixels.
 
-    The click delta is `target - cursor` with the cursor read **now**. A stale read
+    The click delta is `target - cursor` with the cursor read now. A stale read
     makes this rendering wrong, silently and by exactly the drift; the harness
     therefore renders one intent per step rather than a whole script up front.
     """
@@ -428,11 +423,10 @@ SCRIPT_RENDERERS: dict[str, Callable[[Intent, Any, DesktopTaskData], str]] = {
 An exact table, not a substring heuristic: `native_absolute` and
 `native_absolute_control` are different grammars whose names are prefixes of one
 another, and `move_rel` contains neither "compact" nor "absolute" while being
-relative. A heuristic that picked the wrong encoding would give a control arm that
-fails for the wrong reason — the exact thing the four-cell calibration exists to
-rule out. `move_rel` and `diffabs` are absent on purpose: no cell has a scripted
-arm in them yet, and a missing renderer must be a loud `LookupError`, not a
-silently substituted grammar."""
+relative, so a heuristic could pick the wrong encoding and give a control arm that
+fails for the wrong reason. `move_rel` and `diffabs` are absent on purpose: no cell
+has a scripted arm in them yet, and a missing renderer must be a loud `LookupError`,
+not a silently substituted grammar."""
 
 
 def render_step(

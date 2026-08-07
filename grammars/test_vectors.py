@@ -1,29 +1,24 @@
 """The conformance gate: every vector in every ``grammars/*/vectors/*.json``.
 
-This module is the reason the vectors are worth having. They existed for a while
-with nothing in the repository that executed them — 1,456 lines of pinned
-behaviour, checked only by whatever throwaway script the last person wrote — and
-a vector nobody runs is a comment. Each case below is one parametrised test, so a
-regression names the grammar, the section and the case.
+Each case below is one parametrised test, so a regression names the grammar, the
+section and the case.
 
 Run it with ``pytest grammars/`` (``pip install -e '.[dev]'`` for pytest).
 
-Four invariants that are NOT expressible as vectors are asserted here as code,
-each because it was found broken:
+Four invariants that are not expressible as vectors are asserted here as code:
 
 * ``isinstance(codec, Codec)`` for all seven. The protocol is
-  ``@runtime_checkable``, so that is a gate a caller may legitimately write, and
-  it returned False for every grammar while ``Codec`` demanded a ``handlers``
-  table no codec had and a ``stop_sequences`` method no codec had.
+  ``@runtime_checkable``, so a caller may write that gate; it returned False for
+  every grammar while ``Codec`` demanded a ``handlers`` table no codec had and a
+  ``stop_sequences`` method no codec had.
 * The matched pair's shared prose is byte-identical. A line-wrap alone is a
-  different token sequence in the two arms of an A/B whose whole premise is
-  byte-equal prose.
+  different token sequence in the two arms.
 * Every canonical Operation kind can be grouped. A kind that falls through to
   "unknown Operation kind" makes any recorded trajectory containing it unliftable
   in all seven grammars at once.
 * The normalized grammar's quantisation ceiling. The vectors elsewhere use deltas
-  that round-trip exactly, so the lossy region — most of it — needs its own
-  coverage: that region is precisely where a relative label is silently wrong.
+  that round-trip exactly, leaving the lossy region — where a relative label is
+  silently wrong — uncovered.
 """
 
 from __future__ import annotations
@@ -61,9 +56,9 @@ def _vectors(name: str) -> dict:
 def _geometry(payload: dict) -> DisplayGeometry:
     """Vector geometry -> ``DisplayGeometry``, using pixeldesk's own field names.
 
-    One spelling throughout, and it is the package's: a vector saying
-    ``width``/``height`` at the top level and ``desktop_width``/``desktop_height``
-    in a per-case override would drift silently.
+    One spelling throughout: a vector saying ``width``/``height`` at the top
+    level and ``desktop_width``/``desktop_height`` in a per-case override would
+    drift silently.
     """
     return DisplayGeometry(
         desktop_width=int(payload["desktop_width"]),
@@ -145,9 +140,8 @@ def test_to_dict_round_trips_through_action_from_dict(name, payload, case):
 
     ``agent._action_record`` serialises every parsed action by probing for a
     ``to_dict``, so this method's output is the ``parsed_action`` field of every
-    trajectory row — and it was reachable only through that dynamic probe, so a
-    coverage report over ``grammars/`` showed it, and ``Element.to_dict`` and
-    ``Primitive.to_dict`` under it, never running.
+    trajectory row. Reached only through that dynamic probe, it — and
+    ``Element.to_dict`` and ``Primitive.to_dict`` under it — never ran.
     """
     codec = _codec(name)
     parsed = codec.parse(case["text"])
@@ -197,7 +191,7 @@ def test_lift(name, payload, case):
 def test_lift_is_a_fixpoint(name, payload, case):
     """Lifting the recompiled stream again reproduces the same text.
 
-    A lossy lift is allowed; a lift that loses something DIFFERENT on the second
+    A lossy lift is allowed; a lift that loses something different on the second
     pass is not, because a converter run over its own output would keep drifting.
     """
     codec = _codec(name)
@@ -213,7 +207,7 @@ def test_lift_is_a_fixpoint(name, payload, case):
 
 @pytest.mark.parametrize(("name", "payload", "case"), _cases("lift_invalid"))
 def test_lift_invalid(name, payload, case):
-    """An expressiveness ceiling must RAISE, never flatten silently."""
+    """An expressiveness ceiling must raise, never flatten silently."""
     geometry, cursor = _context(payload, case)
     with pytest.raises(ValueError, match=_message(case)):
         _codec(name).action_from_operations(
@@ -230,8 +224,8 @@ def test_from_target(name, payload, case):
     geometry = _geometry(payload["geometry"])
     cursor = tuple(case["cursor"])
     target = tuple(case["target"])
-    # The signatures differ on purpose and that difference is the measurement:
-    # the relative arm needs a fresh cursor read, the absolute arm does not.
+    # The signatures differ: the relative arm needs a fresh cursor read, the
+    # absolute arm does not.
     if name == "compact_raw":
         action = codec.from_target(cursor, target, elements=_elements(case))
     else:
@@ -269,7 +263,7 @@ def test_from_pixel_delta(name, payload, case):
 
 @pytest.mark.parametrize(("name", "payload", "case"), _cases("matched_pair"))
 def test_matched_pair(name, payload, case):
-    """One intent, two encodings, ONE operation sequence."""
+    """One intent, two encodings, one operation sequence."""
     codec = _codec(name)
     twin = _codec(payload["paired_with"])
     geometry = _geometry(payload["geometry"])
@@ -317,7 +311,7 @@ def test_every_section_is_executed():
 
 @pytest.mark.parametrize("name", NAMES)
 def test_codec_satisfies_the_protocol(name):
-    """The seam, actually checked.
+    """``isinstance(codec, Codec)`` for every registered grammar.
 
     ``Codec`` is ``@runtime_checkable``; a caller writing this gate got a false
     negative on every grammar while the protocol required a ``handlers`` table
@@ -342,7 +336,7 @@ def test_describe_is_deterministic(name):
 
 @pytest.mark.parametrize("name", NAMES)
 def test_report_never_raises(name):
-    """A prompt digest is data. The predecessor raised on drift; nothing may."""
+    """A prompt digest is data; ``report()`` must not raise on drift."""
     report = _codec(name).report()
     assert report["grammar"] == name
     assert report["prompt_sha256"] == _codec(name).digest
@@ -361,9 +355,9 @@ MATCHED_ARMS = ("compact_raw", "native_absolute_control")
 def test_matched_arms_share_their_prose_byte_for_byte():
     """Everything except the two mouse-triple productions must be identical.
 
-    Both arms take this text from ``_support.MATCHED_ARM_*``, so this test is a
-    guard against someone reintroducing a local copy — which is how the two came
-    to differ by a line-wrap the first time.
+    Both arms take this text from ``_support.MATCHED_ARM_*``; this guards against
+    a reintroduced local copy, which is how the two came to differ by a line-wrap
+    the first time.
     """
     first, second = (_codec(name) for name in MATCHED_ARMS)
     assert type(first).__doc__ == type(second).__doc__ == _support.MATCHED_ARM_PREAMBLE
@@ -421,10 +415,10 @@ CANONICAL_PROBES = {
 
 
 def test_every_canonical_kind_is_groupable():
-    """A converter does not get to choose what a recording contains.
+    """Every kind in ``ir.CANONICAL_KINDS`` must reach a group.
 
     ``drag``, ``click`` and ``ascii_type`` are all kinds pixeldesk's own executor
-    handles — it SYNTHESISES ``click`` — so a stream containing one must not fall
+    handles — it synthesises ``click`` — so a stream containing one must not fall
     through to "unknown Operation kind", which would make it unliftable in every
     grammar simultaneously.
     """
@@ -454,11 +448,11 @@ def test_the_recovered_kinds_reach_a_grammar_that_can_express_them(kind):
         able[name] = codec.format(action)
     assert able, f"no grammar can lift {kind!r}"
     if kind == "drag":
-        # The whole reason ir.drag is its own kind: the press and the release
-        # survive, and the stroke stays INSIDE them rather than being degraded
-        # into a stationary click. Asserted on the parsed primitives, not on
-        # substring positions -- the approach move to the drag's start point also
-        # spells `move(`, and it correctly precedes the press.
+        # The press and the release survive and the stroke stays inside them,
+        # rather than being degraded into a stationary click. Asserted on the
+        # parsed primitives, not on substring positions -- the approach move to
+        # the drag's start point also spells `move(`, and it correctly precedes
+        # the press.
         assert "deltatype_v2" in able and "ordered_events_v3" in able
         assert "MOVE(" in able["deltatype_v2"]
         assert "left_click_drag" in able["native_absolute"]
@@ -491,22 +485,19 @@ SCREEN_SIZES = [(1920, 1080), (1280, 720), (2560, 1440), (4000, 2000), (3840, 21
 @pytest.mark.parametrize(("width", "height"), SCREEN_SIZES)
 @pytest.mark.parametrize("axis", [0, 1])
 def test_move_rel_quantisation_ceiling(width, height, axis):
-    """Pin the region the vectors deliberately avoid.
+    """Pin the region the vectors avoid.
 
     ``move_rel`` encodes a delta as thousandths of the screen, so most pixel
-    deltas do NOT round-trip — and the vectors were chosen from the ones that do,
-    which left the lossy region, the one where a relative label is quietly wrong,
-    pinned nowhere at all.
+    deltas do not round-trip, and the vectors were chosen from the ones that do.
 
     Two things are asserted for every delta on every axis:
 
-    * a delta whose normalized value is zero while its pixel value is not RAISES,
-      per axis and not only when both axes vanish. Silently zeroing one axis was a
-      real defect: at 4000 wide a ``(1, 100)`` px move became ``[0, 50]``.
+    * a delta whose normalized value is zero while its pixel value is not raises,
+      per axis and not only when both axes vanish. At 4000 wide a ``(1, 100)`` px
+      move became ``[0, 50]``.
     * otherwise the recompiled pixel lies inside the grid's own tolerance,
       ``dimension / 2000 + 0.5`` — half a grid step from rounding the encode plus
-      half a pixel from rounding the decode. Anything wider than that is a bug in
-      the conversion, not the grid.
+      half a pixel from rounding the decode.
     """
     from .move_rel.codec import GRID, MoveRelError, norm_from_pixels
 
@@ -550,21 +541,19 @@ def test_move_rel_quantisation_ceiling(width, height, axis):
             lossy += 1
 
     assert checked, "the sweep checked nothing"
-    # Where the ceiling exists at all is itself worth pinning, because it is not
-    # obvious and it decides which screens a relative label is exact on:
+    # Where the ceiling falls decides which screens a relative label is exact on:
     #
-    #   dimension <= 1000  the grid is FINER than pixels, so every delta gets its
+    #   dimension <= 1000  the grid is finer than pixels, so every delta gets its
     #                      own thousandth and the round trip is exact. No loss.
     #   dimension >  1000  thousandths are coarser than pixels; some deltas share
     #                      a grid value and come back on the wrong pixel.
-    #   dimension >= 2000  a one-pixel delta normalises to zero and MUST raise.
+    #   dimension >= 2000  a one-pixel delta normalises to zero and must raise.
     #                      At exactly 2000 it is ``round(0.5)``, which Python
     #                      rounds to even and therefore to zero, so the boundary
-    #                      is inclusive -- worth pinning rather than reasoning
-    #                      about at the next screen-size change.
+    #                      is inclusive.
     #
-    # 1080p is already above the first threshold on both axes, so the "documented
-    # ceiling" applies to every screen this program actually trains on.
+    # 1080p is already above the first threshold on both axes, so the ceiling
+    # applies to every screen this program trains on.
     if dimension > GRID:
         assert lossy, f"axis {axis} of {dimension} lost nothing; grid changed?"
     else:
@@ -582,7 +571,7 @@ def test_move_rel_quantisation_ceiling(width, height, axis):
 
 
 def test_move_rel_sub_grid_guard_is_per_axis():
-    """The regression this file exists to prevent, stated once, minimally."""
+    """The sub-grid guard fires per axis, not only when both axes vanish."""
     from .move_rel.codec import MoveRelError
 
     codec = _codec("move_rel")
@@ -623,15 +612,14 @@ def test_a_dropped_grammar_fails_loudly(dropped):
 
 
 def test_the_installed_pixeldesk_is_ours():
-    """The dependency is resolved by path, and it has no index presence at all.
+    """The dependency is resolved by path and has no index presence at all.
 
-    It was called ``desktop-env`` until 2026-08-06, which IS contested on PyPI:
+    It was called ``desktop-env`` until 2026-08-06, a name contested on PyPI:
     ``xlang-ai/desktop_env`` (OSWorld) is the same distribution name and the same
-    import name, a different package, so plain ``pip`` — which does not read
+    import name for a different package, so plain ``pip`` — which does not read
     ``[tool.uv.sources]`` — silently installed the wrong one. Under the new name
     that substitution is impossible, but a stale wheel or a leftover
-    ``desktop_env.egg-info`` still shadows it, so this asserts the right module is
-    what answers.
+    ``desktop_env.egg-info`` still shadows it.
     """
     import pixeldesk
 
@@ -641,14 +629,13 @@ def test_the_installed_pixeldesk_is_ours():
 
 
 def test_the_import_name_no_longer_collides_with_osworlds():
-    """The rename is a correctness fix, not hygiene.
+    """Importing ours must not put anything under ``desktop_env`` in ``sys.modules``.
 
     ``evals/osworld.py`` imports OSWorld's ``desktop_env.controllers.setup`` and
     ``desktop_env.evaluators`` to score the benchmark. While this workspace owned
-    that import name, that import resolved to *our* already-imported module and no
-    ``$OSWORLD_ROOT`` could fix it — ``sys.path`` cannot override an entry already
-    in ``sys.modules``. So: importing ours must not put anything under
-    ``desktop_env`` into ``sys.modules``.
+    that import name, that import resolved to our already-imported module and no
+    ``$OSWORLD_ROOT`` could fix it: ``sys.path`` cannot override an entry already
+    in ``sys.modules``.
     """
     import pixeldesk  # noqa: F401
     import pixeldesk.geometry  # noqa: F401
@@ -667,8 +654,7 @@ def test_a_wrong_pixeldesk_is_explained_not_just_reported():
     A bare ``No module named 'pixeldesk.geometry'`` sends the reader looking
     for a missing file when the real fault is a wrong or missing install — and
     ``available()`` lists all seven beforehand regardless, because it reads
-    metadata and imports nothing. The guard survives the rename with a retargeted
-    message; the failure shape it explains did not go away with the collision.
+    metadata and imports nothing.
     """
     explained = grammars._explain_pixeldesk(
         ImportError("No module named 'pixeldesk.geometry'", name="pixeldesk.geometry")
@@ -677,8 +663,7 @@ def test_a_wrong_pixeldesk_is_explained_not_just_reported():
     assert "pixeldesk.geometry" in message
     assert "[tool.uv.sources]" in message
     assert "uv pip install -e ../pixeldesk" in message
-    # The history stays in the message: a leftover desktop_env egg-info produces
-    # exactly this error, and that is the first thing to check.
+    # A leftover desktop_env egg-info produces exactly this error.
     assert "xlang-ai/desktop_env" in message
 
     # And it must not dress up an unrelated ImportError as a packaging problem.
@@ -697,13 +682,12 @@ def test_a_wrong_pixeldesk_is_explained_not_just_reported():
 
 
 def test_no_handler_table_comes_back():
-    """The deleted fiction, pinned deleted.
+    """No grammar may reintroduce a ``handlers.py`` dispatch table.
 
-    Each grammar exported a ``handlers.py`` describing "the dispatch table it
-    contributes to pixeldesk's engine". No such engine existed, and the
-    ``Handler`` those tables were annotated with runs in the opposite direction.
-    Lowering an ``Operation`` belongs in pixeldesk, over a kind vocabulary that
-    is closed by physics.
+    Each grammar exported one, describing "the dispatch table it contributes to
+    pixeldesk's engine". No such engine existed, and the ``Handler`` those tables
+    were annotated with runs in the opposite direction. Lowering an ``Operation``
+    belongs in pixeldesk, over a closed kind vocabulary.
     """
     root = Path(grammars.__file__).parent
     assert not list(root.glob("*/handlers.py"))

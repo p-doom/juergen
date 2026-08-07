@@ -9,16 +9,14 @@
 `oracles.py` holds the state oracles as rewards that declare `runtime` and so
 keep reading real VM state. `indicators.py` holds the diagnostics, computed
 in-process from the step records the harness writes so they ride the trace.
-`fixtures/` holds the task-specific fixtures pixeldesk deliberately left out
-because they are tasks, not VM plumbing: the browser pages and their host server, the
-CDP client, Chrome launch, and the Writer / Calc / Files guest scripts. They attach to
-tasks through the same `Preparer` seam, so a task that needs Chrome brings its own
-Chrome and the session never learns Chrome exists.
+`fixtures/` holds the task-specific fixtures: the browser pages and their host
+server, the CDP client, Chrome launch, and the Writer / Calc / Files guest scripts.
+They attach to tasks through the same `Preparer` seam, so a task that needs Chrome
+brings its own Chrome and the session never learns Chrome exists.
 
-`signoflife/` is the calibrated four-cell gate: **one** taskset, **six** harness
-configs.
+`signoflife/` is the calibrated four-cell gate: one taskset, six harness configs.
 
-This package is a library, **not** a verifiers plugin id: its `__all__` names three
+This package is a library, not a verifiers plugin id: its `__all__` names three
 `Taskset` subclasses, and `loaders._plugin_class` requires exactly one. The plugin
 packages are `evals.signoflife`, `rl.movebox`, `rl.grounding` and `rl.target_box`.
 """

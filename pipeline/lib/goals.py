@@ -5,12 +5,12 @@ end_master_idx)`` with an instruction — produced by any stage-03b annotation
 method, consumed by stage 04. Master indices are the universal coordinate
 system: an annotation made at k fps projects onto a training view at any
 x fps because both are mappings over the same integer axis. View-local frame
-indices are NEVER persisted; ``view_span_to_master`` converts them at the
+indices are never persisted; ``view_span_to_master`` converts them at the
 annotation stage's write time.
 
-Projection rule (load-bearing): membership is tested against the view's
-ACTUAL selected frames (``master_idx ∈ [start, end)``), never derived by fps
-arithmetic — masked slots mean the j-th frame is NOT at tick j*stride.
+Projection rule: membership is tested against the view's actual selected
+frames (``master_idx ∈ [start, end)``), never derived by fps arithmetic —
+masked slots mean the j-th frame is not at tick j*stride.
 ``snap_start="before"`` (default) additionally includes the last selected
 frame at-or-before the goal start when no member frame sits exactly at it:
 that frame is the observation the goal's first action was taken from.
@@ -86,8 +86,8 @@ def goals_by_segment(rows: Iterable[dict[str, Any]]) -> dict[str, list[dict[str,
 def view_span_to_master(view: SegmentView, start_view_idx: int, end_view_idx: int) -> tuple[int, int]:
     """Convert a half-open view-local frame span ``[start, end)`` to a master
     interval, using the frames' actual window boundaries: from the first
-    frame's tick to the last frame's window end. This is the ONLY sanctioned
-    way an annotation method's view-local output reaches disk."""
+    frame's tick to the last frame's window end. This is the only path by which
+    an annotation method's view-local output reaches disk."""
     if not 0 <= start_view_idx < end_view_idx <= len(view.frames):
         raise ValueError(
             f"view span [{start_view_idx}, {end_view_idx}) out of range for "

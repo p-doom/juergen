@@ -1,13 +1,12 @@
-"""Items 4 + 15 — `_control_of` across all four grammars, and sampling authority.
+"""`_control_of` across all four grammars, and sampling authority.
 
-Item 4: `terminate(status="failure")` in a tool-call grammar is the same outcome as a
-bare-token `FAIL`, and must normalise to `fail` — otherwise indicator C counts a
-self-declared failure as a claimed success.
+`terminate(status="failure")` in a tool-call grammar is the same outcome as a
+bare-token `FAIL`, and must normalise to `fail`.
 
-Item 15: `ctx.sampling` is authoritative at the wire (`ChatDialect.apply_overrides`
-is `{**body, "model": ..., **sampling.model_dump(exclude_none=True)}`), so
+`ctx.sampling` is authoritative at the wire (`ChatDialect.apply_overrides` is
+`{**body, "model": ..., **sampling.model_dump(exclude_none=True)}`), so
 `program_sampling` must send only what the eval left unset. The three historical
-temperatures — 1.0 train, 0.0 parity, 0.7 movebox — must not be able to reappear.
+temperatures are 1.0 train, 0.0 parity and 0.7 movebox.
 """
 
 from __future__ import annotations
@@ -225,7 +224,7 @@ def test_prose_is_everything_before_the_final_line() -> None:
 
 def test_parsed_action_comes_from_the_grammars_own_to_dict() -> None:
     """`_action_record` calls `to_dict` by name, so a grammar that dropped it would
-    read as covered while writing nothing. Assert the coupling instead of probing it."""
+    read as covered while writing nothing."""
     import grammars
 
     for name in sorted(grammars.available()):
@@ -253,9 +252,8 @@ def test_parsed_action_comes_from_the_grammars_own_to_dict() -> None:
 def test_untagged_tool_call_shapes_reach_the_same_control_outcome(
     codec_name: str, text: str
 ) -> None:
-    """`_support.iter_tool_calls` accepts bare JSON, a ``` fence and a JSON array
-    because "that is how the RL rollout path sees vLLM-parsed output" — three live
-    reader paths that had no vectors of their own."""
+    """`_support.iter_tool_calls` accepts bare JSON, a ``` fence and a JSON array,
+    because that is how the RL rollout path sees vLLM-parsed output."""
     assert _control_of(load_codec(codec_name).parse(text)) == "fail"
 
 
@@ -322,7 +320,7 @@ def test_the_effective_temperature_source_has_exactly_three_values() -> None:
 @pytest.mark.parametrize("historical", [1.0, 0.0, 0.7])
 def test_a_historical_temperature_cannot_reappear_once_the_eval_has_spoken(historical: float) -> None:
     """A harness default riding the request body is silently dropped. Whatever that
-    default is, the eval's value is what reaches the wire AND what gets
+    default is, the eval's value is what reaches the wire and what gets
     recorded."""
     ctx = make_ctx(temperature=0.25)
     agent = _agent("deltatype_v2", temperature=historical, max_tokens=128)

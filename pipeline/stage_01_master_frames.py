@@ -1,25 +1,22 @@
 #!/usr/bin/env python3
-"""Stage 01a (frames-master): decode every segment's mp4 ONCE into a JPEG
+"""Stage 01a (frames-master): decode every segment's mp4 once into a JPEG
 ArrayRecord frame store, so downstream fps experiments never re-decode.
 
-Today ``stage_01_frames_actions`` couples the (expensive) ffmpeg decode to the
-(cheap) action binning + NO_OP thinning: changing ``--target-fps`` re-decodes
-the whole corpus. This stage splits off the decode. It reads the discover
-``clips_manifest.jsonl`` and, per segment, extracts frames at a fixed
-MASTER fps into one ``images.array_record`` (grain store), referenced as
-``ar:///abs/path/images.array_record#idx`` -- the same URI scheme
+Reads the discover ``clips_manifest.jsonl`` and, per segment, extracts frames
+at a fixed master fps into one ``images.array_record`` (grain store),
+referenced as ``ar:///abs/path/images.array_record#idx`` -- the same URI scheme
 ``image_store`` / stage 01 / stage 02 already consume.
 
 A downstream sampler (01b) then picks the nearest master record per target-fps
 bin and bins the keylog actions, emitting a metadata-only dataset (no new JPEG
-bytes). Because of that, the MASTER fps is the sampling CEILING: you can sample
-DOWN to any fps <= master, never up. Pick it as the highest fps you will ever
-want (storage scales linearly with it). No action binning / NO_OP thinning
-happens here -- those are fps-dependent and belong to 01b.
+bytes). The master fps is therefore the sampling ceiling: you can sample down
+to any fps <= master, never up. Pick it as the highest fps you will ever want
+(storage scales linearly with it). No action binning / NO_OP thinning happens
+here -- those are fps-dependent and belong to 01b.
 
 Frames are stored CFR at ``master_fps`` (ffmpeg's ``fps=`` filter resamples any
 VFR source), so master record ``i`` is at ``source_time_s = i / master_fps``.
-``source_frame_idx`` (nearest frame in the ORIGINAL video) is recorded for
+``source_frame_idx`` (nearest frame in the original video) is recorded for
 provenance only; sampling keys on ``source_time_s``.
 
 Source mp4s are read-only; everything is written under --output-dir.
@@ -73,10 +70,9 @@ def _luma_metrics(jpeg: bytes) -> "tuple[float | None, float | None]":
     histogram pass: ``(mean_luma, frac_dark)`` where mean_luma is 0-255 and
     frac_dark is the fraction of pixels below ``config.BLACK_DARK_CUTOFF``.
 
-    These are raw METRICS, not a boolean -- the sampler (01b) applies the
+    These are raw metrics, not a boolean -- the sampler (01b) applies the
     threshold, so it stays tunable without re-decoding. Returns ``(None, None)``
-    if the frame can't be decoded, so one bad frame never aborts the build and
-    the sampler simply won't be able to drop it (absence of evidence != black)."""
+    if the frame can't be decoded; such a frame is never dropped as black."""
     try:
         import io  # noqa: PLC0415
         from PIL import Image  # noqa: PLC0415
@@ -131,8 +127,7 @@ def pack_master_arrayrecord(
                     if video_fps > 0
                     else 0
                 )
-                # Black-frame FLAG only: metrics are recorded here (the one place
-                # that holds pixels); the sampler applies the drop threshold.
+                # Metrics only; the sampler applies the drop threshold.
                 mean_luma, frac_dark = _luma_metrics(jpeg)
                 manifest_f.write(
                     json.dumps(
@@ -280,7 +275,7 @@ def write_summary_and_manifest(out_dir: Path, summary: dict[str, Any]) -> None:
 
 def run_merge(args: argparse.Namespace) -> None:
     """Fold the per-shard segment_index.shard*_of_<N>.jsonl files (written by the
-    array-job shard tasks into a SHARED --output-dir) into the canonical
+    array-job shard tasks into a shared --output-dir) into the canonical
     segment_index.jsonl, then write the summary + manifest.json marker. Scoped to
     ``_of_<num_shards>`` so stale files from a run with a different shard count are
     ignored, and deduped by segment_id so any accidental overlap can't double-count.
@@ -352,8 +347,8 @@ def parse_args() -> argparse.Namespace:
         "--master-fps",
         type=float,
         default=DEFAULT_MASTER_FPS,
-        help="Uniform frame rate to decode+store at. This is the CEILING for "
-        "downstream sampling (you can only sample DOWN from it). Storage scales "
+        help="Uniform frame rate to decode+store at. This is the ceiling for "
+        "downstream sampling (you can only sample down from it). Storage scales "
         f"linearly with it. Default {DEFAULT_MASTER_FPS}.",
     )
     p.add_argument("--target-height", type=int, default=config.DEFAULT_TARGET_HEIGHT)
@@ -374,10 +369,10 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="Split the manifest into N disjoint round-robin shards for parallel "
-        "jobs; this shard processes rows[shard_index::num_shards]. All shards MUST "
-        "share ONE --output-dir: per-segment frame dirs are keyed by segment_id and "
+        "jobs; this shard processes rows[shard_index::num_shards]. All shards must "
+        "share one --output-dir: per-segment frame dirs are keyed by segment_id and "
         "so never collide. With N>1 each shard writes "
-        "segment_index.shard<I>_of_<N>.jsonl (NOT the top-level manifest.json); run "
+        "segment_index.shard<I>_of_<N>.jsonl, not the top-level manifest.json; run "
         "--merge afterwards to fold them into the canonical segment_index.jsonl + "
         "manifest.json marker.",
     )
@@ -424,7 +419,7 @@ def main() -> None:
         rows = rows[: args.limit]
     sharded = args.num_shards > 1
     if sharded:
-        # Round-robin stride: disjoint AND exhaustive across shard 0..N-1, and
+        # Round-robin stride: disjoint and exhaustive across shard 0..N-1, and
         # load-balances better than contiguous blocks when long segments cluster
         # together in the manifest. read_jsonl preserves file order, so the split
         # is deterministic given the same clips_manifest.
@@ -457,9 +452,8 @@ def main() -> None:
     n_records_total = 0
     total_jpeg_bytes = 0
     with mp.Pool(n_workers) as pool:
-        # Results arrive out of order (imap_unordered); the bar just counts
-        # completions, giving live elapsed / rate / ETA over the whole dataset.
-        # mininterval throttles redraws so a slurm log isn't spammed.
+        # Results arrive out of order (imap_unordered); the bar counts
+        # completions. mininterval throttles redraws so a slurm log isn't spammed.
         bar = tqdm(
             pool.imap_unordered(build_segment_master, tasks, chunksize=4),
             total=len(tasks), unit="seg", desc="[frames_master] decode",
@@ -489,7 +483,7 @@ def main() -> None:
     )
     if sharded:
         # Shard task: write a uniquely-named index + summary (no collision between
-        # the N tasks sharing this dir) and DON'T touch manifest.json -- the merge
+        # the N tasks sharing this dir) and leave manifest.json alone -- the merge
         # step writes the marker once, after all shards succeed.
         tag = f"shard{args.shard_index:04d}_of_{args.num_shards:04d}"
         write_index_jsonl(out_dir / f"segment_index.{tag}.jsonl", index_rows)

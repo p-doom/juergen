@@ -1,8 +1,7 @@
 """A fake session pool the harness can be pointed at via `pool_target`.
 
-Importable by `module:attribute`, so `DesktopPoolConfig.pool_target` can name it —
-which is exactly what that field exists for: injecting a fake, never selecting a VM
-backend.
+Importable by `module:attribute`, so `DesktopPoolConfig.pool_target` can name it;
+that field injects a fake, it does not select a VM backend.
 """
 
 from __future__ import annotations

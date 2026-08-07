@@ -1,9 +1,8 @@
-"""Item 3 — `HistoryPolicy` / `History`.
+"""`HistoryPolicy` / `History`.
 
-Four faithful ports, but **block eviction is new**, so the
-boundaries are what matters here: the window invariant
-(`turns[-1].output is None`), the block-eviction arithmetic, and that every policy
-respects `ImageBudget.max_images` however long the window has grown.
+Block eviction is the new part, so the boundaries are what matters here: the window
+invariant (`turns[-1].output is None`), the block-eviction arithmetic, and that
+every policy respects `ImageBudget.max_images` however long the window has grown.
 """
 
 from __future__ import annotations

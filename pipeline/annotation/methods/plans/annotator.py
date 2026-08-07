@@ -1,8 +1,8 @@
 """plans: enrichment pass — goals artifact in, + plan/plan_flags out.
 
-For each annotated unit it makes ONE cached labeler call: the unit's describe
+For each annotated unit it makes one cached labeler call: the unit's describe
 narration (sidecar from the producing method) + its goals in time order + each
-goal's start-tick screenshot, and gets back a 1-2 sentence first-person PLAN
+goal's start-tick screenshot, and gets back a 1-2 sentence first-person plan
 per goal — written strictly from the information state at that goal's start
 (no outcome/clairvoyance, no restatement; situation + method). Stage 04
 renders the first assistant turn as ``plan\\n<first action>`` under

@@ -1,45 +1,41 @@
 """The gate's arms, as `DesktopHarnessConfig`s over one taskset.
 
-The calibration semantics are the point of this file and are preserved exactly:
+The calibration semantics:
 
-  * the **oracle** arm must read **4/4** — the suite is solvable, the executor
-    dispatches, and the guest probe can observe success;
-  * the **negative** arm must read **0/4** — a plausibly-wrong action through the
-    *same* parse/compile/executor path is scored as a failure, so a pass is not an
+  * the oracle arm must read 4/4 — the suite is solvable, the executor dispatches,
+    and the guest probe can observe success;
+  * the negative arm must read 0/4 — a plausibly-wrong action through the same
+    parse/compile/executor path is scored as a failure, so a pass is not an
     artefact of the harness;
-  * both exist **per grammar**, because a control that certified only one grammar
-    would leave the other's parse/compile path unmeasured;
+  * both exist per grammar, since a control that certified only one grammar would
+    leave the other's parse/compile path unmeasured;
   * the model arms are what the four controls calibrate. Their published readings
-    are off-the-shelf-4B-native **4/4** and Phase-B-compact **2/4**; a run that
-    reports a model number without its two controls in the same configuration is
-    an uncalibrated thermometer.
+    are off-the-shelf-4B-native 4/4 and Phase-B-compact 2/4. A model number is
+    uncalibrated without its two controls in the same configuration.
 
-**Baseline incomparability — read this before quoting a number.** The only
-calibrated external reference we have is off-the-shelf Qwen3-VL-8B = **33.9%**
-OSWorld-Verified, and it was measured through the *sealed* prompts.
-`native_absolute.describe()`, `move_rel.describe()` and
-`native_absolute_control.describe()` are docstring-derived and are **not
-byte-identical** to those prompts. So numbers must not be compared across that
-boundary, and the baseline needs re-measuring through the new prompt before any
+Baseline incomparability — read this before quoting a number. The only calibrated
+external reference we have is off-the-shelf Qwen3-VL-8B = 33.9% OSWorld-Verified,
+and it was measured through the sealed prompts. `native_absolute.describe()`,
+`move_rel.describe()` and `native_absolute_control.describe()` are docstring-derived
+and are not byte-identical to those prompts, so numbers must not be compared across
+that boundary and the baseline needs re-measuring through the new prompt before any
 model arm here is read against 33.9%. Every episode records this on
-`trace.info["prompt"]` (`comparable_to_sealed_baseline: false`) so the caveat
-travels with the data instead of living in someone's memory.
+`trace.info["prompt"]` (`comparable_to_sealed_baseline: false`).
 
-**The matched pair is machine-asserted, so use it.** `compact_raw` and
-`native_absolute_control` declare each other via `PAIRED_WITH`, contribute
-byte-identical handler sets, and share the line-extraction rule, the `" ; "`
-separator, the element vocabulary and the no-control-tokens decision. A
-`matched_pair` vector pins one intent in two encodings to **one** operation
-sequence. Any difference the gate measures between those two arms is therefore the
-*encoding*, not the executor. Two consequences: `0 0 0 ; +LMB -LMB` is a click at
-**the top-left corner** in the absolute arm and "don't move, click here" in
-`compact_raw` — same bytes, different action; and `compact_raw.from_target` needs a
-**fresh cursor read and is wrong if that read is stale**, while
-`native_absolute_control.from_target` needs only element geometry. The scripted arms
-render one intent per step precisely so that asymmetry is exercised honestly rather
-than papered over.
+The matched pair is machine-asserted. `compact_raw` and `native_absolute_control`
+declare each other via `PAIRED_WITH`, contribute byte-identical handler sets, and
+share the line-extraction rule, the `" ; "` separator, the element vocabulary and
+the no-control-tokens decision; a `matched_pair` vector pins one intent in two
+encodings to one operation sequence, so any difference the gate measures between
+those two arms is the encoding, not the executor. Two consequences:
+`0 0 0 ; +LMB -LMB` is a click at the top-left corner in the absolute arm and
+"don't move, click here" in `compact_raw` — same bytes, different action; and
+`compact_raw.from_target` needs a fresh cursor read and is wrong if that read is
+stale, while `native_absolute_control.from_target` needs only element geometry. The
+scripted arms render one intent per step so that asymmetry is exercised rather than
+papered over.
 
-Four control arms + two model arms over one taskset: the arm *is* the config.
+Four control arms + two model arms over one taskset: the arm is the config.
 """
 
 from __future__ import annotations
@@ -104,9 +100,9 @@ def _sha256_file(path: Path) -> str:
 def verify_phaseb_provenance(model_path: Path) -> dict[str, Any]:
     """Fail closed unless the checkpoint is the registered step-900 export.
 
-    Called at dispatch, because the harness does not launch the server. Not
-    ceremony: the compact arm's whole claim is "this specific checkpoint reads
-    2/4", and a silently substituted export invalidates that sentence.
+    Called at dispatch, because the harness does not launch the server. The compact
+    arm's claim is that this specific checkpoint reads 2/4, so a silently
+    substituted export invalidates it.
     """
     root = model_path.parent
     metadata_path = root / ".meta.json"
@@ -190,13 +186,11 @@ CONTROL_ARMS: dict[str, DesktopHarnessConfig] = {
     "compact_oracle": _control(COMPACT_CODEC, negative=False, name="sol_compact_oracle"),
     "compact_negative": _control(COMPACT_CODEC, negative=True, name="sol_compact_negative"),
 }
-"""The four **control arms**: {oracle, negative} x {native, compact}.
+"""The four control arms: {oracle, negative} x {native, compact}.
 
-Not the four suite *cells* — those are `terminal_ls`, `terminal_exact_text`,
+Not the four suite cells — those are `terminal_ls`, `terminal_exact_text`,
 `desktop_open_chrome` and `focus_terminal_and_type`, and they live in `suite.json`
-behind `suite.load_suite()`. Every arm here runs all four of them. This mapping used
-to be called `CELLS`, which is how a reader came to report the gate's structure as
-four oracle/negative arms."""
+behind `suite.load_suite()`. Every arm here runs all four of them."""
 
 
 MODEL_ARMS: dict[str, DesktopHarnessConfig] = {

@@ -1,7 +1,7 @@
 """The one sign-of-life taskset.
 
 Four fixed cells, one row each. The six arms are six `DesktopHarnessConfig`s over
-this one taskset (see `cells.py`), so an arm can never quietly redefine the suite.
+this one taskset (see `cells.py`), so an arm cannot redefine the suite.
 
 Reset isolation comes from the pool: verifiers shards a taskset across `spawn`-ed
 workers and each worker checks out its own desktop, so the isolation property
@@ -37,10 +37,10 @@ class SignOfLifeTask(
     walks the MRO and sorts by (priority, name), so no mixin can shadow another's
     signal by accident.
 
-    `evals.oracles.PairedArmDivergence` is deliberately NOT mixed in: a
-    `@vf.group_reward` makes the episode require `n >= 2` (`env.py:308-312`), which
-    would break every single-sample gate run. Mix it in for an explicit two-arm
-    comparison run and nowhere else.
+    `evals.oracles.PairedArmDivergence` is not mixed in: a `@vf.group_reward` makes
+    the episode require `n >= 2` (`env.py:308-312`), which would break every
+    single-sample gate run. Mix it in for an explicit two-arm comparison run and
+    nowhere else.
     """
 
     def evaluate_state(

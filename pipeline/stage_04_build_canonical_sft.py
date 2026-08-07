@@ -8,14 +8,11 @@ decided HERE, and the full ``terminal_mode`` matrix incl.
 ``replace_final_assistant``). Input is a run dir holding
 ``stage_03_assemble/trajectories.jsonl``.
 
-The other variant — ``stage_04_build_conversations.py`` — is the current
-generation's single injection point: it joins the stage-03 filter mask with the
-stage-03b goals artifact, applies the system prompt and a terminal token that
-always rides the final assistant turn, and emits
+The other variant — ``stage_04_build_conversations.py`` — joins the stage-03
+filter mask with the stage-03b goals artifact, applies the system prompt and a
+terminal token that always rides the final assistant turn, and emits
 ``artifact_type = "juergen_annotation_conversations"``; its train/val split is
-applied downstream in stage 06 (``--val_fraction``). Neither subsumes the other:
-this file owns the canonical-SFT artifact contract and the terminal-mode matrix;
-that file owns the filter+goals join. Prefer that one for new datasets.
+applied downstream in stage 06 (``--val_fraction``). Prefer it for new datasets.
 
     PYTHONPATH=. python3 -m pipeline.stage_04_build_canonical_sft \\
         --run-dir <run with stage_03_assemble/> --output-dir <dest>
@@ -157,10 +154,10 @@ def apply_terminal_policy(
         raise ValueError("terminal_token is required when terminal_mode is not 'none'")
     terminal_message = {"role": "assistant", "content": text_content(terminal_token)}
     if terminal_mode == "append_to_final_assistant":
-        # Correct terminal policy: ride the token at the END of the final action's own turn
-        # ("<action>\n<TERMINATE>"). Keeps user/assistant alternation — at inference the model
-        # always sees an observation between its outputs, so a STANDALONE terminal assistant
-        # turn (append_assistant) trains an out-of-distribution state.
+        # Ride the token at the end of the final action's own turn
+        # ("<action>\n<TERMINATE>"), keeping user/assistant alternation. At inference the
+        # model always sees an observation between its outputs, so a standalone terminal
+        # assistant turn (append_assistant) trains an out-of-distribution state.
         for idx in range(len(messages) - 1, -1, -1):
             if messages[idx].get("role") == "assistant":
                 parts = messages[idx].get("content") or []

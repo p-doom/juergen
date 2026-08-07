@@ -10,40 +10,37 @@ Layering (see stage_03_filter / lib/views):
     selected frame to the end of master coverage.
   * A *dead zone* is a span whose pixels the trainee never sees: black frames,
     missing master coverage, and the span before the first selected frame.
-    Idle-dropped spans are NOT dead zones (they are empty of events by
+    Idle-dropped spans are not dead zones (they are empty of events by
     definition; windows pass over them).
 
-STATE layer vs LABEL layer: ``apply_label_policy`` never deletes an event — it
+State layer vs label layer: ``apply_label_policy`` never deletes an event — it
 returns every parsed event annotated with a disposition (owning window, clamped
 label time, or a discard reason), so stateful formatters (e.g. cumulative
-position) can fold over the FULL stream while emitting labels only for owned
+position) can fold over the full stream while emitting labels only for owned
 events.
 
-Dead-zone label policy (the load-bearing rules):
+Dead-zone label policy:
   * Mouse move / scroll deltas inside a dead zone are discarded from labels
     (counted per zone reason).
   * When the keylog runs past the video's last frame, those events fall in the
-    trailing ``no_coverage`` zone and are DISCARDED — never folded into the last
-    selected frame's action. Nothing was visible, so nothing is supervised: the
-    final label must not carry deltas the trainee had no frame for.
-  * A key/button press+release pair straddling a dead zone is COMPLETED by
+    trailing ``no_coverage`` zone and are discarded — never folded into the last
+    selected frame's action, since nothing was visible there.
+  * A key/button press+release pair straddling a dead zone is completed by
     clamping the unseen endpoint to the zone boundary: release in a zone is
-    emitted at the zone START (tail of the last visible window — after its
-    native events); press in a zone is emitted at the zone END (head of the
+    emitted at the zone start (tail of the last visible window — after its
+    native events); press in a zone is emitted at the zone end (head of the
     first visible window — before its native events). Clamping to boundaries
     preserves event order automatically and resolves staggered combos
     (+ALT +TAB) per key, so alt-tab-style transition supervision survives the
     black flash the transition itself causes.
   * A pair fully inside dead zones (no visible window between its endpoints)
-    is discarded. A press in a dead zone that is NEVER released is discarded
-    too: clamping it forward would emit a press with no matching release — an
-    unbalanced label either way, so the clamp buys nothing.
+    is discarded. A press in a dead zone that is never released is discarded
+    too: clamping it forward would emit a press with no matching release.
   * Every removal/clamp is counted (``PolicyCounters``); zero dangling keys from
-    dead zones by construction. That guarantee is why the clamp exists rather
-    than a drop: a press whose release is silently dropped leaves the key held
-    for the REST OF THE CONVERSATION, so every later label is wrong in a way
-    nothing downstream can detect. The counters double as a per-segment
-    realignment health metric.
+    dead zones by construction. Dropping a release instead of clamping it would
+    leave the key held for the rest of the conversation, making every later
+    label wrong undetectably. The counters double as a per-segment realignment
+    health metric.
 """
 
 from __future__ import annotations
@@ -320,7 +317,7 @@ def apply_label_policy(
     """Assign every event a label disposition per the dead-zone policy.
 
     Returns one LabeledEvent per input event (same order) + counters. Pair
-    matching runs a segment-global held-set over the FULL stream first (a press
+    matching runs a segment-global held-set over the full stream first (a press
     of an already-held name is redundant, a release of an un-held name is
     dangling — identical dedup to ``common.aggregate_actions``), then each
     canonical pair is completed/clamped/dropped by where its endpoints fall."""
@@ -331,7 +328,7 @@ def apply_label_policy(
 
     labeled = [LabeledEvent(event=e, label_t=e.t_s, window=None) for e in events]
 
-    # --- pass 1: held-set pair matching over the full stream ---------------
+    # Pass 1: held-set pair matching over the full stream.
     held: dict[str, int] = {}  # name -> labeled index of the opening press
     pairs: list[tuple[int, int | None]] = []  # (press idx, release idx | None)
     for i, le in enumerate(labeled):
@@ -355,7 +352,7 @@ def apply_label_policy(
         pairs.append((press_idx, None))
     counters.n_held_at_end = len(held)
 
-    # --- pass 2: move/scroll deltas — owned or discarded --------------------
+    # Pass 2: move/scroll deltas — owned or discarded.
     for le in labeled:
         if le.event.kind not in ("move", "scroll"):
             continue
@@ -366,7 +363,7 @@ def apply_label_policy(
             le.discard_reason = zone.reason
             counters.count_discarded_delta(zone.reason)
 
-    # --- pass 3: pairs — emit, clamp, or drop -------------------------------
+    # Pass 3: pairs — emit, clamp, or drop.
     def _drop_pair(press: LabeledEvent, release: LabeledEvent | None) -> None:
         press.window = None
         press.discard_reason = "pair_in_dead_zone"
@@ -390,7 +387,7 @@ def apply_label_policy(
             r_tick = _tick(release.event.t_s, master_fps) if release is not None else None
             if release is None:
                 # Never released: a clamped press would emit a lone +KEY with
-                # no matching release — unbalanced either way, so discard.
+                # no matching release, so discard it.
                 press.discard_reason = "unreleased_press_in_dead_zone"
                 counters.n_unreleased_press_dropped += 1
                 continue

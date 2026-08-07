@@ -2,10 +2,9 @@
 
 One fixed development gate — not a benchmark, not a train/dev/test split. The
 loader's job is to refuse drift: exactly four cells, exactly the four capability
-kinds, unique ids, `max_steps` in [1, 12], `final_benchmark` false. Every check is
-kept from the original loader, and `manifest_sha256` is the canonical-JSON hash of
-the same bytes, so a run's recorded suite hash stays comparable across the
-refactor (`1bf13a84808fd144cf6565c61a303d97e37716d7129f22f9ae46a4dcc3bfbaac`).
+kinds, unique ids, `max_steps` in [1, 12], `final_benchmark` false.
+`manifest_sha256` is the canonical-JSON hash of the manifest bytes; the current
+value is `1bf13a84808fd144cf6565c61a303d97e37716d7129f22f9ae46a4dcc3bfbaac`.
 """
 
 from __future__ import annotations
@@ -39,14 +38,14 @@ ALLOWED_KINDS = {
 SUBMIT_VERBS = ("press enter", "press return", "hit enter", "and press ⏎")
 """Instruction phrases that make submission part of the cell's own requirement.
 
-Used by `_check_no_submit_consistency` to make the item-14 defect class
-structurally unreachable rather than a comment."""
+Used by `_check_no_submit_consistency` to refuse a cell that is both listed in
+`NO_SUBMIT_CELLS` and phrased as a submission."""
 
 NO_SUBMIT_CELLS: frozenset[str] = frozenset()
 """Cells whose success must not depend on pressing Return, read by failure-mode
 indicator D.
 
-**Empty, and that is the resolved state, not an oversight.** No cell in this suite
+Empty, and that is the resolved state, not an oversight: no cell in this suite
 qualifies. `terminal_exact_text`, the only plausible candidate, requires submission
 four ways over:
 
@@ -55,20 +54,18 @@ four ways over:
     `IFS= read -r` only once a newline arrives;
   * its oracle requires `capture_file_exists`, and the capture file is written by the
     line *after* `read` returns — so the file's existence IS evidence of a Return;
-  * its **oracle control arm** — the arm the calibration defines as 4/4 — emits
+  * its oracle control arm — the arm the calibration defines as 4/4 — emits
     `0 0 0 ; +Return -Return`.
 
-So indicator D was penalising the behaviour four independent parts of the cell
-require, including the gold plan. A cell whose own instruction demands submission is
-not a no-submit cell.
+Indicator D was therefore penalising the behaviour four independent parts of the
+cell require, including the gold plan.
 
-Two consequences a reader needs. First, because this was the *only* entry, indicator
-D never had a valid cell to fire on in this suite: every non-zero D reading on the
-sign-of-life gate was this misclassification, and every future one is now
-structurally zero here until a genuine no-submit cell is added. Second, D is a
-`@vf.metric`, never a reward, and `no_submit` is read in exactly one place
-(`indicators.py:231`) — so no published pass count, including the Phase-B-compact
-2/4, was ever a function of this flag.
+Two consequences. Because this was the only entry, indicator D never had a valid
+cell to fire on in this suite: every non-zero D reading on the sign-of-life gate was
+this misclassification, and D is structurally zero here until a genuine no-submit
+cell is added. And D is a `@vf.metric`, never a reward, with `no_submit` read in
+exactly one place (`indicators.py:231`), so no published pass count — including the
+Phase-B-compact 2/4 — was ever a function of this flag.
 
 Adding a genuine no-submit cell is supported and checked: the loader refuses a cell
 that is both listed here and phrased as a submission (`SUBMIT_VERBS`)."""
@@ -105,9 +102,8 @@ def canonical_json(value: object) -> bytes:
 def _check_no_submit_consistency(tasks: list["DevelopmentTask"]) -> None:
     """Refuse a suite whose instructions and whose indicators disagree.
 
-    This is the general form of the item-14 defect: an indicator must never penalise
-    an action the cell's own instruction demands. Two ways to get that wrong, both
-    refused here rather than left as a comment:
+    An indicator must never penalise an action the cell's own instruction demands.
+    Two ways to get that wrong, both refused here:
 
       * a cell listed in `NO_SUBMIT_CELLS` whose instruction says "press Enter" — the
         exact contradiction that made indicator D fire on the gold control arm;

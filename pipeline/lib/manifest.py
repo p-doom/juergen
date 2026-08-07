@@ -1,13 +1,12 @@
 """Shared helper for writing the pipeline ``manifest.json``.
 
 Per pipeline_task() contract (pmanager.configs.schema.pipeline_task), every
-pipeline entrypoint MUST write ``<output_dir>/manifest.json`` before exiting
+pipeline entrypoint must write ``<output_dir>/manifest.json`` before exiting
 cleanly. pmanager polls for this file to detect dataset completion and
 register the dataset in its registry. pmanager does not fabricate one.
 
 The manifest captures: stage name, every config param the entrypoint received,
-input fingerprints (paths + key file hashes), output statistics. This is what
-makes the dataset reproducible at audit time.
+input fingerprints (paths + key file hashes), output statistics.
 """
 
 from __future__ import annotations

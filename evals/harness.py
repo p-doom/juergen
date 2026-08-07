@@ -7,10 +7,9 @@ The loop:
 
 A task family is a taskset plus a `Preparer`; an arm is a `DesktopHarnessConfig`.
 
-What this file deliberately does NOT own, and who does: the sglang lifecycle and
-the endpoint (verifiers), qemu boot and port allocation (the desktop pool), the
-CLI and config (verifiers), and `AsyncOpenAI` construction and sampling
-(`agent.Agent`).
+What this file does not own, and who does: the sglang lifecycle and the endpoint
+(verifiers), qemu boot and port allocation (the desktop pool), the CLI and config
+(verifiers), and `AsyncOpenAI` construction and sampling (`agent.Agent`).
 """
 
 from __future__ import annotations
@@ -72,7 +71,7 @@ class Desktop(Protocol):
 
 
 class HistoryConfig(vf.BaseConfig):
-    """The injected history policy. This is the whole A/B surface."""
+    """The injected history policy."""
 
     name: str = "interleaved_frames"
     n_history_frames: int = Field(default=16, ge=1)
@@ -114,10 +113,8 @@ class SettleConfig(vf.BaseConfig):
 class ScriptedConfig(vf.BaseConfig):
     """Oracle / negative-control cells: no model, the same codec and executor.
 
-    This is what makes the gate a *calibrated* gate rather than a thermometer with
-    no fixed points. The oracle arm must read 4/4 and the negative arm 0/4 through
-    the identical parse and compile path the model arm uses; a control that
-    bypassed the codec would certify nothing about the codec.
+    The oracle arm must read 4/4 and the negative arm 0/4 through the same parse
+    and compile path the model arm uses.
     """
 
     enabled: bool = False
@@ -127,9 +124,6 @@ class ScriptedConfig(vf.BaseConfig):
 class BudgetConfig(vf.BaseConfig):
     """Hard per-episode ceilings: model turns, dispatched operations, output
     tokens, wall time.
-
-    Each is computable from what the episode already records. A budget nobody can
-    compute is a budget that silently never fires.
     """
 
     model_turns: int = Field(default=0, ge=0)
@@ -165,10 +159,10 @@ class DesktopPoolConfig(vf.BaseConfig):
     session_kwargs: dict[str, Any] = Field(default_factory=dict)
     """Passed verbatim to the session-pool constructor named by `pool_target`."""
     pool_target: str = "pixeldesk.vm.pool:DesktopSessionPool"
-    """The session-pool **constructor**, as `module:attribute`.
+    """The session-pool constructor, as `module:attribute`.
 
-    A constructor, not a provider name. Override this to inject a fake pool, never
-    to select a VM backend."""
+    A constructor, not a provider name. Override it to inject a fake pool, not to
+    select a VM backend."""
     hide_gpu_during_boot: bool = True
     """Blank `CUDA_VISIBLE_DEVICES` while the VM boots: the process that forks
     qemu may also hold a GPU, and a child that inherits the visible device can
@@ -180,13 +174,13 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     """Grammar entry-point name. The one field a grammar A/B changes."""
     system_prompt_override: str | None = None
     system_prompt_sha256: str | None = None
-    """A checkpoint's sealed training-prompt digest, **recorded, never enforced.**
+    """A checkpoint's sealed training-prompt digest. Recorded, never enforced.
 
-    `codec.describe()` is docstring-derived and deliberately NOT byte-identical to
-    a checkpoint's sealed training prompt, so a hash gate here would fail every
-    run. The digests ride `trace.info["prompt"]` as data alongside the codec's own
-    `report()`; a run that must not be compared across the prompt boundary is
-    identifiable from the record rather than blocked by an exception."""
+    `codec.describe()` is docstring-derived and not byte-identical to a
+    checkpoint's sealed training prompt, so a hash gate here would fail every run.
+    The digests ride `trace.info["prompt"]` as data alongside the codec's own
+    `report()`, so a run that must not be compared across the prompt boundary is
+    identifiable from the record."""
     history: HistoryConfig = HistoryConfig()
     images: ImageBudgetConfig = ImageBudgetConfig()
     settle: SettleConfig = SettleConfig()
@@ -203,11 +197,11 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     `agent.agent.resolve_sampling`."""
     top_p: float | None = None
     stop_on_click: bool = False
-    """End the episode at the first left-button press. Only freeroll had it; it
-    turns a free rollout into a single-decision probe without a second driver."""
+    """End the episode at the first left-button press, turning a free rollout into
+    a single-decision probe."""
     require_unsolved_start: bool = True
     """Refuse to score a cell whose postcondition already holds before the first
-    action. A gate that starts solved measures nothing."""
+    action."""
     evaluate_on_finish: bool = False
     """Call the session's OSWorld `evaluate()` and publish it as `task_reward`."""
     prefer_context_transport: bool = False
@@ -281,7 +275,7 @@ def _geometry(session: Any) -> Any:
     """The `pixeldesk.geometry.DisplayGeometry` a codec compiles against.
 
     Not a `(w, h)` pair: `codec.compile` clamps against the full display
-    description, and handing it a bare size would put the clamp back on the caller —
+    description, and handing it a bare size puts the clamp back on the caller,
     which is where the coordinate bugs lived.
     """
     from pixeldesk.geometry import DisplayGeometry  # type: ignore[import-not-found]
@@ -400,21 +394,16 @@ def _codec(name: str) -> Any:
 class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
     SUPPORTS_MESSAGE_PROMPT = True
 
-    # -- the one subclass seam ------------------------------------------- #
-
     def pool_factory(self) -> Any:
         """Build the underlying session pool.
 
-        The only thing an environment family may override. Real desktops come from
-        `pixeldesk.vm.pool.DesktopSessionPool`; the container-free RL envs return
-        an in-process virtual desktop with the same session surface, which is why
-        they need no episode driver of their own.
+        The one override point for an environment family. Real desktops come from
+        `pixeldesk.vm.pool.DesktopSessionPool`; the container-free RL envs return an
+        in-process virtual desktop with the same session surface.
         """
         return default_pool_factory(
             dict(self.config.pool.session_kwargs), self.config.pool.pool_target
         )
-
-    # -- provenance metrics (Harness.score runs @metric too) -------------- #
 
     @vf.metric
     async def harness_provenance(self, trace: vf.Trace) -> dict[str, float]:
@@ -428,8 +417,6 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         if self.config.scripted.enabled:
             metrics["control_conformant"] = float(result.get("control_ok") or 0.0)
         return metrics
-
-    # -- the episode ------------------------------------------------------ #
 
     async def launch(
         self,
@@ -447,10 +434,10 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         if not isinstance(trace.state, DesktopState):
             raise TypeError("DesktopHarness requires DesktopState")
 
-        # Everything resolvable from config, resolved before a VM is booted. An
-        # unknown grammar, an unregistered task kind and a scripted arm on a family
-        # with no gold plan are all config errors, and discovering one at step 1 has
-        # already cost a boot and the cell's whole guest setup.
+        # Everything resolvable from config, resolved before a VM is booted:
+        # an unknown grammar, an unregistered task kind and a scripted arm on a
+        # family with no gold plan are config errors, and discovering one at step 1
+        # has already cost a boot and the cell's whole guest setup.
         codec = _codec(self.config.codec)
         preparer = preparer_for(task.kind)
         if self.config.scripted.enabled and not callable(
@@ -492,10 +479,10 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             if lease is not None:
                 # `_run` publishes an episode failure as `infra_invalid` instead of
                 # letting it escape, so this flag would otherwise only ever catch an
-                # `acquire` failure. That matters because `failed` is what makes
-                # pixeldesk RETIRE the VM rather than hand it to the next rollout
-                # (`vm/pool.py:509-519`): a wedged guest — dead executor transport,
-                # unreadable state — was being recycled as healthy.
+                # `acquire` failure. `failed` is what makes pixeldesk retire the VM
+                # rather than hand it to the next rollout (`vm/pool.py:509-519`):
+                # a wedged guest — dead executor transport, unreadable state — was
+                # being recycled as healthy.
                 published = trace.info.get(RESULT_KEY) or {}
                 if published.get("validity") == "infra_invalid":
                     failed = True
@@ -604,7 +591,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 )
                 # Only a real turn updates the provenance. Assigning unconditionally
                 # erased it on the terminal non-turn: a scripted arm exhausting its
-                # script is the *normal* end of every negative control, and it left
+                # script is the normal end of every negative control, and it left
                 # `sampling` empty in the published result, so `SamplingProvenance`
                 # reported temperature -1.0 and no source for the whole arm.
                 if step_sampling:
@@ -727,12 +714,11 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
 
         `trace.state` is `exclude=True` and never reaches `traces.jsonl`, so the same
         fields are mirrored into `trace.info[RESULT_KEY]`; that mirror is what every
-        reward, metric and offline re-score reads, which is why there is exactly one
-        of them rather than a per-runner `result.json` schema.
+        reward, metric and offline re-score reads.
 
-        `success` is `None`, not `False`, on infrastructure failure. Rewards raise on
-        `None` so prime-rl drops the rollout — a booted-VM failure trained as a task
-        failure is worse than no data.
+        `success` is `None`, not `False`, on infrastructure failure: rewards raise on
+        `None` so prime-rl drops the rollout instead of training a booted-VM failure
+        as a task failure.
         """
         state.outcome = outcome
         state.infra_error = infra_error
@@ -774,8 +760,6 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         self._persist(artifacts, trace, frames)
         trace.stop(outcome)
 
-    # -- steps ------------------------------------------------------------ #
-
     async def _decide(
         self,
         agent: Agent,
@@ -807,7 +791,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 wire_body_keys=(),
             )
             # Rendered here, not up front: the relative arms resolve their delta
-            # against a cursor read taken NOW.
+            # against a cursor read taken now.
             text = await asyncio.to_thread(
                 self._render_step, preparer, session, task, codec, script[step - 1]
             )
@@ -853,8 +837,6 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             "action_error": action_error,
         }
 
-    # -- family hooks ----------------------------------------------------- #
-
     async def _observe(
         self, preparer: Any, session: Any, task: DesktopTaskData
     ) -> bytes:
@@ -862,7 +844,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
 
         `Preparer.observe` is how `target_box` draws its synthetic box onto every
         real screenshot. It is a harness-side hook rather than a session method
-        because the annotation is a *task* property (which box) and the pool has no
+        because the annotation is a task property (which box) and the pool has no
         task; threading it through the session would mean mutating a shared,
         concurrently-checked-out object.
         """
@@ -877,14 +859,11 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
     def _script_plan(self, preparer: Any, task: DesktopTaskData) -> list[Any]:
         """The scripted arm's plan: intents, not yet rendered to text.
 
-        Deliberately *not* rendered up front. `compact_raw.from_target` (and the
-        relative renderers generally) need **one fresh cursor read** and are wrong if
-        that read is stale, while `native_absolute_control.from_target` needs only
-        element geometry. Rendering the whole script before the first action would
-        make every click after the first resolve against a stale cursor — the
-        asymmetry is real, it is part of what a native-vs-compact comparison
-        measures, and rendering per step is the way to keep it honest instead of
-        hiding it.
+        Not rendered up front. `compact_raw.from_target` (and the relative renderers
+        generally) need one fresh cursor read and are wrong if that read is stale,
+        while `native_absolute_control.from_target` needs only element geometry.
+        Rendering the whole script before the first action would make every click
+        after the first resolve against a stale cursor.
         """
         return list(preparer.script_plan(task, negative=self.config.scripted.negative))
 
@@ -893,9 +872,8 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
     ) -> str:
         """Render one intent into codec text, reading the cursor now.
 
-        Rendering to *codec text* rather than straight to operations is what makes
-        4/4 and 0/4 mean something: the control arms exercise the same `parse` and
-        `compile` the model arm does.
+        Codec text rather than operations directly, so the control arms exercise the
+        same `parse` and `compile` the model arm does.
         """
         return preparer.render_step(session, task, codec=codec, intent=intent)
 
@@ -903,9 +881,8 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         """Early stop when the family's postcondition is observable in-loop.
 
         The authoritative verdict is still the oracle reward; this only decides
-        whether to keep spending turns. `sign_of_life_v2` published the verdict per
-        step for exactly this reason, and grounding stops at nothing (it wants the
-        full K frames so trajectory length is comparable across regimes).
+        whether to keep spending turns. Grounding never stops early — it wants the
+        full K frames so trajectory length is comparable across regimes.
         """
         del task
         return probe.get("postcondition_success") is True
@@ -926,18 +903,15 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             _LOGGER.warning("grounding cell %s starts inside its bbox", task.name)
 
     def _prompt_report(self, codec: Any) -> dict[str, Any]:
-        """Prompt provenance as data. Never raises.
+        """Prompt provenance as data. Never raises; a digest mismatch is recorded,
+        never enforced.
 
-        A digest mismatch is recorded, never enforced: what a reader needs is
-        which prompt produced a number, not a refusal to produce one.
-
-        **Baseline warning, recorded on every run:** the off-the-shelf
-        Qwen3-VL-8B = 33.9% OSWorld-Verified figure is our only calibrated
-        reference and was measured through the *old* sealed prompts.
-        `native_absolute`, `move_rel` and `native_absolute_control` now describe
-        themselves from docstrings and are not byte-identical to those prompts, so
-        numbers must not be compared across that boundary and the baseline needs
-        re-measuring through the new prompt.
+        Baseline warning, recorded on every run: the off-the-shelf Qwen3-VL-8B =
+        33.9% OSWorld-Verified figure is our only calibrated reference and was
+        measured through the old sealed prompts. `native_absolute`, `move_rel` and
+        `native_absolute_control` now describe themselves from docstrings and are
+        not byte-identical to those prompts, so numbers must not be compared across
+        that boundary and the baseline needs re-measuring through the new prompt.
         """
         prompt = self.config.system_prompt_override
         if prompt is None:
@@ -962,8 +936,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         """Calibration conformance for a control arm; `None` for a model arm.
 
         Oracle arm: must pass. Negative arm: must fail. A model arm has no expected
-        value, so there is nothing to conform to — a field that cannot fail would
-        read as a green light while measuring nothing.
+        value, so there is nothing to conform to.
         """
         if not state.scripted:
             return None
@@ -993,8 +966,6 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             return None
         return score
 
-    # -- artifacts -------------------------------------------------------- #
-
     def _artifact_dir(self, task: DesktopTaskData) -> Path:
         root = Path(self.config.artifacts.output_dir or tempfile.gettempdir())
         directory = root / (task.name or f"task_{task.idx:04d}")
@@ -1021,7 +992,7 @@ def _is_left_click(decision: Decision) -> bool:
     """True iff this action presses the left mouse button.
 
     Reads the compiled operations rather than the grammar's own action shape, so it
-    works for every codec — the operation stream is the shared vocabulary.
+    works for every codec.
     """
     for operation in decision.operations:
         kind = getattr(operation, "kind", None) or (

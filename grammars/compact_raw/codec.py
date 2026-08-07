@@ -1,7 +1,7 @@
 """The compact raw-relative bare-line grammar (the Phase-B paired-eval arm).
 
 One sentence of prose, then one bare action line ``dx dy scroll`` or
-``dx dy scroll ; EVENTS``, where dx and dy are RAW relative screen pixels.
+``dx dy scroll ; EVENTS``, where dx and dy are raw relative screen pixels.
 
 Collapses into one codec:
 
@@ -16,18 +16,15 @@ Collapses into one codec:
 
 Semantics chosen where the sources disagreed:
 
-* The action is the LAST non-empty line. ``parse_compact_raw`` read
-  ``splitlines()[0]`` — the FIRST line — while ``_action_line`` handed it the
-  last of at most two lines, so the same completion could resolve to two
-  different actions depending on which entry point saw it. The prompt says
-  prose first, then the action line, so the last line is the action.
-* ``_action_line`` also rejected any completion with more than two non-empty
-  lines. That cap is gone: extra reasoning is not a format error.
+* The action is the last non-empty line; the prompt puts prose first, then the
+  action line. ``parse_compact_raw`` read ``splitlines()[0]`` instead.
+* There is no cap on the number of non-empty lines. ``_action_line`` rejected
+  any completion with more than two.
 * The canonical separator is ``" ; "``. ``compile_compact`` emitted ``"; "``;
   both parse, one is written.
-* There are deliberately no control tokens. This arm spells idling as
-  ``0 0 0`` and ends episodes by semantic-step accounting, not TERMINATE. Use
-  ``deltatype_v2`` if the grammar needs NO_OP / TERMINATE / FAIL.
+* There are no control tokens. This arm spells idling as ``0 0 0`` and ends
+  episodes by semantic-step accounting, not TERMINATE. Use ``deltatype_v2`` if
+  the grammar needs NO_OP / TERMINATE / FAIL.
 """
 
 from __future__ import annotations
@@ -44,8 +41,8 @@ from .. import _support
 PRODUCER = {"prompt_file": "paired_runtime/prompts/compact_raw_phaseb.txt"}
 
 #: Its matched absolute twin. The two differ only in whether the leading
-#: integers name a position or an offset, so anything changed here must be
-#: changed there or the paired comparison measures the change instead.
+#: integers name a position or an offset; a change to one must be made to the
+#: other.
 PAIRED_WITH = "native_absolute_control"
 
 
@@ -84,10 +81,9 @@ def action_from_dict(value: dict[str, Any]) -> CompactRawAction:
 
 
 class CompactRawCodec:
-    # The class docstring IS the prompt preamble, and it is assigned below from
-    # ``_support.MATCHED_ARM_PREAMBLE`` rather than written here, because
-    # ``native_absolute_control`` must render the byte-identical text. The two had
-    # already drifted by a line-wrap when each held its own copy.
+    # The class docstring is the prompt preamble. It is assigned below from
+    # ``_support.MATCHED_ARM_PREAMBLE`` so that ``native_absolute_control``
+    # renders byte-identical text.
 
     name = "compact_raw"
 
@@ -110,8 +106,7 @@ class CompactRawCodec:
 
     # The three element productions and the notes are shared verbatim with the
     # absolute arm, so their docstrings come from the same constants as the
-    # preamble. Only the mouse-triple productions above differ, and that
-    # difference IS the experiment.
+    # preamble. Only the mouse-triple productions above differ.
 
     @_support.production("+NAME")
     def _press(self) -> None: ...
@@ -123,8 +118,6 @@ class CompactRawCodec:
     def _type(self) -> None: ...
 
     def notes(self) -> None: ...
-
-    # -- interface ---------------------------------------------------------
 
     def describe(self) -> str:
         return _support.render_spec(self)
@@ -177,8 +170,6 @@ class CompactRawCodec:
             _support.lower_transitions(action.elements, error=CompactRawError)
         )
         return tuple(operations)
-
-    # -- training-target construction --------------------------------------
 
     def action_from_operations(
         self,

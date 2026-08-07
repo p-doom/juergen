@@ -1,93 +1,82 @@
 #!/usr/bin/env python3
-"""ONE converter: ABSOLUTE teacher rollouts -> training records in ANY target grammar.
+"""One converter: absolute teacher rollouts -> training records in any target grammar.
 
 Replaces the five ``convert_abs_to_{absolute,relative,moverel,diffabs,deltatype}.py``
-scripts (1,389 LOC of copy-paste). Everything those five shared — rollout walking,
-task-success / slug filtering, per-step frame pairing, parse-error accounting,
-terminate handling, message assembly, the deterministic split, the manifest — lives
-here exactly once. Everything they differed in is the ENCODING, which is now the
-target grammar's job: this script is parameterized by ``--codec`` and hands the work
-to ``grammars.load(name)``.
+scripts (1,389 LOC). Rollout walking, task-success / slug filtering, per-step frame
+pairing, parse-error accounting, terminate handling, message assembly, the
+deterministic split and the manifest live here once; the encoding is the target
+grammar's job, selected with ``--codec``:
 
     codec  = grammars.load("deltatype_v2")     # grammars/deltatype_v2/
     action = codec.action_from_operations(ops, geometry=geom, cursor=cursor_before)
     text   = codec.format(action)              # the assistant training target
     prompt = codec.describe()                  # the matching system prompt
 
-The seam between this converter and a grammar is the **absolute-Operation
-vocabulary** documented in ``grammars/_support.py`` (``move_to``, ``glide_to``,
+The seam between this converter and a grammar is the absolute-Operation
+vocabulary documented in ``grammars/_support.py`` (``move_to``, ``glide_to``,
 ``mouse_down/up``, ``scroll``, ``key_down/up``, ``coalesced_type``, ``wait`` — every
-coordinate an absolute, clamped screen pixel). That is deliberate and it is the
-same seam ``Codec.compile_action`` uses in the other direction: the converter
-lowers the teacher's absolute ``computer_use`` call into Operations, and the codec
-lifts Operations into its own Action in its own coordinate convention. No
-coordinate space is ever named here — that is the grammar's business, which is why
-there is no ``--coord_space`` flag any more (the five originals each hard-coded or
-flagged one; the convention now IS the grammar you pick).
+coordinate an absolute, clamped screen pixel). It is the same seam
+``Codec.compile_action`` uses in the other direction: the converter lowers the
+teacher's absolute ``computer_use`` call into Operations, and the codec lifts
+Operations into its own Action in its own coordinate convention. No coordinate
+space is named here — the convention is a property of the grammar you pick, so
+there is no ``--coord_space`` flag.
 
 The geometry the lift needs comes from the freeroll log, not from the model's text:
 ``cursor_before`` (the real VM cursor before the action) and ``intended_target``
 (the absolute pixel the teacher's coordinate resolved to, post-scale, post-clip).
 Because ``cursor_before[t] == intended_target[t-1]``, a relative codec's diff
-telescopes exactly — the cursor motion is IDENTICAL to the teacher's, only the
+telescopes exactly — the cursor motion is identical to the teacher's, only the
 encoding changes.
 
-★ PROSE IS PRESERVED BY DEFAULT (``--keep_prose``, on unless ``--no_keep_prose``).
-This is not a nicety. Measured over ``/fast/project/HFMI_SynergyUnit/p-doom_shared/
-franz/onpolicy_distill/converted/*/_normalized/*/chat.jsonl`` (2026-08-05), all
-three arms built from ``rollouts/teacher_8b_osworld_train_v1``:
+Prose is preserved by default (``--keep_prose``, on unless ``--no_keep_prose``).
+Measured over ``/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/
+onpolicy_distill/converted/*/_normalized/*/chat.jsonl`` (2026-08-05), all three
+arms built from ``rollouts/teacher_8b_osworld_train_v1``:
 
     osworld_train_absolute        10721 / 10721 assistant turns prose-bearing
     osworld_train_deltatype_raw       0 / 11337
     osworld_train_diffabs             0 / 11102
 
-Under a uniform loss mask the relative arms therefore got ZERO reasoning
-supervision while the absolute control got full reasoning supervision, which
-invalidates every TRAINED absolute-vs-relative comparison built from them.
-(``onpolicy_distill/scripts/action_span_conversion.py`` — outside this repo — is
-the predecessor's fix for the same problem: prose-preserving action-span
-rewriting plus a fail-closed manifest validator.) Prose is therefore applied
-uniformly to every codec here, the thinking system prompt is selected whenever
-prose is kept, prose coverage is a first-class manifest field, and the run ABORTS
-at zero coverage (``_assert_prose_coverage``) rather than silently shipping
-another uncomparable arm.
+Under a uniform loss mask the relative arms carried zero reasoning supervision
+while the absolute control carried full coverage, which invalidates every trained
+absolute-vs-relative comparison built from them. So prose is applied uniformly to
+every codec, the thinking system prompt is selected whenever prose is kept, prose
+coverage is a manifest field, and the run aborts at zero coverage
+(``_assert_prose_coverage``).
 
-The zero-abort is a FLOOR, not a comparison: ``100% vs 5%`` sails through it. The
-defect is an ASYMMETRY BETWEEN ARMS, so a second check measures the asymmetry
-directly (``prose_divergence``). ``--codec`` is single-valued, so one invocation
-is one arm; sibling arms of a sweep are sibling ``--out_dir``s, each with a
-``convert_manifest.json``. After building, this arm's prose coverage is compared
-against every sibling manifest under ``--out_dir``'s parent that records the
-SAME rollout selection, and a relative divergence above
-``--prose_divergence_tol`` is reported (``--prose_divergence warn``, the default;
-``abort`` refuses to write, ``off`` skips) and recorded in the manifest under
-``prose_divergence``.
+The zero-abort is a floor, not a comparison: ``100% vs 5%`` passes it. A second
+check measures the asymmetry between arms directly (``prose_divergence``).
+``--codec`` is single-valued, so one invocation is one arm and sibling arms of a
+sweep are sibling ``--out_dir``s, each with a ``convert_manifest.json``. After
+building, this arm's prose coverage is compared against every sibling manifest
+under ``--out_dir``'s parent that records the same rollout selection, and a
+relative divergence above ``--prose_divergence_tol`` is reported
+(``--prose_divergence warn``, the default; ``abort`` refuses to write, ``off``
+skips) and recorded in the manifest under ``prose_divergence``.
 
-The gated statistic is coverage over the PRE-CODEC turn population,
-``n_turns_with_prose / (n_turns + n_turns_dropped_by_codec)``, because that
-denominator is codec-invariant in practice (measured identical for all seven
-codecs: 734 on ``teacher_8b_v1``, 1053 on ``v2``, 2011 on ``v3``) while raw
-``prose_turn_frac`` is not — ``diffabs`` cannot spell ``type()``, so on
-``teacher_8b_v1`` it drops 74 of 733 turns, none of them prose-bearing, and its
-raw frac reads 9.96% ABOVE ``deltatype_v2``'s from expressiveness alone. Both
-divergences are recorded; only the normalized one gates.
+The gated statistic is coverage over the pre-codec turn population,
+``n_turns_with_prose / (n_turns + n_turns_dropped_by_codec)``: that denominator is
+codec-invariant in practice (measured identical for all seven codecs: 734 on
+``teacher_8b_v1``, 1053 on ``v2``, 2011 on ``v3``) while raw ``prose_turn_frac``
+is not — ``diffabs`` cannot spell ``type()``, so on ``teacher_8b_v1`` it drops 74
+of 733 turns, none of them prose-bearing, and its raw frac reads 9.96% above
+``deltatype_v2``'s from expressiveness alone. Both divergences are recorded; only
+the normalized one gates.
 
-KNOWN GAPS neither check closes. (1) The divergence check is inherently
-order-dependent: it only sees arms that have already finished, so the first arm
-of a sweep is compared against nothing and an absent or mid-build sibling is
-skipped, never aborts. A sweep is therefore only covered from its second arm
-onwards, and never symmetrically — run the last arm with
-``--prose_divergence abort`` or diff the manifests when the sweep is done.
-(2) It cannot tell a STALE sibling manifest from a current one. (3) A failure
-that zeroes prose in EVERY arm diverges nowhere and is caught only by the
-zero-abort. (4) The normalization deliberately forgives the supervision-density
-difference the trainer actually sees (``diffabs`` gets ~10% more prose per turn
-than ``deltatype_v2`` on ``teacher_8b_v1``); that shows only in the ungated raw
-figure. (5) At small prose counts the statistic is coarse: on
-``teacher_8b_v1``'s 32 prose turns one lost turn is 3.1% and passes, two is 6.25%
-and fires. So still compare ``n_turns``, ``n_turns_with_prose`` and
-``n_turns_dropped_by_codec`` ACROSS arms yourself before believing any format
-comparison.
+Gaps neither check closes. (1) The divergence check is order-dependent: it only
+sees arms that have already finished, so the first arm of a sweep is compared
+against nothing and an absent or mid-build sibling is skipped, never aborts — run
+the last arm with ``--prose_divergence abort`` or diff the manifests when the
+sweep is done. (2) It cannot tell a stale sibling manifest from a current one.
+(3) A failure that zeroes prose in every arm diverges nowhere and is caught only
+by the zero-abort. (4) The normalization forgives the supervision-density
+difference the trainer sees (``diffabs`` gets ~10% more prose per turn than
+``deltatype_v2`` on ``teacher_8b_v1``); that shows only in the ungated raw figure.
+(5) At small prose counts the statistic is coarse: on ``teacher_8b_v1``'s 32 prose
+turns one lost turn is 3.1% and passes, two is 6.25% and fires. So compare
+``n_turns``, ``n_turns_with_prose`` and ``n_turns_dropped_by_codec`` across arms
+before believing any format comparison.
 """
 from __future__ import annotations
 
@@ -108,10 +97,10 @@ if str(REPO_ROOT) not in sys.path:
 import grammars  # noqa: E402
 from grammars import _support  # noqa: E402
 
-# Prepended to a codec's ``describe()`` for thinking+action records so TRAINING
-# matches the thinking EVAL prompt (and is disambiguated from a tool-call-only
-# retention set under an anneal mix). Grammar-independent by construction: it
-# describes the shape of the turn, never the action syntax.
+# Prepended to a codec's ``describe()`` for thinking+action records so training
+# matches the thinking eval prompt (and is disambiguated from a tool-call-only
+# retention set under an anneal mix). Grammar-independent: it describes the
+# shape of the turn, never the action syntax.
 THINKING_PREAMBLE = (
     "For each step, first reason in a single <think>...</think> block — your current "
     "sub-goal and what you observe on the screen — then a one-line `Action:` describing "
@@ -169,7 +158,7 @@ class Step:
 def step_to_operations(step: Step) -> tuple[Any, ...] | None:
     """Lower one teacher step into absolute Operations. ``None`` if off-grammar.
 
-    Coordinates come from ``intended_target``, which is ALREADY the post-scale,
+    Coordinates come from ``intended_target``, which is already the post-scale,
     post-clip absolute pixel the VM acted on — so this never re-resolves a
     coordinate convention, it only re-expresses an action the VM already executed.
     """
@@ -195,9 +184,9 @@ def step_to_operations(step: Step) -> tuple[Any, ...] | None:
             ops.append(_support.mouse_up(button))
     elif kind == "left_click_drag":
         # A press at the current cursor, a timed stroke to the target, a release.
-        # The two bare-token originals degraded this to a stationary `+LMB -LMB`
-        # and threw the stroke away; routing through Operations keeps it, and each
-        # codec renders as much of it as its grammar can express.
+        # The two bare-token originals degraded this to a stationary `+LMB -LMB`,
+        # losing the stroke; routing through Operations keeps it, and each codec
+        # renders as much of it as its grammar can express.
         if cursor is not None:
             ops.append(_support.move_to(cursor))
         ops.append(_support.mouse_down("left"))
@@ -253,7 +242,7 @@ def _number(value: Any, default: float = 0.0) -> float:
 
 #: The keys the teacher collections in scope have used for a scroll magnitude.
 #: The teacher is an external, unversioned producer, so this reads all three —
-#: but ONLY these three, and a step carrying none of them is off-grammar rather
+#: but only these three, and a step carrying none of them is off-grammar rather
 #: than a zero scroll. A zero scroll lowers to `scroll(0, 0)`, which every
 #: bare-token grammar renders as its idle line: a real scroll silently labelled
 #: as doing nothing.
@@ -295,18 +284,18 @@ def _geometry(screen: tuple[int, int]):
 def _lift(codec: Any, ops: tuple[Any, ...], step: Step, terminate: str | None) -> Any:
     """Absolute Operations -> this grammar's Action (the inverse of compile_action).
 
-    The codec owns its coordinate convention, so the codec owns this lift; and it
-    owns how it spells termination, so the same call takes ``terminate`` (``None``
-    for a normal turn, else ``"success"`` / ``"failure"``, with ``ops`` empty).
-    A terminal turn is spelled two ways across the seven grammars — a flag on the
-    Action (``deltatype_v2.fail``, ``diffabs.terminate``,
-    ``ordered_events_v3.terminate``) or a ``terminate`` call inside it
-    (``native_absolute``, ``move_rel``), while ``compact_raw`` and
-    ``native_absolute_control`` cannot express one and raise — so the converter
-    must not reconstruct it by introspecting Action dataclasses.
+    The codec owns its coordinate convention and how it spells termination, so
+    the same call takes ``terminate`` (``None`` for a normal turn, else
+    ``"success"`` / ``"failure"``, with ``ops`` empty). A terminal turn is spelled
+    two ways across the seven grammars — a flag on the Action
+    (``deltatype_v2.fail``, ``diffabs.terminate``, ``ordered_events_v3.terminate``)
+    or a ``terminate`` call inside it (``native_absolute``, ``move_rel``) — while
+    ``compact_raw`` and ``native_absolute_control`` cannot express one and raise.
+    The converter must not reconstruct any of this by introspecting Action
+    dataclasses.
 
-    A grammar that has not implemented this fails HERE, loudly, naming the method
-    it must add — never by silently emitting a differently-encoded dataset.
+    A grammar that has not implemented this raises here, naming the method it
+    must add, rather than emitting a differently-encoded dataset.
     """
     lift = getattr(codec, "action_from_operations", None)
     if not callable(lift):
@@ -342,7 +331,7 @@ def format_step(codec: Any, step: Step) -> str | None:
     try:
         return codec.format(_lift(codec, ops, step, terminate))
     except ValueError:
-        # An expressiveness ceiling, and the ONLY thing a dropped turn may mean.
+        # An expressiveness ceiling, and the only thing a dropped turn may mean.
         # Every codec's error type subclasses ValueError; an AssertionError or a
         # KeyError out of a lift is a broken codec invariant, and swallowing one
         # here booked a bug as a per-arm `n_turns_dropped_by_codec`.
@@ -386,7 +375,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 def _read_slugs(path: str | None, *, flag: str) -> set[str] | None:
     """The slug set from a caller-named file. ``None`` only when no file was named.
 
-    A named-but-absent file RAISES. Reading it as "no filter" would silently
+    A named-but-absent file raises. Reading it as "no filter" would silently
     disable the OSWorld eval-leak drop (``--exclude_slugs``) or the quality keep
     (``--keep_slugs``) and produce a dataset the caller believes is filtered.
     """
@@ -414,12 +403,12 @@ class ConvertStats:
     #: Turns the TEACHER lost (no parsed payload / no computer_use dict). Same
     #: for every codec, so it never skews a cross-arm comparison.
     n_turns_teacher_parse_error: int = 0
-    #: Turns THIS codec could not express, so they are absent from this arm and
+    #: Turns this codec could not express, so they are absent from this arm and
     #: this arm only. Kept separate from the teacher errors because it is the
     #: number that differs between arms built from one collection (e.g. diffabs
     #: cannot spell ``type()`` and compact_raw / native_absolute_control have no
-    #: TERMINATE), and a format comparison is only meaningful if it is equal —
-    #: exactly like ``n_turns_with_prose``.
+    #: TERMINATE); a format comparison is only meaningful if it matches, exactly
+    #: like ``n_turns_with_prose``.
     n_turns_dropped_by_codec: int = 0
 
 
@@ -493,11 +482,10 @@ def convert_rollout(
 
         text = format_step(codec, step)
         if text is None:
-            # Off-grammar for THIS grammar only. Still counted into
-            # ``n_parse_err`` so the max_parse_error_frac gate behaves exactly as
-            # before, but ALSO counted separately: this is the per-arm number,
-            # and it is the reason two arms built from one collection can end up
-            # with different turn sets (see ConvertStats).
+            # Off-grammar for this grammar only. Counted into ``n_parse_err`` so
+            # the max_parse_error_frac gate behaves as before, and counted
+            # separately as the per-arm number: it is why two arms built from one
+            # collection can end up with different turn sets (see ConvertStats).
             n_parse_err += 1
             n_codec_drop += 1
             continue
@@ -554,9 +542,9 @@ def discover_run_dirs(roots: str, *, recursive: bool = False) -> list[Path]:
     ``recursive`` walks nested layouts (what ``convert_abs_to_deltatype.py`` did
     with ``rglob``); the default is the flat one-level layout the other four used.
 
-    A root that is not a directory is fatal. Skipping it silently halves a
-    two-collection build on one typo and the manifest still records the string
-    that was asked for.
+    A root that is not a directory is fatal: skipping it silently would halve a
+    two-collection build on one typo, with the manifest still recording the
+    string that was asked for.
     """
     out: list[Path] = []
     for raw in roots.split(","):
@@ -587,33 +575,25 @@ def split_by_recording(
 
 
 def _assert_prose_coverage(stats: ConvertStats, keep_prose: bool) -> None:
-    """Fail loudly on the exact defect that invalidated the last format comparison.
+    """Refuse to write an empty dataset, or a zero-prose one under ``keep_prose``.
 
     Zero prose under ``keep_prose`` is never a legitimate outcome for teacher
     rollouts (the teacher reasons before acting); it means the prose channel was
-    dropped. Our own measurement over the three arms built from
-    ``rollouts/teacher_8b_osworld_train_v1`` (2026-08-05):
+    dropped — the defect measured on the three ``teacher_8b_osworld_train_v1``
+    arms in the module docstring (absolute 10721/10721 vs deltatype_raw 0/11337
+    and diffabs 0/11102). ``onpolicy_distill/scripts/action_span_conversion.py``,
+    outside this repo, is the predecessor's fix for the same problem.
 
-        osworld_train_absolute        10721 / 10721 assistant turns prose-bearing
-        osworld_train_deltatype_raw       0 / 11337
-        osworld_train_diffabs             0 / 11102
-
-    i.e. the two relative arms carried NO reasoning supervision against the
-    absolute control's full coverage, which made them incomparable.
-    (``onpolicy_distill/scripts/action_span_conversion.py``, outside this repo, is
-    the predecessor's fix for the same problem.) Refuse to write rather than ship
-    another such arm.
-
-    This is a ZERO FLOOR ONLY — it cannot see ``100% vs 5%``. The asymmetry itself
-    is measured by :func:`prose_divergence`.
+    A zero floor only — it cannot see ``100% vs 5%``. The asymmetry itself is
+    measured by :func:`prose_divergence`.
     """
-    # An EMPTY result is never a legitimate build. It is also how the prose guard
-    # gets bypassed if ``n_turns == 0`` returns early: pointing the
-    # converter at a rollout collection whose trajectory file / result schema it
-    # cannot read (e.g. the ``traj.jsonl`` + nested-``params`` layout of
-    # rollouts/teacher_8b_osworld_train_v1, which is where all three arms in the
-    # docstring came from) exited 0 with a zero-record dataset and a manifest reading
-    # prose_turn_frac 0.0. Fail instead of shipping nothing.
+    # An empty result is also how the prose guard gets bypassed if
+    # ``n_turns == 0`` returns early: pointing the converter at a rollout
+    # collection whose trajectory file / result schema it cannot read (e.g. the
+    # ``traj.jsonl`` + nested-``params`` layout of
+    # rollouts/teacher_8b_osworld_train_v1, which is where all three arms above
+    # came from) exited 0 with a zero-record dataset and a manifest reading
+    # prose_turn_frac 0.0.
     if stats.n_turns == 0:
         raise SystemExit(
             f"REFUSING TO WRITE: 0 usable assistant turns from {stats.n_seen} "
@@ -646,16 +626,15 @@ def _assert_prose_coverage(stats: ConvertStats, keep_prose: bool) -> None:
 
 
 #: Default relative tolerance for the cross-arm prose-coverage check, on the
-#: PRE-CODEC statistic (see ``_prose_frac_pre_codec``). Anchored on measurement,
-#: not taste: over real collections the legitimate spread of that statistic
-#: between codecs is exactly 0.00% (teacher_8b_v1/v2/v3, all seven codecs, prose
-#: counts 32/34/4 against an identical pre-codec denominator 734/1053/2011), the
-#: smallest REAL defect instance is compact_raw and native_absolute_control on
-#: teacher_8b_v1 losing 2 of 32 prose turns because they have no TERMINATE token
-#: (6.25%), and the historical defect this whole guard exists for was 100%. 0.05
-#: sits above the observed legitimate spread and below the smallest observed real
-#: defect. Its cost is stated openly: on 32 prose turns a single lost turn is
-#: 3.1% and passes.
+#: pre-codec statistic (see ``_prose_frac_pre_codec``). Chosen from measurement:
+#: over real collections the legitimate spread of that statistic between codecs
+#: is 0.00% (teacher_8b_v1/v2/v3, all seven codecs, prose counts 32/34/4 against
+#: an identical pre-codec denominator 734/1053/2011); the smallest real defect
+#: instance is compact_raw and native_absolute_control on teacher_8b_v1 losing 2
+#: of 32 prose turns because they have no TERMINATE token (6.25%); the historical
+#: defect this guard exists for was 100%. 0.05 sits above the observed legitimate
+#: spread and below the smallest observed real defect. Its cost: on 32 prose
+#: turns a single lost turn is 3.1% and passes.
 PROSE_DIVERGENCE_TOL = 0.05
 
 
@@ -664,15 +643,14 @@ def _abs_or_none(value: Any) -> str | None:
 
 
 def _source_selection(m: dict[str, Any]) -> tuple[Any, ...] | None:
-    """The ROLLOUT SELECTION a manifest was built from — its comparability key.
+    """The rollout selection a manifest was built from — its comparability key.
 
     Two arms are comparable iff they were offered the same rollouts under the same
-    admission filters; the CODEC is what is allowed to differ, and so are the
-    per-arm quality gates (``min_valid_actions`` / ``max_parse_error_frac``),
-    whose effect on prose coverage is part of what we want to see. Paths are
-    resolved so ``dir`` and ``dir/`` are one selection. ``None`` when the manifest
-    does not say (a pre-``n_turns`` manifest, which carries no prose accounting
-    either).
+    admission filters. The codec may differ, and so may the per-arm quality gates
+    (``min_valid_actions`` / ``max_parse_error_frac``), whose effect on prose
+    coverage is part of what the check should see. Paths are resolved so ``dir``
+    and ``dir/`` are one selection. ``None`` when the manifest does not say (a
+    pre-``n_turns`` manifest, which carries no prose accounting either).
     """
     raw = m.get("rollouts_dir")
     if not raw:
@@ -690,7 +668,7 @@ def _source_selection(m: dict[str, Any]) -> tuple[Any, ...] | None:
 
 
 def _pre_codec_turns(m: dict[str, Any]) -> int | None:
-    """Turns this arm was OFFERED: kept turns plus the ones its codec could not spell."""
+    """Turns this arm was offered: kept turns plus the ones its codec could not spell."""
     n, dropped = m.get("n_turns"), m.get("n_turns_dropped_by_codec")
     if not isinstance(n, int) or not isinstance(dropped, int) or (n + dropped) <= 0:
         return None
@@ -698,16 +676,16 @@ def _pre_codec_turns(m: dict[str, Any]) -> int | None:
 
 
 def _prose_frac_pre_codec(m: dict[str, Any]) -> float | None:
-    """Prose coverage over the PRE-CODEC turn population (the codec-invariant one).
+    """Prose coverage over the pre-codec turn population (the codec-invariant one).
 
-    ``prose_turn_frac`` divides by the turns that SURVIVED the codec, so it moves
+    ``prose_turn_frac`` divides by the turns that survived the codec, so it moves
     when a codec is merely less expressive: on ``teacher_8b_v1`` ``diffabs`` drops
     74 of 733 turns, none prose-bearing, and reads 9.96% higher than
     ``deltatype_v2`` for no difference in supervision. Dividing by
     ``n_turns + n_turns_dropped_by_codec`` removes that confound — measured
     identical (734) for all seven codecs there — so what is left moves only when a
-    codec drops a PROSE-BEARING turn, which is never benign under a uniform loss
-    mask. NOTE the invariance is empirical, not structural: a whole record lost to
+    codec drops a prose-bearing turn, which is never benign under a uniform loss
+    mask. The invariance is empirical, not structural: a whole record lost to
     ``max_parse_error_frac`` takes its turns out of both terms, so the denominators
     are compared and a mismatch is reported rather than assumed away.
     """
@@ -745,10 +723,9 @@ def prose_divergence(
     matches this arm's, and reports the relative divergence of
     ``_prose_frac_pre_codec``.
 
-    Deliberately non-fatal by itself (the caller decides): a sibling arm may be
-    mid-build, absent, or a legitimately prose-free ``--no_keep_prose`` arm, and
-    the set of siblings is not an input the caller passed. Missing, unreadable and
-    prose-free siblings are therefore skipped, never faults.
+    Non-fatal by itself; the caller decides. A sibling arm may be mid-build,
+    absent, or a legitimately prose-free ``--no_keep_prose`` arm, so missing,
+    unreadable and prose-free siblings are skipped, never faults.
     """
     me = out_dir.resolve()
     key = _source_selection(self_manifest)
@@ -884,8 +861,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--min_valid_actions", type=int, default=2)
     p.add_argument("--max_parse_error_frac", type=float, default=0.5)
     p.add_argument("--no_keep_prose", dest="keep_prose", action="store_false",
-                   help="Build a tool-call-only arm (DROP the teacher's reasoning). Default is "
-                        "to KEEP prose for every codec — see this module's docstring. Such an "
+                   help="Build a tool-call-only arm (drop the teacher's reasoning). The default "
+                        "keeps prose for every codec — see this module's docstring. Such an "
                         "arm is intentionally prose-free, so it is exempt from the cross-arm "
                         "divergence check below and invisible to other arms' checks.")
     p.set_defaults(keep_prose=True)
@@ -893,9 +870,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="What a cross-arm prose-coverage divergence does: `warn` (the default) "
                         "reports it, `abort` refuses to write — use it for the LAST arm of a "
                         "sweep, or in CI — and `off` skips the comparison. The zero-coverage "
-                        "abort applies regardless. Forced to `off` by --no_keep_prose, which is "
-                        "why naming it alongside --no_keep_prose is an error rather than a "
-                        "silently ignored flag.")
+                        "abort applies regardless. Forced to `off` by --no_keep_prose; naming "
+                        "both is an error.")
     p.add_argument("--prose_divergence_tol", type=float, default=None,
                    help="Relative tolerance for this arm's prose coverage against sibling arms "
                         "in sibling --out_dirs built from the same rollout selection, measured "
@@ -977,13 +953,13 @@ def main(argv: list[str] | None = None) -> int:
         "n_unusable": stats.n_unusable,
         "n_train": len(train),
         "n_val": len(val),
-        # Prose coverage is a FIRST-CLASS manifest field: it is the number that has
-        # to match across arms for a format comparison to mean anything.
+        # Prose coverage has to match across arms for a format comparison to mean
+        # anything, so it is recorded here.
         "n_turns": stats.n_turns,
         "n_turns_with_prose": stats.n_turns_with_prose,
         "n_records_with_prose": stats.n_records_with_prose,
         "prose_turn_frac": (stats.n_turns_with_prose / stats.n_turns) if stats.n_turns else 0.0,
-        # Turn accounting split by WHOSE fault the loss is. The teacher figure is
+        # Turn accounting split by where the loss came from. The teacher figure is
         # codec-independent; the codec figure is this arm's expressiveness gap,
         # and two arms are only comparable if it matches (diffabs cannot spell
         # `type()`, compact_raw / native_absolute_control have no TERMINATE).
@@ -991,7 +967,7 @@ def main(argv: list[str] | None = None) -> int:
         "n_turns_dropped_by_codec": stats.n_turns_dropped_by_codec,
     }
 
-    # The zero-abort above is a floor; THIS is the asymmetry check. Run it before
+    # The zero-abort above is a floor; this is the asymmetry check. Run it before
     # anything is written so `abort` can still refuse.
     if divergence != "off":
         report = prose_divergence(out, manifest, tol=tol)

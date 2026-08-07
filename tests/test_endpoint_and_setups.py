@@ -1,9 +1,9 @@
 """The default transport, the remaining in-guest setups, and the RL preparers.
 
-`EndpointTransport` is the **default** — it posts to verifiers' interception endpoint,
-which is the path that commits the turn to the trace graph, so losing it loses tokens,
+`EndpointTransport` is the default: it posts to verifiers' interception endpoint,
+the path that commits the turn to the trace graph, so losing it loses tokens,
 logprobs and branch structure. It is driven here against a fake OpenAI-shaped HTTP
-server rather than mocked, because the thing worth testing is the wire body.
+server rather than mocked.
 """
 
 from __future__ import annotations
@@ -345,7 +345,7 @@ def test_the_open_chrome_setup_kills_any_running_chrome_first() -> None:
 
 
 def test_the_compound_setup_refuses_to_proceed_with_the_terminal_focused() -> None:
-    """The whole point of the cell is that the model must click to focus first."""
+    """The model must click to focus the terminal first."""
     import evals.signoflife.guest as guest
 
     session = _guest_session(active="gnome-terminal-server")

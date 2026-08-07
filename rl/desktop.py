@@ -2,16 +2,13 @@
 
 `movebox` and `grounding` need no VM: their whole observation is a static
 background with a target box drawn on it and a cursor marker composited at the
-current position. Giving that canvas the *same session surface* a real desktop has
-means both envs run under `evals.harness.DesktopHarness` instead of carrying their
-own rollout loops — which is where their divergences came from (movebox reset the
-prompt every step, grounding sent exactly one turn, and the two disagreed about
-whether a coordinate-less click was a no-op or a parse failure).
+current position. That canvas has the same session surface a real desktop has, so
+both envs run under `evals.harness.DesktopHarness` instead of carrying their own
+rollout loops.
 
-The operation vocabulary is `pixeldesk.ir.Operation`, in **absolute screen
-pixels**. This class never divides by 1000: the normalized 0-999 convention is
-the codec's business, and no env holds a copy of
-`round(delta/1000 * screen_dim)`.
+The operation vocabulary is `pixeldesk.ir.Operation`, in absolute screen pixels.
+This class never divides by 1000: the normalized 0-999 convention is the codec's,
+and no env holds a copy of `round(delta/1000 * screen_dim)`.
 """
 
 from __future__ import annotations
@@ -54,15 +51,13 @@ class VirtualDesktop:
     dispatched: int = 0
     session_id: str = "virtual"
 
-    # -- per-episode configuration ---------------------------------------- #
-
     def configure(
         self, *, canvas: Any, cursor: tuple[int, int], screen: tuple[int, int]
     ) -> None:
         """Install this episode's scene. Called by the env's `Preparer.prepare`.
 
-        The pool hands out desktops with no scene because a pool cannot know which
-        task a rollout drew; the preparer is the one place that does.
+        The pool hands out desktops with no scene: only the preparer knows which
+        task a rollout drew.
         """
         self.canvas = canvas
         self.screen = screen
@@ -73,8 +68,6 @@ class VirtualDesktop:
         self.dispatched = 0
         self.cursor = (0, 0)
         self._move_to(*cursor)
-
-    # -- session surface -------------------------------------------------- #
 
     def screen_size(self) -> tuple[int, int]:
         return self.screen
@@ -114,20 +107,16 @@ class VirtualDesktop:
     def release(self, *, failed: bool = False, error: str | None = None) -> None:
         del failed, error
 
-    # -- operation application -------------------------------------------- #
-
     def _apply(self, kind: str, args: tuple[Any, ...]) -> None:
         """Apply one IR operation.
 
         The vocabulary is closed and absolute: `move_to(x, y)`,
         `glide_to(x, y, seconds)`, `mouse_down/up(button)`, `scroll(dx, dy)`,
-        `key_down/up(name)`, `coalesced_type(text)`, `wait(seconds)`. There is
-        deliberately **no relative move** — every codec resolves its own convention
-        against the cursor and emits clamped absolute pixels, so a desktop that
-        accepted a relative op would be re-opening the door this refactor closed.
-        An unknown kind is logged and skipped rather than raising: a grammar may
-        legitimately emit an operation a *canvas* cannot honour (a window manager
-        call, say), and that is not a malformed action.
+        `key_down/up(name)`, `coalesced_type(text)`, `wait(seconds)`. No relative
+        move: every codec resolves its own convention against the cursor and emits
+        clamped absolute pixels. An unknown kind is logged and skipped rather than
+        raising — a grammar may emit an operation a canvas cannot honour (a window
+        manager call, say), which is not a malformed action.
         """
         if kind in {"move_to", "glide_to"} and len(args) >= 2:
             self._move_to(int(args[0]), int(args[1]))
@@ -144,9 +133,8 @@ class VirtualDesktop:
         elif kind == "scroll" and len(args) >= 2:
             self.scrolled += int(args[1])
         elif kind == "hscroll" and args:
-            # `glide_to` and `hscroll` are OPTIONAL backend capabilities, probed
-            # rather than required. A canvas can honour both, so it does; a
-            # transport that cannot must not be assumed to.
+            # `glide_to` and `hscroll` are optional backend capabilities, probed
+            # rather than required. A canvas honours both.
             self.scrolled += int(args[0])
         elif kind == "wait":
             pass
@@ -165,9 +153,8 @@ class VirtualDesktopPool:
 
     It has the checkout/close surface `agent.desktop.LeasedDesktopPool` expects, so
     the container-free envs go through the same lease, node-slot and idle-reaper
-    machinery. That is not ceremony: the slot cap keeps a scaled-up worker from
-    rendering 56 canvases concurrently and thrashing memory, for the same reason it
-    keeps it from booting 56 VMs.
+    machinery. The slot cap keeps a scaled-up worker from rendering 56 canvases
+    concurrently and thrashing memory.
     """
 
     def __init__(self, factory: Callable[[], VirtualDesktop]) -> None:

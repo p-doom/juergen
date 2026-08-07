@@ -1,19 +1,18 @@
-"""The sign-of-life gate under a **flat** plugin id.
+"""The sign-of-life gate under a flat plugin id.
 
-This module exists for one reason: `verifiers` 0.2.1 cannot resolve a dotted
-plugin id, and `evals.signoflife` is dotted.
+`verifiers` 0.2.1 cannot resolve a dotted plugin id, and `evals.signoflife` is
+dotted.
 
 `loaders._import_plugin` (`verifiers/v1/loaders.py:31-43`) does
 
     namespaced = f"verifiers.v1.tasksets.{module}"
     target = namespaced if importlib.util.find_spec(namespaced) else module
 
-and `find_spec` imports the *parent* of the name it is given. For
+and `find_spec` imports the parent of the name it is given. For
 `evals.signoflife` that parent is `verifiers.v1.tasksets.evals`, which does not
-exist, so `find_spec` raises `ModuleNotFoundError` **out of the guard that was
-meant to catch it** — the `else module` fallback is unreachable for any id
-containing a dot. The failure is upstream's, not ours, and it is a crash rather
-than a miss:
+exist, so `find_spec` raises `ModuleNotFoundError` out of the guard meant to catch
+it — the `else module` fallback is unreachable for any id containing a dot, and
+the failure is a crash rather than a miss:
 
     >>> taskset_class("evals.signoflife")
     ModuleNotFoundError: No module named 'verifiers.v1.tasksets.evals'
@@ -23,18 +22,16 @@ returns `None`, and `importlib.import_module("signoflife")` finds this file at t
 repo root. So the gate's plugin id is `signoflife`, and `evals/signoflife/` stays
 where it belongs in the package layout.
 
-Chosen over the two alternatives on purpose. Vendoring a patched `loaders.py` puts
-us on a fork of the framework we pin exactly (`verifiers==0.2.1`) for its internal
-API; moving the package to the repo root would drag `evals/harness.py`,
-`evals/tasks.py` and the fixtures with it, because the taskset is a thin shell over
-those. A twelve-line alias is the smaller thing to own.
+Alternatives rejected: vendoring a patched `loaders.py` forks the framework we pin
+exactly (`verifiers==0.2.1`) for its internal API, and moving the package to the
+repo root would drag `evals/harness.py`, `evals/tasks.py` and the fixtures with
+it, since the taskset is a thin shell over those.
 
-**The `__all__` below is a verifiers contract, not documentation.**
-`loaders._plugin_class` scans it and requires *exactly one* `Taskset` subclass and,
-for the harness, *at most one* `Harness` subclass. Re-exporting anything else from
-`evals.signoflife` here — `DevelopmentSuite`, the preparers, `ARMS` — is harmless;
-re-exporting a second `Taskset` or `Harness` breaks resolution with a `TypeError`
-at dispatch. Two names, and a reason to think before adding a third.
+The `__all__` below is a verifiers contract. `loaders._plugin_class` scans it and
+requires exactly one `Taskset` subclass and, for the harness, at most one
+`Harness` subclass. Re-exporting anything else from `evals.signoflife` here —
+`DevelopmentSuite`, the preparers, `ARMS` — is harmless; re-exporting a second
+`Taskset` or `Harness` breaks resolution with a `TypeError` at dispatch.
 
 `rl.movebox`, `rl.grounding` and `rl.target_box` have the identical defect and no
 alias yet; they are unreachable through the plugin loader until they get one.

@@ -2,11 +2,10 @@
 
 pmanager/labctl launch configs and tests for the crowd-cast SFT data pipeline.
 
-**The stages themselves live at the repo root, in [`pipeline/`](../pipeline).**
+The stages themselves live at the repo root, in [`pipeline/`](../pipeline).
 This directory holds only the two chain configs that schedule them and the test
-suite that covers them; it exists as a separate uv project because those tests
-need `opencv-python-headless`, which the training venv deliberately does not
-carry.
+suite that covers them; it is a separate uv project because those tests need
+`opencv-python-headless`, which the training venv does not carry.
 
 Consumed by [`pmanager`][pmanager]/[`labctl`][labctl] recipes that inject params
 as `--flag=value` args and poll `<output_dir>/manifest.json` for stage
@@ -30,9 +29,8 @@ runs the whole chain. `chain_train` imports `stage_03_filter` from
 family is named (`MASTER_DIR` / `CLIPS_MANIFEST`).
 
 Both configs derive `PROJECT_REPO` from their own location (override with
-`JUERGEN_REPO`) and assert a root `pipeline/` directory exists, so a
-pre-rearchitecture checkout fails at config-build time rather than after the job
-is already scheduled.
+`JUERGEN_REPO`) and assert a root `pipeline/` directory exists, so a checkout
+without one fails at config-build time rather than after the job is scheduled.
 
 ### Tests (`tests/`)
 
@@ -41,7 +39,7 @@ projection, annotation-method registry, and the stage-04 conversation builder.
 
 > Dataset browsing (contributor index, day-grouped segments, timeline heatmap,
 > frame-by-frame viewer) lives in the labctl UI's artifact panel — open any
-> `dataset` artifact and use the **Browse** section.
+> `dataset` artifact and use the Browse section.
 
 ## Setup
 

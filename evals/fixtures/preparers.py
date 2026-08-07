@@ -1,7 +1,7 @@
 """The `Preparer`s that attach fixtures to tasks.
 
-This is the seam the coordinator asked for: a task that needs Chrome brings its own
-fixture, and the session never learns Chrome exists. Two kinds:
+A task that needs Chrome brings its own fixture, and the session never learns
+Chrome exists. Two kinds:
 
   * `web_fixture` — browser fixtures served from the host. The `WebFixtureServer` is
     process-global and lazily started, because a per-episode server would burn a port
@@ -68,7 +68,7 @@ class WebFixturePreparer:
         server = web_fixture_server(fixture)
         result = launch_chrome(session, server, fixture)
         # Launch evidence is data, not a gate: a page that came up on the third
-        # attempt is a slow VM, not a different experiment.
+        # attempt is a slow VM.
         return {"fixture": fixture.id, "template": fixture.template, "chrome": result.as_dict()}
 
     def probe(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:

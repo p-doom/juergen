@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Frame-by-frame stepper for ONE clip — for eyeballing action↔screen alignment.
+"""Frame-by-frame stepper for one clip — for eyeballing action↔screen alignment.
 
 Samples the raw video at ``--target-fps`` (the pipeline's bin rate, default 1 fps)
 and pairs each sampled frame with the keylog action bin for that second (the exact

@@ -7,7 +7,7 @@
      instruction(s) a person would type to a computer-use agent, with per-goal
      start/end frame bounds.
 
-Plus the deterministic keystroke-burst START SNAP (method-internal, from the
+Plus the deterministic keystroke-burst start snap (method-internal, from the
 derived per-frame action labels): the labeler is vision-only and the
 screenshot of the first-keystroke tick often predates the text rendering, so
 it anchors typed goals ~1 frame late; the keylog knows when typing began.
@@ -40,7 +40,7 @@ def clean_goals(parsed: dict[str, Any], frame_lo: int, frame_hi: int,
                 own_hi: int) -> list[dict[str, Any]]:
     """Validate/clamp the model's goals. Bounds are the interleaved
     ``frame <N>`` labels == view indices; clamp to the indices actually sent.
-    ``own_hi`` is the last view index this unit OWNS: a goal whose start is
+    ``own_hi`` is the last view index this unit owns: a goal whose start is
     past it began in the trailing context buffer and belongs to the next
     window — drop it; surviving goals' ends clamp to own_hi."""
     goals: list[dict[str, Any]] = []
@@ -74,7 +74,7 @@ def clean_goals(parsed: dict[str, Any], frame_lo: int, frame_hi: int,
 
 
 def snap_goal_starts(goals: list[dict[str, Any]], unit: AnnotationUnit) -> list[dict[str, Any]]:
-    """Pull each TYPED goal's start back to the first keystroke of its input
+    """Pull each typed goal's start back to the first keystroke of its input
     burst, using the derived per-frame action labels. Walk back over the
     contiguous typing run, stopping at a submission (Return/Enter — that ended
     the PREVIOUS action) or any non-typing frame. Mouse/scroll-initiated goals

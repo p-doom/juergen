@@ -1,21 +1,17 @@
 """A pixeldesk pool that boots nothing, so the whole dispatcher can be run.
 
-`evals/signoflife/__main__.py` and `evals/vm.py` were both at **zero** coverage —
-the CLI, the taskset load, the harness construction and the pool adapter, which is
-the exact path every real gate run takes, and exactly where P1's missing
-`evaluate()` was hiding. Nothing could exercise it because the one thing standing
-between the dispatcher and a booted VM was `pixeldesk.vm.factory.build_desktop_pool`.
+The only thing standing between the dispatcher and a booted VM is
+`pixeldesk.vm.factory.build_desktop_pool`, so this substitutes that and only that.
+`evals.vm.kvm_desktop_pool` runs for real — argument assembly, `DesktopPoolConfig`,
+`_AdaptedPool`, reset-on-reuse, `DesktopFacade` — over a pool whose checkouts are
+these fakes. This is the path every real gate run takes, and where a missing
+`evaluate()` once hid.
 
-So this substitutes *that*, and only that. `evals.vm.kvm_desktop_pool` runs for
-real — argument assembly, `DesktopPoolConfig`, `_AdaptedPool`, reset-on-reuse,
-`DesktopFacade` — over a pool whose checkouts are these fakes. The seam is one
-function, at the bottom, which is the point: everything above it is under test.
-
-**The guest is a VM where nothing happened**, deliberately. It answers the four
-cells' probes with well-formed evidence in which every postcondition is false. That
-is the *negative control's* calibrated reading (0/4), so the dispatcher can be run
-end to end without touching what a cell scores. Making this guest report success
-would fabricate the oracle arm's 4/4, which is a calibration, not a fixture.
+The guest is a VM where nothing happened, deliberately. It answers the four cells'
+probes with well-formed evidence in which every postcondition is false, which is
+the negative control's calibrated reading (0/4), so the dispatcher can be run end
+to end without touching what a cell scores. Making this guest report success would
+fabricate the oracle arm's 4/4, which is a calibration, not a fixture.
 """
 
 from __future__ import annotations
@@ -101,7 +97,7 @@ class FakeGuestTransport:
             task_id = ast.literal_eval(match.group("value")) if match else ""
             return {"output": _state_line(task_id)}
         # Everything else is a setup script. Empty stdout is a real answer: the
-        # compound cell asserts the active window is NOT a terminal after setup,
+        # compound cell asserts the active window is not a terminal after setup,
         # and "" satisfies that the way a focused xmessage note does.
         return {"output": ""}
 
@@ -131,8 +127,8 @@ class FakeGuestClient:
 class FakeGuestSession:
     """`DesktopSession`'s shape: the two halves side by side, unmerged.
 
-    Unmerged on purpose — merging them is `DesktopFacade`'s whole job, and a
-    double that pre-merged would let the adapter be wrong and the test pass.
+    Merging them is `DesktopFacade`'s job, so a pre-merged double would let a
+    wrong adapter pass.
     """
 
     def __init__(self) -> None:

@@ -1,8 +1,8 @@
-"""Item 16 — oracles as runtime-declaring rewards.
+"""Oracles as runtime-declaring rewards.
 
-There is **no `@vf.reward(runtime=...)` kwarg**: the decorator takes `weight` and
-`priority` only. Runtime is injected by *declaring a `runtime` parameter with no
-default* — `_requires_runtime` (`v1/task.py:70-73`) reads
+There is no `@vf.reward(runtime=...)` kwarg: the decorator takes `weight` and
+`priority` only. Runtime is injected by declaring a `runtime` parameter with no
+default — `_requires_runtime` (`v1/task.py:70-73`) reads
 `signature(fn).parameters["runtime"].default is Parameter.empty`, and `Task.score`
 drops runtime-requiring signals when it has no runtime.
 

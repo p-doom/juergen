@@ -1,9 +1,8 @@
 """Geometry and rendering shared by every box-target env.
 
-One definition each, and the inclusivity convention is explicit because it
-silently changes what counts as a hit: boxes are built `(x1, y1, x1+w-1,
-y1+h-1)`, so a 150 px box spans 150 px of pixels, and `in_bbox` is **half-open**
-on the max edge — see `BOX_EDGE_INCLUSIVE`.
+The inclusivity convention changes what counts as a hit: boxes are built
+`(x1, y1, x1+w-1, y1+h-1)`, so a 150 px box spans 150 px of pixels, and
+`in_bbox` is half-open on the max edge — see `BOX_EDGE_INCLUSIVE`.
 """
 
 from __future__ import annotations
@@ -27,8 +26,8 @@ __all__ = [
 BOX_EDGE_INCLUSIVE = False
 """Whether the max edge counts as inside. False = half-open, the convention every
 published grounding/movebox reach number was computed under. Flipping it widens a
-150 px box's hit region by one pixel row and column, which is small but not zero:
-do not flip it to "fix" an off-by-one without re-baselining."""
+150 px box's hit region by one pixel row and column: do not flip it to "fix" an
+off-by-one without re-baselining."""
 
 CURSOR_COLOR = (255, 0, 0)
 BOX_COLOR = (0, 255, 0)
@@ -74,10 +73,9 @@ def draw_box(base: object, bbox: tuple[int, int, int, int], *, width: int = BOX_
 def render_cursor(base: object, cursor: tuple[int, int]):
     """A red crosshair-plus-ring marker at `cursor`, on a copy of `base`.
 
-    Synthetic because these envs have no real desktop cursor. The real-VM env
-    (`target_box`) deliberately does NOT draw one — the genuine GNOME cursor is
-    already in the screenshot, and compositing a second marker on top would train
-    the model to look for a marker that inference will not have.
+    Synthetic, for envs with no real desktop cursor. The real-VM env
+    (`target_box`) does not draw one: the genuine GNOME cursor is already in the
+    screenshot, and a second composited marker is not present at inference.
     """
     from PIL import ImageDraw
 

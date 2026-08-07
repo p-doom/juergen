@@ -3,7 +3,7 @@
 01, via the stage-03 filter mask), actions (stage 02's realigned keylogs), and
 optionally goals (stage 03b), and emit training conversations.
 
-Everything trainable is decided HERE, so ablations are flags, not pipeline
+Everything trainable is decided here, so ablations are flags, not pipeline
 reruns:
   * frame rate     --fps X (any integer divisor of the master fps; the shared
                    selector in lib/views picks frames within filter survivors)
@@ -12,10 +12,10 @@ reruns:
                    stretches; ``ordered_events_v2`` renders each window as an
                    ordered mini-program on a --continuous-action-hz motor grid)
   * goals          --goals-dir (a stage-03b artifact; goals are half-open
-                   master-tick intervals, projected onto the ACTUAL selected
+                   master-tick intervals, projected onto the actual selected
                    frames — one conversation per goal, instruction on the
                    first user turn)
-  * plan prose     --use-plans (goal's ``plan`` prefixes the FIRST assistant
+  * plan prose     --use-plans (goal's ``plan`` prefixes the first assistant
                    turn as ``<plan>\\n<action>``; unusable plan_flags fall back
                    to a plan-less first turn)
   * terminal token --terminal-token (appended to the final assistant message
@@ -28,10 +28,9 @@ Dead-zone accounting: every segment row carries the label-policy counters
 exceeds --dead-zone-flag-frac are flagged (``dead_zone_flagged``) — a
 realignment health signal.
 
-The conversation shape is UNCHANGED from the previous builder (canonical
-chat.jsonl schema: content blocks, instruction text before the image on the
-first user turn, one assistant turn per frame), so stages 05/06 run untouched
-on the output:
+The conversation shape is the canonical chat.jsonl schema: content blocks,
+instruction text before the image on the first user turn, one assistant turn
+per frame. Stages 05/06 consume the output directly.
 
 Output (--output-dir):
   conversations.jsonl          one row per conversation {messages, provenance}.
@@ -143,10 +142,10 @@ def build_messages(
     terminal_token: str | None = None,
 ) -> list[dict[str, Any]]:
     """Assemble one interleaved conversation. Canonical chat.jsonl schema:
-    instruction TEXT before the image on the first user turn, image-only on
+    instruction text before the image on the first user turn, image-only on
     later turns, one assistant turn per frame carrying its action. The plan
-    prefixes the FIRST assistant turn (``<plan>\\n<action>``); the terminal
-    token rides at the END of the final assistant message."""
+    prefixes the first assistant turn (``<plan>\\n<action>``); the terminal
+    token rides at the end of the final assistant message."""
     messages: list[dict[str, Any]] = []
     if system_prompt:
         messages.append({"role": "system", "content": [_text_block(system_prompt)]})

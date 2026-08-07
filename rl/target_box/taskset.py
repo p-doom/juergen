@@ -1,13 +1,12 @@
 """target_box: move a real VM's cursor into a synthetic box on a real desktop.
 
-Reward stays **dense** — reach plus closest-approach shaping. Sparsifying to
-in-box-only gives ~0 GRPO signal at the ~1% reach this env starts from, so the
-shaping term is what makes the env learnable at all rather than a nicety.
+Reward is dense: reach plus closest-approach shaping. Sparsifying to in-box-only
+gives ~0 GRPO signal at the ~1% reach this env starts from.
 
-The shaping term reads *best* (closest-ever) distance, not final. That is the
-anti-limit-cycle term: a policy that oscillates through the neighbourhood of the
-box and ends far away is closer to solving the task than one that never approaches,
-and a final-distance reward would score them the other way round.
+The shaping term reads best (closest-ever) distance, not final — the
+anti-limit-cycle term. A policy that oscillates through the neighbourhood of the
+box and ends far away is closer to solving the task than one that never
+approaches, and a final-distance reward would score them the other way round.
 """
 
 from __future__ import annotations
@@ -72,9 +71,9 @@ class TargetBoxTasksetConfig(vf.TasksetConfig):
     base_path: str = ""
     """Directory of OSWorld task JSONs used only as realistic backgrounds.
 
-    NO-LEAK: point this at the 259-task TRAIN set. The 110 held-out tasks are
-    eval-only, and a benchmark used for eval should ideally never appear in training
-    at all — a synthetic overlay does not launder the desktop it sits on."""
+    NO-LEAK: point this at the 259-task train set. The 110 held-out tasks are
+    eval-only; the synthetic overlay does not make the underlying desktop safe to
+    train on."""
     tasks_file: str = ""
     max_tasks: int = 0
     max_steps: int = 10

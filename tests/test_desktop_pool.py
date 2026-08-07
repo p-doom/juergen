@@ -1,11 +1,10 @@
-"""Item 1 — `NodeSlots` / `LeasedDesktopPool` / `LeaseRegistry`.
+"""`NodeSlots` / `LeasedDesktopPool` / `LeaseRegistry`.
 
-The load-bearing claim is in the module docstring: *"The lock dies with the process
-that holds it, so a SIGKILLed worker returns its slots to the node without a reaper
-— which is the property a per-worker in-memory counter can never have."* That is
-asserted here against a **real** SIGKILLed child process, because it is the only
-property that justifies the file existing: verifiers' worker pool is upscale-only,
-so a worker that dies holding VMs must not hold their admission tickets either.
+The lock dies with the process that holds it, so a SIGKILLed worker returns its
+slots to the node without a reaper — a property a per-worker in-memory counter
+cannot have. That is asserted here against a real SIGKILLed child process:
+verifiers' worker pool is upscale-only, so a worker that dies holding VMs must not
+hold their admission tickets either.
 """
 
 from __future__ import annotations
@@ -155,9 +154,7 @@ def _spawn_holder(directory: Path, max_slots: int, count: int) -> subprocess.Pop
 
 
 def test_sigkilled_worker_returns_its_slots_with_no_reaper(tmp_path: Path) -> None:
-    """The claim the whole module rests on.
-
-    No reaper runs here and nothing in this process knows the child existed. The
+    """No reaper runs here and nothing in this process knows the child existed. The
     slots come back because the kernel drops the `flock` when the process dies —
     exactly what an in-memory counter in a worker that just got SIGKILLed cannot do.
     """

@@ -1,9 +1,8 @@
 """Postconditions decided from realized guest state.
 
-Unchanged logic, moved. Every clause is recorded separately in `evidence` so a
-partial pass is diagnosable without re-running the VM, and an unreadable state is
-`status="error"` rather than `success=False` — collapsing those two is how a broken
-probe becomes a silent 0/4.
+Every clause is recorded separately in `evidence` so a partial pass is diagnosable
+without re-running the VM, and an unreadable state is `status="error"` rather than
+`success=False` — collapsing those two is how a broken probe becomes a silent 0/4.
 """
 
 from __future__ import annotations

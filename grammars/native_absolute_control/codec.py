@@ -1,32 +1,30 @@
 """The bare-line ABSOLUTE grammar: paired_eval's absolute control arm.
 
-``x y scroll`` or ``x y scroll ; EVENTS``, where x and y are ABSOLUTE integer
+``x y scroll`` or ``x y scroll ; EVENTS``, where x and y are absolute integer
 screen-pixel coordinates. Everything else — the one-sentence prose preamble, the
 element tail, the ``type("…")`` payload, the button and key names — is identical
-to ``compact_raw``. That is the point: the two are a matched pair whose ONLY
-difference is whether the two integers name a position or an offset, which is
-the absolute-versus-relative question the program exists to answer.
+to ``compact_raw``: the two are a matched pair whose only difference is whether
+the two integers name a position or an offset.
 
 "control" is inherited from its paired-eval arm role
 (``paired_runtime`` ``arm.name == "native_absolute_control"``,
 ``prompts/native_absolute_control.txt``); the name is kept so receipts,
 recipes and prompt digests still line up with what is on disk.
 
-Semantics, chosen so the arm is never weaker than its relative twin — an
-asymmetry between the two would confound the comparison:
+Semantics, chosen so the arm is never weaker than its relative twin:
 
-* **Keyboard transitions are accepted.** Lowering straight to the IR gives
+* Keyboard transitions are accepted. Lowering straight to the IR gives
   ``key_down`` / ``key_up``, so an element that is neither a mouse button nor
   ``type()`` is not a parse error.
-* **The coordinates are unconditional.** x and y always name a position, even in
-  ``0 0 0 ; type("x")``; the move is skipped only when that position IS the
+* The coordinates are unconditional. x and y always name a position, even in
+  ``0 0 0 ; type("x")``; the move is skipped only when that position is the
   current cursor, which is exactly when ``compact_raw`` skips its own move. So
   the matched action for "type without moving" is
   ``<cursor_x> <cursor_y> 0 ; type("x")``, and both arms lower to the same
   operations.
-* **``0 0 0`` is the top-left corner**, not "do not move". That is the whole
-  semantic difference from ``compact_raw`` and it has its own vector.
-* Like ``compact_raw``: the action is the LAST non-empty line, there is no
+* ``0 0 0`` is the top-left corner, not "do not move" — the semantic difference
+  from ``compact_raw``.
+* Like ``compact_raw``: the action is the last non-empty line, there is no
   line-count cap, the canonical separator is ``" ; "``, and there are no control
   tokens.
 """
@@ -50,8 +48,9 @@ PRODUCER = {
     ),
 }
 
-#: Its matched relative twin. Named so the pairing is discoverable from either
-#: side rather than living only in a pipeline config.
+#: Its matched relative twin. The two differ only in whether the leading
+#: integers name a position or an offset; a change to one must be made to the
+#: other.
 PAIRED_WITH = "compact_raw"
 
 
@@ -90,10 +89,9 @@ def action_from_dict(value: dict[str, Any]) -> NativeAbsoluteControlAction:
 
 
 class NativeAbsoluteControlCodec:
-    # The class docstring IS the prompt preamble, and it is assigned below from
-    # ``_support.MATCHED_ARM_PREAMBLE`` rather than written here, because
-    # ``compact_raw`` must render the byte-identical text. The two had already
-    # drifted by a line-wrap when each held its own copy.
+    # The class docstring is the prompt preamble. It is assigned below from
+    # ``_support.MATCHED_ARM_PREAMBLE`` so that ``compact_raw`` renders
+    # byte-identical text.
 
     name = "native_absolute_control"
 
@@ -118,8 +116,7 @@ class NativeAbsoluteControlCodec:
 
     # The three element productions and the notes are shared verbatim with the
     # relative arm, so their docstrings come from the same constants as the
-    # preamble. Only the mouse-triple productions above differ, and that
-    # difference IS the experiment.
+    # preamble. Only the mouse-triple productions above differ.
 
     @_support.production("+NAME")
     def _press(self) -> None: ...
@@ -131,8 +128,6 @@ class NativeAbsoluteControlCodec:
     def _type(self) -> None: ...
 
     def notes(self) -> None: ...
-
-    # -- interface ---------------------------------------------------------
 
     def describe(self) -> str:
         return _support.render_spec(self)
@@ -192,8 +187,6 @@ class NativeAbsoluteControlCodec:
             )
         )
         return tuple(operations)
-
-    # -- training-target construction --------------------------------------
 
     def action_from_operations(
         self,

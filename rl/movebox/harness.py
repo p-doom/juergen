@@ -1,9 +1,7 @@
 """movebox harness: `DesktopHarness` plus a canvas pool and a preparer.
 
-The whole env-specific surface is ~40 lines because the episode loop is shared.
-Pre-refactor this was `harness.py` (78) delegating to `rollout.py` (171) which
-re-implemented parse -> apply -> render -> terminate with its own no-op/repeat
-accounting; that accounting is now `MouseIndicators` plus one metric.
+The episode loop is shared; no-op/repeat accounting is `MouseIndicators` plus one
+metric.
 """
 
 from __future__ import annotations
@@ -29,9 +27,8 @@ __all__ = ["MoveBoxHarness", "MoveBoxHarnessConfig", "MoveBoxPreparer"]
 class MoveBoxPreparer:
     """Installs the scene on the virtual desktop and reports box containment.
 
-    `postcondition_success` in the probe is what stops the episode the moment the
-    cursor lands in the box — the same early exit the standalone rollout had, now
-    expressed through the shared driver's one stopping rule.
+    `postcondition_success` in the probe stops the episode the moment the cursor
+    lands in the box.
     """
 
     kind = "movebox"
@@ -84,8 +81,8 @@ class MoveBoxHarnessConfig(DesktopHarnessConfig):
     """`move_rel` owns the normalized 0-999 relative convention. The env does not
     know the convention exists — `compile` hands it absolute pixels."""
     history: HistoryConfig = HistoryConfig(name="stateless_single_turn")
-    """Stateless by design: a fresh single-turn prompt each step makes the per-step
-    grounding decision identifiable, which is the point of this env."""
+    """Stateless: a fresh single-turn prompt each step makes the per-step grounding
+    decision identifiable."""
     images: ImageBudgetConfig = ImageBudgetConfig(max_images=1, media="png")
     settle: SettleConfig = SettleConfig(min_delay_s=0.0, per_kind={})
     pool: DesktopPoolConfig = DesktopPoolConfig(

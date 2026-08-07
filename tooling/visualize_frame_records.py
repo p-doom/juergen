@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Viewer for stage 03 (frame-records) datasets — frames + binned actions.
 
-Pointed at the **stage-03 output** rather than at raw mp4 + keylogs, because
+Pointed at the stage-03 output rather than at raw mp4 + keylogs, because
 stage 03 has already done the work: target-fps sampling, NO_OP head/tail
 thinning, and per-bin action strings, with each kept frame referenced as an
 ``ar:///…/images.array_record#idx`` URI into the stage-01a frames-master store.
@@ -31,8 +31,8 @@ temporal order. Names are rdev keys (``KeyA``, ``Num1``, ``Space``, ``Backspace`
 ``ShiftLeft`` …) and mouse buttons (``LMB``, ``RMB``, ``MMB``). The front-end
 parses this to light a keyboard, draw a mouse arrow, and reconstruct typed text.
 
-Records for one segment must be contiguous and in trajectory order (both stage
-Stages 01 and 03 stream ``chat.jsonl``/segments in order, so this holds). Any extra
+Records for one segment must be contiguous and in trajectory order (stages 01 and
+03 both stream ``chat.jsonl``/segments in order, so this holds). Any extra
 top-level keys are ignored, so the viewer keeps working if stage 03 enriches rows.
 
 Frames are resolved through ``pipeline.lib.image_store`` (the same
@@ -57,12 +57,12 @@ not-yet-generated dir — is reported inline, the others keep working).
 at its root or one level down is discovered), or directly at a
 ``frame_records.jsonl`` file.
 
-It also opens a stage-01a **frames-master** store directly (auto-detected by its
+It also opens a stage-01a frames-master store directly (auto-detected by its
 ``segment_index.jsonl`` + ``frames/`` layout / ``juergen_annotation_frames_master``
 marker): the raw decoded frames are browsable with no sampler run, but since 01a
 is keylog-free the action HUD stays empty — run stage 03 to get actions.
 
-And it opens a stage-04 **conversations** dataset (auto-detected by a
+And it opens a stage-04 conversations dataset (auto-detected by a
 ``conversations.jsonl`` / ``juergen_annotation_conversations`` marker): each
 segment's interleaved screenshot→action chat is browsed as a trajectory — the
 user-turn screenshots are the frames, the following assistant turn is that frame's
@@ -130,7 +130,7 @@ _COALESCE_MOVES = 4
 def _resolve_alignment_path(clips_manifest: str | Path | None) -> Path | None:
     """Locate an ``alignment.jsonl``: ``--alignment`` (a file or a dir holding one),
     else a ``*realign*`` sibling of the (raw) clips_manifest dir that belongs to the
-    SAME dataset family (matched by the manifest dir's distinctive prefix, so e.g. an
+    same dataset family (matched by the manifest dir's distinctive prefix, so e.g. an
     ``eval`` master never picks up a ``subset100`` alignment)."""
     if ALIGNMENT_OVERRIDE:
         p = Path(ALIGNMENT_OVERRIDE).expanduser()
@@ -160,7 +160,7 @@ def _raw_events(
     """Keylog events as table rows.
 
     Without ``splices``: ``[t_raw, type, detail]`` on the raw keylog clock.
-    With ``splices`` (the stage-00 alignment map): **dual-clock**
+    With ``splices`` (the stage-00 alignment map): dual-clock
     ``[t_raw, t_aln, type, detail, trimmed]`` where ``t_aln = keylog_to_video`` and
     ``trimmed`` marks events inside a collapsed span (kept content folded to one
     instant) or past ``video_end`` (overhang dropped off the video).
@@ -438,7 +438,7 @@ class ConversationsDataset(FrameRecordsDataset):
     Each conversation (one segment's interleaved screenshot->action chat) is one
     Segment: every ``user`` turn's screenshot is a frame, and the ``assistant``
     turn that follows carries that frame's action string. The images are ``ar://``
-    refs into the SAME stage-01a master store the stage-03 output used, so frame
+    refs into the same stage-01a master store the stage-03 output used, so frame
     fetching and the black-frame cross-reference are inherited unchanged from
     ``FrameRecordsDataset``. Conversation-level context (system prompt, per-segment
     instruction, target fps, alignment) is surfaced in the segment detail.
@@ -1463,7 +1463,6 @@ loadDatasets().catch(err=>{ document.body.innerHTML='<pre style="padding:20px;co
 """
 
 
-# --------------------------------------------------------------------------- #
 def resolve_jsonl_paths(dataset: Path) -> list[Path]:
     """Find the ``frame_records.jsonl`` file(s) under ``dataset``.
 

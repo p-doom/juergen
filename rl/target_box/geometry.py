@@ -2,12 +2,12 @@
 
 Nothing about the box is in the task row. The box and cursor start are derived
 deterministically from `instance_key = f"{task_id}:{path}"`, so one OSWorld task
-always gets the same scene while the *background* is a genuine post-`reset()`
+always gets the same scene while the background is a genuine post-`reset()`
 desktop. The real task's instruction is not used — `TARGET_BOX_INSTRUCTION` is.
 
-Validation is kept because a misconfigured scene is silently a different task: a
-box wider than `screen - 2*margin`, or a cursor margin covering half the screen,
-produces "hard" episodes that are actually impossible.
+`TargetBoxConfig.validate` rejects a box wider than `screen - 2*margin` or a
+cursor margin covering half the screen: both produce episodes that are impossible
+rather than hard.
 """
 
 from __future__ import annotations
@@ -88,9 +88,8 @@ def sample_cursor_start(
 def annotate(screenshot: bytes, box: tuple[int, int, int, int]) -> bytes:
     """Draw the target box on a live screenshot.
 
-    No cursor marker: the genuine desktop cursor is already in the frame, and
-    compositing a synthetic one would teach the model to look for a marker that
-    inference will not have.
+    No cursor marker: the genuine desktop cursor is already in the frame, and a
+    synthetic one is not present at inference.
     """
     import io
 

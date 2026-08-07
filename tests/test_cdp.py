@@ -1,13 +1,11 @@
 """`evals/fixtures/cdp.py` — the hand-rolled websocket client.
 
-140 lines of RFC6455 framing written by hand is exactly where a silent bug lives: a
-masking or continuation-frame error does not crash, it returns wrong evidence. So the
-client is driven against a real socket server that speaks the protocol back, rather
-than a mock of its own helpers.
+The client is driven against a real socket server that speaks RFC6455 back, not a
+mock of its own helpers: a masking or continuation-frame error does not crash, it
+returns wrong evidence.
 
-Every bound here is a bound on *evidence size*, and the module's own docstring says a
-page returning 40 MB of `outerHTML` must fail loudly rather than silently fill a trace
-— so the bounds are asserted too.
+The bounds are bounds on evidence size — a page returning 40 MB of `outerHTML` must
+fail loudly rather than silently fill a trace — so they are asserted too.
 """
 
 from __future__ import annotations
@@ -125,7 +123,7 @@ class FakeCdpServer:
                 request = json.loads(_read_client_message(conn))
                 self.requests.append(request)
                 if getattr(self, "ping_first", False):
-                    # Deterministic ordering: ping, block on the pong, THEN reply.
+                    # Deterministic ordering: ping, block on the pong, then reply.
                     # Sending both frames and reading afterwards races the client's
                     # close, which made this flaky rather than wrong.
                     conn.sendall(_server_frame(b"hb", opcode=0x9))

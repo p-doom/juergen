@@ -1,8 +1,7 @@
 """Browser task fixtures: the pages, and the host HTTP server that serves them.
 
-A browser task needs a page whose DOM state an oracle can read. That page is part of
-the *task*, not of the VM, which is why this lives next to tasks and oracles: the
-session forwards a port and knows nothing about checkboxes.
+A browser task needs a page whose DOM state an oracle can read; the session forwards
+a port and knows nothing about checkboxes.
 
 Four templates, each isolating one input primitive so a failure names a capability
 rather than "the browser task failed":
@@ -21,14 +20,9 @@ screen-scraping. `cdp.py` is the second, independent read of the same state — 
 fixture whose HTTP state and DOM disagree is broken, and having both is how you find
 that out.
 
-**Dropped on the way in:** the browser-audit causal-heartbeat machinery
-(`apply_browser_audit`, `_causal_heartbeat_summaries`,
-`_causal_post_window_marker_sequences`, `wait_for_causal_post_window_heartbeat`,
-`wait_for_browser_quiescence`) — roughly 700 of the original 1489 lines. It refused to
-proceed unless observed event ordering matched one preregistered click experiment.
-That is the same enforcement anti-pattern pixeldesk just relaxed by ~900 LOC: the
-page still *reports* its events, and a caller that wants ordering evidence reads
-`state["events"]`. Nothing refuses to run.
+Event ordering is reported, never enforced: the page posts its events and a caller
+that wants ordering evidence reads `state["events"]`. Nothing here refuses to run on
+an unexpected ordering.
 """
 
 from __future__ import annotations

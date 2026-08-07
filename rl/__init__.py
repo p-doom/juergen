@@ -6,11 +6,10 @@ session surface a real VM does, so they run under `evals.harness.DesktopHarness`
 rather than carrying rollout loops of their own. `target_box` uses the real VM
 pool and differs only in its preparer and rewards.
 
-The seam: **rendering and geometry are general, the coordinate convention is the
-codec's.** No env implements `round(delta/1000 * screen_dim)`; that arithmetic
-is
-now inside the codec: `codec.compile(text, geometry, cursor)` returns `Operation`s
-already in absolute screen pixels, and an env only ever applies pixel operations.
+Rendering and geometry are general; the coordinate convention is the codec's. No
+env implements `round(delta/1000 * screen_dim)` — `codec.compile(text, geometry,
+cursor)` returns `Operation`s already in absolute screen pixels, and an env only
+applies pixel operations.
 """
 
 from rl.geometry import (

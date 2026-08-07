@@ -1,11 +1,10 @@
-"""Diagnostics that ride the trace instead of being recomputed by ad-hoc scripts.
+"""Diagnostics that ride the trace.
 
-Cell pass/fail is not sufficient: a cell can flip for the wrong reason. The four
-failure-mode indicators below decide whether a defect is actually gone. As
-`@vf.metric` they are computed once, in-process, from the same step records the
-harness already writes — so a run can
-never again be reported without them, and offline `traces.jsonl` re-scoring gets
-them for free (a metric declares no `runtime`, so it is never skipped).
+A cell can flip for the wrong reason, so pass/fail is not sufficient; the four
+failure-mode indicators below say whether a defect is actually gone. As
+`@vf.metric` they are computed in-process from the same step records the harness
+already writes, so offline `traces.jsonl` re-scoring gets them too (a metric
+declares no `runtime`, so it is never skipped).
 
   A  literal `\\n` / `\\r` / `\\t` inside a typed string — the s900 Return defect;
      the model writes an escape sequence instead of a key transition.
@@ -43,7 +42,7 @@ SUBMIT_KEYS = frozenset({"Return", "Enter", "KpEnter", "NumpadEnter", "ENTER", "
 DIGIT_LATTICE = frozenset({0, 1, 10, 100})
 """The observed output support of the collapsed relative-delta checkpoints:
 `{0, ±1, ±10, ±100}` per axis, 400/400 samples, mode literally `(±10, ±10)` —
-14.1 px = hypot(10, 10). On-lattice rate is therefore a *collapse detector*: a
+14.1 px = hypot(10, 10). On-lattice rate is therefore a collapse detector: a
 healthy relative policy emits arbitrary integers, a collapsed one emits digits."""
 
 _LITERAL_ESCAPES = ("\\n", "\\r", "\\t")
@@ -94,8 +93,7 @@ def _calls(parsed: Any) -> list[dict[str, Any]]:
 
     Each call serialises to its `computer_use` arguments dict, so `action`, `text`,
     `keys` and `coordinate` read the same way whether the turn carried one call or
-    several, so the same defect is measurable in a native-grammar arm and in a
-    bare-token one.
+    several.
     """
     if not isinstance(parsed, dict):
         return []
@@ -149,9 +147,8 @@ def deltas(parsed: Any) -> list[tuple[int, int]]:
 
     Only meaningful for relative grammars: `deltatype_v2` / `compact_raw` in raw
     pixels, `move_rel` in normalized 0-999. `native_absolute` carries a target
-    rather than a delta and reports nothing, which is correct — the lattice question
-    does not apply to an absolute grammar, and inventing a delta by differencing
-    consecutive targets would fabricate a distribution.
+    rather than a delta and reports nothing; differencing consecutive targets to
+    invent one would fabricate a distribution.
     """
     if not isinstance(parsed, dict):
         return []
@@ -187,9 +184,9 @@ def on_lattice(delta: tuple[int, int]) -> bool:
 def delta_histogram(values: Iterable[tuple[int, int]]) -> dict[str, float]:
     """log2 magnitude bins of |(dx, dy)|, plus the summary statistics.
 
-    Bins rather than a mean because the failure mode is *bimodal*: a collapsed
-    policy piles up at hypot(10,10) = 14.1 px while a working one spreads over
-    hundreds of pixels, and a mean sits between the two describing neither.
+    Bins rather than a mean because the failure mode is bimodal: a collapsed policy
+    piles up at hypot(10,10) = 14.1 px while a working one spreads over hundreds of
+    pixels, and a mean sits between the two describing neither.
     """
     magnitudes = [math.hypot(dx, dy) for dx, dy in values]
     bins: dict[str, float] = {f"delta_bin_{2 ** k}": 0.0 for k in range(0, 12, 2)}
@@ -292,11 +289,10 @@ class MouseIndicators:
 
 
 class SamplingProvenance:
-    """Assert on the trace what sampling actually reached the wire.
+    """Record on the trace what sampling actually reached the wire.
 
-    A program-set temperature is discarded by `Dialect.apply_overrides` whenever
-    the eval set one, so recording the resolved value *and* where it came from is
-    what keeps a run from silently disagreeing with its own config.
+    `Dialect.apply_overrides` discards a program-set temperature whenever the eval
+    set one, so both the resolved value and its source are recorded.
     """
 
     @vf.metric

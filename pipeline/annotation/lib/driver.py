@@ -4,7 +4,7 @@ Ported from the v2 ``run_dataset`` driver, minus the subprocess layer: methods
 run in-thread (frames come from the ar:// store, not ffmpeg). Each work item
 is routed at dispatch time to whichever model has the most TPM headroom by a
 closed-loop governor: it projects each model's tokens/minute from the item's
-token estimate and that model's OWN measured call latency, and only admits an
+token estimate and that model's own measured call latency, and only admits an
 item if the model stays under --target-tpm. A faster model gets fewer
 concurrent items that cycle quicker; a slower one gets more — the asymmetric
 split emerges live (AIMD on measured TPM).
@@ -34,8 +34,8 @@ def model_slug(model: str | None) -> str:
 
 
 class TpmGovernor:
-    """Adaptive-concurrency governor. Each model has an in-flight LIMIT that a
-    control loop raises while the model's MEASURED sustained TPM is below
+    """Adaptive-concurrency governor. Each model has an in-flight limit that a
+    control loop raises while the model's measured sustained TPM is below
     target and lowers when it exceeds — so each model is driven to ~target_tpm
     regardless of token-estimate error. A loose projection ceiling guards
     against runaway admission during the measurement lag."""
@@ -94,7 +94,7 @@ class TpmGovernor:
                 self.cv.wait(timeout=0.5)
 
     def note_tokens(self, m: Any, handle: int, n: int, now: float) -> None:
-        """Live token report from a RUNNING item (long chain items report per
+        """Live token report from a running item (long chain items report per
         labeler call so the measured TPM window sees a steady stream instead of
         one end-of-item spike). Reported tokens are remembered per handle and
         subtracted from the release-time total, so nothing double-counts."""
@@ -154,7 +154,7 @@ def run_driver(
     """Run ``run_item(item, model)`` over all items under the governor.
 
     ``run_item`` returns a result dict; ``actual_tokens`` in it (when present)
-    feeds the governor's TPM measurement. A ``run_item`` that accepts a THIRD
+    feeds the governor's TPM measurement. A ``run_item`` that accepts a third
     parameter is handed a ``report_tokens(n)`` callable to stream token counts
     while it runs — required for long chain items (e.g. day-scope annotation),
     whose end-of-item total would otherwise be invisible to the governor for

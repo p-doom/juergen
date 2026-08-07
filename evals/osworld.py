@@ -1,31 +1,28 @@
-"""OSWorld's task setup and its benchmark scorer, against a desktop **we** own.
+"""OSWorld's task setup and its benchmark scorer, against a desktop we own.
 
-`OSWorldEvaluateOracle` says the reward *is* `DesktopEnv.evaluate()`. This module
+`OSWorldEvaluateOracle` says the reward is `DesktopEnv.evaluate()`. This module
 produces that number without letting OSWorld own the VM: `evals/vm.py`'s
 `DesktopFacade` gets `setup()` and `evaluate()` from here, and the OSWorld task
 family (`kind="osworld"`, and `kind="grounding"` which inherits its preparer)
 reaches the guest through them.
 
-We cannot use `DesktopEnv` itself for this. `DesktopEnv` owns a VM lifecycle
-through its own provider layer, and the lifecycle is ours (qemu + KVM under
-`pixeldesk`'s pool) — OSWorld's apptainer provider strips KVM ioctls on the hai-*
-nodes. What we want from OSWorld is only the two pure-ish pieces that *do*
-generalise across providers:
+`DesktopEnv` itself is unusable here: it owns a VM lifecycle through its own
+provider layer, and the lifecycle is ours (qemu + KVM under `pixeldesk`'s pool) —
+OSWorld's apptainer provider strips KVM ioctls on the hai-* nodes. Two pieces do
+generalise across providers, and they are the ones we take:
 
   * `SetupController`, which turns a task JSON's `config` list into guest side
     effects over the in-VM HTTP agent — the same agent our `HttpGuiTransport`
-    drives, on the same port. `osworld_grounding_runner.py` already reached for it
-    exactly this way, for exactly this reason.
+    drives, on the same port.
   * `evaluators.getters` + `evaluators.metrics`, which are the benchmark's
-    definition of success. Re-deriving them would be re-deriving OSWorld.
+    definition of success.
 
-`OSWorldBridge` is therefore both the *caller* of those and the `env` object they
+`OSWorldBridge` is therefore both the caller of those and the `env` object they
 are handed: OSWorld's getters take `(env, config)` and read `env.controller`,
 `env.vm_ip`, `env.cache_dir`, `env.vm_platform`, `env.chromium_port`,
 `env.server_port`, `env.vlc_port`, `env.getters`, `env.vm_machine`,
 `env.current_use_proxy`, `env.setup_controller` and `env.evaluators`. Every one of
-those is a plain attribute here, named and set in `__init__` or `bind()`. That is
-the whole trick: a duck that quacks for 106 call sites, and nothing else.
+those is a plain attribute here, named and set in `__init__` or `bind()`.
 
 `evaluate()` is a faithful port of `DesktopEnv.evaluate`
 (OSWorld's `desktop_env/desktop_env.py:458-524`)
@@ -35,15 +32,15 @@ under `and`. It is a port and not a call because `DesktopEnv.evaluate` is a meth
 on the object that owns the VM. Do not "improve" the arithmetic here: a difference
 from it is a difference from the published benchmark.
 
-**The import is lazy, and it has to be.** OSWorld's `controllers/setup.py` pulls
+The import is lazy, and has to be: OSWorld's `controllers/setup.py` pulls
 playwright, pydrive and requests_toolbelt at module import, and
 `evaluators.getters.__init__` is worse; a text-only eval that merely imports
 `evals.vm` must not drag that in. `osworld_modules()` is the one seam that touches
 `sys.path` and OSWorld's namespace, so a test can substitute it wholesale and
 exercise every line of the binding and the arithmetic without OSWorld installed.
 
-⚠️ **`desktop_env` below is OSWORLD'S package, not ours** — ours is `pixeldesk`,
-and it must stay that way: `sys.path` cannot override an entry already in
+⚠️ `desktop_env` below is OSWorld's package, not ours — ours is `pixeldesk`, and
+it must stay that way: `sys.path` cannot override an entry already in
 `sys.modules`, so any local distribution claiming the name `desktop_env` makes
 `import desktop_env.controllers.setup` resolve to it instead, whatever
 `OSWORLD_ROOT` says. Do not "tidy" these names to match ours; they are the other
@@ -102,7 +99,7 @@ def osworld_root() -> Path:
 
 
 def osworld_modules() -> tuple[Any, Any, Any, Any]:
-    """`(SetupController, PythonController, getters, metrics)` — **the** seam.
+    """`(SetupController, PythonController, getters, metrics)` — the import seam.
 
     One function, so exactly one place imports OSWorld and exactly one place has
     to be substituted to test everything above it.
@@ -178,8 +175,6 @@ class OSWorldBridge:
         self.result_getter: Any = None
         self.expected_getter: Any = None
 
-    # -- OSWorld's namespace ---------------------------------------------- #
-
     def _load(self) -> tuple[Any, Any, Any, Any]:
         if self._modules is None:
             self._modules = self._loader()
@@ -233,8 +228,6 @@ class OSWorldBridge:
             self._cache_root = Path(tempfile.mkdtemp(prefix="osworld-cache-"))
         self._cache_root.mkdir(parents=True, exist_ok=True)
         return self._cache_root
-
-    # -- binding ----------------------------------------------------------- #
 
     def bind(self, task_config: dict[str, Any]) -> None:
         """`DesktopEnv._set_task_info` + `_set_evaluator_info`, same arithmetic.
@@ -303,8 +296,6 @@ class OSWorldBridge:
                 f"{len(self.metric_options)} option sets"
             )
 
-    # -- setup -------------------------------------------------------------- #
-
     def setup(self, task_config: dict[str, Any]) -> int:
         """Bind the task and run its `config` steps. Returns the step count.
 
@@ -329,8 +320,6 @@ class OSWorldBridge:
         """
         if control == "fail":
             self.action_history.append("FAIL")
-
-    # -- the score ----------------------------------------------------------- #
 
     def evaluate(self) -> float:
         """`DesktopEnv.evaluate()` (OSWorld's `desktop_env.py:458-524`), ported verbatim."""

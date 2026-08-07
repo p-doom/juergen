@@ -1,7 +1,7 @@
-"""A fake pool constructor, so `pool_target` can be shown to inject a fake.
+"""A fake pool constructor for `pool_target` to be pointed at.
 
-`pool_target` names a **constructor** (`module:attribute`), not a provider. This
-module is what a test points it at; nothing here selects a VM backend.
+`pool_target` names a constructor (`module:attribute`), not a provider; nothing
+here selects a VM backend.
 """
 
 from __future__ import annotations

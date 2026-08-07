@@ -1,16 +1,11 @@
 """The OSWorld benchmark family, end to end without OSWorld or a VM.
 
-Two things were untested because they were unimplemented: `DesktopFacade` — the
-only session a real VM ever hands the harness — had neither `setup()` nor
-`evaluate()`, so the OSWorld task family could not be prepared, let alone scored;
-and no task class composed `OSWorldEvaluateOracle`, so even a session that could
-score produced no reward. `evals/vm.py` sat at 0% coverage the whole time.
-
+`DesktopFacade` is the only session a real VM ever hands the harness, and
 `osworld_modules()` is the one seam that imports OSWorld, so substituting it here
 exercises every line of the binding and of the ported `DesktopEnv.evaluate`
-arithmetic against fakes. The arithmetic is the part that must not drift: a
-difference from upstream is a difference from the published benchmark, so the
-conjunction, the mean-vs-max and the FAIL inversion are pinned by value.
+arithmetic against fakes. A difference from upstream is a difference from the
+published benchmark, so the conjunction, the mean-vs-max and the FAIL inversion are
+pinned by value.
 """
 
 from __future__ import annotations
@@ -34,7 +29,7 @@ class _Getters:
 
     @staticmethod
     def get_from_guest(env: Any, config: dict[str, Any]) -> Any:
-        # Reads the env, which is the whole reason getters take one.
+        # Reads the env, which is why getters take one.
         return env.controller.run(config["command"])
 
     @staticmethod
@@ -193,7 +188,7 @@ def test_a_scalar_evaluator_with_an_expected_getter_and_options(tmp_path) -> Non
 
 
 def test_the_getter_is_handed_the_bridge_as_its_env(tmp_path) -> None:
-    """106 of OSWorld's getter env-reads are `env.controller`; the bridge IS the
+    """106 of OSWorld's getter env-reads are `env.controller`; the bridge is the
     env, which is the only reason the getters work outside `DesktopEnv`."""
     bridge = _bridge(tmp_path)
     bridge.bind(
@@ -458,8 +453,8 @@ def _facade(tmp_path: Path, *, runtime: Any | None = None) -> tuple[DesktopFacad
 
 
 def test_the_facade_still_refuses_to_be_a_catch_all_proxy() -> None:
-    """The design constraint: the harness probes optional capabilities with
-    `getattr`, so anything the facade does not name must read as absent."""
+    """The harness probes optional capabilities with `getattr`, so anything the
+    facade does not name must read as absent."""
     facade = DesktopFacade(_Checkout(), _Session())
     assert getattr(facade, "reset_to_checkpoint", None) is None
     assert getattr(facade, "evaluate", None) is not None
@@ -520,8 +515,8 @@ def test_a_runtime_that_will_not_report_ports_falls_back_to_defaults(tmp_path) -
 
 
 def test_the_facade_delegates_the_rest_of_the_surface(tmp_path) -> None:
-    """The union `FakeSession` has always stood in for, against the real two
-    halves: `HttpGuiTransport` for input/geometry, `OSWorldClient` for pixels."""
+    """The two real halves `FakeSession` unions: `HttpGuiTransport` for
+    input/geometry, `OSWorldClient` for pixels."""
     facade, checkout = _facade(tmp_path)
     assert facade.session_id == "sess-1"
     assert facade.screen_size() == (1280, 800)
@@ -611,8 +606,8 @@ def test_the_taskset_carries_the_whole_task_json_not_just_its_config(tmp_path) -
 
 
 def test_the_preparer_and_the_facade_meet(tmp_path) -> None:
-    """The seam P1 was missing: a taskset row -> the OSWorld preparer -> the
-    production facade -> a benchmark score. Nothing here is a `FakeSession`."""
+    """A taskset row -> the OSWorld preparer -> the production facade -> a
+    benchmark score. Nothing here is a `FakeSession`."""
     from evals.tasks import OSWorldTaskset, OSWorldTasksetConfig, preparer_for
 
     root = _osworld_tree(

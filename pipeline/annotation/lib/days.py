@@ -1,20 +1,20 @@
 """Day grouping + day streams for day-scope annotation methods.
 
-A DAY is the pipeline-native work unit for sequential-watching methods
+A day is the work unit for sequential-watching methods
 (``INPUT_KIND="days"``): all of one user's segments whose recordings started
 on the same local calendar date, laid out on a wall-clock day axis. Wall-clock
 placement comes from each segment video's mp4 ``mvhd creation_time``
 (header-only read via ``lib.realign.mp4_mvhd``), joined through the
 stage-00 clip manifest (``video_path``/``user_id`` per ``segment_id``); the
-stage-03 filter artifact remains the sole authority for WHICH segments and
+stage-03 filter artifact remains the sole authority for which segments and
 ticks are usable.
 
 A ``DayStream`` concatenates the day's ``SegmentView``s (lib/views, @k fps
 within filter survivors) onto the day clock: every selected frame gets a
 day-global dense index (0..N-1 in time order — the ``frame <N>`` the model is
-shown; NEVER persisted), a day time, its canonical per-frame action label,
+shown; never persisted), a day time, its canonical per-frame action label,
 and its ``(segment_id, master_idx)`` master coordinates for emit time. Frames
-are cut into CHUNKS at real gaps > ``gap_cut_s`` (the recording stopped);
+are cut into chunks at real gaps > ``gap_cut_s`` (the recording stopped);
 evidence context never crosses a chunk boundary.
 """
 
@@ -75,7 +75,7 @@ class DayStream:
     n_segments: int
 
     def context_before(self, day_idx: int, n: int) -> list[DayFrame]:
-        """The n frames up to AND INCLUDING day_idx, within its chunk (never
+        """The n frames up to and including day_idx, within its chunk (never
         across a recording gap) — the future-blind evidence window."""
         for chunk in self.chunks:
             if chunk[0].day_idx <= day_idx <= chunk[-1].day_idx:

@@ -12,12 +12,12 @@ v3 adds two things:
   ``down(KeyH); up(KeyH)`` spelling of every character,
 * a parser, so the same object writes training targets and reads completions.
 
-Escaping inside ``type()`` is deliberately minimal: ONLY ``\\\\`` and ``\\"``.
-Return is an event — ``down(Return); up(Return)`` — never a character inside
-``type()``. The executor cannot type a newline inside a burst, and a
-double-escaped ``\\\\n`` types two literal characters instead of pressing
-Return, which is a labelling defect that reached real training data. Rejecting
-every other backslash escape at parse time removes the spelling that caused it.
+Escaping inside ``type()`` is minimal: only ``\\\\`` and ``\\"``. Return is an
+event — ``down(Return); up(Return)`` — never a character inside ``type()``. The
+executor cannot type a newline inside a burst, and a double-escaped ``\\\\n``
+types two literal characters instead of pressing Return, a labelling defect that
+reached real training data. Every other backslash escape is rejected at parse
+time.
 
 The segment -> primitives extraction (motor-grid accumulation, label policy,
 dead zones) stays in the data pipeline. This codec owns the surface syntax and
@@ -229,8 +229,6 @@ class OrderedEventsV3Codec:
         Emit only the action line — no JSON, no tool calls, no other commentary.
         """
 
-    # -- interface ---------------------------------------------------------
-
     def describe(self) -> str:
         return _support.render_spec(self)
 
@@ -311,8 +309,6 @@ class OrderedEventsV3Codec:
             else:
                 raise OrderedEventsV3Error(f"unknown primitive kind: {item.kind!r}")
         return tuple(operations)
-
-    # -- training-target construction --------------------------------------
 
     def action_from_operations(
         self,
@@ -410,8 +406,6 @@ class OrderedEventsV3Codec:
             if name == button:
                 return token
         raise OrderedEventsV3Error(f"unsupported mouse button: {button!r}")
-
-    # -- scanner -----------------------------------------------------------
 
     def _scan(self, line: str) -> tuple[Primitive, ...]:
         primitives: list[Primitive] = []

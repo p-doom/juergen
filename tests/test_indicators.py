@@ -1,13 +1,11 @@
-"""Items 5, 6, 7 — indicator generalisation, the digit lattice, and `_never_moved`.
+"""Indicator generalisation, the digit lattice, and `_never_moved`.
 
-Item 5: A/B/D now read `native_absolute` / `move_rel` `calls` as well as the bare
-grammars' `elements`, and legacy `(kind, value)` element pairs are still accepted so a
-cached trace does not silently read 0 (which would look like a fixed defect).
+A/B/D read `native_absolute` / `move_rel` `calls` as well as the bare grammars'
+`elements`, and legacy `(kind, value)` element pairs are still accepted so a cached
+trace does not silently read 0 (which would look like a fixed defect).
 
-Item 6: `on_lattice` / `delta_histogram` implement a documented finding
-(`{0, ±1, ±10, ±100}`, mode `(±10, ±10)` = 14.1 px) whose test was never in-tree.
-
-Item 7: `_never_moved` replaces a `distance=-1.0` sentinel.
+`on_lattice` / `delta_histogram` implement a documented finding
+(`{0, ±1, ±10, ±100}`, mode `(±10, ±10)` = 14.1 px).
 """
 
 from __future__ import annotations
@@ -196,7 +194,7 @@ def test_indicator_B_is_silent_when_type_and_submit_are_separate_steps() -> None
 
 
 def test_indicator_B_reads_a_multi_call_native_turn() -> None:
-    """One turn, two calls: the whole point of reading `calls` rather than one action."""
+    """One turn, two calls, so `calls` is read rather than a single action."""
     text = _tool_call({"action": "type", "text": "ls"}) + "\n" + _tool_call(
         {"action": "key", "keys": ["ENTER"]}
     )
@@ -218,7 +216,7 @@ def test_indicator_C_is_premature_only_when_the_cell_did_not_succeed() -> None:
 
 
 def test_indicator_C_treats_a_self_declared_fail_as_a_termination() -> None:
-    """This is what item 4's normalisation buys: `fail` is recorded and read as one."""
+    """`fail` is recorded, and read as a termination."""
     trace = _score([], control_terminate="fail", success=False)
     assert trace.metrics["C_terminated"] == 1.0
     assert trace.info["indicators"]["failure_modes"]["C_termination_raw"] == "fail"
@@ -384,11 +382,10 @@ def test_the_mouse_metric_reads_no_op_parse_error_and_in_bbox_rates() -> None:
 
 
 def test_never_moved_lives_in_the_grounding_taskset_not_in_evals() -> None:
-    """Item 7's successor is `rl.grounding.taskset._never_moved`.
+    """`_never_moved` lives in `rl.grounding.taskset`, not in `evals/indicators.py`.
 
-    Recorded here because that is not where a reader of `evals/indicators.py` would
-    look for it: the `distance = -1.0` sentinel it replaces lived on the *result*, so
-    the natural home would be alongside the other indicators. It is exercised in
+    The `distance = -1.0` sentinel it replaces lived on the result, so the natural
+    place to look for it is alongside the other indicators. It is exercised in
     `tests/test_rl_tasksets.py`.
     """
     import evals.harness as harness_module

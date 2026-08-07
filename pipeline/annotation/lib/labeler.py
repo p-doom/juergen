@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Model-agnostic VLM labeler client (OpenAI-compatible).
 
-One thin client used by every annotation step, selected entirely by env so we
-can "iterate on frontier, distill to local later" without code changes:
+One thin client used by every annotation step, selected entirely by env:
 
     LABELER_MODEL      (default: Kimi-K2.6)
     LABELER_BASE_URL   (default: $AZURE_OPENAI_ENDPOINT  -> Azure /openai/v1/ surface)
@@ -35,7 +34,7 @@ from typing import Any
 from pipeline.lib.common import extract_json_object, image_data_url
 
 # Served from the same Azure mihir-4710 /openai/v1/ surface; pass the model by
-# name. (Earlier iterations used the "gpt-5.5" deployment on this resource.)
+# name.
 DEFAULT_LABELER_MODEL = "Kimi-K2.6"
 
 
@@ -59,7 +58,7 @@ class LabelerConfig:
     api_key: str
     timeout_s: float = 300.0
     retries: int = 2
-    # Transient failures (429 / 5xx / timeouts) get their OWN deeper ladder:
+    # Transient failures (429 / 5xx / timeouts) get their own deeper ladder:
     # long sequential call chains (day-scope annotation) die mid-stream on the
     # shallow default above, and Azure Kimi throws 429s even under nominal
     # quota. Exponential with jitter, honoring Retry-After when the server
@@ -74,7 +73,7 @@ class LabelerConfig:
     reasoning_effort: str | None = os.environ.get("LABELER_REASONING_EFFORT") or None
     # Reservation for the answer + in-band chain-of-thought (Kimi-K2.6 returns
     # reasoning in `reasoning_content`, which still counts against this cap).
-    # RESERVED against the model's 262K context, so it competes with the ~150
+    # Reserved against the model's 262K context, so it competes with the ~150
     # input frames. Observed describe/extract usage maxed at ~21K, so 32K is
     # ample and leaves the most room for frames. Override via env.
     max_completion_tokens: int = int(os.environ.get("LABELER_MAX_TOKENS") or 32000)
@@ -150,8 +149,6 @@ class Labeler:
             max_retries=0,
         )
 
-    # -- full (content + reasoning + meta) ----------------------------------
-
     def call_full(
         self,
         system: str,
@@ -187,11 +184,10 @@ class Labeler:
                     except Exception:
                         meta = {}
                 cached_model = str(meta.get("model", "")) if meta else ""
-                # Safety net: the cache path has no model in its key, so a cached
-                # response from a DIFFERENT model would otherwise be served
-                # silently (e.g. K2.6 answers returned for a K2.5 run). Refuse it
-                # and re-call. Keep separate run dirs per model so this never even
-                # triggers; this just makes a mix-up loud instead of wrong.
+                # The cache path has no model in its key, so a cached response
+                # from a different model would otherwise be served silently
+                # (e.g. K2.6 answers returned for a K2.5 run). Refuse it and
+                # re-call; keep separate run dirs per model to avoid the case.
                 if cached_model and cached_model != self.config.model:
                     print(f"  [labeler] cache model mismatch "
                           f"({cached_model!r} != {self.config.model!r}); re-calling "
@@ -241,7 +237,7 @@ class Labeler:
             except Exception as exc:
                 last_err = f"{type(exc).__name__}: {exc}"
                 if "content_filter" in last_err:
-                    # Azure blocked the request/response for THESE inputs —
+                    # Azure blocked the request/response for these inputs —
                     # deterministic; surface it as its own type immediately.
                     raise ContentFilteredError(last_err) from exc
                 wait = self._transient_wait(exc, transient_n)
@@ -274,9 +270,9 @@ class Labeler:
             if finish_reason == "length":
                 # The budget ran out — on reasoning (empty content) or mid-answer
                 # (truncated content). Either way the response is unusable:
-                # retry with a doubled budget and NEVER cache it. Only at the
+                # retry with a doubled budget and never cache it. Only at the
                 # cap does a truncated-but-present answer fall through (cached,
-                # loud below) — an empty one is an error.
+                # with a warning below); an empty one is an error.
                 if budget < budget_cap:
                     budget = min(budget_cap, budget * 2)
                     print(f"  [labeler] completion hit its budget "
@@ -337,8 +333,6 @@ class Labeler:
                 wait = max(wait, float(headers.get("retry-after")))
         return wait
 
-    # -- raw text -----------------------------------------------------------
-
     def call_text(
         self,
         system: str,
@@ -352,8 +346,6 @@ class Labeler:
         return self.call_full(system, user_text, images=images, image_labels=image_labels,
                               cache_path=cache_path, no_cache=no_cache,
                               max_completion_tokens=max_completion_tokens).text
-
-    # -- json ---------------------------------------------------------------
 
     def call_json(
         self,

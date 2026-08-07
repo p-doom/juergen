@@ -1,14 +1,12 @@
 """movebox: multi-step move-the-cursor-into-the-box, container-free.
 
-Reward is **pure sparse task success** — 1.0 iff the cursor entered the box. One
-named knob, and no dense shaping term: a constant that reads as tunable while
-contributing identically `-0.0` is a trap.
+Reward is pure sparse task success: 1.0 iff the cursor entered the box. One named
+knob, and no dense shaping term.
 
-Shaping parameters stay **module constants, never config fields.** Inside a
-`vf.Task`, `self.config` is the per-task `TaskConfig`, which has no custom fields —
-reading one raises `AttributeError`, and one throwing reward inside `Task.score`'s
-`asyncio.gather` drops the *whole group's* rewards, silently deleting the gradient.
-That bug killed prior runs; the constant form makes it unreachable.
+Shaping parameters stay module constants, not config fields. Inside a `vf.Task`,
+`self.config` is the per-task `TaskConfig`, which has no custom fields — reading
+one raises `AttributeError`, and one throwing reward inside `Task.score`'s
+`asyncio.gather` drops the whole group's rewards, deleting the gradient.
 """
 
 from __future__ import annotations
@@ -31,8 +29,7 @@ from rl.movebox.dataset import (
 __all__ = ["MoveBoxTask", "MoveBoxTaskset", "MoveBoxTasksetConfig"]
 
 REACH_REWARD = 1.0
-"""The only reward term. Sparse task success, per the explicit directive that this
-env report exactly what it measures and nothing shaped on top."""
+"""The only reward term: sparse task success, with nothing shaped on top."""
 
 
 class MoveBoxTask(MouseIndicators, SamplingProvenance, DesktopTask):
@@ -67,10 +64,9 @@ class MoveBoxTask(MouseIndicators, SamplingProvenance, DesktopTask):
             "reach_step": float(result.get("reach_frame", -1)),
             "best_distance_px": float(result.get("best_distance", -1.0)),
             "repeat_actions": float(repeats),
-            # From the preparer's evidence, which is where the band actually lands.
-            # This read `result["band_index"]`, a key nothing ever publishes, so the
-            # curriculum metric was the constant -1.0 — the one number this env needs
-            # to slice its results by.
+            # From the preparer's evidence, where the band lands. Reading
+            # `result["band_index"]` (a key nothing publishes) made this metric the
+            # constant -1.0.
             "band": _band_index(result),
         }
 
@@ -87,7 +83,7 @@ class MoveBoxTasksetConfig(vf.TasksetConfig):
     band_weights: dict[str, float] = {"near": 0.6, "medium": 0.3, "far": 0.1}
     max_steps: int = 8
     """Read here and passed onto the row. The harness has a `max_steps` of its own;
-    this one is the taskset's and must not be silently shadowed by it."""
+    this one is the taskset's and must not be shadowed by it."""
 
 
 class MoveBoxTaskset(vf.Taskset[MoveBoxTask, MoveBoxTasksetConfig]):

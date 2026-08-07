@@ -23,10 +23,10 @@ __all__ = ["GroundingHarness", "GroundingHarnessConfig", "GroundingCanvasPrepare
 class GroundingCanvasPreparer:
     """Loads the labelled screenshot and places the stratified cursor start.
 
-    `postcondition_success` is deliberately left unset: this env does not stop on a
-    hit. The screenshot is a final state and the eval is single-step, so there is
-    nothing to stop early *from* — and in the multi-step VM-backed variant the fixed
-    K frames are what makes trajectory length comparable across regimes.
+    `postcondition_success` is left unset: this env does not stop on a hit. The
+    screenshot is a final state and the eval is single-step, and in the multi-step
+    VM-backed variant the fixed K frames keep trajectory length comparable across
+    regimes.
     """
 
     kind = "grounding_canvas"

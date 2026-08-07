@@ -3,34 +3,30 @@
 `verifiers`' own `vf eval` CLI cannot stand in, because three things this gate
 needs are not expressible as CLI flags —
 
-  * **the arm.** An arm is a whole `DesktopHarnessConfig` (codec, history policy,
+  * the arm. An arm is a whole `DesktopHarnessConfig` (codec, history policy,
     image budget, settle profile, scripted/negative, artifact policy) that lives in
-    `cells.py` precisely so an arm cannot be redefined at a command line. `--arm`
-    names one; it does not rebuild one.
-  * **the VM.** `DesktopPoolConfig.session_kwargs` has to be filled with an image,
+    `cells.py` so an arm cannot be redefined at a command line. `--arm` names one;
+    it does not rebuild one.
+  * the VM. `DesktopPoolConfig.session_kwargs` has to be filled with an image,
     a qemu binary and a pool target that the harness can actually drive
     (`evals/vm.py`).
-  * **the aggregate.** labctl's `eval_result` output wants one `result.json` at a
-    fixed marker path, and the thing we need out of a multi-trial run is
-    **pass_rate per cell**, not one pass count.
+  * the aggregate. labctl's `eval_result` output wants one `result.json` at a
+    fixed marker path, and what a multi-trial run has to yield is pass_rate per
+    cell, not one pass count.
 
 Everything else is verifiers': task loading, the episode, interception, the
 client, `traces.jsonl`.
 
-**Trials are separate `run_eval` passes, not `num_rollouts`.** Both give N draws
-per cell, but `DesktopHarness._artifact_dir` keys on the task name alone, so N
-rollouts of one task overwrite each other's frames,
-prompts, GIF and `result.json` and the run keeps only the last. A pass per trial
-with its own `artifacts.output_dir` keeps all N. The sglang server and the desktop
-pool are process-global and survive across passes, so the extra passes cost
-nothing.
+Trials are separate `run_eval` passes, not `num_rollouts`. Both give N draws per
+cell, but `DesktopHarness._artifact_dir` keys on the task name alone, so N
+rollouts of one task overwrite each other's frames, prompts, GIF and
+`result.json` and the run keeps only the last. A pass per trial with its own
+`artifacts.output_dir` keeps all N. The sglang server and the desktop pool are
+process-global and survive across passes, so the extra passes cost nothing.
 
-**`controls_ok` is emitted for control arms only, and is `null` for a model arm.**
-The old runner computed `expected_passed = 0 if negative else len(rows)` for every
-mode, so a model arm's `controls_ok` was just "every selected cell passed" wearing
-the word *control* — a green light that restated the measurement instead of
-checking it. Nothing derived from a model arm can calibrate that arm; cite the
-scripted oracle/negative runs.
+`controls_ok` is emitted for control arms only, and is `null` for a model arm:
+nothing derived from a model arm can calibrate that arm, so cite the scripted
+oracle/negative runs instead.
 
 Exit status: 0 fine, 2 a control arm did not read its calibrated value, 3
 infrastructure failure (a result that must not be read as a model number).
@@ -91,11 +87,9 @@ def _sglang(
 ) -> Iterator[str]:
     """Serve `model_path` and yield its OpenAI base URL.
 
-    `python` is an explicit interpreter, not `sys.executable`, and that is the
-    whole point: the harness needs `verifiers`, sglang needs a 14 GB CUDA stack,
-    and the two do not have to be the same venv. Keeping them apart means the
-    already-built, already-referenced sglang environment stays byte-unchanged
-    instead of being mutated to add a framework it does not use.
+    `python` is an explicit interpreter, not `sys.executable`: the harness needs
+    `verifiers`, sglang needs a 14 GB CUDA stack, and the two do not have to be the
+    same venv.
     """
     if port == 0:
         # sglang derives grpc_port = port + 10000 and rejects > 65535, and its own
@@ -187,12 +181,11 @@ def _sha256_file(path: Path) -> str:
 def _model_provenance(model_path: Path | None) -> dict[str, Any] | None:
     """Record which checkpoint served the arm — recorded, not enforced.
 
-    `cells.verify_phaseb_provenance` fails closed against the *step-900* export and
-    is the right check for that one arm; hard-coding a second, third and fourth
-    expected manifest here would make every new arm a code change. What must never
-    be lost is *which bytes answered*, so both registration files are hashed and
-    embedded, and `--verify-phaseb` opts into the strict check when the arm is the
-    one it describes.
+    `cells.verify_phaseb_provenance` fails closed against the step-900 export and is
+    the right check for that one arm; hard-coding an expected manifest per arm here
+    would make every new arm a code change. Both registration files are hashed and
+    embedded so which bytes answered is never lost, and `--verify-phaseb` opts into
+    the strict check when the arm is the one it describes.
     """
     if model_path is None:
         return None
@@ -245,7 +238,7 @@ def _eval_config(
         client={"base_url": base_url, "api_key_var": API_KEY_VAR},
         sampling={"temperature": temperature, "top_p": top_p, "max_tokens": max_tokens},
         num_rollouts=1,
-        # One episode at a time. Concurrency here would put N desktops on the node
+        # One episode at a time: concurrency here would put N desktops on the node
         # at once, and the node budget is a slot count, not a promise of memory.
         max_concurrent=1,
         output_dir=traces_dir,
@@ -264,10 +257,10 @@ def _harness_error(trace: Any) -> dict[str, Any] | None:
     the run exited 3 with no reason recorded anywhere a reader would look, and the
     only copy of the message was a log line in a batch job's stdout.
 
-    Reads `trace.errors` / `trace.stop_condition`, which verifiers fills in for
-    exactly this case. Diagnostic only: an episode with no result was already
-    excluded from every rate (`_aggregate` counts `validity == "valid"`), so
-    nothing here can move a pass count.
+    Reads `trace.errors` / `trace.stop_condition`, which verifiers fills in for this
+    case. Diagnostic only: an episode with no result is already excluded from every
+    rate (`_aggregate` counts `validity == "valid"`), so nothing here can move a
+    pass count.
     """
     errors = getattr(trace, "errors", None) or []
     if not errors:
@@ -314,13 +307,12 @@ def _episode_row(trace: Any, trial: int) -> dict[str, Any]:
 def _aggregate(
     rows: list[dict[str, Any]], *, cell_ids: list[str], scripted: bool, negative: bool
 ) -> dict[str, Any]:
-    """pass_rate per cell over trials — the reading this gate is supposed to give.
+    """pass_rate per cell over trials.
 
     A single-trial score cannot be read on `desktop_open_chrome`: the suite's own
-    `instrument_limits` note says a Chrome that starts but never maps a window
-    flips PASS to FAIL and that the cell must be read as a rate over trials. A
-    scalar `passed/4` hides exactly that, which is how one race became a published
-    arm difference.
+    `instrument_limits` note says a Chrome that starts but never maps a window flips
+    PASS to FAIL, so the cell must be read as a rate over trials. A scalar
+    `passed/4` hides that, and one such race was once reported as an arm difference.
     """
     per_cell: dict[str, Any] = {}
     for cell in cell_ids:

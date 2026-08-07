@@ -1,7 +1,7 @@
 """Realigned-pipeline annotation chain STUB: 03 filter -> 03b annotate @k fps.
 
 The downstream stage is nested as the upstream stage's on_complete child.
-Both stages read the SAME master store + realigned clips manifest family; the
+Both stages read the same master store + realigned clips manifest family; the
 annotation fps K is independent of any training fps (bounded only by the
 master fps, integer stride).
 
@@ -31,12 +31,6 @@ def _resolve_project_repo() -> str:
     Both configs in this package derive the same thing -- the juergen checkout,
     from this file's location or from ``JUERGEN_REPO`` -- and stage the checkout
     itself, because their entrypoints are ``pipeline/...``.
-
-    The hardcoded absolute path this replaces kept resolving to a checkout that
-    still carried the pre-rearchitecture ``data_pipeline/realigned_pipeline/``
-    layout and had no root ``pipeline/`` at all — so every ``pipeline/...``
-    entrypoint below resolved silently at config-build time and only failed once
-    the job was already scheduled on a node.
     """
     root = Path(os.environ.get("JUERGEN_REPO") or Path(__file__).resolve().parents[2])
     if not (root / "pipeline").is_dir():
@@ -65,12 +59,10 @@ def _entrypoint(rel_path: str) -> str:
 
 PROJECT_REPO = _resolve_project_repo()
 DATASETS_ROOT = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/datasets/yll.kryeziu"
-# Repointed to the v3 lineage 2026-08-05. The previous _v1 names
+# Repointed to the v3 lineage 2026-08-05: the previous _v1 names
 # (``..._full_master_fps_15_sharded`` and
-# ``..._full_v1_stage_02_realign_manifest``) do not exist on disk any more, so
-# stage_03_filter() -- which reads both below -- was broken. v3 is the current
-# lineage and the only one present. Asserted by _source(), not just verified
-# once by hand: a repointed constant rots the same way the last one did.
+# ``..._full_v1_stage_02_realign_manifest``) no longer exist on disk. Existence
+# is asserted by _source() at config-build time.
 MASTER_DIR = (
     "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/datasets/alfred.nguyen/"
     "ccast0618d_dataset_full_v3_stage_01_master_frames_fps_15"
@@ -89,9 +81,7 @@ GOALS_VERSION = f"{TAG}_stage_03b_goals_describe_extract_fps_{ANNOTATE_FPS}"
 def _source(path: str) -> str:
     """Return ``path`` after asserting it exists.
 
-    Same contract as :func:`_entrypoint`, applied to the dataset paths. Both of
-    these were stale until 2026-08-05 and nothing said so: the config built
-    cleanly, ``labctl validate`` passed, and stage 03 failed on the node.
+    Same contract as :func:`_entrypoint`, applied to the dataset paths.
     """
     if not Path(path).exists():
         raise RuntimeError(

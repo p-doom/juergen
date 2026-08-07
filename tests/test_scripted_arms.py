@@ -1,15 +1,15 @@
-"""Item 8 — scripted arms as `Intent` + per-step rendering.
+"""Scripted arms as `Intent` + per-step rendering.
 
-Three properties are load-bearing:
+The renderer table is exact, not a substring heuristic: `native_absolute` and
+`native_absolute_control` are prefixes of one another, and `move_rel` contains
+neither "compact" nor "absolute" while being relative.
 
-  * the renderer table is **exact**, not a substring heuristic — `native_absolute`
-    and `native_absolute_control` are prefixes of one another, and `move_rel`
-    contains neither "compact" nor "absolute" while being relative;
-  * the **new** fourth renderer emits `native_absolute_control`'s bare-line absolute
-    form, where `0 0 0 ; +LMB -LMB` is a click at the top-left corner while the same
-    bytes in `compact_raw` mean "don't move, click here";
-  * rendering happens **per step**, because the relative arms resolve a click against
-    a cursor read that must be fresh.
+The fourth renderer emits `native_absolute_control`'s bare-line absolute form, where
+`0 0 0 ; +LMB -LMB` is a click at the top-left corner while the same bytes in
+`compact_raw` mean "don't move, click here".
+
+Rendering happens per step, because the relative arms resolve a click against a
+cursor read that must be fresh.
 """
 
 from __future__ import annotations
@@ -184,11 +184,9 @@ def test_the_relative_renderer_resolves_the_click_against_the_live_cursor() -> N
 
 
 def test_the_same_bytes_mean_different_actions_in_the_paired_arms() -> None:
-    """The deliberate semantic trap the paired grammars share.
-
-    `0 0 0 ; +LMB -LMB` is a click at the top-left corner in the absolute arm and
-    "don't move, click here" in `compact_raw`. This is exactly why a control arm must
-    be rendered per grammar and never copied between them.
+    """`0 0 0 ; +LMB -LMB` is a click at the top-left corner in the absolute arm and
+    "don't move, click here" in `compact_raw`, so a control arm must be rendered per
+    grammar and never copied between them.
     """
     bytes_ = "0 0 0 ; +LMB -LMB"
     geometry = _geo()
@@ -203,7 +201,6 @@ def test_the_same_bytes_mean_different_actions_in_the_paired_arms() -> None:
 
 
 def test_a_stale_cursor_read_is_exactly_the_drift_in_the_relative_arm() -> None:
-    """The asymmetry the per-step rendering exists to keep honest."""
     codec = load_codec("deltatype_v2")
     task = _task("open_chrome")
     fresh = render_step(_session((100, 100)), task, codec=codec, intent=Intent("click", target=(300, 400)))
@@ -268,8 +265,8 @@ def test_a_terminal_click_target_is_recomputed_from_guest_geometry() -> None:
 def test_every_scripted_step_parses_and_compiles_through_the_real_codec(
     codec_name: str, negative: bool
 ) -> None:
-    """This is what makes 4/4 and 0/4 mean something: the controls use the same
-    `parse` and `compile` the model arm does."""
+    """The controls use the same `parse` and `compile` the model arm does, which is
+    what makes 4/4 and 0/4 comparable to it."""
     codec = load_codec(codec_name)
     geometry = _geo()
     for cell in load_suite().tasks:

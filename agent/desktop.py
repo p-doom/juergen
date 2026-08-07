@@ -2,35 +2,33 @@
 
 Two facts about verifiers force this module to exist.
 
-**1. The worker pool is upscale-only.** `verifiers/v1/serve/pool.py:77` —
-*"Upscale-only for now — workers are never reclaimed."* `_maybe_scale_up`
-(pool.py:148-153) spawns a worker when in-flight rollouts hit 90% of
-`workers * multiplex`; there is no counterpart. A worker that holds a VM
-therefore holds it until the broker's `_shutdown` (pool.py:243-261) at the end of
-the whole run. Scale down the *load* and the VMs stay pinned: a 14-VM pool per
-worker times four scaled-up workers is 56 VMs on a node sized for 14, and the
-extras are idle. Nothing inside verifiers will fix this, because nothing inside
-verifiers knows a worker owns a VM.
+1. The worker pool is upscale-only. `verifiers/v1/serve/pool.py:77` —
+   "Upscale-only for now — workers are never reclaimed." `_maybe_scale_up`
+   (pool.py:148-153) spawns a worker when in-flight rollouts hit 90% of
+   `workers * multiplex`; there is no counterpart. A worker that holds a VM holds
+   it until the broker's `_shutdown` (pool.py:243-261) at the end of the whole
+   run. Scaling down the load leaves the VMs pinned: a 14-VM pool per worker
+   times four scaled-up workers is 56 VMs on a node sized for 14, and the extras
+   are idle.
 
-**2. One `Harness` instance is shared by every rollout** (`env.py:257,352`), and
-`Harness.__init__` must not be overridden. So the pool cannot live on the harness
-instance, and per-rollout state must not either.
+2. One `Harness` instance is shared by every rollout (`env.py:257,352`), and
+   `Harness.__init__` must not be overridden. So the pool cannot live on the
+   harness instance, and per-rollout state must not either.
 
-The fix is at our boundary and has three parts:
+Three parts:
 
-  * **Process-global pools** keyed by `PoolSpec.key`, created lazily on first
+  * Process-global pools keyed by `PoolSpec.key`, created lazily on first
     `acquire` and torn down by `atexit`/SIGTERM. Not per-Harness, not per-rollout.
-    Two callers that reuse one key with different specs is a configuration error and
-    is refused, not silently resolved to whichever spec arrived first.
-  * **A node-wide slot lease** (`NodeSlots`): one `flock`ed file per admissible
-    VM under a shared directory, so the *sum* over spawn-workers can never exceed
-    the node budget however many workers the broker decides to start. This is the
-    part that actually bounds the leak — a per-worker `max_sessions` cannot.
-  * **An idle reaper**: a lease has a deadline. A rollout's lease is extended
-    past `launch` by `scoring_grace_s` precisely so a runtime-declaring
-    `@vf.reward` can still read live VM state during `Task.score`, then it is
-    released. A pool with no live leases for `pool_idle_ttl_s` is closed and its
-    slots returned, which is the scale-down verifiers does not do.
+    Reusing one key with two different specs is refused, not resolved to whichever
+    spec arrived first.
+  * A node-wide slot lease (`NodeSlots`): one `flock`ed file per admissible VM
+    under a shared directory, so the sum over spawn-workers cannot exceed the node
+    budget however many workers the broker starts. A per-worker `max_sessions`
+    cannot bound it.
+  * An idle reaper: a lease has a deadline. A rollout's lease is extended past
+    `launch` by `scoring_grace_s` so a runtime-declaring `@vf.reward` can still
+    read live VM state during `Task.score`, then it is released. A pool with no
+    live leases for `pool_idle_ttl_s` is closed and its slots returned.
 """
 
 from __future__ import annotations
@@ -87,8 +85,7 @@ class NodeSlots:
 
     A slot is an advisory `flock` on `slot_{i:04d}.lock`. The lock dies with the
     process that holds it, so a SIGKILLed worker returns its slots to the node
-    without a reaper — which is the property a per-worker in-memory counter can
-    never have.
+    without a reaper; a per-worker in-memory counter would not.
     """
 
     def __init__(self, *, directory: Path = DEFAULT_SLOT_DIR, max_slots: int = 14) -> None:
@@ -131,13 +128,13 @@ class NodeSlots:
 class DesktopLease:
     """One desktop session, held for one rollout plus a scoring grace period.
 
-    `eq=False` is load-bearing, not style: `LeasedDesktopPool._leases` is a **set**,
-    and a plain `@dataclass` generates `__eq__`, which sets `__hash__ = None`. With
-    the generated `__eq__` every `acquire` died on `TypeError: unhashable type` after
+    `eq=False` is load-bearing: `LeasedDesktopPool._leases` is a set, and a plain
+    `@dataclass` generates `__eq__`, which sets `__hash__ = None`. With the
+    generated `__eq__` every `acquire` died on `TypeError: unhashable type` after
     the node slot and the VM had already been taken but before either was tracked,
-    leaking both. Identity is also the semantics the pool wants: two leases are never
-    interchangeable, the registry keys by `trace_id`, and `forget` discards the object
-    it was handed.
+    leaking both. Identity is also the semantics the pool wants: two leases are
+    never interchangeable, the registry keys by `trace_id`, and `forget` discards
+    the object it was handed.
 
     `session` is whatever `pixeldesk.vm.pool.DesktopSessionPool` checks out. The
     episode driver never releases directly — it calls `finish()`, which starts the
@@ -185,7 +182,7 @@ class DesktopLease:
 class LeaseRegistry:
     """trace id -> live lease, so post-`launch` scoring can find the VM.
 
-    `Task.score` and `Harness.score` run *after* `launch` returns
+    `Task.score` and `Harness.score` run after `launch` returns
     (`rollout.py:226-235`) and receive `runtime`, not our session. A
     runtime-declaring `@vf.reward` looks the session up here and probes real VM
     state; if the grace window has already closed it falls back to the final probe
@@ -228,8 +225,8 @@ class PoolSpec:
     """Everything that identifies a pool, so two harness configs that want the
     same VMs share one pool instead of each starting its own.
 
-    `max_node_slots` is deliberately separate from whatever the underlying pool
-    calls its own maximum: the pool's limit is per process, this one is per node.
+    `max_node_slots` is separate from whatever the underlying pool calls its own
+    maximum: the pool's limit is per process, this one is per node.
     """
 
     key: str
@@ -257,8 +254,6 @@ class LeasedDesktopPool:
             target=self._reap_forever, name=f"vm-reaper[{spec.key}]", daemon=True
         )
         self._reaper.start()
-
-    # -- lifecycle ------------------------------------------------------- #
 
     def _ensure_pool(self) -> Any:
         with self._lock:
@@ -313,8 +308,6 @@ class LeasedDesktopPool:
                 _LOGGER.exception("desktop pool %s: close failed", self.spec.key)
             _LOGGER.info("desktop pool %s: closed", self.spec.key)
 
-    # -- the reaper ------------------------------------------------------ #
-
     def _reap_once(self) -> None:
         with self._lock:
             expired = [lease for lease in self._leases if lease.expired()]
@@ -334,9 +327,8 @@ class LeasedDesktopPool:
             and self.spec.pool_idle_ttl_s > 0
             and time.monotonic() - idle_since > self.spec.pool_idle_ttl_s
         ):
-            # The scale-down verifiers never performs: a worker that has finished
-            # its share of the rollouts stops holding VMs, and its node slots go
-            # back so a busier worker can take them.
+            # A worker that has finished its share of the rollouts stops holding
+            # VMs, and its node slots go back so a busier worker can take them.
             _LOGGER.info(
                 "desktop pool %s: idle %.0fs, releasing VMs",
                 self.spec.key,
@@ -403,10 +395,9 @@ _TEARDOWN_INSTALLED = False
 def _install_teardown() -> None:
     """Register the process-wide teardown, once, when the first pool is created.
 
-    Not at import: `import agent.desktop` would then replace the process's SIGINT and
-    SIGTERM handlers as a side effect of importing a library, in a process that may
-    own no VM at all. There is nothing to tear down until a pool exists, so that is
-    when the handlers go in.
+    Not at import: `import agent.desktop` would then replace the process's SIGINT
+    and SIGTERM handlers in a process that may own no VM at all. There is nothing
+    to tear down until a pool exists.
     """
     global _TEARDOWN_INSTALLED
     if _TEARDOWN_INSTALLED:
@@ -440,11 +431,11 @@ def default_pool_factory(
 ) -> Callable[[], Any]:
     """Call pixeldesk's constructor directly with explicit config.
 
-    Deliberately *not* a provider-by-name lookup: no name registry, no plugin
-    resolution, and nothing patched into the OSWorld tree, which is re-clonable and
-    would silently lose the patch. `target` names a **constructor**
-    (`module:attribute`) and `session_kwargs` is passed to it verbatim; overriding
-    it is how a test injects a fake, not how a VM backend is selected.
+    Not a provider-by-name lookup: no name registry, no plugin resolution, and
+    nothing patched into the OSWorld tree, which is re-clonable and would lose the
+    patch. `target` names a constructor (`module:attribute`) and `session_kwargs`
+    is passed to it verbatim; overriding it is how a test injects a fake, not how
+    a VM backend is selected.
 
     Imported lazily so a text-only eval never pulls the VM stack in.
     """

@@ -3,7 +3,7 @@
 `ModelContext` is read in full:
 
   * `ctx.model` — the model id;
-  * `ctx.sampling` — **the** temperature source. `Dialect.apply_overrides`
+  * `ctx.sampling` — the temperature source. `Dialect.apply_overrides`
     (`dialects/base.py:197-200`, `dialects/chat.py:349-352`) silently drops a
     temperature set in the request body whenever the eval already set one, because
     the eval's sampling is authoritative at the wire. So a harness default is
@@ -54,8 +54,8 @@ class ModelCallError(RuntimeError):
 class Codec(Protocol):
     """The half of `pixeldesk.codec_protocol.Codec` an episode driver touches.
 
-    `compile` hands back `pixeldesk.ir.Operation`s **already in absolute screen
-    pixels** — every normalisation convention (raw pixel deltas, the normalized
+    `compile` hands back `pixeldesk.ir.Operation`s already in absolute screen
+    pixels — every normalisation convention (raw pixel deltas, the normalized
     0-999 grid, the drag-only MOVE form) lives inside the codec. Nothing
     downstream of `compile` may re-resolve a coordinate.
 
@@ -87,8 +87,7 @@ def load_codec(name: str) -> Codec:
     """Resolve a grammar by name through its entry point.
 
     Grammars live in `juergen/grammars/<name>/` and register themselves; this is
-    the only place an episode driver learns a grammar's identity, so adding one
-    never touches the harness.
+    the only place an episode driver resolves a grammar name.
     """
     from importlib.metadata import entry_points
 
@@ -102,11 +101,11 @@ def load_codec(name: str) -> Codec:
     except ImportError:  # pragma: no cover - environment-dependent
         pass
     else:
-        # `grammars.load` is the tree's real registry and already falls back to
-        # scanning peer directories, so an uninstalled checkout resolves here. The
-        # pixeldesk probe below never could: pixeldesk exposes neither `CODECS`
-        # nor `load_codec` (it is deliberately grammar-free), so before this branch
-        # existed an uninstalled checkout raised LookupError for every grammar.
+        # `grammars.load` is the tree's registry and already falls back to scanning
+        # peer directories, so an uninstalled checkout resolves here. The pixeldesk
+        # probe below cannot: pixeldesk is grammar-free and exposes neither
+        # `CODECS` nor `load_codec`, so without this branch an uninstalled checkout
+        # raised LookupError for every grammar.
         try:
             return grammars.load(name)
         except KeyError:
@@ -135,7 +134,7 @@ class EffectiveSampling:
     `temperature_source` exists so a run can be audited without re-deriving
     override precedence: `"ctx.sampling"` means the eval/orchestrator set it (and
     it wins), `"harness_default"` means the eval left it unset and the harness
-    filled in. There is no third possibility, which is the point.
+    filled in. There is no third possibility.
     """
 
     model: str
@@ -168,9 +167,9 @@ def _eval_set(sampling: vf.Sampling, key: str) -> bool:
 def program_sampling(
     ctx: vf.ModelContext, defaults: dict[str, Any]
 ) -> dict[str, Any]:
-    """Only the knobs the eval left unset. Anything the eval set is dropped here
-    because `apply_overrides` would overwrite it anyway — sending it would make
-    the recorded request a lie."""
+    """Only the knobs the eval left unset. Anything the eval set is dropped here:
+    `apply_overrides` would overwrite it anyway, and sending it would misrepresent
+    the recorded request."""
     return {
         key: value
         for key, value in defaults.items()
@@ -220,8 +219,8 @@ class EndpointTransport:
 
     The program body carries only the knobs the eval left unset; the proxy applies
     `ctx.model` + `ctx.sampling` on top and commits the resulting `Response` to
-    the trace graph. This is the default because losing the graph loses tokens,
-    logprobs and branch structure, i.e. everything training needs.
+    the trace graph. This is the default: without the graph there are no tokens,
+    logprobs or branch structure.
     """
 
     endpoint: str
@@ -299,10 +298,9 @@ class Decision:
     """One model turn, all the way through to executable operations.
 
     `control` names a non-dispatching outcome the grammar defines
-    (`terminate` / `fail` / `no_op`), which is why `operations` can legitimately
-    be empty without a parse error. `prose` is the reasoning that preceded the
-    action line — the Phase-B history policy needs it and every runner that threw
-    it away made its own history unreproducible.
+    (`terminate` / `fail` / `no_op`), so `operations` can be empty without a parse
+    error. `prose` is the reasoning that preceded the action line; the Phase-B
+    history policy needs it.
     """
 
     step: int
@@ -337,7 +335,7 @@ _CONTROL_FLAGS = ("terminate", "fail", "no_op")
 def _control_of(action: Any) -> str | None:
     """Read a grammar's control outcome without knowing its action type.
 
-    Four *different* concepts on four names, not four spellings of one — measured
+    Four different concepts on four names, not four spellings of one — measured
     across the seven in-tree grammars:
 
         terminate  deltatype_v2, diffabs, ordered_events_v3, native_absolute, move_rel
@@ -370,8 +368,8 @@ def _control_of(action: Any) -> str | None:
 def _action_record(action: Any) -> Any:
     """`parsed_action`, straight from the grammar's own serialiser.
 
-    One name, called directly: every in-tree action type defines `to_dict`, and a
-    grammar that does not is a contract violation rather than a fallback case.
+    Every in-tree action type defines `to_dict`; a grammar that does not is a
+    contract violation, not a fallback case.
     """
     if action is None:
         return None
@@ -403,11 +401,10 @@ def _first_prose(text: str) -> str:
 class Agent:
     """screenshot window -> prompt -> sample -> parse -> compile.
 
-    The prompt is `codec.describe()` (the grammar documents itself; no harness
-    keeps a copy of a system prompt it does not own) plus whatever the injected
-    `HistoryPolicy` renders. An explicit `system_prompt` override exists only for
-    replaying a checkpoint whose sealed training prompt differs from the codec's
-    current description — pass its sha256 alongside so the drift is visible.
+    The prompt is `codec.describe()` plus whatever the injected `HistoryPolicy`
+    renders. An explicit `system_prompt` override exists only for replaying a
+    checkpoint whose sealed training prompt differs from the codec's current
+    description — pass its sha256 alongside so the drift is visible.
     """
 
     codec: Codec
@@ -483,8 +480,8 @@ class Agent:
         """Parse + compile a model turn. Pure: no VM, no network.
 
         Separated from `step` so the same code path scores a cached rollout, a
-        scripted oracle cell, and a live episode. A parse failure is a *result*,
-        not an exception — it is the system under test misbehaving.
+        scripted oracle cell, and a live episode. A parse failure is a result of
+        the system under test, not an exception.
         """
         prose = _first_prose(text)
         try:

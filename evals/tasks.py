@@ -1,8 +1,8 @@
 """Task rows, rollout state, and the tasksets that enumerate them.
 
-The six collapsed drivers differed less in their loop than in *what they did to
-the VM before the loop* and *what they read out of it afterwards*. Those two
-things are the `Preparer` seam below; everything else is one harness.
+A family differs from another in what it does to the VM before the loop and what
+it reads out of it afterwards. Those two things are the `Preparer` seam below;
+everything else is one harness.
 
   * freeroll               -> `none` / `terminal`
   * grounding              -> `grounding` (OSWorld setup + cached-trajectory
@@ -58,9 +58,8 @@ class DesktopTaskData(vf.TaskData):
 
     `kind` selects the `Preparer`; `expected` is whatever that family's oracle
     needs; `setup` is static per-task setup input (an OSWorld task config path, a
-    replay trajectory, a bbox). Nothing here is grammar-specific — the codec is a
-    harness config field, so the same row runs under every grammar, which is what
-    makes a grammar A/B a one-field change.
+    replay trajectory, a bbox). Nothing here is grammar-specific: the codec is a
+    harness config field, so the same row runs under every grammar.
     """
 
     kind: str = "none"
@@ -75,7 +74,7 @@ class DesktopTaskData(vf.TaskData):
     regime: str | None = None
     cursor_start: tuple[int, int] | None = None
     no_submit: bool = False
-    """True for a cell whose success *requires* not pressing Return. Read by the
+    """True for a cell whose success requires not pressing Return. Read by the
     over-submission indicator (D), which is otherwise unable to tell a correct
     submit from an over-generalised one."""
 
@@ -111,10 +110,10 @@ class DesktopTask(vf.Task[DesktopTaskData, DesktopState]):
     """Base task: no rewards of its own.
 
     Rewards come from the oracle mixins in `evals/oracles.py` and metrics from
-    `evals/indicators.py`; a concrete taskset composes exactly the ones its family
-    can actually evaluate. Keeping the base empty means a taskset never inherits a
-    reward that raises for lack of evidence — one throwing reward inside
-    `Task.score`'s `asyncio.gather` drops the whole group's rewards.
+    `evals/indicators.py`; a concrete taskset composes the ones its family can
+    actually evaluate. The base stays empty so a taskset never inherits a reward
+    that raises for lack of evidence: one throwing reward inside `Task.score`'s
+    `asyncio.gather` drops the whole group's rewards.
     """
 
 
@@ -167,9 +166,8 @@ class _NoPreparation:
 class _TerminalPreparation:
     """freeroll `--desktop_setup terminal`.
 
-    Only freeroll had this, and only typing evals need it: start with a focused
-    terminal so the first model turn is not spent finding one. Preserved verbatim,
-    including the `ctrl-l` clear.
+    Only typing evals need it: start with a focused terminal, cleared with
+    `ctrl-l`, so the first model turn is not spent finding one.
     """
 
     kind = "terminal"
@@ -198,11 +196,9 @@ class _TerminalPreparation:
 class _OSWorldPreparation:
     """OSWorld benchmark tasks: run the task JSON's `config` setup commands.
 
-    Both `osworld_fullbench_runner.py` and `osworld_one_task_runner.py` got this
-    for free from `DesktopEnv.reset(task_config=...)`; `osworld_grounding_runner.py`
-    reached for `SetupController` directly so the VM lifecycle stayed under our
-    qemu+KVM control rather than the apptainer provider that strips KVM ioctls on
-    hai-* nodes. The session owns the lifecycle now, so setup goes through it.
+    Setup goes through the session rather than `DesktopEnv.reset(task_config=...)`
+    so the VM lifecycle stays under our qemu+KVM control: OSWorld's apptainer
+    provider strips KVM ioctls on the hai-* nodes.
     """
 
     kind = "osworld"
@@ -227,17 +223,16 @@ class _GroundingPreparation(_OSWorldPreparation):
     """Grounding targets: OSWorld setup, optional cached-trajectory replay, then a
     deterministic stratified cursor placement.
 
-    *Replay.* Our labelled bboxes were sampled from `step_001.png` frames sitting
+    Replay: our labelled bboxes were sampled from `step_001.png` frames sitting
     next to the originating rollout's `traj.jsonl`, so the desktop must be advanced
     from post-setup to post-replay before the bbox means anything. Upstream
     OSWorld's `_replay_setup` is a `NotImplementedError` stub; `_replay` below
     dispatches each cached `action` as a raw pyautogui expression and skips a row
     it cannot execute rather than killing the run.
 
-    *Stratified starts.* `near`/`medium`/`far` are not jitter: they make the
-    distance-to-target a controlled variable, and the minimum radius is raised by
-    the bbox half-diagonal so a full-window target cannot collect a degenerate
-    reach-at-step-0.
+    Stratified starts: `near`/`medium`/`far` make the distance-to-target a
+    controlled variable, and the minimum radius is raised by the bbox half-diagonal
+    so a full-window target cannot collect a degenerate reach-at-step-0.
     """
 
     kind = "grounding"
@@ -280,7 +275,7 @@ class _GroundingPreparation(_OSWorldPreparation):
 
 
 def osworld_task_config(task: DesktopTaskData) -> dict[str, Any]:
-    """The **whole** OSWorld task JSON a row stands for.
+    """The whole OSWorld task JSON a row stands for.
 
     Whole, not just its `config` list, because the `evaluator` block travels with
     it: `DesktopFacade.setup()` binds both at once so `evaluate()` can stay
@@ -378,7 +373,7 @@ def cursor_start(
     model has acted. Same ladder-then-raise shape as `rl.target_box.geometry.
     sample_cursor_start`.
 
-    ⚠️ A BARE MIRROR DEGENERATES FOR WINDOW-SIZED TARGETS, which is why `far` goes
+    ⚠️ A bare mirror degenerates for window-sized targets, which is why `far` goes
     through the ladder too. Without a containment check, a target whose centre sits
     near the screen centre gets a start inside itself, and grounding runs with
     `require_unsolved_start=False` (`rl/grounding/harness.py:77`), so such an
@@ -438,7 +433,7 @@ def cursor_start(
 class OSWorldTasksetConfig(vf.TasksetConfig):
     """A split file (`{app: [task_id, ...]}`) or an explicit list of task JSONs.
 
-    NO-LEAK: point `split_path` only at the training split when this feeds RL. The
+    Leakage: point `split_path` only at the training split when this feeds RL. The
     held-out split is eval-only, and a benchmark used for eval should ideally never
     appear in training at all.
     """
@@ -449,9 +444,8 @@ class OSWorldTasksetConfig(vf.TasksetConfig):
     max_steps: int = 15
     max_tasks: int = 0
     resume_dir: str = ""
-    """If set, skip tasks that already have `<resume_dir>/<app>/<id>/result.json`.
-    `osworld_fullbench_runner.py` alone had this, and an interrupted 369-task array
-    run is exactly when you need it."""
+    """If set, skip tasks that already have `<resume_dir>/<app>/<id>/result.json`,
+    for resuming an interrupted 369-task array run."""
 
 
 class OSWorldTaskset(vf.Taskset[DesktopTask, OSWorldTasksetConfig]):
@@ -517,9 +511,8 @@ class GroundingTasksetConfig(vf.TasksetConfig):
 class GroundingTaskset(vf.Taskset[DesktopTask, GroundingTasksetConfig]):
     """bboxes.jsonl x {near, medium, far}. One task per (target, regime).
 
-    The old runner nested two loops inside one process and rebooted a VM per
-    rollout; here the cross-product *is* the taskset, so verifiers shards it and
-    the pool supplies VMs.
+    The cross-product is the taskset, so verifiers shards it and the pool supplies
+    VMs.
     """
 
     def load(self) -> Iterable[DesktopTask]:
@@ -582,10 +575,8 @@ class FreerollTasksetConfig(vf.TasksetConfig):
 class FreerollTaskset(vf.Taskset[DesktopTask, FreerollTasksetConfig]):
     """Goal-only episodes with no state oracle — the qualitative probe.
 
-    `freeroll.py` took several newline-separated instructions and looped them in
-    one process, rebooting the VM between each. One instruction is one task now;
-    blank and `#`-comment lines are still dropped, and an empty list still yields a
-    single no-goal rollout.
+    One instruction is one task. Blank and `#`-comment lines are dropped, and an
+    empty list yields a single no-goal rollout.
     """
 
     def load(self) -> Iterable[DesktopTask]:

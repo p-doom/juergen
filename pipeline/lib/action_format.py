@@ -1,9 +1,8 @@
 """Action formatters: (events, windows, dead_zones) -> one label per window.
 
-This is the single place the on-disk keylog becomes assistant-turn text, so
-action-format ablations are a stage-04 flag, not a pipeline rerun. A formatter
-receives the FULL raw event stream (state layer) plus the dead-zone label
-policy's dispositions (label layer) via ``events.apply_label_policy`` — a
+This is the single place the on-disk keylog becomes assistant-turn text. A
+formatter receives the full raw event stream (state layer) plus the dead-zone
+label policy's dispositions (label layer) via ``events.apply_label_policy`` — a
 stateful format (e.g. cumulative cursor position) folds over every event while
 emitting labels only for owned ones.
 
@@ -17,11 +16,11 @@ branch) preserves the relative order of movement, scrolling, and key/button
 transitions inside each window as one mini-program:
 ``move(4,-1); down(LMB); move(2,0); up(LMB)``. Continuous motion is
 accumulated on an internal ``continuous_action_hz`` motor grid (default 10 Hz
-== 100 ms ticks, NOT another frame rate); every press/release is an ordering
-barrier at its exact position. The aggregate format cannot represent
+== 100 ms ticks; not a frame rate); every press/release is an ordering barrier
+at its exact position. The aggregate format cannot represent
 ``move -> click -> move``; this one can. Held-state anomaly accounting
-(redundant press / dangling release / held at end) already lives in the shared
-label policy's ``PolicyCounters``.
+(redundant press / dangling release / held at end) lives in the shared label
+policy's ``PolicyCounters``.
 """
 
 from __future__ import annotations

@@ -2,14 +2,14 @@
 
 An ``AnnotationUnit`` is the work quantum stage 03b dispatches to a labeler
 model: one segment's view (frames @k fps within filter survivors), split into
-window-units ONLY when the segment exceeds the model's context budget. Cuts
-are snapped to a command/prompt SUBMISSION (Return/Enter) or a real time-gap —
+window-units only when the segment exceeds the model's context budget. Cuts
+are snapped to a command/prompt submission (Return/Enter) or a real time-gap —
 never mid typing-burst — so one action (and its goal) is not split across two
 windows; non-final windows also see a trailing tail-buffer of context frames
-(goals that START in the buffer belong to the next window and are dropped).
+(goals that start in the buffer belong to the next window and are dropped).
 
 Coordinates: methods see the segment's dense view-local frame indices (the
-``frame <N>`` labels sent to the model ARE view indices); nothing view-local
+``frame <N>`` labels sent to the model are view indices); nothing view-local
 is ever persisted — the stage converts spans to master intervals at write time
 (lib/goals.view_span_to_master).
 """
@@ -85,8 +85,8 @@ def est_frame_tokens(ref: str) -> int:
 
 def frame_activity(action: str | None) -> str:
     """Classify a frame by its derived action label: "idle" (NO_OP), "type"
-    (mid keyboard-burst), or "other". A lone idle frame is NOT a reliable
-    boundary — people pause a beat mid-typing — so cutting keys on SUBMISSIONS
+    (mid keyboard-burst), or "other". A lone idle frame is not a reliable
+    boundary — people pause a beat mid-typing — so cutting keys on submissions
     and real time-gaps, using this only to avoid cutting between two "type"
     frames."""
     if not action or action == "NO_OP":
@@ -100,7 +100,7 @@ def frame_activity(action: str | None) -> str:
 
 def _is_submission(action: str | None) -> bool:
     """A Return/Enter keypress commits a typed command / prompt / message —
-    the real boundary BETWEEN activities in continuous work."""
+    the real boundary between activities in continuous work."""
     return bool(action) and ("Return" in action or "Enter" in action)
 
 
@@ -131,7 +131,7 @@ def plan_windows(n: int, max_frames: int, overlap: int = 0, *,
                  times: list[float] | None = None,
                  slack: int = 0, big_gap_s: float = 6.0) -> list[tuple[int, int]]:
     """Partition [0, n) into (lo, hi) half-open windows, each <= max_frames.
-    A split happens ONLY when needed (n > max_frames); otherwise one window.
+    A split happens only when needed (n > max_frames); otherwise one window.
     With ``actions`` + ``slack``, each interior boundary snaps within ±slack to
     a submission or genuine time-gap, never inside an unsubmitted typing burst."""
     if n <= 0:
@@ -174,7 +174,7 @@ def plan_windows(n: int, max_frames: int, overlap: int = 0, *,
 class AnnotationUnit:
     """One labeler work quantum: an owned span [lo, hi) of a segment view's
     frames plus ``tail_buffer`` trailing context frames. ``actions`` are the
-    derived canonical labels for ALL of the segment's view frames (used for
+    derived canonical labels for all of the segment's view frames (used for
     keystroke-burst snapping and window planning; method-internal only)."""
 
     unit_id: str
@@ -200,7 +200,7 @@ class AnnotationUnit:
 
     @property
     def owned_hi_view_idx(self) -> int:
-        """Last view index this unit OWNS (goals starting past it are the next
+        """Last view index this unit owns (goals starting past it are the next
         window's)."""
         return self.hi - 1
 

@@ -1,6 +1,6 @@
 """Action grammars: one directory per grammar, discovered at runtime.
 
-A grammar is a peer, not a case in a switch. Each directory holds
+Each directory holds
 
 * ``codec.py`` — ``parse`` · ``format`` · ``compile`` · ``describe`` ·
   ``stop_sequences``, exported as a module-level ``CODEC`` singleton that
@@ -8,17 +8,17 @@ A grammar is a peer, not a case in a switch. Each directory holds
 * ``vectors/*.json`` — conformance vectors pinning both directions, executed by
   ``grammars/test_vectors.py``.
 
-A grammar contributes NO dispatch table. It ``compile``s to ``Operation``s and
-stops there: the Operation vocabulary is closed by physics rather than open per
-grammar, so lowering one is a fixed ``if kind ==`` chain inside pixeldesk
-(``execute/guest_program.py``) over a set no grammar extends. There is no
-per-grammar dispatch table, and none should be added: see ``_support.py``.
+A grammar contributes no dispatch table. It ``compile``s to ``Operation``s and
+stops there: the Operation vocabulary is closed rather than open per grammar, so
+lowering one is a fixed ``if kind ==`` chain inside pixeldesk
+(``execute/guest_program.py``) over a set no grammar extends. See
+``_support.py``.
 
 ``parse`` (eval and RL rollout) and ``format`` (training-target construction)
-are members of the same object, because that round-trip is what stops the
-trained grammar and the parsed grammar from diverging. ``compile`` is the only
-place a coordinate convention is resolved, and it always emits absolute screen
-pixels, so nothing downstream carries a coordinate space.
+are members of the same object, and the conformance vectors assert the round
+trip between them. ``compile`` is the only place a coordinate convention is
+resolved, and it always emits absolute screen pixels, so nothing downstream
+carries a coordinate space.
 """
 
 from __future__ import annotations
@@ -42,10 +42,10 @@ def _from_entry_points() -> dict[str, str]:
 
 
 def _from_directories() -> dict[str, str]:
-    """Fallback for an uninstalled checkout: a peer directory IS a grammar.
+    """Fallback for an uninstalled checkout: a peer directory is a grammar.
 
     Keeps ``git checkout`` + ``python -c 'import grammars'`` working before the
-    package is reinstalled, so adding a grammar never blocks on packaging.
+    package is reinstalled.
     """
     root = Path(__file__).parent
     found: dict[str, str] = {}
@@ -76,21 +76,18 @@ _WRONG_PIXELDESK = "pixeldesk."
 def _explain_pixeldesk(exc: ImportError) -> ImportError:
     """Turn a wrong-package import failure into a sentence that says so.
 
-    ``pixeldesk`` is a name nobody else owns, so the VM layer cannot be silently
-    substituted by a same-named PyPI package the way a dependency called
-    ``desktop_env`` would be — that name belongs to ``xlang-ai/desktop_env``
-    (OSWorld), a different package entirely.
+    ``pixeldesk`` has no index presence, so the dependency is resolved by a
+    ``[tool.uv.sources]`` path entry that only ``uv`` reads: ``pip install .``
+    fails to resolve it, and a stale wheel, a half-renamed ``.egg-info`` whose
+    ``top_level.txt`` still says ``desktop_env``, or a shadowing directory on
+    ``sys.path`` all produce the same bare submodule error. That message names a
+    submodule, which sends the reader looking for a missing file when the fault
+    is a wrong or missing install — and ``available()`` lists all seven grammars
+    first, because it reads entry-point metadata and imports nothing.
 
-    The failure *shape* remains, though. ``pixeldesk`` has no index
-    presence at all, so the dependency is still resolved by a path entry that
-    only ``uv`` reads; a ``pip install .`` now fails to resolve it, and a stale
-    wheel, a half-renamed ``.egg-info`` whose ``top_level.txt`` still says
-    ``desktop_env``, or a shadowing directory on ``sys.path`` all produce the
-    same bare submodule error. That message names a submodule, which sends the
-    reader looking for a missing file when the truth is a wrong or missing
-    install — and ``available()`` cheerfully lists all seven grammars first,
-    because it reads entry-point metadata and imports nothing. So the first real
-    signal is this exception, and it has to be legible.
+    ``desktop_env``, the name this package used until 2026-08-06, is also
+    ``xlang-ai/desktop_env`` (OSWorld) on PyPI — same import name, different
+    package. ``pixeldesk`` is a name nobody else owns.
     """
     installed = sys.modules.get("pixeldesk")
     return ImportError(

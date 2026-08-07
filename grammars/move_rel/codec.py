@@ -1,16 +1,15 @@
 """The ``move_rel`` computer_use grammar: explicit relative move, normalized.
 
-Two corrections over the ``native_rel_v1`` dialect, both of which this codec
-now enforces by construction rather than by convention:
+Two corrections over the ``native_rel_v1`` dialect, both enforced here by
+construction:
 
-1. A relative move is its OWN action. v1 folded the delta into a click's
-   ``coordinate``, which native computer_use / pyautogui read as an ABSOLUTE
-   target, so a relative value there was semantically wrong. Here a
-   move-and-click is TWO calls — ``move_rel {coordinate:[dx,dy]}`` then a
-   COORDINATE-LESS click — and a click that carries a coordinate is a parse
-   error naming v1.
-2. Coordinates are NORMALIZED to thousandths of the screen, per axis. ``compile``
-   is the only place that grid is converted back to pixels
+1. A relative move is its own action. v1 folded the delta into a click's
+   ``coordinate``, which native computer_use / pyautogui read as an absolute
+   target. Here a move-and-click is two calls — ``move_rel
+   {coordinate:[dx,dy]}`` then a coordinate-less click — and a click that
+   carries a coordinate is a parse error naming v1.
+2. Coordinates are normalized to thousandths of the screen, per axis.
+   ``compile`` is the only place that grid is converted back to pixels
    (``px = norm * dim / 1000``, the exact inverse of the encoder's
    ``norm = round(px / dim * 1000)``).
 
@@ -30,14 +29,13 @@ Semantics chosen where the sources disagreed:
 
 * ``coordinate`` — not ``delta`` — carries the relative offset. That is what
   ``rl/grounding/parsing.py`` reads and what the trained checkpoints emit;
-  ``rl/computer_use/actions.py`` requires ``delta`` and is the odd one out, so
-  ``delta`` is rejected with a message saying so.
-* A coordinate on a click is REJECTED. ``rl/grounding/parsing.py`` accepted it
-  (it also handles v1), but accepting it here would re-admit the absolute /
-  relative confusion this grammar exists to remove.
+  ``rl/computer_use/actions.py`` requires ``delta``, which is rejected here with
+  a message saying so.
+* A coordinate on a click is rejected: that is the absolute / relative confusion
+  this grammar exists to remove. ``rl/grounding/parsing.py`` accepted it because
+  it also handles v1.
 * Out-of-range normalized values are accepted, not clamped at parse. The prompt
-  states the [-999, 999] range; resolution clamps to the display anyway, and a
-  range check is not worth a parse failure.
+  states the [-999, 999] range, and resolution clamps to the display anyway.
 """
 
 from __future__ import annotations
@@ -85,7 +83,7 @@ def norm_from_pixels(pixels: int, dimension: int) -> int:
 
 @dataclass(frozen=True)
 class MoveRelCall:
-    """One validated call. ``delta`` is a NORMALIZED relative offset."""
+    """One validated call. ``delta`` is a normalized relative offset."""
 
     action: str
     delta: tuple[int, int] | None = None
@@ -242,8 +240,6 @@ class MoveRelCodec:
         </tool_call>
         """
 
-    # -- interface ---------------------------------------------------------
-
     def describe(self) -> str:
         return _support.render_tool_prompt(
             self,
@@ -366,8 +362,6 @@ class MoveRelCodec:
                 raise MoveRelError(f"unsupported action: {name!r}")
         return tuple(operations)
 
-    # -- validation --------------------------------------------------------
-
     def validate_call(self, arguments: dict[str, Any]) -> MoveRelCall:
         name = str(arguments.get("action", "")).strip()
         known = {item.syntax for item in _support.productions(self)}
@@ -438,8 +432,6 @@ class MoveRelCodec:
             )
         return tuple(_support.normalize_key(key, error=MoveRelError) for key in keys)
 
-    # -- training-target construction --------------------------------------
-
     def action_from_operations(
         self,
         operations: Sequence[Operation],
@@ -477,11 +469,10 @@ class MoveRelCodec:
                     norm_from_pixels(pixels[0], width),
                     norm_from_pixels(pixels[1], height),
                 )
-                # Guarded PER AXIS. Testing only ``delta == (0, 0)`` let a
-                # mixed move through: on a 4000-wide display a (1, 100) pixel
-                # move normalises to (0, 50), so the horizontal component
-                # vanished silently -- exactly the failure the whole-delta guard
-                # exists to prevent, on one axis instead of two.
+                # Guarded per axis: testing only ``delta == (0, 0)`` let a mixed
+                # move through, because on a 4000-wide display a (1, 100) pixel
+                # move normalises to (0, 50) and the horizontal component
+                # vanishes silently.
                 vanished = tuple(
                     "xy"[axis]
                     for axis in (0, 1)

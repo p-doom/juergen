@@ -1,9 +1,9 @@
-"""Items 9, 12, 13 — `VirtualDesktop`, the band shuffle, and md5-seeded regimes.
+"""`VirtualDesktop`, the band shuffle, and md5-seeded regimes.
 
-Item 9: `VirtualDesktop` gives a canvas the same session surface a real desktop has,
-so movebox/grounding run under the shared driver. The load-bearing rule is that it
-applies **absolute pixel** operations only — there is deliberately no relative move,
-because every convention is resolved inside the codec.
+`VirtualDesktop` gives a canvas the same session surface a real desktop has, so
+movebox/grounding run under the shared driver. It applies absolute pixel operations
+only — there is deliberately no relative move, because every convention is resolved
+inside the codec.
 
 `band_sequence` decorrelates task index from difficulty: emitting band repeats in
 dict-insertion order would make any prefix, shard or `max_tasks` cut a biased
@@ -97,7 +97,8 @@ def test_glide_to_is_honoured_as_an_absolute_move() -> None:
 
 
 def test_there_is_no_relative_move_in_the_vocabulary() -> None:
-    """A desktop that accepted a relative op would re-open the door this closed."""
+    """A desktop that accepted a relative op would resolve a convention the codec
+    already resolved."""
     desktop = _desktop(screen=(200, 150))
     before = desktop.cursor
     desktop.execute_atomic([_op("move_rel", 5, 5), _op("move_by", 5, 5)])
@@ -187,7 +188,7 @@ def test_the_canvas_pool_has_the_checkout_surface_the_lease_expects() -> None:
 
 
 def test_a_codec_compiled_action_drives_the_virtual_desktop_end_to_end() -> None:
-    """The point of item 9: the same compile path, no env-side arithmetic."""
+    """The same compile path as a real desktop, with no env-side arithmetic."""
     from agent.agent import load_codec
     from pixeldesk.geometry import DisplayGeometry
 
@@ -407,7 +408,7 @@ def test_the_far_regime_is_the_screen_mirror_when_the_mirror_is_admissible() -> 
 
 BOXES = [
     (900, 500, 1000, 600),
-    (0, 0, 1920, 1080),  # a full-window target: NO on-screen start is outside it
+    (0, 0, 1920, 1080),  # a full-window target: no on-screen start is outside it
     (0, 0, 40, 40),  # hard against the top-left edge
     (1880, 1040, 1920, 1080),  # hard against the bottom-right edge
 ]
@@ -440,7 +441,7 @@ def test_every_regime_start_is_on_screen() -> None:
 
 
 def test_the_far_regime_starts_OUTSIDE_the_box() -> None:
-    """Every regime, `far` included, must start OUTSIDE the box.
+    """Every regime, `far` included, must start outside the box.
 
     `far` tries the screen mirror `(sw-cx, sh-cy)` first and falls through to the
     same eight-angle ladder as `near`/`medium` when the mirror is inside the box.

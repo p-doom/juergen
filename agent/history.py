@@ -1,7 +1,6 @@
 """History policy: the injected object that decides what the model sees each step.
 
-Before this module the history shape was implicit in whichever episode driver you
-had forked, which is precisely *why* people forked:
+The four shapes in the tree, and where each came from:
 
   * `eval/freeroll.py` + `eval/osworld_grounding_runner.py` (via
     `osworld_runtime._interleave_messages` / `append_turn`) — one user turn per
@@ -17,8 +16,8 @@ had forked, which is precisely *why* people forked:
   * `rl/movebox/rollout.py` — no history at all; one fresh single-turn prompt per
     step, the pixel cursor being the only threaded state.
 
-All four are here as `HistoryPolicy` implementations over one mutable `History`
-window. The policy only *renders*; the window owns append and eviction.
+All four are `HistoryPolicy` implementations over one mutable `History` window.
+The policy only renders; the window owns append and eviction.
 """
 
 from __future__ import annotations
@@ -51,7 +50,7 @@ IMAGE_PLACEHOLDER = "Previous screenshot omitted."
 class ImageBudget:
     """How many images may ride a prompt, and how each is encoded.
 
-    `max_images` is the hard cap the *policy* honours; the window's
+    `max_images` is the hard cap the policy honours; the window's
     `n_history_frames` is the eviction trigger. They are separate because the
     Phase-B contract evicts at 5 images while keeping older *actions*, and
     target_box accumulates turns while sending exactly one image.
@@ -112,7 +111,7 @@ class History:
     That is exactly `osworld_runtime.append_turn`'s
     `len(recent_actions) == len(recent_frames) - 1`.
 
-    Eviction is *block* eviction, not slide-by-one: once the window exceeds
+    Eviction is block eviction, not slide-by-one: once the window exceeds
     `n_history_frames` we keep the newest `n_history_frames // 2`. This preserves
     the server-side prefix cache — while the window grows the prompt is
     append-only, and only ~N/2 frames are re-prefilled, roughly once every N/2
@@ -206,9 +205,8 @@ class InterleavedFrames:
 
     One user turn per in-window frame, the model's prior text as the following
     assistant turn. `persist_instruction=True` re-anchors the goal on the
-    earliest in-window user turn *every* step so it survives eviction of the
-    first frame; `False` reverts to goal-on-step-1, which is the training
-    distribution.
+    earliest in-window user turn every step so it survives eviction of the first
+    frame; `False` reverts to goal-on-step-1, which is the training distribution.
     """
 
     persist_instruction: bool = True
@@ -256,8 +254,8 @@ class ProseSummarisedWindow:
     five: four completed turns plus the current screen). Actions older than the
     image window are not dropped — they are summarised to prose and listed in a
     `Previous actions:` block on the first user turn, which also carries the
-    instruction. The image comes *before* the text on that first turn, matching
-    the sealed teacher-forced evaluator.
+    instruction. The image comes before the text on that first turn, matching the
+    sealed teacher-forced evaluator.
     """
 
     header: str = (
@@ -278,13 +276,13 @@ class ProseSummarisedWindow:
         del step
         images = history.images
         outputs = history.all_outputs
-        # `images` is the in-window frames; `outputs` is every action ever taken. The
-        # two live in different index spaces the moment `History` block-evicts, and
-        # `len(history.evicted)` is exactly the number of frames that left the window
-        # (one output per dropped turn). Comparing `outputs` against `images` alone
-        # raised for every window past `n_history_frames` — fatal for any rollout
-        # longer than the window under this policy — and indexing `outputs` with a
-        # position derived from `images` paired the wrong action with each frame.
+        # `images` is the in-window frames; `outputs` is every action ever taken.
+        # The two live in different index spaces the moment `History` block-evicts,
+        # and `len(history.evicted)` is exactly the number of frames that left the
+        # window (one output per dropped turn). Comparing `outputs` against
+        # `images` alone raised for every window past `n_history_frames`, and
+        # indexing `outputs` with a position derived from `images` paired the wrong
+        # action with each frame.
         dropped = len(history.evicted)
         if len(outputs) != dropped + len(images) - 1:
             raise ValueError(
@@ -328,8 +326,8 @@ class LatestImageOnly:
 
     The conversation grows (so the model's own reasoning and tool results stay in
     context) but each older image part is rewritten to a text placeholder, one
-    replacement per message. Cheap in tokens, and it was the only shape that kept
-    a VM-in-the-loop 10-step rollout inside the renderer's image cache.
+    replacement per message. Cheap in tokens, and the only shape that kept a
+    VM-in-the-loop 10-step rollout inside the renderer's image cache.
     """
 
     initial_suffix: str = "Initial observation."
@@ -370,9 +368,9 @@ class StatelessSingleTurn:
     """movebox / single-step grounding shape: no history at all.
 
     One fresh `[system, user(text + image)]` prompt per step. The only threaded
-    state is whatever the environment carries (the pixel cursor). This is a
-    deliberate ablation partner for `InterleavedFrames`, not an oversight — a
-    stateless prompt makes the per-step grounding decision identifiable.
+    state is whatever the environment carries (the pixel cursor). An ablation
+    partner for `InterleavedFrames`: a stateless prompt makes the per-step
+    grounding decision identifiable.
     """
 
     name: str = "stateless_single_turn"
@@ -403,8 +401,8 @@ POLICIES: dict[str, Any] = {
 
 
 def history_policy(name: str, **kwargs: Any) -> HistoryPolicy:
-    """Build a policy by name. This is the whole point of the module: the A/B is a
-    config field (`--harness.history.name=prose_summarised_window`), not a fork."""
+    """Build a policy by name, so the A/B is a config field
+    (`--harness.history.name=prose_summarised_window`) rather than a fork."""
     try:
         factory = POLICIES[name]
     except KeyError as exc:

@@ -6,38 +6,34 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     # grammars/ hard-imports pixeldesk: `_support.py` takes Operation and
     # DisplayGeometry from it, and every codec's `compile` signature names
-    # DisplayGeometry. Without this line `import grammars` raised
-    # ModuleNotFoundError on a clean install of this package, which is the worst
-    # shape of packaging bug -- the wheel builds, installs, and then fails at the
-    # first import.
+    # DisplayGeometry.
     "pixeldesk",
     "av>=16.1.0",
-    # `verifiers.v1` is the framework this repo's agent/, evals/ and rl/ are
-    # written against: fifteen modules do `import verifiers.v1 as vf`, every
-    # Taskset/Harness/Task/Config base comes from it, and `evals/signoflife`
-    # is a verifiers *plugin package* (its `__all__` contract is verifiers').
-    # It was imported everywhere and declared nowhere -- absent from this file
-    # AND from `uv.lock` -- so a clean resolve produced a tree that cannot
-    # import itself. Pinned exactly, not floored: `loaders._plugin_class`,
-    # `narrow_plugin_field` and the `Harness.launch(endpoint, secret, ...)`
-    # signature are all unversioned internal API we call directly.
+    # `verifiers.v1` is the framework agent/, evals/ and rl/ are written against:
+    # fifteen modules do `import verifiers.v1 as vf`, every Taskset/Harness/Task/
+    # Config base comes from it, and `evals/signoflife` is a verifiers plugin
+    # package (its `__all__` contract is verifiers').
     #
-    # Bare, deliberately: the `harbor` extra pulls `harbor==0.14.0`, which we
-    # do not want anywhere near this resolve (see project_harbor_migration --
-    # that integration is audit-only and must stay opt-in).
+    # Pinned exactly, not floored: `loaders._plugin_class`, `narrow_plugin_field`
+    # and the `Harness.launch(endpoint, secret, ...)` signature are unversioned
+    # internal API we call directly.
+    #
+    # Bare, without the `harbor` extra: that extra pulls `harbor==0.14.0`, which
+    # is excluded from this resolve (see project_harbor_migration -- audit-only,
+    # opt-in).
     "verifiers==0.2.1",
 ]
 
 [project.optional-dependencies]
 # Test-only. `pytest grammars/` runs the grammar conformance vectors, which need
-# nothing but pixeldesk; keep this extra that cheap so the gate is runnable
-# without resolving the training stack.
+# nothing but pixeldesk, so this extra stays cheap enough to run the gate without
+# resolving the training stack.
 dev = ["pytest>=8"]
 
-# One entry per grammar directory under grammars/. This table plus the
-# directory IS the registration — nothing else in the repo enumerates grammars,
-# and grammars/__init__.py falls back to scanning peer directories so an
-# uninstalled checkout still discovers a new one.
+# One entry per grammar directory under grammars/. This table plus the directory
+# is the registration; nothing else in the repo enumerates grammars, and
+# grammars/__init__.py falls back to scanning peer directories so an uninstalled
+# checkout still discovers a new one.
 [project.entry-points."juergen.grammars"]
 compact_raw = "grammars.compact_raw.codec:CODEC"
 deltatype_v2 = "grammars.deltatype_v2.codec:CODEC"
@@ -56,49 +52,45 @@ override-dependencies = [
     "openai>=2.26.0",
 ]
 
-# The torch stack is NOT resolved here any more. It entered only through the
-# `eval` workspace member's sglang[all] extra, which was deleted 2026-08-06
-# along with the member; with it went the `pytorch-cu128` explicit index (the
-# hai nodes' driver 12080 rejects the default +cu130 wheels), the four
-# torch/torchaudio/torchvision/torchcodec source redirects onto it, and the
-# nvidia-cudnn-cu12 override. Resolution went 382 -> 124 packages. Restore all
-# of it together if anything here ever depends on torch again.
+# The torch stack is no longer resolved here. It entered only through the `eval`
+# workspace member's sglang[all] extra, deleted 2026-08-06 along with the member;
+# with it went the `pytorch-cu128` explicit index (the hai nodes' driver 12080
+# rejects the default +cu130 wheels), the four torch/torchaudio/torchvision/
+# torchcodec source redirects onto it, and the nvidia-cudnn-cu12 override.
+# Resolution went 382 -> 124 packages. Restore all of it together if anything
+# here depends on torch again.
 
 [tool.uv.sources]
-# pixeldesk is a sibling checkout with NO REMOTE AND NO INDEX PRESENCE, so a
-# path is the only way to resolve it. It is not a workspace member: it is its own
-# repository, deliberately, because its whole design constraint is one runtime
-# dependency (Pillow) and folding it into this workspace would put the training
-# stack's resolver in the same room as the VM layer.
+# pixeldesk is a sibling checkout with no remote and no index presence, so a path
+# is the only way to resolve it. It is not a workspace member: it is its own
+# repository, with one runtime dependency (Pillow).
 #
-# The path IS the pin for now. THE MOMENT pixeldesk HAS A REMOTE, replace this
-# with `{ git = ..., rev = ... }` or a version specifier: a path source resolves
-# to whatever is on disk, so two checkouts of juergen at the same commit can
-# install different pixeldesk code and nothing records which.
+# The path is the pin for now. Once pixeldesk has a remote, replace this with
+# `{ git = ..., rev = ... }` or a version specifier: a path source resolves to
+# whatever is on disk, so two checkouts of juergen at the same commit can install
+# different pixeldesk code and nothing records which.
 #
-# RENAMED 2026-08-06, from `desktop-env`. That name was already taken on PyPI by
-# xlang-ai/desktop_env (OSWorld) -- same distribution name AND same import name,
-# different package. This source entry is only read by uv, so `pip install .`
-# resolved the dependency from PyPI instead, installed OSWorld's package, and the
-# first codec import failed on a missing `desktop_env.geometry`.
+# Renamed 2026-08-06 from `desktop-env`, which collides on PyPI with
+# xlang-ai/desktop_env (OSWorld) in both distribution name and import name. This
+# source entry is only read by uv, so `pip install .` resolved the dependency
+# from PyPI instead, installed OSWorld's package, and the first codec import
+# failed on a missing `desktop_env.geometry`.
 #
-# It was a CORRECTNESS bug, not just a packaging one: `evals/osworld.py` imports
-# OSWorld's `desktop_env.controllers.setup` and `desktop_env.evaluators` to score
-# the benchmark, and while our package owned that import name, that import
-# resolved to ours and no $OSWORLD_ROOT could fix it -- sys.path cannot override
-# an entry already in sys.modules. `pixeldesk` is unclaimed (pypi.org 404, and so
-# are the `pixel-desk` / `pixel_desk` normalisations PyPI folds into it).
+# The collision was also a correctness bug: `evals/osworld.py` imports OSWorld's
+# `desktop_env.controllers.setup` and `desktop_env.evaluators` to score the
+# benchmark, and while our package owned that import name, that import resolved
+# to ours and no $OSWORLD_ROOT could fix it -- sys.path cannot override an entry
+# already in sys.modules. `pixeldesk` is unclaimed (pypi.org 404, and so are the
+# `pixel-desk` / `pixel_desk` normalisations PyPI folds into it).
 #
 # The guard in `grammars/load()` stays, retargeted: the collision is gone but the
-# failure SHAPE is not. pixeldesk still has no index presence, so a `pip install`
+# failure shape is not. pixeldesk still has no index presence, so a `pip install`
 # still cannot resolve it, and a leftover `desktop_env.egg-info` still shadows it
 # -- both surface as the same bare missing-submodule error.
 #
-# Not editable on purpose. An editable path source makes this package's installed
-# behaviour change when a sibling directory is edited, which is convenient while
-# developing both and wrong as a default -- it is also the opposite of how the
-# version pin that replaces it will behave. Developers working on both do
-# `uv pip install -e ../pixeldesk` explicitly, and that overrides this.
+# Not editable: an editable path source makes this package's installed behaviour
+# change when a sibling directory is edited. Developers working on both do
+# `uv pip install -e ../pixeldesk` explicitly, which overrides this.
 pixeldesk = { path = "../pixeldesk" }
 
 [build-system]

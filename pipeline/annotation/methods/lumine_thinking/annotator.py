@@ -1,27 +1,27 @@
 """lumine_thinking: sequential day-watching with carried memory (Track A).
 
 The core mechanic (validated in hindsight_fold/lumine as ``clip_annotator``;
-reimplemented here self-contained — nothing is imported from lumine):
+reimplemented here, nothing imported from lumine):
 
-  1. SEQUENTIAL WATCHING WITH CARRIED MEMORY. The model sees a user-day's
+  1. Sequential watching with carried memory. The model sees a user-day's
      frame+action stream strictly in time order, one ~30-frame clip at a
      time, carrying a 2-4 sentence textual memory clip to clip. It never
      sees ahead. Chunk boundaries (recording gaps > gap_cut_s) get a one-time
      "resumed after a break" note; the memory itself persists across them.
-  2. THOUGHTS AT DECISION POINTS. Per clip the model marks 0-N moments where
+  2. Thoughts at decision points. Per clip the model marks 0-N moments where
      the person visibly commits/switches/reconsiders and writes the person's
-     inner monologue AT that exact frame (first person, present tense, 15-45
+     inner monologue at that exact frame (first person, present tense, 15-45
      words, evidence-bound, kind in plan/reorient/decide/react/monitor/wait).
-     Steady flow gets ZERO thoughts. Anchors outside the clip are dropped.
-  3. FUTURE-BLIND VERIFICATION IS A HARD GATE. Every thought is audited
+     Steady flow gets zero thoughts. Anchors outside the clip are dropped.
+  3. Future-blind verification is a hard gate. Every thought is audited
      against only the frames up to and including its anchor (within its
-     chunk); only passes reach the uniform artifact. A per-day SELF-TEST
+     chunk); only passes reach the uniform artifact. A per-day self-test
      canary (texts of two thoughts >=30 min apart swapped - the auditor must
      fail both plants) aborts the day if the gate itself is broken.
 
-Each clip additionally returns a detailed factual LOG (stored in the clip
-ledger + memory sidecar, never carried forward, never part of the verifier's
-evidence — a pure passenger for future consumers).
+Each clip additionally returns a detailed factual log, stored in the clip
+ledger + memory sidecar, never carried forward and never part of the
+verifier's evidence.
 
 Coordinates: prompts use day-global dense frame indices (lib/days); nothing
 day-local persists — thoughts are returned in (segment_id, master_idx)
@@ -52,15 +52,15 @@ LABELER_DEFAULTS = {"temperature": 0.2, "reasoning_effort": "low"}
 KINDS = ("plan", "reorient", "decide", "react", "monitor", "wait")
 VERIFY_MODES = ("batched", "per_thought")
 
-# Validated params (defaults, not dogma) — override via --param key=value.
+# Validated params; override via --param key=value.
 DEFAULT_CLIP_FRAMES = 30          # ~60 s at 0.5 fps
 DEFAULT_MAX_THOUGHTS_PER_CLIP = 3
 DEFAULT_CTX_FRAMES = 12           # pre-anchor evidence frames for the auditor
 DEFAULT_SELFTEST_MIN_SEP_S = 1800.0
 # Per-call completion budgets. Kimi's in-band reasoning plus the log field
 # make writer completions run 8-12k observed (lumine's 4k cap predates the
-# log); starting low just buys guaranteed escalation retries at full input
-# cost. The labeler still doubles up to LABELER_MAX_TOKENS on overflow.
+# log); a lower start only buys escalation retries at full input cost. The
+# labeler still doubles up to LABELER_MAX_TOKENS on overflow.
 DEFAULT_WRITER_MAX_TOKENS = 16384
 DEFAULT_VERIFY_MAX_TOKENS = 8192
 MEMORY_SEED = "(day just started — no memory yet)"
@@ -103,7 +103,7 @@ def _render(ctx: MethodContext, frames: list[DayFrame]) -> tuple[list[str], list
 
 def _clean_thoughts(parsed: dict[str, Any], clip: list[DayFrame],
                     max_per_clip: int) -> tuple[list[dict[str, Any]], int]:
-    """Validate the writer's thoughts: anchor must be a frame OF THIS CLIP
+    """Validate the writer's thoughts: anchor must be a frame of this clip
     (out-of-clip anchors are the model hallucinating indices — dropped, never
     remapped), kind falls back to 'plan', text is whitespace-normalized."""
     by_idx = {fr.day_idx: fr for fr in clip}
@@ -151,7 +151,7 @@ def _audit_batched(ctx: MethodContext, day: DayStream, thoughts: list[dict[str, 
                    report) -> list[dict[str, Any]]:
     """One audit call for a set of thoughts (same chunk, ordered): frames up
     to the LAST anchor, per-thought evidence cutoff enforced by the prompt.
-    A thought with no returned verdict FAILS (the gate never defaults open)."""
+    A thought with no returned verdict fails (the gate never defaults open)."""
     anchors = [int(t["day_idx"]) for t in thoughts]
     lo, hi = min(anchors), max(anchors)
     frames = day.context_before(hi, (hi - lo) + ctx_frames)
@@ -220,7 +220,7 @@ def _audit(ctx: MethodContext, day: DayStream, thoughts: list[dict[str, Any]],
                     ctx.cache_dir / f"{cache_stem}_v{th['day_idx']:06d}.txt",
                     verify_max, report)
     except ContentFilteredError as exc:
-        # The audit itself was blocked — fail CLOSED: unverifiable thoughts
+        # The audit itself was blocked — fail closed: unverifiable thoughts
         # never reach the artifact.
         for th in thoughts:
             if not th.get("verify"):
@@ -231,7 +231,7 @@ def _audit(ctx: MethodContext, day: DayStream, thoughts: list[dict[str, Any]],
 def _specificity(th: dict[str, Any]) -> float:
     """How anchored a thought's text is to concrete on-screen referents.
     A generic thought ("I'll switch to another application") is consistent
-    with almost ANY moment, so swapping it elsewhere legitimately PASSES the
+    with almost any moment, so swapping it elsewhere legitimately passes the
     audit — planting one is a false alarm, not a gate test. Count tokens that
     look like named specifics: digits, quoted text, path-ish tokens, and
     proper nouns (capitalized past sentence start)."""
@@ -254,8 +254,8 @@ def _self_test(ctx: MethodContext, day: DayStream, thoughts: list[dict[str, Any]
                report) -> dict[str, Any]:
     """Verifier canary: swap the texts of two thoughts ≥ min_sep_s apart and
     audit both plants — each text now sits at a moment whose evidence cannot
-    support it, so a working auditor must FAIL both. The pair is the most
-    SPECIFIC eligible one (see _specificity): the canary must plant thoughts
+    support it, so a working auditor must fail both. The pair is the most
+    specific eligible one (see _specificity): the canary must plant thoughts
     whose referents provably aren't at the other anchor, else "vague but
     consistent passes" turns the test into a coin flip. Returns a status
     record; the caller aborts the day on 'failed'."""
@@ -287,10 +287,10 @@ def _self_test(ctx: MethodContext, day: DayStream, thoughts: list[dict[str, Any]
         plants.append({"host_day_idx": host["day_idx"], "host_t": host["t_label"],
                        "donor_day_idx": donor["day_idx"], "donor_t": donor["t_label"],
                        "caught": caught, "reason": v["reason"]})
-    # A DEAD gate passes everything -> both plants pass -> abort. One caught
+    # A dead gate passes everything -> both plants pass -> abort. One caught
     # plant proves the gate works; the passed one is (per the audit's own
     # "vague but consistent passes" rule) usually a too-generic text — record
-    # it as 'partial', don't kill a healthy day.
+    # it as 'partial' rather than failing the day.
     status = "ok" if n_caught == 2 else ("partial" if n_caught == 1 else "failed")
     return {"status": status, "plants": plants}
 
@@ -299,7 +299,7 @@ def run_unit(item: dict[str, Any], ctx: MethodContext) -> dict[str, Any]:
     """``item``: {"id": day_tag, "day": DayStream, "row": day-index row}.
     Walks the day's clips strictly in order (resuming from the per-clip
     ledger), verifies every thought future-blind, runs the day-end self-test,
-    writes the memory/log sidecar, and returns ALL thoughts with verdicts
+    writes the memory/log sidecar, and returns all thoughts with verdicts
     attached (the stage emits only the passes)."""
     day: DayStream = item["day"]
     p = ctx.params
@@ -319,7 +319,7 @@ def run_unit(item: dict[str, Any], ctx: MethodContext) -> dict[str, Any]:
     spent = {"total": 0}
 
     def track(n: int) -> None:
-        """Stream every call's tokens to the governor AND into the day total."""
+        """Stream every call's tokens to the governor and into the day total."""
         spent["total"] += int(n)
         report(n)
 
@@ -354,7 +354,7 @@ def run_unit(item: dict[str, Any], ctx: MethodContext) -> dict[str, Any]:
                     cache_path=ctx.cache_dir / f"{clip_key}.txt", no_cache=ctx.no_cache,
                     max_completion_tokens=writer_max)
             except ContentFilteredError:
-                # The provider refuses to describe THIS clip's screen content.
+                # The provider refuses to describe this clip's screen content.
                 # Degrade to an unannotated clip (zero thoughts, memory carried
                 # unchanged) instead of killing the whole day.
                 parsed, res = {}, None

@@ -1,7 +1,6 @@
 """Make both source roots importable for the tests.
 
-``pipeline`` lives at the REPO ROOT (moved out of ``data_pipeline`` in the
-data-layer restructure); ``configs`` still lives under ``data_pipeline``.
+``pipeline`` lives at the repo root; ``configs`` lives under ``data_pipeline``.
 Neither is an installed package (the stage scripts sys.path-hack their own root
 when run directly), so both roots go on ``sys.path``.
 """

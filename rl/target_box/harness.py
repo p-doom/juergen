@@ -5,12 +5,11 @@ both inside the preparer: the box is derived from the task key rather than label
 and every observation is annotated with that box.
 
 Dropped on the way in: the "exactly one tool call per step" rule that ended a
-rollout with `multiple_actions_parsed`, and the few-shot pair whose demonstrated
-deltas were computed in **raw pixels** while the executor read them as normalized
-0-999 — ~1.9x too large in x at 1920x1080, with a system prompt that never mentioned
-normalization. Both were compensations for the convention living outside the
-grammar. It now lives in the codec, so the prompt is `codec.describe()` and a turn
-may carry as many operations as the grammar allows.
+rollout with `multiple_actions_parsed`, and a few-shot pair whose demonstrated
+deltas were computed in raw pixels while the executor read them as normalized
+0-999 (~1.9x too large in x at 1920x1080, under a system prompt that never
+mentioned normalization). The convention now lives in the codec, so the prompt is
+`codec.describe()` and a turn may carry as many operations as the grammar allows.
 """
 
 from __future__ import annotations
@@ -56,11 +55,11 @@ class TargetBoxPreparer:
 
     def prepare(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
         if task.setup.get("config"):
-            # One session contract, not two: `setup()` takes the whole OSWorld
-            # task JSON everywhere (`evals/vm.py`), because that is what lets the
-            # `evaluator` block reach the session and `evaluate()` stay
-            # argument-free. target_box has no evaluator and does not want one —
-            # its reward is the declared box — so this is a shape change only.
+            # `setup()` takes the whole OSWorld task JSON everywhere
+            # (`evals/vm.py`), which is what lets the `evaluator` block reach the
+            # session and `evaluate()` stay argument-free. target_box has no
+            # evaluator — its reward is the declared box — so this is a shape
+            # change only.
             session.setup(osworld_task_config(task))
         box, cursor, screen = _scene(task)
         observed = tuple(session.screen_size())
@@ -74,9 +73,8 @@ class TargetBoxPreparer:
     def observe(self, frame: bytes, task: DesktopTaskData) -> bytes:
         """Draw the target box on every observation.
 
-        The box must be on *every* frame, not just the first: the model has to see
-        where it is going after each move, and an un-annotated later frame silently
-        turns a grounded task into a memory task.
+        The box must be on every frame, not just the first: an un-annotated later
+        frame turns a grounded task into a memory task.
         """
         box, _, _ = _scene(task)
         return annotate(frame, box)
@@ -91,7 +89,7 @@ class TargetBoxPreparer:
             "in_bbox": inside,
             "distance": distance_to_box(cursor, box),
             "postcondition_status": "ok",
-            # Success needs the model to *declare* it, so entering the box does not
+            # Success needs the model to declare it, so entering the box does not
             # end the episode; the reward requires the terminate as well.
             "postcondition_success": False,
         }

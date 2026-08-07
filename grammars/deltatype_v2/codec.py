@@ -1,12 +1,8 @@
 """The Phase-B compact deltatype-v2 grammar.
 
-One codec owns the whole grammar: parse, format, the ordered plan, and the
-lowering.
-
-``report()`` below returns the prompt and action digests as DATA, with a
-``matches_producer`` boolean. It cannot raise: a digest mismatch is recorded, not
-enforced, because what a reader needs is which prompt produced a number, not a
-refusal to produce one.
+``report()`` below returns the prompt and action digests as data, with a
+``matches_producer`` boolean. It cannot raise: a digest mismatch is recorded,
+not enforced.
 """
 
 from __future__ import annotations
@@ -20,10 +16,9 @@ from pixeldesk.ir import Operation
 
 from .. import _support
 
-#: Provenance of the sealed Phase-B producer prompt, recorded so drift is
-#: visible. ``describe()`` renders a superset of it (the sealed text omits
-#: ``type()``, which the producer's parser has always accepted), so
-#: ``matches_producer`` is expected to be False and that is not an error.
+#: Provenance of the sealed Phase-B producer prompt. ``describe()`` renders a
+#: superset of it (the sealed text omits ``type()``, which the producer's parser
+#: has always accepted), so ``matches_producer`` is expected to be False.
 PRODUCER = {
     "prompt_sha256": (
         "57f7d0b230974068618b48151b73215d5517d5445a99dbf5abdc05557e3482e6"
@@ -104,8 +99,6 @@ class DeltatypeV2Codec:
     #: sequence marks the end of a turn earlier than the completion does.
     stop_sequences: tuple[str, ...] = ()
 
-    # -- productions: each docstring is the only spec of that production ----
-
     @_support.production("dx dy scroll")
     def _mouse(self) -> None:
         """Three integers. dx and dy are a move in RAW SCREEN PIXELS relative to
@@ -156,8 +149,6 @@ class DeltatypeV2Codec:
 
     def notes(self) -> None:
         """Emit exactly one action line per turn."""
-
-    # -- interface ---------------------------------------------------------
 
     def describe(self) -> str:
         return _support.render_spec(self)
@@ -235,8 +226,6 @@ class DeltatypeV2Codec:
             )
         return tuple(operations)
 
-    # -- training-target construction --------------------------------------
-
     def action_from_operations(
         self,
         operations: Sequence[Operation],
@@ -287,8 +276,6 @@ class DeltatypeV2Codec:
                 dx, dy, plan.scroll, plan.elements, prompt_digest=self.digest
             )
         )
-
-    # -- grammar rule ------------------------------------------------------
 
     def _validate_drag(self, action: DeltatypeV2Action) -> DeltatypeV2Action:
         moves = [

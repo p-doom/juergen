@@ -1,13 +1,13 @@
 """Training-record stage (payload-free): build inline SFT records from chat.jsonl.
 
 Wrapper around omegalax/scripts/build_sft_records_from_chat.py. Reads the
-stage-04 conversations dataset's single <source>/chat.jsonl directly (NO grain
-payload) and writes self-contained
-inline records per split under <output_dir>/<split>/. Each record IS a training
-example (message slice with ar:// image refs preserved), not a pointer into a
-shared payload; the stage 01 master image store is unchanged.
+stage-04 conversations dataset's single <source>/chat.jsonl directly (no grain
+payload) and writes self-contained inline records per split under
+<output_dir>/<split>/. Each record is a complete training example (message
+slice with ar:// image refs preserved), not a pointer into a shared payload;
+the stage 01 master image store is unchanged.
 
-The recording-level train/val split is applied HERE via --val_fraction (> 0 ->
+The recording-level train/val split is applied here via --val_fraction (> 0 ->
 train/ + val/; 0 -> train/ only). Because the split lives here, the stage-05
 measure cache stays split-agnostic (a single message_lengths.jsonl) and is
 reused for every split, so changing --val_fraction re-runs only this stage and
@@ -89,7 +89,7 @@ flags.DEFINE_string(
 flags.DEFINE_float(
     "val_fraction",
     0.0,
-    "Recording-level val fraction, applied HERE (records stage) over the single "
+    "Recording-level val fraction, applied here (records stage) over the single "
     "<source>/chat.jsonl: > 0 writes <out>/train/ and <out>/val/ (split by "
     "recording_id), 0 writes <out>/train/ only. Because the split is applied here, "
     "the measure cache stays split-agnostic and is reused when you change this value.",
@@ -138,10 +138,6 @@ def main(_) -> None:
     lengths_root = Path(FLAGS.message_lengths_path) if FLAGS.message_lengths_path else None
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Stage 04 writes a single split-agnostic <source>/chat.jsonl; apply the
-    # recording-level split HERE from --val_fraction, reusing the one root cache for
-    # every split (no re-tokenization when val_fraction changes). > 0 writes
-    # <out>/train/ and <out>/val/; 0 writes <out>/train/ only.
     src_chat = source_path / "chat.jsonl"
     if not src_chat.is_file():
         raise FileNotFoundError(

@@ -110,7 +110,7 @@ _SOL_STATE = json.dumps(
 
 @pytest.mark.parametrize("kind", CORE_KINDS)
 def test_probe_dispatches_no_input_events(kind: str) -> None:
-    """The seam's load-bearing property, asserted per preparer."""
+    """`probe` must not drive the guest, asserted per preparer."""
     session = _WitnessSession()
     task = make_task_data(kind=kind, bbox=(10, 10, 50, 50))
     preparer_for(kind).probe(session, task)
@@ -169,7 +169,6 @@ def test_the_none_preparer_boots_screenshots_and_goes() -> None:
 
 
 def test_the_terminal_preparer_launches_a_terminal_and_clears_it() -> None:
-    """Preserved verbatim, including the `ctrl-l`."""
     session = FakeSession()
     task = make_task_data(kind="terminal")
     assert preparer_for("terminal").prepare(session, task) == {"prepared": "terminal"}

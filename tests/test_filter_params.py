@@ -1,10 +1,9 @@
-"""Stage-03 judgment parameters: one assembly, one default, one validation.
+"""Stage-03 judgment parameters.
 
-These knobs decide which frames survive, and they are read from two places — the
-CLI builds them from `argparse`, and the pool worker reads them off its task dict.
-Two assemblies is what let the two disagree, so what is pinned here is that there
-is only one: `filter_params` normalises and validates, and neither caller may
-supply a default of its own.
+These knobs decide which frames survive, and they are read from two places: the CLI
+builds them from `argparse`, and the pool worker reads them off its task dict. Two
+assemblies is what let the two disagree, so `filter_params` is the only one — it
+normalises and validates, and neither caller may supply a default of its own.
 """
 
 from __future__ import annotations

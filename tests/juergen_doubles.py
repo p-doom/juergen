@@ -1,9 +1,7 @@
 """Shared doubles for the agent/ evals/ rl/ suite.
 
-The doubles are deliberately thin and *behavioural*: a `FakeSession` records the
-argv it was handed and replays canned stdout, because every guest interaction in
-this module is "run one command, read one marker line". A mock that accepted
-anything would let a broken marker protocol pass.
+A `FakeSession` records the argv it was handed and replays canned stdout, because
+every guest interaction in this module is "run one command, read one marker line".
 
 Nothing here needs a VM, a GPU or a network. The one test file that needs a real
 qemu is marked `kvm` and skips itself.
@@ -31,9 +29,9 @@ def png(width: int = 8, height: int = 6, colour: tuple[int, int, int] = (10, 20,
 class FakeSession:
     """The session surface the harness and the preparers actually touch.
 
-    `argv_responses` maps a substring of the joined argv to the stdout to return, so
-    a test pins the guest protocol (one `SOLV2_STATE=` line, one `FIXTURE_JSON=`
-    line) rather than the fact that *some* command ran.
+    `argv_responses` maps a substring of the joined argv to the stdout to return,
+    so a test pins the guest protocol (one `SOLV2_STATE=` line, one
+    `FIXTURE_JSON=` line).
     """
 
     def __init__(
@@ -57,8 +55,6 @@ class FakeSession:
         self.evaluate_value: float | None = None
         self.task_config: dict[str, Any] | None = None
         self.declared_terminal: list[str | None] = []
-
-    # -- surface -------------------------------------------------------- #
 
     def screen_size(self) -> tuple[int, int]:
         return self.screen
@@ -94,10 +90,10 @@ class FakeSession:
         return {"output": ""}
 
     def setup(self, task_config: dict[str, Any]) -> int:
-        """The **whole** OSWorld task JSON, matching `DesktopFacade.setup`.
+        """The whole OSWorld task JSON, matching `DesktopFacade.setup`.
 
-        The **whole** JSON, not just the `config` list: the `evaluator` block has
-        to reach the session, or a no-argument `evaluate()` has nothing to score.
+        Not just the `config` list: the `evaluator` block has to reach the
+        session, or a no-argument `evaluate()` has nothing to score.
         """
         steps = list(task_config.get("config") or [])
         self.task_config = dict(task_config)

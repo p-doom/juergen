@@ -1,13 +1,13 @@
 """grounding: single-step relative-move onto a labelled UI target.
 
 Reward = sparse reach + a bounded shaping term, with an explicit no-move penalty.
-The total ordering is deliberate and is the reason a *negative* term exists at all:
+The total ordering:
 
     no-move  -0.15   <   miss  (0, 0.3)   <   hit  1.0
 
 A model that emits `wait`, `terminate`, or a coordinate-less click never moves and
-so can never miss; without the penalty that is a strictly safer policy than trying,
-and GRPO finds it. The `-0.15` makes not moving worse than any miss.
+so can never miss; without the penalty that is a strictly safer policy than trying.
+The `-0.15` makes not moving worse than any miss.
 
 Shaping parameters are module constants, not config fields: inside a `vf.Task`,
 `self.config` is the per-task `TaskConfig` with no custom fields, so reading one
@@ -68,8 +68,7 @@ def _never_moved(result: dict) -> bool:
     """No dispatched movement at all — the no-op attractor.
 
     Distinct from an unparseable reply: a well-formed `wait`/`terminate`/
-    coordinate-less click parses fine and still moves nothing, and conflating the
-    two hides which failure the policy actually has.
+    coordinate-less click parses fine and still moves nothing.
     """
     steps = result.get("steps_detail") or []
     for step in steps:
@@ -86,7 +85,7 @@ class GroundingTasksetConfig(vf.TasksetConfig):
     max_targets: int = 0
     target_idxs: list[int] = []
     max_steps: int = 1
-    """Single-step by default: the screenshot is a FINAL state, so `wait` and
+    """Single-step by default: the screenshot is a final state, so `wait` and
     `terminate` are meaningless and a second turn would score a stale scene."""
 
 

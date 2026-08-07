@@ -6,14 +6,14 @@ license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.11"
-# This dep set is the one the STAGES need — they live at ../pipeline and are
-# run from this venv. pmanager itself is loaded by the *outer* process (the
+# This dep set is the one the stages need — they live at ../pipeline and are
+# run from this venv. pmanager itself is loaded by the outer process (the
 # `pmanager launch` invocation), not by the stages. The configs here use
 # ``from pmanager.configs.schema import …``, but those imports resolve in
 # pmanager's own venv, not this one.
 #
-# Two stages deliberately run work in ANOTHER venv and so do not contribute
-# here: pipeline/stage_05_measure_lengths.py and stage_06_training_records.py
+# Two stages run their work in another venv and so do not contribute here:
+# pipeline/stage_05_measure_lengths.py and stage_06_training_records.py
 # subprocess-wrap omegalax scripts via ``uv run --project <omegalax_repo>``.
 dependencies = [
     "absl-py>=2.0",                # flag-based entrypoints: pipeline/stage_05_measure_lengths.py + stage_06_training_records.py
@@ -34,20 +34,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 # Not a published package — pyproject anchors a uv venv at this directory.
-# `pipeline/`, `tooling/` and `datasets/` live at the REPO ROOT and are
-# deliberately NOT packaged (sys.path-hacked entrypoints, as before);
-# `goal_timeline_viewer/` (manual-annotation tooling, never ground truth) has
-# since moved out of this repo entirely, to the slurm repo
-# (dev/franz/berlin/crowd-cast-bc/goal_timeline_viewer/) — same for
-# `visualize_run.py` and `tooling/labctl/recipes/` (dispatch, not code; see
-# dev/franz/berlin/crowd-cast-bc/labctl/recipes/eval/). None had an
-# __init__.py, so none were ever subpackages and this list needed no change
-# for any of these moves.
-#
-# `configs` is all that is left to package: the annotation_pipeline generation
-# was deleted 2026-08-06 and the stage_[a-d] configs that used its directory as
-# a repo-root sentinel went with it. chain_annotate.py and chain_train.py assert
-# a root `pipeline/` instead, which is where the stages actually live.
+# `pipeline/`, `tooling/` and `datasets/` live at the repo root and are not
+# packaged (their entrypoints put the repo root on sys.path themselves), so
+# `configs` is the only package here.
 packages = ["configs"]
 py-modules = []
 

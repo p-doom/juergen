@@ -3,9 +3,9 @@
 No relative-delta arithmetic lives here: the codec hands the env `Operation`s in
 absolute pixels.
 
-`band_weights` carries the curriculum shape, and the band list is deliberately NOT
-dict-insertion ordered — that would correlate task index with difficulty, making
-any prefix or shard of the taskset a biased sample.
+`band_weights` carries the curriculum shape. The band list is not in
+dict-insertion order: that would correlate task index with difficulty, making any
+prefix or shard of the taskset a biased sample.
 """
 
 from __future__ import annotations
@@ -53,9 +53,9 @@ class MoveBoxScene:
     screen_h: int
     band: str
     start_distance: float
-    """Distance to the box **centre**, the sampler's own control variable. NOT the
-    reward's distance, which is to the nearest box *edge* — the two names stay
-    distinct so the units cannot be silently confused."""
+    """Distance to the box centre, the sampler's own control variable. Not the
+    reward's distance, which is to the nearest box edge — the two names stay
+    distinct so the units cannot be confused."""
 
 
 def list_backgrounds(backgrounds_dir: str = DEFAULT_BACKGROUNDS_DIR) -> list[str]:
@@ -151,9 +151,8 @@ def load_canvas(scene: MoveBoxScene):
 def band_sequence(band_weights: dict[str, float], n_tasks: int, seed: int) -> list[str]:
     """Bands for `n_tasks`, shuffled so index is uncorrelated with difficulty.
 
-    The old builder emitted `round(w * n) `repeats per band in dict-insertion order,
-    padded with `near` and truncated — so all the easy tasks came first and any
-    prefix, shard, or `max_tasks` cut was a biased sample of the curriculum.
+    Unshuffled, any prefix, shard or `max_tasks` cut would be a biased sample of
+    the curriculum.
     """
     bands: list[str] = []
     for name, weight in band_weights.items():

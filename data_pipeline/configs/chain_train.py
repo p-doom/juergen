@@ -13,9 +13,9 @@ STUB status — adjust before launching:
     manifest are not named here at all: stage 03 is imported from
     chain_annotate, so its MASTER_DIR / CLIPS_MANIFEST are the single place to
     point at a dataset family.
-  * PROJECT_REPO is NOT a placeholder any more: it is derived from this file's
-    own location and validated (see below), so it follows whichever checkout you
-    launch from instead of rotting into a stale absolute path.
+  * PROJECT_REPO is derived from this file's own location and validated (see
+    below), so it follows whichever checkout you launch from instead of rotting
+    into a stale absolute path.
   * pmanager injects ``--output_dir`` (and ``--source_path`` for 05/06); the
     03/04 input dirs are derived statically from the datasets root + version
     (the argparse stages accept ``--foo_bar=value`` via
@@ -35,15 +35,8 @@ def _resolve_project_repo() -> str:
     from this file's location or from ``JUERGEN_REPO`` -- and stage the checkout
     itself, because their entrypoints are ``pipeline/...``.
 
-    The hardcoded absolute path this replaces kept resolving to a checkout that
-    still carried the pre-rearchitecture ``data_pipeline/realigned_pipeline/``
-    layout and had no root ``pipeline/`` at all — so every ``pipeline/...``
-    entrypoint below resolved silently at config-build time and only failed once
-    the job was already scheduled on a node.
-
-    Duplicated verbatim in chain_annotate.py, matching the existing ``_as_child``
-    duplication: each config stays standalone-launchable with no cross-import at
-    module scope.
+    Duplicated verbatim in chain_annotate.py (as ``_as_child`` is) so each config
+    stays standalone-launchable with no cross-import at module scope.
     """
     root = Path(os.environ.get("JUERGEN_REPO") or Path(__file__).resolve().parents[2])
     if not (root / "pipeline").is_dir():
@@ -74,10 +67,8 @@ def _omegalax_repo(path: str) -> str:
     """Return ``path`` after asserting it is an omegalax checkout on disk.
 
     Same contract as :func:`_entrypoint`, applied to the other path this config
-    hands a stage. Without it a stale OMEGALAX_REPO passes ``labctl validate``
-    and the job dies on a node after being scheduled -- which is exactly what
-    the entrypoint check exists to prevent, so leaving this one unchecked made
-    the guarantee only half true.
+    hands a stage: without it a stale OMEGALAX_REPO passes ``labctl validate``
+    and the job dies on a node after being scheduled.
     """
     if not (Path(path) / "pyproject.toml").is_file():
         raise RuntimeError(

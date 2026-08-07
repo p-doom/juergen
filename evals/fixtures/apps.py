@@ -1,26 +1,22 @@
 """Desktop-app task fixtures: Writer, Calc, Files, and an in-guest Chrome.
 
-These are *tasks*, so they live here and not in the VM layer: a session boots a
-desktop, and a task that needs a spreadsheet with a known value in B7 brings the
-spreadsheet.
-
 Each fixture is one bash script driven through the guest, plus one read-only state
-probe. Four properties are load-bearing and preserved:
+probe. Four properties are load-bearing:
 
-  * **A private, per-fixture guest root**, resolved once by trying
-    `XDG_RUNTIME_DIR`, then `HOME`, then the temp dir, and requiring the created
-    directory to be mode 0700, owned by us and a direct child of the base. A shared
-    `/tmp/fixture` would let one cell's leftovers decide another cell's outcome.
-  * **Documents are built, not shipped.** Text and CSV go in as base64, then
+  * A private, per-fixture guest root, resolved once by trying `XDG_RUNTIME_DIR`,
+    then `HOME`, then the temp dir, and requiring the created directory to be mode
+    0700, owned by us and a direct child of the base. A shared `/tmp/fixture` would
+    let one cell's leftovers decide another cell's outcome.
+  * Documents are built, not shipped. Text and CSV go in as base64, then
     LibreOffice converts them headlessly to `.odt`/`.ods`. Committing binary office
     documents makes the initial state unreviewable, and `--convert-to` is the only
     way to get a file the same LibreOffice build will open without a recovery dialog.
-  * **Window geometry is normalised and then verified.** The clean snapshot
-    sometimes restores Calc's last geometry as a 16-pixel sliver; unmaximising,
-    setting an explicit rectangle, re-maximising and then *polling until the mapped
-    client is actually larger than 1000x600* is what makes the window usable. Setting
-    geometry without verifying it silently yields a task the model cannot see.
-  * **The in-guest Chrome fixture serves itself.** A local `ThreadingHTTPServer` on
+  * Window geometry is normalised and then verified. The clean snapshot sometimes
+    restores Calc's last geometry as a 16-pixel sliver; unmaximising, setting an
+    explicit rectangle, re-maximising and then polling until the mapped client is
+    actually larger than 1000x600 is what makes the window usable. Setting geometry
+    without verifying it silently yields a task the model cannot see.
+  * The in-guest Chrome fixture serves itself. A local `ThreadingHTTPServer` on
     the loopback interface serves one settings page and accepts its state posts, so
     the task needs no host round-trip and no port forward — unlike `web.py`'s
     fixtures, which are reached from the guest at `10.0.2.2`.

@@ -69,8 +69,8 @@ def extract_frames_ffmpeg(
         "-loglevel",
         "error",
         # Cap threads: on shared login nodes ffmpeg's default (all cores) gets
-        # SIGKILL'd by the CPU-usage policy killer. A small cap is plenty for
-        # sparse (1-2 fps) frame extraction and stays under the radar.
+        # SIGKILL'd by the CPU-usage policy killer. A small cap suffices for
+        # sparse (1-2 fps) frame extraction.
         "-threads",
         str(int(os.environ.get("JUERGEN_ANNOTATION_FFMPEG_THREADS", "4"))),
         "-y",

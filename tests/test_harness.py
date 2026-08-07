@@ -1,13 +1,8 @@
-"""The episode driver, and the "also verify" list.
+"""The episode driver.
 
-Every preserved single-runner behaviour is exercised through a real
-`DesktopHarness.launch` against a fake pool injected by `pool_target` — which is
-what `pool_target` exists for. No VM, no GPU, no network.
-
-Covers: `stop_on_click`, `desktop_setup=terminal`, `reach_frame`, cached-trajectory
-replay, per-kind settle (2.0 s Chrome / 0.75 s), the unsolved-start precondition,
-`controls_ok`, resume-skip, GIF, prompt sidecars, atomic writes, and that all
-prompt/digest raises are gone.
+Every behaviour is exercised through a real `DesktopHarness.launch` against a fake
+pool injected by `pool_target`, which is what `pool_target` exists for. No VM, no
+GPU, no network.
 """
 
 from __future__ import annotations
@@ -306,7 +301,6 @@ def test_a_scripted_negative_arm_that_fails_is_control_conformant(tmp_path, prep
 
 
 def test_a_negative_arm_that_passes_is_NOT_conformant(tmp_path, preparer) -> None:
-    """The calibration failing loudly is the whole point."""
     preparer.plan = ["0 0 0 ;"]
     preparer.probes = [
         {"postcondition_status": "ok", "postcondition_success": False},
@@ -712,7 +706,7 @@ def test_an_executor_failure_also_retires_the_vm(tmp_path, preparer, monkeypatch
 
 
 def test_a_clean_episode_returns_the_vm_for_reuse(tmp_path, preparer, monkeypatch) -> None:
-    """The other half: a healthy VM must NOT be retired after every rollout."""
+    """The other half: a healthy VM must not be retired after every rollout."""
     captured = _captured_lease(monkeypatch)
     _, result, _ = _run(_config(tmp_path), _task(max_steps=1), replies=["0 0 0 ;"])
     assert result["validity"] == "valid"

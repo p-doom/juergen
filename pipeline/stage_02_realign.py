@@ -7,17 +7,16 @@ segments by recording, threads idle pauses across segment boundaries, and:
 
   * writes corrected keylogs (event timestamps re-stamped from the OBS global
     clock to recorded-video PTS) for every segment that has a non-trivial map;
-  * writes a REALIGNED clip manifest -- the discover rows verbatim, plus the
+  * writes a realigned clip manifest -- the discover rows verbatim, plus the
     alignment status, with ``keylog_path`` repointed at the corrected keylog for
     corrected segments (``aligned`` segments keep their raw keylog).
 
 Stage 01 then reads this manifest unchanged: bucketing the corrected keylog by
 raw timestamp == bucketing the raw keylog by corrected video time, so actions
-land on the right frames with no change to the frames/annotate/assemble/canonical
-code. The realignment math lives in ``realign`` (spec-faithful: per-segment
-naive vs cross-segment global, overhang-refined leading collapse, 5-status
-taxonomy). Cross-segment threading needs *every* segment of a recording, so
-siblings are enumerated from the source uploads tree, not just manifest rows.
+land on the right frames. The realignment math lives in ``realign``
+(per-segment naive vs cross-segment global, overhang-refined leading collapse,
+5-status taxonomy). Cross-segment threading needs every segment of a recording,
+so siblings are enumerated from the source uploads tree, not just manifest rows.
 
 Source keylogs/mp4s are read-only; corrected keylogs go to the output artifact.
 
@@ -52,7 +51,7 @@ from pipeline.lib.common import ensure_dir, read_jsonl, write_json  # noqa: E402
 
 
 def build_keylog_index(uploads_roots: set[Path]) -> dict[str, list[Path]]:
-    """Index every source keylog by recording_id (uuid), across ALL version/user
+    """Index every source keylog by recording_id (uuid), across all version/user
     dirs (a recording's segments can be split across recorder-version dirs).
     Globs each uploads root once."""
     index: dict[str, list[Path]] = defaultdict(list)
@@ -65,7 +64,7 @@ def build_keylog_index(uploads_roots: set[Path]) -> dict[str, list[Path]]:
 
 
 def sibling_segments(recording_id: str, keylogs: list[Path]) -> list[dict[str, Any]]:
-    """Build seg dicts for ALL segments of a recording from its indexed keylogs,
+    """Build seg dicts for all segments of a recording from its indexed keylogs,
     deduped by segment index (preferring the copy with a decodable video)."""
     by_idx: dict[int, dict[str, Any]] = {}
     for kp in keylogs:

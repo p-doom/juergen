@@ -1,18 +1,17 @@
 """Primitives shared by the grammar codecs.
 
-Two invariants make this module safe to depend on:
+Adding a grammar never edits this file. A new codec either reuses these helpers
+or ignores them. There is no table, registry, or enum here that a new grammar
+has to be added to — the only registration is the ``juergen.grammars`` entry
+point in ``pyproject.toml``.
 
-* **Adding a grammar never edits this file.** A new codec either reuses these
-  helpers or ignores them. There is no table, registry, or enum here that a new
-  grammar has to be added to — the only registration is the ``juergen.grammars``
-  entry point in ``pyproject.toml``.
-* **Nothing here knows a coordinate convention.** Every helper that touches a
-  coordinate is handed an already-resolved absolute screen pixel. Each codec
-  owns its own convention (raw relative delta, normalized relative delta,
-  absolute, diff-of-absolute, …) and resolves it in ``compile`` before anything
-  shared sees it. There is deliberately no coordinate-space enum.
+Nothing here knows a coordinate convention. Every helper that touches a
+coordinate is handed an already-resolved absolute screen pixel. Each codec owns
+its own convention (raw relative delta, normalized relative delta, absolute,
+diff-of-absolute, …) and resolves it in ``compile`` before anything shared sees
+it. There is no coordinate-space enum.
 
-The Operation vocabulary the codecs emit (all coordinates are ABSOLUTE screen
+The Operation vocabulary the codecs emit (all coordinates are absolute screen
 pixels, already clamped to the display):
 
 ===================  =========================  ==================================
@@ -100,7 +99,8 @@ def wait(seconds: float) -> Operation:
     return Operation("wait", (float(seconds),))
 
 
-# prompt derivation: the docstring IS the spec (BrowserGym core/action pattern)
+# Prompt derivation follows BrowserGym's core/action pattern: the docstring is
+# the spec.
 
 _ORDER = itertools.count()
 
@@ -118,8 +118,8 @@ class Production:
 def production(syntax: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Mark a codec member as a grammar production rendered into the prompt.
 
-    The decorated member's docstring is the ONLY place that production is
-    specified, so the prompt and the parser cannot describe different things.
+    The decorated member's docstring is the only specification of that
+    production.
     """
 
     def decorate(function: Callable[..., Any]) -> Callable[..., Any]:
@@ -151,9 +151,8 @@ def render_spec(codec: Any) -> str:
     """Render the codec's system prompt from its own docstrings.
 
     Preamble = the codec class docstring. Body = one block per ``@production``.
-    Epilogue = the ``notes`` docstring. All three are mandatory: a codec that
-    grows a prompt section by accident is better than one that silently ships a
-    prompt missing one, so this raises rather than omitting a block.
+    Epilogue = the ``notes`` docstring. All three are mandatory; a missing one
+    raises rather than being omitted from the prompt.
     """
     body: list[str] = []
     for item in productions(codec):
@@ -231,9 +230,9 @@ def spec_digest(text: str) -> str:
 def drift_report(codec: Any, *, producer: dict[str, str]) -> dict[str, Any]:
     """Describe how the live prompt relates to the recorded producer prompt.
 
-    This NEVER raises. A blocking prompt-digest check is what made in-place
-    editing of a grammar expensive enough that forking a worktree was the
-    rational move; the digest is data, not a gate.
+    Never raises: the digest is data, not a gate. A blocking digest check was
+    tried and made in-place editing of a grammar expensive enough that forking a
+    worktree was cheaper.
     """
     observed = spec_digest(codec.describe())
     recorded = producer.get("prompt_sha256")
@@ -411,8 +410,8 @@ def lower_typing(text: str, *, error: type[Exception] = ValueError) -> Operation
     """One coalesced type. Rejects an embedded newline.
 
     The executor cannot type a newline inside a burst, and a double-escaped
-    ``\\n`` types two literal characters instead of pressing Return — a real
-    labelling defect. Return is an event, never a character.
+    ``\\n`` types two literal characters instead of pressing Return. Return is an
+    event, never a character.
     """
     if "\n" in text or "\r" in text:
         raise error(
@@ -446,17 +445,14 @@ def lower_transitions(
 
 # lifting: Operations -> an action, the training-label direction
 #
-# ``compile_action`` read backwards. A converter that has absolute Operations —
-# from a recorded trajectory, a scripted oracle, a teacher rollout — needs an
-# action in a specific grammar, and it must not be the converter's job to know
-# what a coordinate means or how a grammar spells termination. So the lift lives
-# on the codec, and everything reusable lives here.
+# ``compile_action`` read backwards. The lift lives on the codec so a converter
+# holding absolute Operations — a recorded trajectory, a scripted oracle, a
+# teacher rollout — need not know what a coordinate means or how a grammar
+# spells termination; everything reusable lives here.
 #
-# Where a grammar genuinely cannot express what the Operations say, the lift
-# RAISES. That is the point: a ``glide_to`` inside a held button is a drag, and
-# the converters this replaces were degrading exactly that into a stationary
-# ``+LMB -LMB`` and discarding the stroke. An expressiveness ceiling has to be
-# visible, never silently flattened.
+# Where a grammar cannot express what the Operations say, the lift raises. A
+# ``glide_to`` inside a held button is a drag, and the converters this replaces
+# degraded it into a stationary ``+LMB -LMB``, discarding the stroke.
 
 
 @dataclass(frozen=True)
@@ -487,18 +483,17 @@ def group_operations(
 ) -> tuple[Group, ...]:
     """Absolute Operations -> high-level groups, in order.
 
-    Adjacent same-button click PAIRS collapse into one ``click`` with a repeat
+    Adjacent same-button click pairs collapse into one ``click`` with a repeat
     count, a ``key_down`` run followed by exactly its reverse collapses into one
     ``chord``, and a ``glide_to`` stays a ``stroke`` so a drag survives the trip.
     Grammars that want individual transitions expand the groups again; for the
     transition spellings the collapse and the expansion are exact inverses.
 
-    EVERY CANONICAL OPERATION KIND IS ACCEPTED HERE, because a converter does not
-    choose what a recording contains. A kind that falls through to "unknown
-    Operation kind" makes a whole recorded trajectory unliftable in every grammar
-    at once, so these are handled explicitly:
+    Every canonical Operation kind is accepted here. A kind that falls through to
+    "unknown Operation kind" makes a whole recorded trajectory unliftable in every
+    grammar at once, so these are handled explicitly:
 
-    * ``click(button)`` — pixeldesk's executor SYNTHESISES this itself
+    * ``click(button)`` — pixeldesk's executor synthesises this itself
       (``guest_program.lower_guest_operations``), so it appears in any stream
       that has been through that lowering. It is one press/release pair, and a
       pair spelled this way coalesces with pairs spelled as
@@ -507,17 +502,15 @@ def group_operations(
       ``stroke``, ``button_up(left)``. That is the same group shape a codec
       already recognises as a drag, so ``deltatype_v2`` reaches its ``MOVE``
       form, ``ordered_events_v3`` and ``move_rel`` interleave, and
-      ``native_absolute`` reaches ``left_click_drag`` — while the three grammars
-      with no stroke primitive still raise, which is correct. A ZERO-EXTENT drag
-      keeps its press and release, which is the entire reason ``ir.drag`` exists
-      as its own kind.
+      ``native_absolute`` reaches ``left_click_drag``, while the three grammars
+      with no stroke primitive raise. A zero-extent drag keeps its press and
+      release, which is why ``ir.drag`` exists as its own kind.
     * ``ascii_type(text)`` — becomes the same ``type`` group as
-      ``coalesced_type``. This is the one FLATTENING in this function and it is
-      deliberate: no grammar here has two typing primitives, so per-keystroke
-      ASCII and one clipboard burst cannot be told apart downstream of the lift.
-      The mechanism changes (``pyautogui.write`` becomes a paste) and the
-      recompiled stream therefore differs from the input; the vectors pin that as
-      a documented-lossy case rather than leaving it invisible.
+      ``coalesced_type``. This is the one flattening in this function: no grammar
+      here has two typing primitives, so per-keystroke ASCII and one clipboard
+      burst cannot be told apart downstream of the lift. The mechanism changes
+      (``pyautogui.write`` becomes a paste) and the recompiled stream therefore
+      differs from the input; the vectors pin that as a documented-lossy case.
     """
     ops = list(operations)
     groups: list[Group] = []
@@ -608,15 +601,12 @@ def group_operations(
             groups.append(Group("key_up", keys=tuple(ups)))
             index = scan
         elif kind in ("coalesced_type", "ascii_type"):
-            # The one flattening: see this function's docstring. No grammar here
-            # has two typing primitives, so the paste/keystroke distinction has
-            # nowhere to land and the vectors document the loss.
+            # The one flattening: see this function's docstring.
             groups.append(Group("type", text=str(args[0])))
             index += 1
         elif kind == "scroll":
             # Both arities, disambiguated by pixeldesk's own scroll_deltas --
-            # the one function ir.py declares as the only place that decides,
-            # so a producer and a consumer cannot drift apart silently.
+            # the one function ir.py declares as the only place that decides.
             dx, dy = scroll_deltas(args)
             groups.append(Group("scroll", dx=int(dx), dy=int(dy)))
             index += 1
@@ -777,12 +767,10 @@ def terminate_status(
     """Validate the lift's ``terminate`` argument. ``None``, success or failure.
 
     Each grammar then spells it its own way — a flag, a distinct FAIL token, a
-    ``terminate`` call, or not at all.
-
-    Three states, three spellings, no case folding. The bool forms this also used
-    to take (``False`` meaning None, ``True`` meaning success) were a fourth and a
-    fifth that no caller passes, and ``True`` silently meaning SUCCESS is how a
-    terminate whose status was lost lands as a claimed success.
+    ``terminate`` call, or not at all. Three states, three spellings, no case
+    folding. The bool forms this used to accept (``False`` meaning None, ``True``
+    meaning success) were removed: ``True`` meaning success is how a terminate
+    whose status was lost lands as a claimed success.
     """
     if value is None:
         return None
@@ -790,8 +778,6 @@ def terminate_status(
         return str(value)
     raise error(f"terminate must be None, 'success' or 'failure', got {value!r}")
 
-
-# the computer_use tool-call family
 
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 _FENCE_OPEN_RE = re.compile(r"^```(?:json)?\s*", re.IGNORECASE)
@@ -902,31 +888,21 @@ def normalize_key(value: object, *, error: type[Exception] = ValueError) -> str:
     return raw
 
 
-# NO HANDLER TABLES LIVE HERE, AND NONE SHOULD BE ADDED
-#
-# There is no dispatch engine in pixeldesk for a grammar to contribute a
-# ``dict[str, Handler]`` to. The temptation is worth naming: a shared ``match`` over
-# GRAMMAR-specific action names would be wrong, because that set is open. But a
-# codec's job ends at ``compile``, and the Operation vocabulary on the far side is
-# closed by physics: a pointer moves, a button transitions, a wheel turns, text
-# arrives. Lowering THAT set is a fixed ``if kind ==`` chain in
-# ``pixeldesk.execute.guest_program`` over something no grammar extends, which
-# is correct and is where it belongs.
+# No handler tables live here, and none should be added. There is no dispatch
+# engine in pixeldesk for a grammar to contribute a ``dict[str, Handler]`` to. A
+# shared ``match`` over grammar-specific action names would be wrong, because
+# that set is open per grammar; a codec's job ends at ``compile``, and the
+# Operation vocabulary on the far side is closed: a pointer moves, a button
+# transitions, a wheel turns, text arrives. Lowering it is a fixed
+# ``if kind ==`` chain in ``pixeldesk.execute.guest_program`` over something no
+# grammar extends.
 
 
-# shared prose for the matched pair
-
-#: The preamble of BOTH bare-line paired-eval arms, ``compact_raw`` and
-#: ``native_absolute_control``, held in ONE string and assigned to both codec
-#: classes' ``__doc__``.
-#:
-#: It is a constant rather than two docstrings because the two arms had already
-#: drifted: the same sentence was wrapped at a different column in each, so the
-#: shared prose was not byte-identical and the two prompts tokenised differently.
-#: The entire premise of the pair is that everything except the meaning of the two
-#: leading integers is identical, and a rewrap is exactly the kind of edit that
-#: reintroduces the difference silently. Deriving both from here makes drift
-#: impossible rather than merely discouraged.
+#: The preamble of both bare-line paired-eval arms, ``compact_raw`` and
+#: ``native_absolute_control``, held in one string and assigned to both codec
+#: classes' ``__doc__``. A constant rather than two docstrings because the arms
+#: had drifted: the same sentence wrapped at a different column in each, so the
+#: two prompts tokenised differently.
 MATCHED_ARM_PREAMBLE = """You operate a real desktop VM with a mouse and keyboard.
 
 First write one short sentence describing the action, without numbers. Then
@@ -937,8 +913,7 @@ Complete exactly the next semantic step shown in the user context.
 """
 
 #: The productions the two arms share verbatim, likewise held once. Only the
-#: mouse-triple productions differ between the arms, and that difference IS the
-#: experiment.
+#: mouse-triple productions differ between the arms.
 MATCHED_ARM_PRESS = """Press NAME. Mouse buttons are LMB, RMB, MMB. Keyboard keys use rdev
 names: Return, Tab, Backspace, Escape, ControlLeft, ShiftLeft, KeyA, ...
 """
@@ -952,8 +927,7 @@ contain a newline — press Return as an event (`+Return -Return`).
 MATCHED_ARM_NOTES = """Emit exactly one action line per turn."""
 
 #: Which member of a paired arm takes which shared string. Applied by
-#: ``apply_matched_arm_prose`` after each arm's class body, so neither arm can
-#: hold its own copy of the prose and drift from the other.
+#: ``apply_matched_arm_prose`` after each arm's class body.
 _MATCHED_ARM_PROSE = {
     "_press": MATCHED_ARM_PRESS,
     "_release": MATCHED_ARM_RELEASE,
@@ -965,10 +939,8 @@ _MATCHED_ARM_PROSE = {
 def apply_matched_arm_prose(codec_class: type) -> type:
     """Install the shared paired-arm prose onto one arm's class.
 
-    Called by BOTH ``compact_raw`` and ``native_absolute_control`` and by nothing
-    else. It exists so the shared half of the two prompts has exactly one source:
-    the arms differ only in whether the two leading integers name a position or an
-    offset, and any other difference makes the A/B measure the difference instead.
+    Called by ``compact_raw`` and ``native_absolute_control`` and by nothing
+    else, so the shared half of the two prompts has exactly one source.
     """
     codec_class.__doc__ = MATCHED_ARM_PREAMBLE
     for member, doc in _MATCHED_ARM_PROSE.items():

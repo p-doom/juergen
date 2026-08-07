@@ -13,7 +13,7 @@ Collapses into one codec:
   ``drag_to`` and accepted ``clicks`` as well as ``pixels`` for scroll),
 * ``eval/action_parser.py::parse_computer_use_tool_call`` and
   ``parse_computer_use_tool_calls`` (last-call-wins vs all-calls-in-order — this
-  codec keeps ALL calls in order, because a turn legitimately contains
+  codec keeps all calls in order, since a turn legitimately contains
   mouse_down, mouse_move, mouse_up),
 * the RL rollout extractor in ``rl/computer_use/parsing.py``.
 
@@ -21,15 +21,15 @@ Semantics chosen where the sources disagreed:
 
 * ``drag_to`` is accepted as an alias of ``left_click_drag`` (see
   ``ACTION_ALIASES``) rather than rejected. It was rung1's spelling for the same
-  gesture; a checkpoint that emits it should not fail to parse.
-* ``coordinate`` on a click is CORRECT here (that is what absolute means).
+  gesture.
+* ``coordinate`` on a click is correct here — that is what absolute means.
   ``delta`` — the key ``rl/computer_use/actions.py`` requires — is rejected with
-  a message naming it, because a relative offset has no meaning in this grammar.
-* ``triple_click`` dispatches three press/release pairs. The historical tool
-  description said "simulated as double-click since it's the closest action";
-  the sign-of-life executor already did three, which is strictly more faithful.
+  a message naming it.
+* ``triple_click`` dispatches three press/release pairs, as the sign-of-life
+  executor did. The historical tool description said "simulated as double-click
+  since it's the closest action".
 * A zero scroll emits no operation instead of raising. The sign-of-life codec
-  raised "zero scroll is not an action"; a no-op is not a format error.
+  raised "zero scroll is not an action".
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ from .. import _support
 #: Provenance of the producer prompt (``eval/osworld_system_prompts.py``
 #: ``computer_use_v1``, byte-equal in shape to ``split/eval_system_prompt.txt``).
 #: ``describe()`` regenerates that envelope from docstrings, so the digests are
-#: not expected to match; ``report()` says so rather than raising.
+#: not expected to match; ``report()`` records that rather than raising.
 PRODUCER = {"prompt_id": "computer_use_v1"}
 
 CLICKS = {
@@ -58,30 +58,22 @@ CLICKS = {
 }
 DRAGS = {"left_click_drag"}
 
-#: ACCEPTED ON INPUT, NOT ADVERTISED IN THE PROMPT.
-#:
-#: ``rung1``'s ``NativeAbsoluteExecutor`` exposed ``drag_to`` for exactly the
-#: gesture ``left_click_drag`` names, so a checkpoint trained or evaluated through
-#: it may still emit that spelling. Rejecting it turns a semantically correct
-#: completion into a parse error at eval time, which is the expensive direction of
-#: the trade. The alias is therefore normalised to the advertised name here rather
-#: than declared as a production: adding a production would put a second name for
-#: one gesture into the tool schema the model reads, and teaching the model two
-#: spellings is not the goal — surviving one it already knows is.
-#:
-#: ``format`` re-emits the canonical name, so the alias canonicalises on the round
-#: trip in the same way ``"; "`` canonicalises to ``" ; "`` in the bare-token arms.
+#: Accepted on input, not advertised in the prompt. ``rung1``'s
+#: ``NativeAbsoluteExecutor`` exposed ``drag_to`` for exactly the gesture
+#: ``left_click_drag`` names, so a checkpoint trained or evaluated through it may
+#: still emit that spelling. It is normalised to the advertised name here rather
+#: than declared as a production, which would put a second name for one gesture
+#: into the tool schema the model reads. ``format`` re-emits the canonical name,
+#: so the alias canonicalises on the round trip.
 ACTION_ALIASES = {"drag_to": "left_click_drag"}
 
 BUTTON_NAMES = ("left", "right", "middle")
 MAX_WAIT_SECONDS = 10.0
 
-#: ``left_click_drag`` lowers to a TIMED stroke, not an instant jump. The
-#: A bare ``mouse_down, move_to, mouse_up`` is not registered as a drag by many
-#: toolkits — the same class of defect as degrading a drag into a stationary
-#: click. ``glide_to`` is an optional backend capability whose documented fallback
-#: is ``move_to``, so a backend without it degrades explicitly rather than the
-#: codec choosing it silently.
+#: ``left_click_drag`` lowers to a timed stroke, not an instant jump: a bare
+#: ``mouse_down, move_to, mouse_up`` is not registered as a drag by many
+#: toolkits. ``glide_to`` is an optional backend capability whose documented
+#: fallback is ``move_to``.
 DRAG_SECONDS = 0.5
 
 
@@ -243,8 +235,6 @@ class NativeAbsoluteCodec:
         </tool_call>
         """
 
-    # -- interface ---------------------------------------------------------
-
     def describe(self) -> str:
         return _support.render_tool_prompt(
             self,
@@ -372,8 +362,6 @@ class NativeAbsoluteCodec:
             else:  # pragma: no cover - validate_call fixes the set
                 raise NativeAbsoluteError(f"unsupported action: {name!r}")
         return tuple(operations)
-
-    # -- training-target construction --------------------------------------
 
     def action_from_operations(
         self,
@@ -534,8 +522,6 @@ class NativeAbsoluteCodec:
             )
             calls.append(NativeCall("mouse_up", button=group.button))
         return calls
-
-    # -- validation --------------------------------------------------------
 
     def validate_call(self, arguments: dict[str, Any]) -> NativeCall:
         name = str(arguments.get("action", "")).strip()

@@ -1,30 +1,20 @@
-"""Items 14 + 17 — the correctness of the gate itself.
+"""The correctness of the gate itself.
 
-`terminal_exact_text` is a **submit** cell
-by its own instruction, so listing it in `NO_SUBMIT_CELLS` was the bug and indicator D
-must not fire there.
+`terminal_exact_text` is a submit cell by its own instruction, so listing it in
+`NO_SUBMIT_CELLS` was the bug and indicator D must not fire there. Four independent
+parts of the cell require the Return, each asserted separately below: the
+instruction ends "and press Enter"; the guest fixture completes an `IFS= read -r`
+only on a newline; the oracle requires the capture file that only a completed `read`
+writes, so not submitting cannot pass and submitting is the only way to pass; and
+the oracle control arm the calibration defines as 4/4 presses Return.
 
-The evidence that decided it, each asserted separately below:
+`terminal_exact_text` was the only entry, so `NO_SUBMIT_CELLS` is now empty and
+indicator D never had a valid cell to fire on in this suite. D is a `@vf.metric` and
+`no_submit` is read in exactly one place, so no published pass count — including the
+Phase-B-compact 2/4 — was ever a function of it.
 
-  * the cell's instruction ends *"and press Enter"* (14b);
-  * its guest fixture completes an `IFS= read -r` only on a newline (14c);
-  * its oracle requires the capture file that only a completed `read` writes, so
-    NOT submitting cannot pass and submitting is the only way to pass (14d);
-  * its **oracle control arm — defined by the calibration as 4/4 — presses Return** (14e).
-
-An indicator that fires on the behaviour four independent parts of the cell require,
-including the gold plan, measures nothing about the model.
-
-Two consequences, both asserted:
-
-  * `terminal_exact_text` was the **only** entry, so `NO_SUBMIT_CELLS` is now empty and
-    indicator D never had a valid cell to fire on in this suite (14a, 14i);
-  * D is a `@vf.metric` and `no_submit` is read in exactly one place, so no published
-    pass count — including the Phase-B-compact 2/4 — was ever a function of it (14g).
-
-The contradiction is now structurally unreachable: `load_suite` refuses a cell that is
-both listed as no-submit and phrased as a submission (14j), and refuses a
-`NO_SUBMIT_CELLS` entry naming no real cell (14k).
+`load_suite` refuses a cell that is both listed as no-submit and phrased as a
+submission, and refuses a `NO_SUBMIT_CELLS` entry naming no real cell.
 """
 
 from __future__ import annotations
@@ -123,7 +113,7 @@ def test_14d_the_oracle_requires_the_file_that_only_enter_creates() -> None:
 
 
 def test_14e_the_oracle_control_arm_for_this_cell_presses_return() -> None:
-    """The arm the calibration *defines* as 4/4 submits."""
+    """The arm the calibration defines as 4/4 submits."""
     plan = guest.script_plan(_cell_data(), negative=False)
     assert [intent.kind for intent in plan] == ["type", "submit"]
     rendered = [
@@ -149,10 +139,7 @@ def _cell_data():
 
 
 def test_indicator_D_does_not_fire_on_the_gold_plan() -> None:
-    """The Return that the cell's instruction demands, that its fixture requires,
-    that its oracle scores as the only pass, and that its own oracle control arm
-    emits, must not be counted as over-generalisation.
-    """
+    """The Return this cell requires must not be counted as over-generalisation."""
     task_data = _cell_data()
     steps = []
     for intent in guest.script_plan(task_data, negative=False):
@@ -188,8 +175,8 @@ def _parse(codec_name: str, text: str):
 def test_14g_the_misclassification_cannot_move_a_pass_count() -> None:
     """`no_submit` feeds indicator D and nothing else.
 
-    So resolving item 14 either way changes a *metric*, never `success`. A published
-    2/4 is a count of `postcondition` rewards, which never read this flag.
+    Resolving it either way changes a metric, never `success`. A published 2/4 is a
+    count of `postcondition` rewards, which never read this flag.
     """
     repo = Path(__file__).resolve().parents[1]
     readers = []
@@ -213,7 +200,7 @@ def test_14g_the_misclassification_cannot_move_a_pass_count() -> None:
 
 
 def test_14i_indicator_D_has_no_valid_cell_to_fire_on_in_this_suite() -> None:
-    """The larger finding: `terminal_exact_text` was the ONLY entry.
+    """`terminal_exact_text` was the only entry.
 
     So every non-zero D reading ever published against the sign-of-life gate came
     from the misclassified cell. D is structurally zero on this suite now, and stays
@@ -244,7 +231,7 @@ def test_14i_indicator_D_has_no_valid_cell_to_fire_on_in_this_suite() -> None:
 
 
 def test_14j_the_loader_refuses_a_no_submit_cell_that_demands_submission(monkeypatch) -> None:
-    """The structural invariant: the item-14 defect class cannot be reintroduced."""
+    """So the misclassification cannot be reintroduced."""
     import evals.signoflife.suite as suite_module
 
     monkeypatch.setattr(suite_module, "NO_SUBMIT_CELLS", frozenset({EXACT_TEXT_CELL}))

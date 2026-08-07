@@ -1,16 +1,14 @@
 """A dependency-free Chrome DevTools Protocol client.
 
 One `Runtime.evaluate` over a raw websocket, hand-rolled on `socket` and `struct`.
-That is deliberate, and it belongs to *tasks* rather than to the VM layer: the only
-reason a fixture needs CDP is to read the DOM state a browser task's oracle scores.
-The VM layer forwards a port; it does not know what a page is.
+The only reason a fixture needs CDP is to read the DOM state a browser task's
+oracle scores; the VM layer forwards a port and does not know what a page is.
 
-Why not playwright: `SetupController`'s playwright-over-CDP path is the thing that
-drags in a browser-automation stack, a matching browser build and a proxy config the
-cluster does not have, and it only ever gets used to run one expression. 140 lines of
-websocket framing has no install story at all.
+Not playwright: `SetupController`'s playwright-over-CDP path drags in a
+browser-automation stack, a matching browser build and a proxy config the cluster
+does not have, and it only ever runs one expression.
 
-Every bound here is a bound on *evidence size*, not on correctness: a page that
+Every bound here is a bound on evidence size, not on correctness: a page that
 returns 40 MB of `outerHTML` should fail loudly rather than silently fill a trace.
 """
 

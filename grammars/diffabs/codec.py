@@ -1,8 +1,8 @@
 """The diff-of-absolute bare-token grammar.
 
 Surface: ``dx dy scroll`` optionally followed by ``; +KEY -KEY`` events, or a
-control token. The deltas are RAW screen pixels obtained as the difference of
-two ABSOLUTE positions — the teacher's intended target minus the cursor before
+control token. The deltas are raw screen pixels obtained as the difference of
+two absolute positions — the teacher's intended target minus the cursor before
 the action — which is what "diffabs" names and what ``from_absolute`` below
 implements. Behaviour is identical to the absolute action it was derived from;
 only the encoding is relative.
@@ -23,15 +23,12 @@ Collapses into one codec:
 Semantics chosen where the sources disagreed:
 
 * The action is the last ``Action: <body>`` marker if present, otherwise the
-  last non-empty line. ``parse_action`` cut the text at the FIRST newline while
-  ``parse_action_tolerant`` fell back to the LAST line, so the same completion
-  resolved to two different actions depending on which function ran. Every
-  prompt in this family puts reasoning BEFORE the action, so the last line wins
-  and there is one rule.
+  last non-empty line; every prompt in this family puts reasoning before the
+  action. ``parse_action`` cut the text at the first newline while
+  ``parse_action_tolerant`` fell back to the last line.
 * ``TERMINATE`` is accepted. ``psai_v1`` documents only ``NO_OP``; ``yll_v1``
-  adds ``TERMINATE`` and the trained checkpoints emit it, so refusing it would
-  turn a correct completion into a parse error. There is no ``FAIL`` in this
-  family — use ``deltatype_v2``.
+  adds ``TERMINATE`` and the trained checkpoints emit it. There is no ``FAIL``
+  in this family — use ``deltatype_v2``.
 * There is no ``type()`` element. Literal text is spelled as key transitions
   here; the coalesced ``type()`` element is what ``deltatype_v2`` adds.
 """
@@ -52,7 +49,7 @@ PRODUCER = {
 }
 
 #: Retained from ``eval/action_parser.py`` for consumers that scored on X11
-#: button codes. The IR itself carries button NAMES.
+#: button codes. The IR itself carries button names.
 X11_BUTTON_CODES = {"LMB": 1, "MMB": 2, "RMB": 3}
 
 
@@ -168,8 +165,6 @@ class DiffabsCodec:
     def notes(self) -> None:
         """Emit one action per turn."""
 
-    # -- interface ---------------------------------------------------------
-
     def describe(self) -> str:
         return _support.render_spec(self)
 
@@ -230,8 +225,6 @@ class DiffabsCodec:
             _support.lower_transitions(action.elements, error=DiffabsError)
         )
         return tuple(operations)
-
-    # -- training-target construction --------------------------------------
 
     def action_from_operations(
         self,

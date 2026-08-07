@@ -1,13 +1,13 @@
 """Chrome fixture launch and browser diagnostics.
 
-A browser task brings its own browser: this module starts Chromium in the guest on a
-fixture URL, waits for the page to report ready, and reads the live DOM through CDP.
-The session forwards a port and reaps process groups; it does not know Chrome exists.
+This module starts Chromium in the guest on a fixture URL, waits for the page to
+report ready, and reads the live DOM through CDP. The session forwards a port and
+reaps process groups; it does not know Chrome exists.
 
-`launch` retries under **one absolute deadline** rather than per-attempt timeouts.
+`launch` retries under one absolute deadline rather than per-attempt timeouts.
 Per-attempt timeouts compose into an unbounded total, which is how a "30 second"
-readiness wait becomes four minutes; and a relaunch is arm-neutral browser setup, never
-an action retry — nothing about the model's turn is repeated.
+readiness wait becomes four minutes. A relaunch is arm-neutral browser setup, not an
+action retry: nothing about the model's turn is repeated.
 """
 
 from __future__ import annotations
@@ -108,8 +108,7 @@ def launch(
     """Bring the fixture page to ready inside one absolute deadline.
 
     Only a timeout or a transport failure may relaunch Chromium. A page that loads
-    and reports a *wrong* state is a deterministic failure and stays terminal —
-    retrying it would launder a broken fixture into a flaky one.
+    and reports a wrong state is a deterministic failure and stays terminal.
     """
     if timeout_s <= 0:
         raise ChromeFixtureError("fixture setup deadline must be positive")
@@ -208,9 +207,9 @@ def capture_browser_diagnostics(
 ) -> dict[str, Any]:
     """Read the live fixture page through CDP without modifying page state.
 
-    This is the *second*, independent read of state the page also posts over HTTP. A
-    fixture whose DOM and posted state disagree is broken, and only having both makes
-    that detectable — a single source cannot be wrong in a way you can see.
+    This is the second, independent read of state the page also posts over HTTP. A
+    fixture whose DOM and posted state disagree is broken, and having both is what
+    makes that detectable.
     """
     target = find_page_target(chromium_port, fixture.id, timeout_s=timeout_s)
     websocket_url = local_websocket_url(target, chromium_port)

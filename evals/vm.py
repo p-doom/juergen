@@ -1,38 +1,37 @@
 """The one adapter between pixeldesk's session pool and the harness's session.
 
-`DesktopPoolConfig.pool_target` names a **constructor** and `session_kwargs` is
-handed to it verbatim (`agent.desktop.default_pool_factory`). Its nominal default,
+`DesktopPoolConfig.pool_target` names a constructor and `session_kwargs` is handed
+to it verbatim (`agent.desktop.default_pool_factory`). Its nominal default,
 `pixeldesk.vm.pool:DesktopSessionPool`, cannot be used that way, for two reasons
 that only show up against a real VM:
 
-**1. The constructor is not callable from config.** `DesktopSessionPool.__init__`
-requires a `DesktopPoolConfig` *dataclass* and a `session_factory` *callable*
+1. The constructor is not callable from config. `DesktopSessionPool.__init__`
+requires a `DesktopPoolConfig` dataclass and a `session_factory` callable
 (`pool.py:373-382`). Neither survives a recipe, a TOML file or a JSON
 `session_kwargs`. `pixeldesk.vm.factory:build_desktop_pool` is the
-plain-arguments entry point that exists for exactly this, but it still takes the
-dataclass for `config`.
+plain-arguments entry point, but it still takes the dataclass for `config`.
 
-**2. `checkout()` does not return a session the harness can drive.** It returns a
+2. `checkout()` does not return a session the harness can drive. It returns a
 `CheckedOutDesktopSession`, whose whole surface is `env`, `session_id`,
 `tracked_env()`, `touch()` and `release()` (`pool.py:320-367`). The harness calls
 `screen_size()`, `cursor_position()`, `screenshot()` and `execute_atomic()` on
 whatever it gets (`evals/harness.py:76-83`), and the preparers additionally call
-`execute_argv()`. Those live on *two different objects* — `HttpGuiTransport` has
+`execute_argv()`. Those live on two different objects — `HttpGuiTransport` has
 the input/geometry half, `OSWorldClient` has the pixels-and-guest-commands half —
 and `DesktopSession` holds both without merging them.
 
 So `kvm_desktop_pool` is the callable entry point and `DesktopFacade` is the
-union, and nothing more: no policy, no retries, no provider selection by name.
+union: no policy, no retries, no provider selection by name.
 
-**Reset isolation is explicit here, because the pool does not do it.**
+Reset isolation is explicit here, because the pool does not do it.
 `DesktopSessionPool.release` returns a session to the `ready` list untouched until
 `rollouts_completed >= max_rollouts_per_session` (`pool.py:495-519`) — no snapshot
 restore, no `reset()`. A second rollout on a reused VM would therefore start with
 the first one's Chrome still open, which for a four-cell gate scored on realized
-guest state is not a degraded measurement but a wrong one. Two settings are
-honest and both are supported:
+guest state is a wrong measurement rather than a degraded one. Two settings are
+supported:
 
-  * `max_rollouts_per_session=1` (**the default here**) retires the VM after every
+  * `max_rollouts_per_session=1` (the default here) retires the VM after every
     rollout, so each one boots its own. Strictest, and what a multi-trial gate run
     wants: the trials are then independent draws in the VM too, not just the model.
   * a higher value plus `reset_on_reuse=True` calls `DesktopSession.reset()` — an
@@ -59,9 +58,8 @@ class DesktopFacade:
 
     Explicit delegation rather than `__getattr__`: the harness probes optional
     capabilities with `getattr(session, "screenshot_settled", None)` and
-    `getattr(session, "evaluate", None)`, and a catch-all proxy would answer *yes*
-    to every probe and then fail at call time. What this class does not name, the
-    harness must be able to discover is absent.
+    `getattr(session, "evaluate", None)`, and a catch-all proxy would answer yes to
+    every probe and then fail at call time.
     """
 
     def __init__(
@@ -71,8 +69,6 @@ class DesktopFacade:
         self._session = session
         self._osworld_cache_dir = osworld_cache_dir
         self._osworld_bridge: Any = None
-
-    # -- identity / lifecycle -------------------------------------------- #
 
     @property
     def session_id(self) -> str:
@@ -99,8 +95,6 @@ class DesktopFacade:
         (`session.py:535-536`), so a cached reference would keep driving a stale
         input audit after a restore."""
         return self._session.transport
-
-    # -- the input + geometry half (HttpGuiTransport) --------------------- #
 
     def execute_atomic(self, operations: Any) -> Any:
         self._touch()
@@ -134,15 +128,12 @@ class DesktopFacade:
 
     def execute_pyautogui(self, code: str) -> None:
         """Unused by the sign-of-life cells (they go through the codec and
-        `execute_atomic`); the grounding and freeroll preparers do use it, and
-        omitting it would make this adapter silently unusable for them."""
+        `execute_atomic`); the grounding and freeroll preparers do use it."""
         self._touch()
         try:
             self._transport.execute_pyautogui(code)
         finally:
             self._touch()
-
-    # -- the pixels half (OSWorldClient) ---------------------------------- #
 
     def screenshot(self) -> bytes:
         self._touch()
@@ -168,14 +159,11 @@ class DesktopFacade:
         finally:
             self._touch()
 
-    # -- the OSWorld benchmark half (evals/osworld.py) --------------------- #
-    #
-    # Named, not proxied — same rule as everything above, and here it earns its
-    # keep twice over. `harness._evaluate` probes `getattr(session, "evaluate")`
-    # and the OSWorld preparer calls `session.setup(...)`; under a `__getattr__`
-    # catch-all both would answer yes on a session with no OSWorld tree behind
-    # it and fail mid-episode, after the boot and the guest setup. Absent has to
-    # be discoverable *before* a VM is spent.
+    # The OSWorld half (`evals/osworld.py`) is named, not proxied:
+    # `harness._evaluate` probes `getattr(session, "evaluate")` and the OSWorld
+    # preparer calls `session.setup(...)`, so under a `__getattr__` catch-all both
+    # would answer yes on a session with no OSWorld tree behind it and fail
+    # mid-episode, after the boot and the guest setup.
 
     @property
     def _osworld(self) -> Any:
@@ -207,8 +195,7 @@ class DesktopFacade:
         read back off the runtime. `state()` is on `QemuRuntime` and not on the
         `Runtime` protocol, so a backing that does not offer it falls through to
         OSWorld's own defaults rather than failing: a task whose evaluator never
-        touches Chrome or VLC does not need them, and refusing to score it would
-        be inventing a dependency.
+        touches Chrome or VLC does not need them.
         """
         runtime = getattr(self._session, "runtime", None)
         state = getattr(runtime, "state", None)
@@ -227,11 +214,10 @@ class DesktopFacade:
     def setup(self, task_config: dict[str, Any]) -> int:
         """Run an OSWorld task JSON's `config` steps, and bind it for scoring.
 
-        Takes the **whole task config**, not just its `config` list, which is the
-        shape `DesktopEnv.reset(task_config=...)` uses and the only shape that
-        lets `evaluate()` stay argument-free: the evaluator block arrives with the
-        setup, so the desktop is never asked to score a task it was not prepared
-        for.
+        Takes the whole task config, not just its `config` list, which is the shape
+        `DesktopEnv.reset(task_config=...)` uses and the only shape that lets
+        `evaluate()` stay argument-free: the evaluator block arrives with the setup,
+        so the desktop is never asked to score a task it was not prepared for.
         """
         self._touch()
         try:
@@ -242,23 +228,22 @@ class DesktopFacade:
     def declare_terminal(self, control: str | None) -> None:
         """Tell the scorer how the episode ended.
 
-        OSWorld inverts the reward on `infeasible` tasks — declaring FAIL *is*
-        success there and forfeits everywhere else — and reads that off its
-        action history, which we do not keep. Optional by design: the harness
-        probes for it, and a session that cannot answer simply never claims a
-        FAIL, which is the same verdict as a model that never declared one.
+        OSWorld inverts the reward on `infeasible` tasks — declaring FAIL is
+        success there and forfeits everywhere else — and reads that off its action
+        history, which we do not keep. Optional: the harness probes for it, and a
+        session that cannot answer simply never claims a FAIL, which is the same
+        verdict as a model that never declared one.
         """
         self._osworld.declare_terminal(control)
 
     def evaluate(self) -> float:
         """The OSWorld benchmark score for the task this desktop was set up for.
 
-        No arguments, because `DesktopHarness._evaluate` has none to give — see
-        `setup()` for why that is sound. Raises rather
-        than returning 0.0 when there is nothing to score; the harness records a
-        raise as a missing reward, and `OSWorldEvaluateOracle` refuses a missing
-        reward outright. Infrastructure failure must never be trained as task
-        failure.
+        No arguments, because `DesktopHarness._evaluate` has none to give (see
+        `setup()`). Raises rather than returning 0.0 when there is nothing to score;
+        the harness records a raise as a missing reward, and
+        `OSWorldEvaluateOracle` refuses a missing reward outright, so infrastructure
+        failure is never trained as task failure.
         """
         self._touch()
         try:

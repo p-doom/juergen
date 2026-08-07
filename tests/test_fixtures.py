@@ -1,11 +1,8 @@
-"""Items 10 + 11 — the `WebFixtureServer` state store, and `probe_app_state`.
+"""The `WebFixtureServer` state store, and `probe_app_state`.
 
-Item 10: `apply` / `wait_ready` are generation-guarded, rewritten after ~700 LOC of
-causal-heartbeat audit machinery was removed. The guard is the load-bearing part:
-without it a page still unloading from the previous episode writes its dying scroll
-position into the new episode's state.
-
-Item 11: `probe_app_state` consolidates rung2's `probe_state` / `probe_geometry`.
+`apply` / `wait_ready` are generation-guarded: without the guard, a page still
+unloading from the previous episode writes its dying scroll position into the new
+episode's state.
 """
 
 from __future__ import annotations

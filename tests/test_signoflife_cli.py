@@ -1,22 +1,18 @@
 """`python -m evals.signoflife`, end to end, with no VM and no GPU.
 
-`evals/signoflife/__main__.py` (211 statements) and `evals/vm.py` (86) were both at
-**zero** coverage, and the 97.1% that was published had both excluded — the honest
-figure was 88%. `SignOfLifeTaskset.load` never executed either. So the one path
-every real gate run takes — CLI -> argument validation -> taskset load -> harness
-construction -> pool adapter -> episode -> `result.json` — was untested end to end,
-which is precisely where the missing `DesktopFacade.evaluate()` was hiding.
+The path every real gate run takes — CLI -> argument validation -> taskset load ->
+harness construction -> pool adapter -> episode -> `result.json` — and where the
+missing `DesktopFacade.evaluate()` once hid.
 
 This runs the real `main()`. The only substitution is
 `pixeldesk.vm.factory.build_desktop_pool` (see `juergen_fake_desktop`), so
 `evals.vm.kvm_desktop_pool` and `DesktopFacade` are the production objects under
 test rather than doubles.
 
-**Scoring semantics are untouched.** The guest reports a desktop where nothing
-happened, which is the *negative* control's calibrated reading — 0/4 with
-`control_ok` true on every cell. Nothing here asserts, changes or fabricates the
-oracle arm's 4/4: that is a calibration against a real VM, and a fixture that
-produced it would be fiction.
+Scoring semantics are untouched. The guest reports a desktop where nothing happened,
+which is the negative control's calibrated reading — 0/4 with `control_ok` true on
+every cell. Nothing here asserts, changes or fabricates the oracle arm's 4/4: that
+is a calibration against a real VM, and a fixture that produced it would be fiction.
 """
 
 from __future__ import annotations
@@ -81,7 +77,7 @@ def _fresh_process() -> None:
     under the same key with a different `PoolSpec` — returning the live one would
     run the episode under someone else's slot budget and TTLs. The dispatcher's
     key is `signoflife-<arm>` while its `slot_dir` is derived from `--output`, so
-    two runs of one arm in ONE process collide by construction. In production
+    two runs of one arm in one process collide by construction. In production
     they never share a process; in a test they do, so the process-global registry
     is reset instead of the guard being weakened.
     """
@@ -220,8 +216,8 @@ def test_the_result_is_written_atomically_and_leaves_no_partial(tmp_path) -> Non
 
 
 def test_a_scripted_arm_refuses_a_model_it_would_silently_ignore(tmp_path) -> None:
-    """Recorded-and-ignored is the worst shape: the run record would name a
-    checkpoint that never answered a single token."""
+    """Recorded and ignored, the run record would name a checkpoint that never
+    answered a single token."""
     with pytest.raises(SystemExit) as excinfo:
         main(_argv(tmp_path / "run", tmp_path, "--model-path", str(tmp_path)))
     assert "scripted" in str(excinfo.value)
@@ -319,8 +315,7 @@ def test_a_model_arm_with_too_few_trials_warns_but_runs(tmp_path, caplog) -> Non
 
 def test_controls_ok_is_null_for_a_model_arm_by_construction() -> None:
     """The old runner computed `expected_passed = 0 if negative else len(rows)`
-    for every mode, so a model arm's `controls_ok` restated its own pass count
-    wearing the word *control*."""
+    for every mode, so a model arm's `controls_ok` restated its own pass count."""
     from evals.signoflife.__main__ import _aggregate
 
     rows = [
@@ -354,10 +349,9 @@ def test_a_cell_with_no_valid_draw_has_a_null_pass_rate_not_a_zero() -> None:
 
 
 def test_an_episode_that_publishes_nothing_still_records_why(tmp_path) -> None:
-    """A raise *before* `DesktopHarness._run` — a bad pool spec, an unknown
-    grammar, an unregistered kind — never reaches the code that publishes
-    `infra_error`, so the row must not read `validity: null, infra_error: null`.
-    Exit 3 with no reason anywhere a reader looks is the worst kind of red light.
+    """A raise before `DesktopHarness._run` — a bad pool spec, an unknown grammar,
+    an unregistered kind — never reaches the code that publishes `infra_error`, so
+    the row must not read `validity: null, infra_error: null`.
 
     Provoked here the way it actually happens: the same arm dispatched twice in
     one process, whose `pool_for` guard refuses the second spec.
@@ -367,7 +361,7 @@ def test_an_episode_that_publishes_nothing_still_records_why(tmp_path) -> None:
     assert code == 0
 
     second = tmp_path / "second"
-    # Deliberately NOT `_fresh_process()`: keep the first run's pool registered.
+    # Deliberately not `_fresh_process()`: keep the first run's pool registered.
     assert main(_argv(second, tmp_path, "--cell", CELL_IDS[0])) == 3
     result = json.loads((second / "result.json").read_text())
     assert result["status"] == "infrastructure_failure"
@@ -384,14 +378,14 @@ def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_se
 ) -> None:
     """Two properties in one run, because they are the same run.
 
-    *Provenance is recorded, never enforced.* `--verify-phaseb` is the fail-closed
-    check for one arm; hard-coding a second, third and fourth expected manifest
-    would make every new arm a code change. What must never be lost is which bytes
-    answered, so the checkpoint's `config.json` and both registration files are
-    hashed into the result.
+    Provenance is recorded, never enforced: `--verify-phaseb` is the fail-closed
+    check for one arm, and hard-coding an expected manifest per arm would make every
+    new arm a code change. What must not be lost is which bytes answered, so the
+    checkpoint's `config.json` and both registration files are hashed into the
+    result.
 
-    *A model arm that cannot reach its server is an infrastructure failure.* Exit 3
-    and `pass_rate: null` — not 0/4, which would read as a model that tried and
+    A model arm that cannot reach its server is an infrastructure failure: exit 3
+    and `pass_rate: null`, not 0/4, which would read as a model that tried and
     failed.
     """
     model = tmp_path / "ckpt"

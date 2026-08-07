@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage 03 (filter): a pure keep/drop mask over the master frame axis.
 
-This stage SAMPLES NOTHING. It judges, per master tick (tick i == master
+This stage samples nothing. It judges, per master tick (tick i == master
 record i == 1/master_fps s), whether that tick's frame is usable for any
 downstream consumer, and writes a compact survivor mask:
 
@@ -9,9 +9,9 @@ downstream consumer, and writes a compact survivor mask:
     (``mean_luma``/``frac_dark`` vs thresholds) — already master-resolution.
   * idle:   the realigned keylog is judged per ``--idle-judgment-bin-s`` bin
     (default: a 2 s bin with the rounded NO_OP predicate, see
-    ``--idle-activity``); the INTERIOR of any inactive run longer than
+    ``--idle-activity``); the interior of any inactive run longer than
     ``--idle-min-duration-s`` is dropped, keeping ``--idle-keep-head-s``/
-    ``--idle-keep-tail-s`` at each end. All knobs are in SECONDS, so a 4 fps
+    ``--idle-keep-tail-s`` at each end. All knobs are in seconds, so a 4 fps
     and a 15 fps master behave identically.
 
 Because the output is a mask at master resolution (not a sampled dataset),
@@ -90,8 +90,8 @@ def _master_frame_manifest(master_row: dict[str, Any], frames_dir: Path, seg: st
 
 def _is_black(mrec: dict[str, Any], luma_max: float, dark_frac_min: float) -> bool:
     """True if this master record's frame is (near-)black per the stage-01 luma
-    metrics. Records without metrics (older masters, decode failures) are NEVER
-    dropped -- absence of evidence isn't blackness."""
+    metrics. Records without metrics (older masters, decode failures) are never
+    dropped."""
     ml, fd = mrec.get("mean_luma"), mrec.get("frac_dark")
     return (ml is not None and ml <= luma_max) or (fd is not None and fd >= dark_frac_min)
 
@@ -104,7 +104,7 @@ def _str2bool(s: str | bool) -> bool:
 
 
 def _activity_mask(keylog_path: Path | None, n_records: int, master_fps: float) -> list[bool]:
-    """Per master tick: did the demonstrator do anything in it? Judged on RAW
+    """Per master tick: did the demonstrator do anything in it? Judged on raw
     events (a slow sub-pixel mouse drift is still activity), so idleness is not
     an artifact of per-tick rounding."""
     active = [False] * n_records
@@ -130,14 +130,12 @@ def _rounded_activity_mask(
     keylog_path: Path | None, n_records: int, master_fps: float, bin_ticks: int
 ) -> list[bool]:
     """Legacy-predicate activity at judgment-bin granularity: a bin is active
-    iff its FORMATTED action is non-NO_OP — i.e. summed deltas round to
+    iff its formatted action is non-NO_OP — i.e. summed deltas round to
     nonzero, or it carries deduped key events. Runs the real binning code
-    (``aggregate_actions`` + ``format_action``) rather than reimplementing the
-    predicate, so delta rounding, scroll fallback and held-set dedup of
-    autorepeats/dangling releases all behave identically to the emitted label.
-    With ``--idle-min-duration-s 0`` and
-    zero head/tail this keeps every frame at the judgment fps (0 NO_OP
-    frames)."""
+    (``aggregate_actions`` + ``format_action``), so delta rounding, scroll
+    fallback and held-set dedup of autorepeats/dangling releases all behave
+    identically to the emitted label. With ``--idle-min-duration-s 0`` and zero
+    head/tail this keeps every frame at the judgment fps (0 NO_OP frames)."""
     active = [False] * n_records
     if keylog_path is None or not keylog_path.exists():
         return active
@@ -153,7 +151,7 @@ def _rounded_activity_mask(
 
 def _coarsen_activity(active: list[bool], bin_ticks: int) -> list[bool]:
     """Smear activity to judgment-bin granularity: every tick of a bin counts
-    as active if ANY tick in it was. Coarser bins make the idle judgment less
+    as active if any tick in it was. Coarser bins make the idle judgment less
     twitchy (a slot tick inside a micro-pause of an otherwise busy second is
     not idle); ``bin_ticks == 1`` is a no-op."""
     if bin_ticks <= 1:
@@ -224,24 +222,20 @@ def filter_params(
     idle_judgment_bin_s: Any,
     idle_activity: Any,
 ) -> dict[str, Any]:
-    """The ONE definition of a filter's judgment parameters.
+    """Normalise and validate a filter's eight judgment parameters.
 
-    These knobs decide which frames survive, so exactly one function normalises
-    and validates them. Every caller passes all eight: there is no default here,
-    because the CLI is the one place defaults are applied (from ``lib.config``),
-    and a second default would let the same run judge differently depending on
-    which entry point built it.
+    Every caller passes all eight; there is no default here, since defaults are
+    applied once in the CLI (from ``lib.config``).
 
-    ``idle_judgment_bin_s`` falsy means "no binning" and normalises to ``None``,
-    so a run that passes ``0`` and a run that passes nothing record the same
-    value in the per-segment artifact AND in the run manifest.
+    A falsy ``idle_judgment_bin_s`` means "no binning" and normalises to
+    ``None``, so passing ``0`` and passing nothing record the same value in the
+    per-segment artifact and in the run manifest.
 
-    ``rounded`` needs a bin to evaluate the NO_OP predicate over; that pairing is
-    refused here rather than reaching a worker and failing on ``None * fps``.
+    ``rounded`` needs a nonzero bin to evaluate the NO_OP predicate over; that
+    pairing is refused here rather than failing on ``None * fps`` in a worker.
 
-    ``qc_view_fps`` is deliberately NOT part of this set: it only affects the
-    diagnostic view, and including it would invalidate the resume cache of every
-    artifact already on disk.
+    ``qc_view_fps`` is not part of this set: it only affects the diagnostic
+    view, and it is excluded from the resume-cache key.
     """
     activity = str(idle_activity)
     if activity not in config.IDLE_ACTIVITIES:
@@ -334,7 +328,7 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
             return {**base, "status": f"master_{master_row.get('status')}"}
         master_fps = float(master_row.get("master_fps") or task["master_fps"])
 
-        # Resume: reuse only if a prior run judged with the SAME params.
+        # Resume: reuse only if a prior run judged with the same params.
         if not task["force"] and out_path.exists():
             try:
                 prev = json.loads(out_path.read_text())
@@ -380,7 +374,7 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
             for t in range(start, end):
                 reasons[t] = REASON_IDLE
         # Black wins over idle: a black tick is a dead zone downstream (its
-        # pixels are unusable), an idle tick is merely uninteresting.
+        # pixels are unusable), an idle tick is not.
         if params["drop_black_frames"]:
             for t, mrec in enumerate(master_manifest):
                 if _is_black(mrec, params["black_luma_max"], params["black_dark_frac_min"]):
@@ -452,7 +446,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--black-dark-frac-min", type=float, default=config.DEFAULT_BLACK_DARK_FRAC_MIN,
                    help="...or if this fraction of pixels are near-black.")
     p.add_argument("--idle-min-duration-s", type=float, default=config.DEFAULT_IDLE_MIN_DURATION_S,
-                   help="Thin the interior of inactive runs LONGER than this many seconds.")
+                   help="Thin the interior of inactive runs longer than this many seconds.")
     p.add_argument("--idle-keep-head-s", type=float, default=config.DEFAULT_IDLE_KEEP_HEAD_S,
                    help="Seconds kept at the start of each thinned idle run.")
     p.add_argument("--idle-keep-tail-s", type=float, default=config.DEFAULT_IDLE_KEEP_TAIL_S,
@@ -464,7 +458,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--idle-activity", choices=config.IDLE_ACTIVITIES,
                    default=config.DEFAULT_IDLE_ACTIVITY,
                    help="What counts as activity. 'rounded' (default) = the NO_OP "
-                        "predicate per judgment bin — the bin's FORMATTED action is non-NO_OP "
+                        "predicate per judgment bin — the bin's formatted action is non-NO_OP "
                         "(deltas round to nonzero, or deduped key events survive); with the "
                         "min-duration/head/tail 0 it keeps every frame at the judgment "
                         "fps. 'raw' = any nonzero-delta or key event "

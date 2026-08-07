@@ -7,16 +7,16 @@ Used identically by stage 03b (annotation @k fps) and stage 04 (training
 The master axis is integer ticks == master record
 indices; nothing here touches timestamps.
 
-Selector semantics (load-bearing):
+Selector semantics:
   * two fps modes (``FPS_MODES``): ``exact`` (default) requires an integer
     stride master_fps/fps and puts slot j at tick ``j * stride``; ``nearest``
     (opt-in) allows any fps <= master_fps and puts slot j at the tick nearest
-    its ideal time (spacing jitters by up to half a master tick). In BOTH
-    modes a masked tick means the slot yields NO frame — skip, never
+    its ideal time (spacing jitters by up to half a master tick). In both
+    modes a masked tick means the slot yields no frame — skip, never
     substitute a neighbor.
   * Window of selected frame i = ``[tick_i, tick_of_next_selected_frame)``;
     the last window runs to the end of master coverage. Windows never overlap.
-    Idle-dropped spans are NOT dead zones: they are empty by definition and
+    Idle-dropped spans are not dead zones: they are empty by definition and
     windows pass over them.
   * Dead zones = black spans + the span before the first selected frame
     (missing coverage past the axis end is derived implicitly by the label
@@ -49,14 +49,15 @@ USABLE_FILTER_STATUSES = {"ok", "cached"}
 
 
 # Frame-selection modes:
-#   exact   — fps must divide master_fps (integer stride); slots land ON ticks,
-#             perfectly even spacing. The loud default.
-#   nearest — any fps <= master_fps; slot j sits at the master tick NEAREST its
+#   exact   — fps must divide master_fps (integer stride); slots land on ticks,
+#             perfectly even spacing. The default.
+#   nearest — any fps <= master_fps; slot j sits at the master tick nearest its
 #             ideal time j/fps, so spacing jitters by up to half a master tick
 #             (e.g. 4 fps on a 15 fps master picks ticks 0,4,8,11,15,...).
-#             Causally correct: a frame's label window starts AT its actual tick
+#             A frame's label window starts at its actual tick
 #             ([tick_i, tick_{i+1})), so no action ever precedes its observation
-#             frame. A nearest-pick would smear up to half a tick.
+#             frame; keying the window on the ideal time would smear it by up
+#             to half a tick.
 FPS_MODES = ("exact", "nearest")
 
 
@@ -89,7 +90,7 @@ def resolve_stride(master_fps: float, fps: float, mode: str = "exact") -> float:
 class ViewFrame:
     """One selected frame: master coordinates + its label-ownership window."""
 
-    view_idx: int  # position within this segment's view (NEVER persisted)
+    view_idx: int  # position within this segment's view (never persisted)
     slot: int  # ideal-slot index j (master_idx == round(j * stride))
     master_idx: int
     t_s: float  # master_idx / master_fps, for humans
@@ -143,7 +144,7 @@ def build_segment_view(
 
     # Slot j's tick: j*stride exactly, or the nearest tick to the ideal time
     # (half-up, deterministic). stride >= 1 keeps ticks strictly increasing.
-    # Either way a masked tick means the slot yields NO frame — never a
+    # Either way a masked tick means the slot yields no frame — never a
     # neighbor.
     selected: list[tuple[int, int]] = []  # (slot, tick)
     n_slots = 0

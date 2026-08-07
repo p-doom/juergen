@@ -276,7 +276,7 @@ def realign_recording(segs: list[dict], idle_timeout: float = IDLE_TIMEOUT,
 
     segs: list of {segment_id, segment_idx, keylog_path, video_path,
                    video_dur_s?(float|None), creation_time?(datetime|None)}.
-          Pass ALL segments of the recording present in the *source* tree (not
+          Pass all segments of the recording present in the source tree (not
           just dataset-kept ones) so overhanging idles thread correctly.
 
     Returns {segment_id: result}; result keys: splices ([{kp,vp,collapse,leading}]),

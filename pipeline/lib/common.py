@@ -314,7 +314,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
         candidates.append(stripped[start : end + 1])
     # Models emit raw backslashes inside strings (Windows paths, regexes,
     # LaTeX) that json.loads rejects as invalid escapes; escape the invalid
-    # ones. Valid escapes must be CONSUMED left-to-right (not lookahead-
+    # ones. Valid escapes must be consumed left-to-right (not lookahead-
     # tested), else the tail of a valid '\\\\' pair followed by a letter
     # (r'\\\\phi') is itself "repaired" and the string breaks differently.
     def _fix_escape(m: re.Match) -> str:
@@ -331,9 +331,9 @@ def extract_json_object(text: str) -> dict[str, Any]:
             last_err = exc
     else:
         # Nothing parses whole ("Extra data" after the object, prose around
-        # it, a broken outer brace). raw_decode parses ONE object at a given
+        # it, a broken outer brace). raw_decode parses one object at a given
         # position ignoring the rest — scan every '{' in every candidate and
-        # keep the LARGEST decoded dict (the real answer object dwarfs any
+        # keep the largest decoded dict (the real answer object dwarfs any
         # fragment or JSON-ish snippet in surrounding prose).
         decoder = json.JSONDecoder(strict=False)
         best: tuple[int, dict[str, Any]] | None = None
