@@ -154,14 +154,24 @@ class OrderedFormatterTest(unittest.TestCase):
     re-expressed over the realigned formatter interface (windows in master
     ticks at 15 fps; the default 10 Hz motor grid)."""
 
-    def labels(self, events: list[RawEvent], windows: list[Window], hz: float = 10.0) -> list[str]:
-        result = get_formatter("ordered_events_v2", continuous_action_hz=hz).format_segment(
-            events, windows, [], master_fps=MASTER_FPS
-        )
+    def labels(
+        self,
+        events: list[RawEvent],
+        windows: list[Window],
+        hz: float = 10.0,
+        jitter_px: int = 0,
+    ) -> list[str]:
+        result = get_formatter(
+            "ordered_events_v2", continuous_action_hz=hz, jitter_deadband_px=jitter_px
+        ).format_segment(events, windows, [], master_fps=MASTER_FPS)
         return result.labels
 
-    def one_window_label(self, events: list[RawEvent], hz: float = 10.0) -> str:
-        return self.labels(events, [Window(master_idx=0, start=0, end=30)], hz=hz)[0]
+    def one_window_label(
+        self, events: list[RawEvent], hz: float = 10.0, jitter_px: int = 0
+    ) -> str:
+        return self.labels(
+            events, [Window(master_idx=0, start=0, end=30)], hz=hz, jitter_px=jitter_px
+        )[0]
 
     def test_discrete_event_splits_movement_inside_one_motor_tick(self) -> None:
         self.assertEqual(
@@ -215,6 +225,208 @@ class OrderedFormatterTest(unittest.TestCase):
                 _key(3, 0.04, "release", "LMB"),
             ]),
             "down(LMB); up(LMB)",
+        )
+
+    def test_zero_delta_other_kind_does_not_split_a_run(self) -> None:
+        # A move(0,0) sample (driver noise: mice/trackpads report these
+        # continuously, unrelated to real motion) landing between two scrolls
+        # in the same motor tick must not fragment the scroll accumulator --
+        # it renders nothing itself, so it must not act as a barrier either.
+        self.assertEqual(
+            self.one_window_label([
+                _scroll(0, 0.01, 0.0, -1.0),
+                _move(1, 0.02, 0.0, 0.0),
+                _scroll(2, 0.03, 0.0, -1.0),
+            ]),
+            "scroll(0,-2)",
+        )
+        # Symmetric case: a zero-delta scroll must not split a move run.
+        self.assertEqual(
+            self.one_window_label([
+                _move(0, 0.01, 1.0, 0.0),
+                _scroll(1, 0.02, 0.0, 0.0),
+                _move(2, 0.03, 1.0, 0.0),
+            ]),
+            "move(2,0)",
+        )
+        # A real (nonzero) event of the other kind must still split the run.
+        self.assertEqual(
+            self.one_window_label([
+                _scroll(0, 0.01, 0.0, -1.0),
+                _move(1, 0.02, 5.0, 0.0),
+                _scroll(2, 0.03, 0.0, -1.0),
+            ]),
+            "scroll(0,-1); move(5,0); scroll(0,-1)",
+        )
+
+    def test_jitter_deadband_off_by_default(self) -> None:
+        # jitter_px defaults to 0 -- a sandwiched 1px move is never eligible
+        # (threshold_px=0 only matches an exact (0,0), which never renders).
+        self.assertEqual(
+            self.one_window_label([
+                _scroll(0, 0.01, 0.0, -1.0),
+                _move(1, 0.02, -1.0, 0.0),
+                _scroll(2, 0.03, 0.0, -4.0),
+            ]),
+            "scroll(0,-1); move(-1,0); scroll(0,-4)",
+        )
+
+    def test_jitter_deadband_drops_sandwiched_move_and_merges_flanks(self) -> None:
+        # Same events as above, deadband on: the noise move is gone and the
+        # two scrolls it separated merge exactly as if it had never occurred.
+        self.assertEqual(
+            self.one_window_label(
+                [
+                    _scroll(0, 0.01, 0.0, -1.0),
+                    _move(1, 0.02, -1.0, 0.0),
+                    _scroll(2, 0.03, 0.0, -4.0),
+                ],
+                jitter_px=1,
+            ),
+            "scroll(0,-5)",
+        )
+
+    def test_jitter_deadband_never_empties_a_window(self) -> None:
+        # move(1,0) and scroll(0,-1) are each individually axis-jitter, but
+        # they're the window's ENTIRE content -- deleting both would leave
+        # nothing, so neither is dropped (order preserved either way).
+        self.assertEqual(
+            self.one_window_label(
+                [_move(0, 0.01, 1.0, 0.0), _scroll(1, 0.02, 0.0, -1.0)], jitter_px=1
+            ),
+            "move(1,0); scroll(0,-1)",
+        )
+        self.assertEqual(
+            self.one_window_label(
+                [_scroll(0, 0.01, 0.0, -1.0), _move(1, 0.02, 1.0, 0.0)], jitter_px=1
+            ),
+            "scroll(0,-1); move(1,0)",
+        )
+
+    def test_jitter_deadband_respects_magnitude_threshold(self) -> None:
+        # One move/scroll-only run -> scroll(-1)+scroll(-1) merge to (0,-2)
+        # regardless; neither merged result is dropped since both exceed the
+        # threshold -- real motion, not noise.
+        self.assertEqual(
+            self.one_window_label(
+                [
+                    _scroll(0, 0.01, 0.0, -1.0),
+                    _move(1, 0.02, 2.0, 0.0),
+                    _scroll(2, 0.03, 0.0, -1.0),
+                ],
+                jitter_px=1,
+            ),
+            "scroll(0,-2); move(2,0)",
+        )
+
+    def test_jitter_deadband_between_clicks_drops_without_merging(self) -> None:
+        # down/up are different kinds -- the jitter move is dropped, but
+        # down(LMB) and up(LMB) never merge into each other.
+        self.assertEqual(
+            self.one_window_label(
+                [
+                    _key(0, 0.01, "press", "LMB"),
+                    _move(1, 0.02, -1.0, 0.0),
+                    _key(2, 0.03, "release", "LMB"),
+                ],
+                jitter_px=1,
+            ),
+            "down(LMB); up(LMB)",
+        )
+
+    def test_jitter_deadband_merges_tick_boundary_pair(self) -> None:
+        # Two small moves split by a motor-tick boundary, nothing else in the
+        # window: they're still one contiguous move-only run, so they merge
+        # into one primitive -- (1,0)+(1,0)=(2,0) exceeds the threshold, so
+        # the merged result is kept (not deleted), but as ONE primitive.
+        self.assertEqual(
+            self.one_window_label(
+                [_move(0, 0.01, 1.0, 0.0), _move(1, 0.10, 1.0, 0.0)], jitter_px=1
+            ),
+            "move(2,0)",
+        )
+
+    def test_jitter_deadband_diagonal_is_never_jitter(self) -> None:
+        # Two chained axis moves summing to a DIAGONAL result: never treated
+        # as jitter, however small each axis is -- two-axis motion takes
+        # deliberate intent that hand tremor doesn't produce.
+        self.assertEqual(
+            self.one_window_label(
+                [_move(0, 0.01, 1.0, 0.0), _move(1, 0.02, 0.0, -1.0)], jitter_px=1
+            ),
+            "move(1,-1)",
+        )
+        # Same, sandwiched between a click's down/up -- still kept.
+        self.assertEqual(
+            self.one_window_label(
+                [
+                    _key(0, 0.01, "press", "LMB"),
+                    _move(1, 0.02, 1.0, 0.0),
+                    _move(2, 0.03, 0.0, -1.0),
+                    _key(3, 0.04, "release", "LMB"),
+                ],
+                jitter_px=1,
+            ),
+            "down(LMB); move(1,-1); up(LMB)",
+        )
+
+    def test_jitter_deadband_merges_interleaved_scroll_and_move(self) -> None:
+        # No button/typing breaks this run, so scroll and move each sum
+        # independently across the whole interleaved stretch. The run opens
+        # on scroll, so the merged output leads with scroll too.
+        self.assertEqual(
+            self.one_window_label(
+                [
+                    _scroll(0, 0.01, 0.0, -1.0),
+                    _move(1, 0.02, 0.0, 1.0),
+                    _scroll(2, 0.03, 0.0, -2.0),
+                    _move(3, 0.04, 1.0, 0.0),
+                    _scroll(4, 0.05, 0.0, -11.0),
+                ],
+                jitter_px=1,
+            ),
+            "scroll(0,-14); move(1,1)",
+        )
+        # Same shape, but the run opens on move -> merged output leads move.
+        self.assertEqual(
+            self.one_window_label(
+                [
+                    _move(0, 0.01, 1.0, 0.0),
+                    _scroll(1, 0.02, 0.0, -1.0),
+                    _move(2, 0.03, 2.0, 0.0),
+                    _scroll(3, 0.04, 0.0, -3.0),
+                ],
+                jitter_px=1,
+            ),
+            "move(3,0); scroll(0,-4)",
+        )
+
+    def test_jitter_deadband_run_dropped_when_window_has_other_content(self) -> None:
+        # scroll(0,-1) and move(0,1) are both axis-jitter, but down(LMB)/
+        # up(LMB) elsewhere in the window mean dropping both doesn't empty
+        # it -- so both go.
+        self.assertEqual(
+            self.one_window_label(
+                [
+                    _key(0, 0.01, "press", "LMB"),
+                    _key(1, 0.02, "release", "LMB"),
+                    _scroll(2, 0.03, 0.0, -1.0),
+                    _move(3, 0.04, 0.0, 1.0),
+                ],
+                jitter_px=1,
+            ),
+            "down(LMB); up(LMB)",
+        )
+
+    def test_jitter_deadband_run_summing_to_zero_is_omitted(self) -> None:
+        # Opposite-direction moves that cancel out exactly: not jitter
+        # suppression emptying real content -- there was genuinely no net
+        # motion, same as move(0,0) never rendering anywhere else.
+        self.assertEqual(
+            self.one_window_label(
+                [_move(0, 0.01, 1.0, 0.0), _move(1, 0.02, -1.0, 0.0)], jitter_px=1
+            ),
+            "NO_OP",
         )
 
     def test_empty_window_is_no_op(self) -> None:
@@ -282,14 +494,24 @@ class OrderedTypingFormatterTest(unittest.TestCase):
     """``ordered_events_v3``: v2 plus the ``type("...")`` collapse. Anything
     that is not a plain typing run must stay byte-identical to v2."""
 
-    def labels(self, events: list[RawEvent], windows: list[Window], hz: float = 10.0) -> list[str]:
-        result = get_formatter("ordered_events_v3", continuous_action_hz=hz).format_segment(
-            events, windows, [], master_fps=MASTER_FPS
-        )
+    def labels(
+        self,
+        events: list[RawEvent],
+        windows: list[Window],
+        hz: float = 10.0,
+        jitter_px: int = 0,
+    ) -> list[str]:
+        result = get_formatter(
+            "ordered_events_v3", continuous_action_hz=hz, jitter_deadband_px=jitter_px
+        ).format_segment(events, windows, [], master_fps=MASTER_FPS)
         return result.labels
 
-    def one_window_label(self, events: list[RawEvent], hz: float = 10.0) -> str:
-        return self.labels(events, [Window(master_idx=0, start=0, end=30)], hz=hz)[0]
+    def one_window_label(
+        self, events: list[RawEvent], hz: float = 10.0, jitter_px: int = 0
+    ) -> str:
+        return self.labels(
+            events, [Window(master_idx=0, start=0, end=30)], hz=hz, jitter_px=jitter_px
+        )[0]
 
     @staticmethod
     def _typed(names: list[str], t0: float = 0.01, seq0: int = 0) -> list[RawEvent]:
@@ -447,6 +669,33 @@ class OrderedTypingFormatterTest(unittest.TestCase):
         ]
         self.assertEqual(
             self.one_window_label(events), 'type("h"); move(5,0); type("i")'
+        )
+
+    def test_jitter_deadband_sandwiched_between_typing_runs(self) -> None:
+        # A tiny move riding along between two typing runs is hand-tension
+        # noise too. Applied AFTER typing collapse, so it sees type(), not the
+        # raw down/up pairs underneath -- and dropping it reunites the two
+        # typing runs it had separated into ONE type("hi"), not two adjacent
+        # type("h"); type("i").
+        events = [
+            *self._typed(["KeyH"], t0=0.01, seq0=0),
+            _move(2, 0.03, 1.0, 0.0),
+            *self._typed(["KeyI"], t0=0.05, seq0=3),
+        ]
+        self.assertEqual(
+            self.one_window_label(events, jitter_px=1), 'type("hi")'
+        )
+
+    def test_jitter_deadband_typing_reunion_needs_the_whole_run_dropped(self) -> None:
+        # Same shape, but the move is too big to be jitter -- the typing runs
+        # stay separated by it, exactly as without the deadband.
+        events = [
+            *self._typed(["KeyH"], t0=0.01, seq0=0),
+            _move(2, 0.03, 5.0, 0.0),
+            *self._typed(["KeyI"], t0=0.05, seq0=3),
+        ]
+        self.assertEqual(
+            self.one_window_label(events, jitter_px=1), 'type("h"); move(5,0); type("i")'
         )
 
     def test_press_held_across_boundary_stays_down(self) -> None:

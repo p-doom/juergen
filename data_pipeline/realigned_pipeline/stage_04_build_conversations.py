@@ -895,6 +895,13 @@ def parse_args() -> argparse.Namespace:
                    help="ordered_events_* only: internal motor-grid rate for accumulating "
                         "move/scroll deltas within a window (NOT a frame rate; recorded as "
                         "null for formats that ignore it).")
+    p.add_argument("--jitter-deadband-px", type=int, default=0,
+                   help="ordered_events_* only: drop a move(dx,dy) primitive when it sits "
+                        "BETWEEN two other primitives (a click, scroll, or typed text) and "
+                        "both |dx| and |dy| are within this threshold -- incidental cursor "
+                        "jitter from hand tension while operating a button/wheel/keyboard, "
+                        "not intentional pointer control. A move at either end of a window "
+                        "(nothing before or after it) is never dropped. Default 0 = off.")
     p.add_argument("--coalesce-typing", nargs="?", const=True, type=_str2bool,
                    default=False, metavar="BOOL",
                    help="ordered_events_v3 ONLY: fuse consecutive typing-only frames "
@@ -1020,7 +1027,9 @@ def main() -> None:
     sample_cfg: dict[str, Any] | None = None
     if args.action_format != SAMPLED_FORMAT:
         formatter = get_formatter(
-            args.action_format, continuous_action_hz=args.continuous_action_hz
+            args.action_format,
+            continuous_action_hz=args.continuous_action_hz,
+            jitter_deadband_px=args.jitter_deadband_px,
         )
         sample_cfg = _load_sample_config(args.sample_dir)
     # Coalescing needs a format where "this window is typing and nothing else" is
@@ -1289,6 +1298,7 @@ def main() -> None:
         "goal_index": str(args.goal_index) if args.goal_index else None,
         "action_format": args.action_format,
         "continuous_action_hz": getattr(formatter, "continuous_action_hz", None),
+        "jitter_deadband_px": getattr(formatter, "jitter_deadband_px", None),
         "coalesce_typing": bool(args.coalesce_typing),
         "max_coalesce_frames": args.max_coalesce_frames if args.coalesce_typing else None,
         "n_coalesced_turns": n_coalesced_turns if args.coalesce_typing else None,
