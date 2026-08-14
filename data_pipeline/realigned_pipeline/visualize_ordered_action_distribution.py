@@ -1242,9 +1242,12 @@ def get_distribution(name: str) -> "dict[str, Any] | None":
     if entry is None:
         return None
     if entry["dist"] is None:
-        V.DATASET_SAMPLE_LIMIT = DATASET_SAMPLE_LIMIT
+        # The frame viewer's loaders take WHICH samples to read as a Sampling
+        # object (it also offers a random draw); this viewer only ever aggregates
+        # the first --limit samples, so pass that mode explicitly.
+        sampling = V.Sampling("first", DATASET_SAMPLE_LIMIT)
         try:
-            ds = V._build_dataset(entry["path"])
+            ds = V._build_dataset(entry["path"], sampling)
         except SystemExit as exc:  # empty / not-yet-generated dataset dir
             raise RuntimeError(str(exc)) from exc
         entry["obj"] = ds

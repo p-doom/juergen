@@ -129,6 +129,7 @@ import random
 import re
 import sys
 from collections import OrderedDict
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -2063,6 +2064,16 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({"error": f"unknown segment {sid!r}"}, 404)
                 else:
                     self._send_json(detail)
+            elif route == "/api/marks":
+                name = self._dsname(q)
+                mid = (q.get("mid") or [""])[0]
+                if name not in DATASETS:
+                    self._send_json({"error": f"unknown dataset {name!r}"}, 404)
+                else:
+                    marks = _load_marks(name, mid)
+                    self._send_json({
+                        "marks": marks, "n_marked": len(marks), "path": str(_marks_path(name, mid)),
+                    })
             elif route == "/api/find":
                 name = self._dsname(q)
                 if name not in DATASETS:
@@ -2083,6 +2094,49 @@ class Handler(BaseHTTPRequestHandler):
             pass
         except Exception as exc:  # noqa: BLE001 — surface as 500, keep server up
             self._send(500, f"{type(exc).__name__}: {exc}".encode(), "text/plain")
+
+    def do_POST(self) -> None:  # noqa: N802
+        route = urlparse(self.path).path
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b""
+            try:
+                body = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                self._send_json({"error": "invalid JSON body"}, 400)
+                return
+            if route == "/api/mark":
+                self._set_mark(body)
+            else:
+                self._send(404, b"not found", "text/plain")
+        except BrokenPipeError:
+            pass
+        except Exception as exc:  # noqa: BLE001 — surface as 500, keep server up
+            self._send(500, f"{type(exc).__name__}: {exc}".encode(), "text/plain")
+
+    def _set_mark(self, body: dict[str, Any]) -> None:
+        """Toggle one segment's golden-trace mark on/off and persist immediately —
+        marking happens one segment at a time while browsing, so there is no
+        "unsaved" state to lose track of. Re-reads the file fresh (see
+        ``_load_marks``) so a second server process / browser tab open on the same
+        dataset+marks_id doesn't clobber marks made from here, or vice versa."""
+        name = str(body.get("ds") or "")
+        sid = str(body.get("id") or "")
+        mid = str(body.get("mid") or "")
+        if name not in DATASETS or not sid:
+            self._send_json({"error": f"unknown dataset/segment: {name!r} / {sid!r}"}, 404)
+            return
+        marks = _load_marks(name, mid)
+        marked = bool(body.get("marked"))
+        if marked:
+            marks[sid] = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        else:
+            marks.pop(sid, None)
+        _save_marks(name, marks, mid)
+        self._send_json({
+            "ok": True, "id": sid, "marked": marked,
+            "n_marked": len(marks), "path": str(_marks_path(name, mid)),
+        })
 
     def _serve_frame(self, q: dict[str, list[str]]) -> None:
         name = self._dsname(q)
@@ -2123,6 +2177,7 @@ INDEX_HTML = r"""<!doctype html>
                   border-radius:4px; padding:3px 8px; font:inherit; cursor:pointer; }
   button:hover { border-color:#5b9dd9; }
   button.on { background:#2d4a75; border-color:#5b9dd9; }
+  button#markgood.on { background:#5a4a1a; border-color:#d9b95b; color:#ffd580; }
   /* sampling controls (first N / random N + seed) */
   header input { background:#22262e; color:#d7dae0; border:1px solid #343a44;
                  border-radius:4px; padding:2px 6px; font:inherit; }
@@ -2229,6 +2284,7 @@ INDEX_HTML = r"""<!doctype html>
   #modenote .cnote-sys { color:#b9a06a; }
   #modenote details { margin-top:4px; }
   #modenote summary { cursor:pointer; user-select:none; }
+  #modenote .cnote-fixed { margin-top:4px; }
   #modenote .cnote-text { margin-top:3px; white-space:pre-wrap; color:#e4d7a6; }
   #chatbtn { margin-top:6px; display:inline-block; cursor:pointer; background:#2a3550;
              color:#cfe0ff; border:1px solid #3a4a6a; border-radius:4px; padding:3px 9px;
@@ -2309,7 +2365,10 @@ INDEX_HTML = r"""<!doctype html>
   <button id="nextmatch" title="next matching turn (n)" style="display:none">match ▸</button>
   <span id="matchinfo" class="seginfo"></span>
   <span id="seginfo" class="seginfo"></span>
-  <span class="hint"><kbd>←</kbd>/<kbd>→</kbd> step · <kbd>↑</kbd>/<kbd>↓</kbd> prev/next segment · <kbd>space</kbd> play · <kbd>a</kbd>/<kbd>d</kbd> prev/next active · <kbd>n</kbd>/<kbd>N</kbd> prev/next action match · <kbd>,</kbd>/<kbd>.</kbd> prev/next black · <kbd>⇧,</kbd>/<kbd>⇧.</kbd> black w/ action · <kbd>c</kbd> chat</span>
+  <button id="markgood" title="mark this segment a golden/good trace (m)">☆ mark good</button>
+  <label title="optional: give this review pass its own marks file (golden_marks_&lt;id&gt;.json) instead of the dataset's shared golden_marks.json — so independent sessions never overwrite each other's marks. Remembered per-browser; blank = shared file.">marks id <input id="marksid" type="text" placeholder="(shared)" size="8"></label>
+  <span id="markinfo" class="seginfo"></span>
+  <span class="hint"><kbd>←</kbd>/<kbd>→</kbd>/<kbd>a</kbd>/<kbd>d</kbd> step · <kbd>↑</kbd>/<kbd>↓</kbd>/<kbd>w</kbd>/<kbd>s</kbd> prev/next segment · <kbd>space</kbd> play · <kbd>n</kbd>/<kbd>N</kbd> prev/next action match · <kbd>,</kbd>/<kbd>.</kbd> prev/next black · <kbd>⇧,</kbd>/<kbd>⇧.</kbd> black w/ action · <kbd>m</kbd> mark good · <kbd>c</kbd> chat</span>
 </header>
 <main>
   <aside id="filters">
@@ -2388,6 +2447,7 @@ let MASTER_FPS=15, EV=null, EVT=[], HAS_ACTIONS=false, _evLo=-1, _evHi=-1;
 let ALN=null, DUAL=false, ALNACT=null;   // alignment overlay (master + --alignment)
 let CLOCK='raw';                         // which keylog drives the HUD: 'raw' | 'aligned'
 let ALL_SEGMENTS=[];                      // full segment list for DS (pre-filter)
+let MARKS={}, MARKS_PATH='';              // golden-trace marks for DS: segment_id -> {ts}
 // Which N samples of the dataset the server loads: the first N in store order, or
 // N drawn at random. A random draw is deterministic in (seed, N, dataset) — the
 // same seed always yields the same N samples — and it is the *membership* that is
@@ -2566,6 +2626,13 @@ function collapsibleNote(cls, label, text){
   if(!text) return '';
   return `<details><summary><span class="${cls}">${label}</span></summary><div class="cnote-text">${esc(String(text))}</div></details>`;
 }
+// The goal is the one thing you need on screen at all times to judge whether a
+// trace is doing the right thing — unlike context/system prompt, it's never
+// tucked behind a click.
+function goalNote(text){
+  if(!text) return '';
+  return `<div class="cnote-fixed"><span class="cnote-goal">goal</span><div class="cnote-text">${esc(String(text))}</div></div>`;
+}
 // Dedicated full-chat window. Reassembled client-side from what the segment detail
 // already carries (system prompt + goal/context + per-frame actions) — no extra
 // payload. Images are stripped from the client, so each user turn shows a screenshot
@@ -2708,8 +2775,70 @@ async function loadSegments(){
   ALL_SEGMENTS = info.segments || [];
   // The hit map belongs to the dataset it was searched in.
   clearTimeout(_actTimer); ACTQ=''; ACTHITS=null; MATCHES=[];
+  await loadMarks();       // marks belong to DS too — load before options render
   buildFilters(ALL_SEGMENTS);
   await applyFilters();   // populates #seg from the (filtered) list and loads one
+}
+
+// ---- golden-trace marks -----------------------------------------------------
+// Marking is a per-segment boolean (this trace is 100% correct), persisted
+// server-side to golden_marks.json (or golden_marks_<id>.json, see MARKS_ID)
+// next to the dataset so it survives restarts and browser reloads; the client
+// just mirrors that file in MARKS.
+// MARKS_ID namespaces the marks file so independent review passes/sessions
+// don't share (and overwrite) one another's marks: blank -> golden_marks.json,
+// set -> golden_marks_<id>.json. Remembered per-browser via localStorage, since
+// it's a "who/which pass is reviewing" choice, not a dataset property.
+let MARKS_ID = localStorage.getItem('fr_marks_id') || '';
+$('#marksid').value = MARKS_ID;
+function marksQS(){ return '&mid='+encodeURIComponent(MARKS_ID); }
+async function loadMarks(){
+  try{
+    const info=await jget('/api/marks?ds='+encodeURIComponent(DS)+marksQS());
+    MARKS = info.marks || {};
+    MARKS_PATH = info.path || '';
+  }catch(e){ MARKS = {}; MARKS_PATH=''; }
+  updateMarkCount();
+}
+function updateMarkCount(){
+  const el=$('#markinfo'); if(!el) return;
+  el.textContent = Object.keys(MARKS).length+' marked';
+  el.title = MARKS_PATH || '';
+}
+function updateMarkUI(){
+  const on = !!(SEG && MARKS[SEG.segment_id]);
+  const btn=$('#markgood'); if(!btn) return;
+  btn.classList.toggle('on', on);
+  btn.textContent = on ? '★ marked good' : '☆ mark good';
+}
+async function toggleMark(){
+  if(!SEG || !SEG.segment_id) return;
+  const id=SEG.segment_id, marked=!MARKS[id];
+  const r=await fetch('/api/mark', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ds:DS, id, marked, mid:MARKS_ID}),
+  });
+  const j=await r.json();
+  if(j.error){ console.error(j.error); return; }
+  if(marked) MARKS[id]={ts:Date.now()}; else delete MARKS[id];
+  MARKS_PATH = j.path || MARKS_PATH;
+  updateMarkUI(); updateMarkCount();
+  const sel=$('#seg'); const opt=sel && sel.querySelector(`option[value="${CSS.escape(id)}"]`);
+  const s=ALL_SEGMENTS.find(s=>s.segment_id===id);
+  if(opt && s) opt.textContent = segOptionLabel(s);
+  // "marked only" filters on MARKS membership, so a toggle can drop the current
+  // segment out of the visible list — re-run the filter to reflect that.
+  if($('#fmarked') && $('#fmarked').checked) await applyFilters();
+}
+// Switching marks id mid-session re-reads that file's marks for DS and refreshes
+// every place MARKS shows up (button state, counter, dropdown stars, "marked
+// only" filter) without touching the loaded segment/frame data.
+async function onMarksIdChange(){
+  MARKS_ID = $('#marksid').value.trim();
+  localStorage.setItem('fr_marks_id', MARKS_ID);
+  await loadMarks();
+  updateMarkUI();
+  if(ALL_SEGMENTS.length) await applyFilters();
 }
 
 // ---- filtering (left sidebar) ----------------------------------------------
@@ -2719,11 +2848,12 @@ function stuckOptionLabel(s){
   return `, stuck ${s.stuck_key||'key'} ${s.stuck_key_frames}f${s.stuck_key_unreleased?' open':''}`;
 }
 function segOptionLabel(s){
-  return MODE==='frames_master'
+  const star = MARKS[s.segment_id] ? '★ ' : '';
+  return star + (MODE==='frames_master'
     ? `${s.segment_id}  (${s.n_frames} frames, ${s.duration_s}s${s.align_status?', '+s.align_status:''})`
     : MODE==='inline_records'
     ? `${s.segment_id}  (${s.n_non_noop}/${s.n_frames} act${s.measured_length?', '+s.measured_length+' tok':''}${stuckOptionLabel(s)})`
-    : `${s.segment_id}  (${s.n_non_noop}/${s.n_frames} act, ${s.duration_s}s${stuckOptionLabel(s)})`;
+    : `${s.segment_id}  (${s.n_non_noop}/${s.n_frames} act, ${s.duration_s}s${stuckOptionLabel(s)})`);
 }
 const _has = (segs,k)=>segs.some(s=>s[k]!=null);
 // Build the filter controls to match the fields this dataset actually carries.
@@ -2734,7 +2864,8 @@ function buildFilters(segs){
   const hasActs=_has(segs,'acts_max');
   // segment id is always present — with tens of thousands of segments this is the
   // only practical way to reach a known one without scrolling the dropdown
-  let th=`<label class="frow2">segment id contains<input id="fseg" type="search" placeholder="uuid / _seg0000 / substring…"></label>`;
+  let th=`<label class="frow2"><input id="fmarked" type="checkbox"> ★ marked good only</label>`
+        + `<label class="frow2">segment id contains<input id="fseg" type="search" placeholder="uuid / _seg0000 / substring…"></label>`;
   if(hasActs) th+=`<label class="frow2">action contains<input id="fact" type="search" placeholder='down(LMB) · move(-100, · type(" · KeyEnter'></label>`
                 + `<div class="fnote"><span id="factstat"></span>every turn searched verbatim · `
                 + `<kbd>n</kbd>/<kbd>N</kbd> step through the matches in the open segment</div>`;
@@ -2774,7 +2905,9 @@ function filteredSegments(){
   const tp=($('#ftyped')&&$('#ftyped').value||'').trim().toLowerCase();
   const stuckRaw=($('#fstuck')&&$('#fstuck').value||'').trim();
   const stuckT=stuckRaw===''?null:Number(stuckRaw);
+  const markedOnly=!!($('#fmarked')&&$('#fmarked').checked);
   let list=ALL_SEGMENTS.filter(s=>{
+    if(markedOnly && !MARKS[s.segment_id]) return false;
     if(sg && !String(s.segment_id||'').toLowerCase().includes(sg)) return false;
     if(g && !String(s.instruction||'').toLowerCase().includes(g)) return false;
     if(cv && !String(s.conv_text||'').toLowerCase().includes(cv)) return false;
@@ -2821,6 +2954,7 @@ async function applyFilters(){
 }
 async function loadSegment(id){
   SEG=await jget('/api/segment?ds='+encodeURIComponent(DS)+'&id='+encodeURIComponent(id)+sampQS());
+  updateMarkUI();
   FR=SEG.frames;
   DUAL = !!SEG.dual_clock;
   ALN = SEG.align || null;
@@ -2854,7 +2988,7 @@ async function loadSegment(id){
     if(SEG.target_fps) h+=` · ${SEG.target_fps} fps`;
     if(SEG.alignment_status) h+=` · ${esc(String(SEG.alignment_status))}`;
     h+=` · ${SEG.n_turns||FR.length} turns`;
-    h+=collapsibleNote('cnote-goal', 'goal', SEG.instruction);
+    h+=goalNote(SEG.instruction);
     h+=collapsibleNote('cnote-context', 'context', SEG.context);
     h+=collapsibleNote('cnote-sys', 'system prompt', SEG.system_prompt);
     h+='<div>'+chatBtn()+'</div>';
@@ -2872,7 +3006,7 @@ async function loadSegment(id){
     if(SEG.overflow_mode) h+=` · overflow=${esc(String(SEG.overflow_mode))}`;
     if(SEG.action_format) h+=` · ${esc(String(SEG.action_format))}`;
     if(SEG.target_fps) h+=` · ${SEG.target_fps} fps`;
-    h+=collapsibleNote('cnote-goal', 'goal', SEG.instruction);
+    h+=goalNote(SEG.instruction);
     h+=collapsibleNote('cnote-context', 'context', SEG.context);
     h+=collapsibleNote('cnote-sys', 'system prompt', SEG.system_prompt);
     h+='<div>'+chatBtn()+'</div>';
@@ -3075,10 +3209,6 @@ function show(i){
   updateMatchInfo();
 }
 function step(d){ show(cur+d); }
-// Active on the currently-selected clock: aligned action when the HUD toggle is
-// on 'aligned' (and aligned actions exist), else the raw binning.
-function frameActive(f){ return (CLOCK==='aligned' && f.action_aln!=null) ? f.action_aln!=='NO_OP' : !f.is_noop; }
-function nextActive(d){ let i=cur+d; while(i>=0&&i<FR.length){ if(frameActive(FR[i])){show(i);return;} i+=d; } }
 // Jump to the prev/next (near-)black frame. Both modes carry is_black (master:
 // from its own luma metrics; 01b sample: cross-referenced from the master).
 function nextBlack(d){ let i=cur+d; while(i>=0&&i<FR.length){ if(FR[i].is_black){show(i);return;} i+=d; } }
@@ -3114,6 +3244,9 @@ $('#next').onclick=()=>step(1);
 $('#prevmatch').onclick=()=>nextMatch(-1);
 $('#nextmatch').onclick=()=>nextMatch(1);
 $('#play').onclick=togglePlay;
+$('#markgood').onclick=toggleMark;
+$('#marksid').onchange=onMarksIdChange;
+$('#marksid').addEventListener('keydown', e=>{ if(e.key==='Enter') onMarksIdChange(); });
 $('#strip').onclick=e=>{ const c=e.target.closest('.cell'); if(c) show(+c.dataset.i); };
 $('#strip2').onclick=e=>{ const c=e.target.closest('.cell'); if(c) show(+c.dataset.i); };
 $('#clocktoggle').onclick=()=>{
@@ -3139,13 +3272,13 @@ document.addEventListener('keydown',e=>{
   if(e.target.tagName==='SELECT'||e.target.tagName==='INPUT') return;
   if(e.key==='c'){ toggleChat(); return; }
   if(e.key==='f'){ setFilters(!$('#filters').classList.contains('show')); return; }
-  if(e.key==='ArrowUp'){stepSegment(-1);e.preventDefault();}
-  else if(e.key==='ArrowDown'){stepSegment(1);e.preventDefault();}
-  else if(e.key==='ArrowLeft'){step(-1);e.preventDefault();}
-  else if(e.key==='ArrowRight'){step(1);e.preventDefault();}
+  if(e.key==='m'){ toggleMark(); return; }
+  // wasd mirrors the arrows: w/s step segments (up/down), a/d step frames (left/right).
+  if(e.key==='ArrowUp'||e.key==='w'){stepSegment(-1);e.preventDefault();}
+  else if(e.key==='ArrowDown'||e.key==='s'){stepSegment(1);e.preventDefault();}
+  else if(e.key==='ArrowLeft'||e.key==='a'){step(-1);e.preventDefault();}
+  else if(e.key==='ArrowRight'||e.key==='d'){step(1);e.preventDefault();}
   else if(e.key===' '){togglePlay();e.preventDefault();}
-  else if(e.key==='a'){nextActive(-1);}
-  else if(e.key==='d'){nextActive(1);}
   else if(e.key==='n'){nextMatch(1);}
   else if(e.key==='N'){nextMatch(-1);}   // shift+n
   else if(e.key===','){nextBlack(-1);}
@@ -3420,6 +3553,65 @@ def get_dataset(name: str, sampling: "Sampling | None" = None):
     else:
         objs.move_to_end(key)
     return obj
+
+
+_MARKS_ID_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _sanitize_marks_id(raw: str) -> str:
+    """A client-chosen marks-file identifier, defanged to a safe filename
+    fragment (it lands directly in a path segment): anything outside
+    ``[A-Za-z0-9._-]`` collapses to ``_``, capped at 64 chars. Blank stays blank
+    -- that's the "no id" case, i.e. the dataset's shared ``golden_marks.json``."""
+    return _MARKS_ID_RE.sub("_", (raw or "").strip())[:64]
+
+
+def _marks_path(name: str, marks_id: str = "") -> Path:
+    """Where a dataset's golden-trace marks live: ``golden_marks.json`` next to the
+    dataset root (or next to the file itself, if ``--dataset`` pointed at a file
+    directly) — so the marks travel with the dataset rather than piling up
+    somewhere central. A non-blank ``marks_id`` gets its own sibling file
+    (``golden_marks_<id>.json``) instead of the shared default, so independent
+    review passes / sessions never step on each other's marks."""
+    root = DATASETS[name]["path"].expanduser()
+    root = root if root.is_dir() else root.parent
+    mid = _sanitize_marks_id(marks_id)
+    return root / (f"golden_marks_{mid}.json" if mid else "golden_marks.json")
+
+
+def _load_marks(name: str, marks_id: str = "") -> dict[str, Any]:
+    """The mark dict for ``name``/``marks_id`` (segment_id -> {"ts": iso str}), read
+    fresh from disk on every call — no in-memory cache. Several server processes
+    (or browser tabs against the same dataset+marks_id) can be open at once; a
+    cached copy would go stale the moment ANOTHER one writes, and the next save
+    from here would blindly overwrite it and lose those marks. Re-reading is cheap
+    (the file is a small dict), so there's no reason to risk that. A
+    missing/corrupt file just means no marks yet."""
+    path = _marks_path(name, marks_id)
+    if not path.exists():
+        return {}
+    try:
+        return dict(json.loads(path.read_text()).get("marks") or {})
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_marks(name: str, marks: dict[str, Any], marks_id: str = "") -> None:
+    """Persist ``marks`` for ``name``/``marks_id``, atomically (write to a temp file
+    then rename) so a crash mid-write can't corrupt the marks file. Callers must
+    have just re-read the current on-disk state via ``_load_marks`` and applied
+    only their own change to it, so a concurrent writer's marks survive."""
+    path = _marks_path(name, marks_id)
+    payload = {
+        "dataset": name,
+        "dataset_path": str(DATASETS[name]["path"]),
+        "marks_id": marks_id or None,
+        "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "marks": marks,
+    }
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    tmp.replace(path)
 
 
 def register_datasets(paths: list[str]) -> None:

@@ -589,9 +589,12 @@ def register_datasets(paths: list[str]) -> None:
 def _ensure_built(entry: dict[str, Any]) -> Any:
     """Build the dataset object once, detecting its action format on the way."""
     if entry["obj"] is None:
-        V.DATASET_SAMPLE_LIMIT = DATASET_SAMPLE_LIMIT
+        # The frame viewer's loaders take WHICH samples to read as a Sampling
+        # object (it also offers a random draw); this viewer only ever aggregates
+        # the first --limit samples, so pass that mode explicitly.
+        sampling = V.Sampling("first", DATASET_SAMPLE_LIMIT)
         try:
-            ds = V._build_dataset(entry["path"])
+            ds = V._build_dataset(entry["path"], sampling)
         except SystemExit as exc:
             raise RuntimeError(str(exc)) from exc
         entry["obj"] = ds
