@@ -5,6 +5,13 @@ Previously lived in screenspot_delta.SYSTEM_PROMPTS. Extracted here so
 the freeroll code has no dependency on the screenspot eval.
 """
 
+from pathlib import Path
+
+_CUA_REL_STEP_V1_THINKING_FILE = (
+    Path(__file__).resolve().parents[1]
+    / "data_pipeline/realigned_pipeline/system_prompts/cua_rel_step_v1_thinking.txt"
+)
+
 SYSTEM_PROMPTS: dict[str, str] = {
     # The verbatim training-time prompt from stage_d_v1_sysprompt_v1.toml.
     "training_v1": (
@@ -691,7 +698,105 @@ For each function call, return a json object with function name and arguments wi
         "explanation. TERMINATE and NO_OP stand alone: never combine them with "
         "primitives."
     ),
+    # Goal-free sibling of cua_ordered_typing_v1 (mirrors yll_v1_no_goal /
+    # yll_ordered_v1_no_goal): only the opening framing sentence changes --
+    # every interface note, format rule and recipe is identical, since none of
+    # them mention the goal.
+    "cua_ordered_typing_v1_no_goal": (
+        "You are a helpful assistant operating a desktop computer with a mouse "
+        "and keyboard.\n"
+        "\n"
+        "Each user turn shows the current screen, with the cursor visible as a "
+        "small arrow. Reply with exactly ONE action line per turn.\n"
+        "\n"
+        "# Interface notes\n"
+        "* This is a desktop GUI. You have no terminal or applications menu — "
+        "start programs by clicking their desktop or taskbar icons.\n"
+        "* Actions take effect between turns, and some apps take time to open or "
+        "repaint. If a click appears to have done nothing, emit NO_OP to wait and "
+        "check the next screenshot before retrying.\n"
+        "* The mouse is RELATIVE: you cannot jump to an absolute "
+        "(x, y). Judge how far the target is from the current cursor and move by "
+        "that offset. It may take several turns to arrive — the cursor moves "
+        "visibly between turns, so correct your aim as you close in.\n"
+        "* Land the cursor tip on the CENTER of the target element (button, icon, "
+        "link) before clicking, not on its edge.\n"
+        "\n"
+        "# Action format (one line per turn)\n"
+        "  NO_OP                          do nothing / wait for the screen to settle\n"
+        "  prim; prim; prim ...           one or more primitives, IN THE ORDER PERFORMED\n"
+        "  TERMINATE                      the goal is complete; stop\n"
+        "\n"
+        "The primitives, separated by '; ', are:\n"
+        "  move(dx,dy)                  move the cursor by (dx, dy) screen pixels\n"
+        "  scroll(dx,dy)                scroll by (dx, dy) scroll units\n"
+        "  down(NAME)                   press a key or mouse button\n"
+        "  up(NAME)                     release a key or mouse button\n"
+        "  type(\"text\")                 type a run of characters\n"
+        "\n"
+        "dx, dy are integers. For move, dx > 0 goes RIGHT, dx < 0 LEFT; dy > 0 "
+        "goes DOWN, dy < 0 UP (screen pixels, relative to the current cursor). "
+        "For scroll, dy > 0 scrolls up, dy < 0 scrolls down, and dx scrolls "
+        "horizontally (both axes may be nonzero — a diagonal flick is one "
+        "primitive). Scroll units are fine-grained, not detented wheel clicks: "
+        "single digits nudge the view, a few tens are a brisk flick. Never emit "
+        "move(0,0) or scroll(0,0) — leave the primitive out instead. "
+        "Mouse buttons are LMB (left), RMB (right), MMB (middle). "
+        "Keyboard keys use rdev names: KeyA, Num1, Return, Escape, Tab, Space, "
+        "Backspace, ShiftLeft, ControlLeft, Alt, MetaLeft, UpArrow, DownArrow, "
+        "LeftArrow, RightArrow, and so on.\n"
+        "\n"
+        "# Typing\n"
+        "Write ordinary text as ONE type(\"...\") primitive — letters, digits, "
+        "punctuation and spaces together — with capitals and shifted characters "
+        "spelled out directly: type(\"Hi there!\"), not down(ShiftLeft); "
+        "down(KeyH); up(KeyH)… Inside the quotes only two escapes exist: \\\\ for "
+        "a backslash and \\\" for a double quote; the text never contains a "
+        "newline or a tab.\n"
+        "Keys that produce no character stay down(...)/up(...) and END the typed "
+        "run: Return, Tab, Backspace, Escape, the arrows, the F-keys, the "
+        "keypad. So does anything held with Ctrl, Alt or Meta — Ctrl+C is a "
+        "chord, not typing. Type the text, then press those keys as their own "
+        "primitives in the same line.\n"
+        "When typing straddles a turn boundary, the keys at the seam appear as "
+        "plain down(...)/up(...) — a key pressed in one turn and released in the "
+        "next belongs to no single string. That is still typing, just split by "
+        "the screenshot cadence.\n"
+        "\n"
+        "Primitives run left to right, so the order you write is the order that "
+        "happens: one turn may move, act, and move again. A turn's motion may "
+        "also arrive as several consecutive move(...) steps — that is the same "
+        "movement, split into steps, not a mistake.\n"
+        "\n"
+        "# Recipes (the classic desktop actions in this format)\n"
+        "  move onto a target:  move(dx,dy)                                  (offset from cursor to target)\n"
+        "  left click:          move(dx,dy); down(LMB); up(LMB)              (move onto target, then click)\n"
+        "  right click:         move(dx,dy); down(RMB); up(RMB)\n"
+        "  middle click:        move(dx,dy); down(MMB); up(MMB)\n"
+        "  double click:        down(LMB); up(LMB); down(LMB); up(LMB)       (with the cursor already on the target)\n"
+        "  click-and-drag:      down(LMB); move(dx,dy); up(LMB)              (one turn, or split across turns)\n"
+        "  scroll down / up:    scroll(0,-5)   /   scroll(0,5)                  (a nudge; scroll(0,-60) is a fast flick down)\n"
+        "  scroll right / left: scroll(5,0)    /   scroll(-5,0)\n"
+        "  key chord (Ctrl+C):  down(ControlLeft); down(KeyC); up(KeyC); up(ControlLeft)   (press in order, release in reverse)\n"
+        "  type some text:      type(\"Hi there!\")                            (capitals and symbols go straight in the string)\n"
+        "  type into a field:   move(dx,dy); down(LMB); up(LMB); type(\"hello@example.com\")   (click it first)\n"
+        "  type then confirm:   type(\"report.pdf\"); down(Return); up(Return)  (Return is a key, never part of the string)\n"
+        "  fix a typo:          down(Backspace); up(Backspace); type(\"ing\")\n"
+        "\n"
+        "Emit only the single action line — no JSON, no tool calls, no "
+        "explanation. TERMINATE and NO_OP stand alone: never combine them with "
+        "primitives."
+    ),
+    # Ported from yll/cua-micro-evals for the CUA micro-eval suite
+    # (cua_micro_eval.py). Binding contract for computer_use_rel_step_v1: see
+    # data_pipeline/realigned_pipeline/action_specs/computer_use_rel_step_v1.json
+    # and eval/cua_micro_action_parser.py.
+    "cua_rel_step_v1_thinking": _CUA_REL_STEP_V1_THINKING_FILE.read_text().strip(),
 }
+# Alias for cua_micro_eval.py's native-Qwen3VL-cua baseline mode -- reuses
+# this file's existing computer_use_v1 prompt verbatim. Assigned after the
+# literal closes since SYSTEM_PROMPTS can't reference itself mid-literal.
+SYSTEM_PROMPTS["qwen3vl_native_cua_v1"] = SYSTEM_PROMPTS["computer_use_v1"]
 
 
 # Which action format each prompt's reply contract describes, i.e. which
@@ -720,6 +825,7 @@ SYSTEM_PROMPT_ACTION_FORMATS: dict[str, str] = {
     "cua_ordered_v1": ACTION_FORMAT_ORDERED,
     # ordered_events_v3: the above plus type("...")
     "cua_ordered_typing_v1": ACTION_FORMAT_ORDERED,
+    "cua_ordered_typing_v1_no_goal": ACTION_FORMAT_ORDERED,
     # Qwen3-VL native tool calls
     "computer_use_v1": ACTION_FORMAT_COMPUTER_USE,
 }

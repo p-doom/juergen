@@ -56,6 +56,38 @@ def _pil_to_data_url(img: Image.Image, *, quality: int = 85) -> str:
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
 
 
+def evict_history(
+    recent_frames: list[Image.Image],
+    recent_actions: list[str],
+    *,
+    n_history_frames: int,
+) -> None:
+    """Block-evict ``recent_frames``/``recent_actions`` in place once the
+    window exceeds ``n_history_frames``.
+
+    The invariant maintained is ``len(recent_actions) == len(recent_frames) - 1``
+    — every frame except the latest (unpaired, action-less) one has an action
+    that followed it. Callers must only invoke this when that invariant
+    already holds (e.g. right after appending a new, as-yet-unpaired frame, or
+    right after ``append_turn`` below).
+
+    Eviction is StreamingLLM-style *block* eviction rather than slide-by-one:
+    once the window exceeds ``n_history_frames`` we keep only the newest
+    ``n_history_frames // 2`` frames (and their aligned actions). This preserves
+    sglang's RadixAttention prefix cache — while the window grows the prompt is
+    append-only (full cache reuse) and only the ~``N/2`` frames retained on a
+    slide are re-prefilled, roughly once every ``N/2`` steps. Slide-by-one would
+    instead invalidate the whole window on every step past ``N``.
+    """
+    if len(recent_frames) > n_history_frames:
+        keep = max(1, n_history_frames // 2)
+        recent_frames[:] = recent_frames[-keep:]
+        # Actions align to every frame but the latest.
+        recent_actions[:] = (
+            recent_actions[-(len(recent_frames) - 1) :] if len(recent_frames) > 1 else []
+        )
+
+
 def append_turn(
     recent_frames: list[Image.Image],
     recent_actions: list[str],
@@ -68,25 +100,11 @@ def append_turn(
 
     A "turn" is ``(frame, action_text)`` where ``action_text`` is the action the
     model produced *from the previous* current frame; ``frame`` is the resulting
-    new screen. The invariant maintained is
-    ``len(recent_actions) == len(recent_frames) - 1`` — every frame except the
-    latest has an action that followed it.
-
-    Eviction is StreamingLLM-style *block* eviction rather than slide-by-one:
-    once the window exceeds ``n_history_frames`` we keep only the newest
-    ``n_history_frames // 2`` frames (and their aligned actions). This preserves
-    sglang's RadixAttention prefix cache — while the window grows the prompt is
-    append-only (full cache reuse) and only the ~``N/2`` frames retained on a
-    slide are re-prefilled, roughly once every ``N/2`` steps. Slide-by-one would
-    instead invalidate the whole window on every step past ``N``.
+    new screen. See ``evict_history`` for the eviction policy this then applies.
     """
     recent_actions.append(action_text)
     recent_frames.append(frame)
-    if len(recent_frames) > n_history_frames:
-        keep = max(1, n_history_frames // 2)
-        recent_frames[:] = recent_frames[-keep:]
-        # Actions align to every frame but the latest.
-        recent_actions[:] = recent_actions[-(len(recent_frames) - 1):] if len(recent_frames) > 1 else []
+    evict_history(recent_frames, recent_actions, n_history_frames=n_history_frames)
 
 
 def _interleave_messages(

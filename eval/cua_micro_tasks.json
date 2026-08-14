@@ -1,0 +1,587 @@
+{
+  "schema_version": 1,
+  "suite": "cua_micro_tasks",
+  "coordinate_grid": 1000,
+  "description": "Balanced atomic and short-horizon CUA micro-evals with per-turn semantic state verifiers.",
+  "tasks": [
+    {
+      "id": "click.desktop.libreoffice_writer",
+      "category": "native_launch",
+      "instruction": "Click the LibreOffice Writer icon under the cursor.",
+      "setup": {
+        "kind": "desktop"
+      },
+      "target": {
+        "kind": "fixed_norm",
+        "bbox": [
+          2,
+          285,
+          38,
+          345
+        ],
+        "label": "LibreOffice Writer dock icon"
+      },
+      "cursor": {
+        "kind": "target_center"
+      },
+      "expected": {
+        "kind": "click",
+        "button": "left"
+      },
+      "verifier": {
+        "kind": "active_title_regex",
+        "pattern": "LibreOffice Writer"
+      }
+    },
+    {
+      "id": "click.desktop.libreoffice_impress",
+      "category": "native_launch",
+      "instruction": "Click the LibreOffice Impress icon under the cursor.",
+      "setup": {
+        "kind": "desktop"
+      },
+      "target": {
+        "kind": "fixed_norm",
+        "bbox": [
+          2,
+          415,
+          38,
+          475
+        ],
+        "label": "LibreOffice Impress dock icon"
+      },
+      "cursor": {
+        "kind": "target_center"
+      },
+      "expected": {
+        "kind": "click",
+        "button": "left"
+      },
+      "verifier": {
+        "kind": "active_title_regex",
+        "pattern": "LibreOffice Impress"
+      }
+    },
+    {
+      "id": "key.desktop.open_terminal",
+      "category": "multi_turn",
+      "instruction": "Open Terminal with the Ctrl+Alt+T keyboard shortcut.",
+      "setup": {
+        "kind": "desktop"
+      },
+      "turn_mode": "retry",
+      "turn": {
+        "target": {
+          "kind": "fixed_norm",
+          "bbox": [
+            50,
+            100,
+            950,
+            900
+          ],
+          "label": "Desktop"
+        },
+        "cursor": {
+          "kind": "target_center"
+        },
+        "expected": {
+          "kind": "any"
+        },
+        "verifier": {
+          "kind": "guest_command_regex",
+          "command": "pgrep -a -f '^/usr/libexec/gnome-terminal-server'",
+          "pattern": "gnome-terminal-server"
+        }
+      },
+      "max_turns": 4
+    },
+    {
+      "id": "type.terminal.native_exact",
+      "category": "native_app",
+      "instruction": "Type exactly into the focused Terminal: echo This is a typing test. I am trained by omegalax",
+      "setup": {
+        "kind": "native_terminal_capture"
+      },
+      "turn_mode": "retry",
+      "turn": {
+        "target": {
+          "kind": "fixed_norm",
+          "bbox": [
+            100,
+            150,
+            900,
+            850
+          ],
+          "label": "Terminal input"
+        },
+        "cursor": {
+          "kind": "target_center"
+        },
+        "expected": {
+          "kind": "type",
+          "text": "echo This is a typing test. I am trained by omegalax"
+        },
+        "verifier": {
+          "kind": "guest_json_equals",
+          "path": "/tmp/cua_native_terminal_state.json",
+          "field": "value",
+          "value": "echo This is a typing test. I am trained by omegalax"
+        }
+      },
+      "max_turns": 32
+    },
+    {
+      "id": "type.text_editor.native_exact",
+      "category": "native_app",
+      "instruction": "Type exactly into the focused Text Editor document: Hello, World! This is a typing test. I am trained by omegalax",
+      "setup": {
+        "kind": "native_app",
+        "app": "text_editor"
+      },
+        "turn_mode": "retry",
+        "turn": {
+        "target": {
+          "kind": "fixed_norm",
+          "bbox": [
+            150,
+            150,
+            850,
+            850
+          ],
+          "label": "Text Editor document"
+        },
+        "cursor": {
+          "kind": "target_center"
+        },
+        "expected": {
+          "kind": "type",
+          "text": "Hello, World! This is a typing test. I am trained by omegalax"
+        },
+        "verifier": {
+          "kind": "saved_file_equals",
+          "path": "/tmp/cua_native_editor.txt",
+          "value": "Hello, World! This is a typing test. I am trained by omegalax"
+        }
+      },
+      "max_turns": 32
+    },
+    {
+      "id": "key.writer.open_save_as",
+      "category": "native_app",
+      "instruction": "Open the Save As dialog in LibreOffice Writer using Ctrl+Shift+S.",
+      "setup": {
+        "kind": "native_app",
+        "app": "writer"
+      },
+      "target": {
+        "kind": "fixed_norm",
+        "bbox": [
+          100,
+          100,
+          900,
+          900
+        ],
+        "label": "LibreOffice Writer window"
+      },
+      "cursor": {
+        "kind": "target_center"
+      },
+      "expected": {
+        "kind": "key",
+        "keys": [
+          "CTRL",
+          "SHIFT",
+          "S"
+        ]
+      },
+      "verifier": {
+        "kind": "active_title_regex",
+        "pattern": "user-virtual-machine Save(?:\\n|$)"
+      }
+    },
+    {
+      "id": "key.impress.open_save_as",
+      "category": "native_app",
+      "instruction": "Open the Save As dialog in LibreOffice Impress using Ctrl+Shift+S.",
+      "setup": {
+        "kind": "native_app",
+        "app": "impress"
+      },
+      "target": {
+        "kind": "fixed_norm",
+        "bbox": [
+          100,
+          100,
+          900,
+          900
+        ],
+        "label": "LibreOffice Impress window"
+      },
+      "cursor": {
+        "kind": "target_center"
+      },
+      "expected": {
+        "kind": "key",
+        "keys": [
+          "CTRL",
+          "SHIFT",
+          "S"
+        ]
+      },
+      "verifier": {
+        "kind": "active_title_regex",
+        "pattern": "user-virtual-machine Save(?:\\n|$)"
+      }
+    },
+    {
+      "id": "click.files.open_eval_target",
+      "category": "native_app",
+      "instruction": "Double-click the EvalTarget folder under the cursor in Files.",
+      "setup": {
+        "kind": "native_app",
+        "app": "files"
+      },
+      "target": {
+        "kind": "fixed_norm",
+        "bbox": [
+          110,
+          297,
+          368,
+          326
+        ],
+        "label": "EvalTarget folder row"
+      },
+      "cursor": {
+        "kind": "target_center"
+      },
+      "expected": {
+        "kind": "click",
+        "button": "left",
+        "count": 2
+      },
+      "verifier": {
+        "kind": "active_title_regex",
+        "pattern": "EvalTarget"
+      }
+    },
+    {
+      "id": "key.calculator.digit7",
+      "category": "native_app",
+      "instruction": "Enter the digit 7 in Calculator using the keyboard.",
+      "setup": {
+        "kind": "native_app",
+        "app": "calculator"
+      },
+      "target": {
+        "kind": "fixed_norm",
+        "bbox": [
+          250,
+          150,
+          750,
+          850
+        ],
+        "label": "Calculator window"
+      },
+      "cursor": {
+        "kind": "target_center"
+      },
+      "expected": {
+        "kind": "key",
+        "keys": [
+          "7"
+        ]
+      },
+      "verifier": {
+        "kind": "calculator_clipboard_equals",
+        "value": "7"
+      }
+    },
+    {
+      "id": "click.chrome.back",
+      "category": "chrome_control",
+      "instruction": "Click Chrome's Back button under the cursor.",
+      "setup": {
+        "kind": "chrome",
+        "variant": "history"
+      },
+      "target": {
+        "kind": "fixed_norm",
+        "bbox": [
+          41,
+          69,
+          55,
+          97
+        ],
+        "label": "Back button"
+      },
+      "cursor": {
+        "kind": "target_center"
+      },
+      "expected": {
+        "kind": "click",
+        "button": "left"
+      },
+      "verifier": {
+        "kind": "active_title_regex",
+        "pattern": "PAGE_A.*Chrome"
+      }
+    },
+    {
+      "id": "click.chrome.reload",
+      "category": "chrome_control",
+      "instruction": "Click Chrome's Reload button under the cursor.",
+      "setup": {
+        "kind": "chrome",
+        "variant": "reload"
+      },
+      "target": {
+        "kind": "fixed_norm",
+        "bbox": [
+          75,
+          65,
+          96,
+          100
+        ],
+        "label": "Reload button"
+      },
+      "cursor": {
+        "kind": "target_center"
+      },
+      "expected": {
+        "kind": "click",
+        "button": "left"
+      },
+      "verifier": {
+        "kind": "active_title_regex",
+        "pattern": "LOAD_2.*Chrome"
+      }
+    },
+    {
+      "id": "click.chrome.deterministic_button",
+      "category": "chrome_control",
+      "instruction": "Click the blue COMPLETE button under the cursor.",
+      "setup": {
+        "kind": "chrome",
+        "variant": "button"
+      },
+      "target": {
+        "kind": "fixed_norm",
+        "bbox": [
+          421,
+          463,
+          615,
+          562
+        ],
+        "label": "COMPLETE button"
+      },
+      "cursor": {
+        "kind": "target_center"
+      },
+      "expected": {
+        "kind": "click",
+        "button": "left"
+      },
+      "verifier": {
+        "kind": "active_title_regex",
+        "pattern": "PASS_BUTTON.*Chrome"
+      }
+    },
+    {
+      "id": "scroll.chrome.down",
+      "category": "chrome_control",
+      "instruction": "Scroll down on the page under the cursor.",
+      "setup": {
+        "kind": "chrome",
+        "variant": "scroll"
+      },
+      "target": {
+        "kind": "fixed_norm",
+        "bbox": [
+          300,
+          250,
+          700,
+          750
+        ],
+        "label": "Scrollable page"
+      },
+      "cursor": {
+        "kind": "target_center"
+      },
+      "expected": {
+        "kind": "scroll",
+        "sign": "down"
+      },
+      "verifier": {
+        "kind": "active_title_regex",
+        "pattern": "PASS_SCROLL.*Chrome"
+      }
+    },
+    {
+      "id": "multi.calculator.73_plus_19",
+      "category": "multi_turn",
+      "instruction": "In Calculator, compute 73 + 19 and submit the result. Use the on-screen buttons or the keyboard; submit with Enter or the = button.",
+      "setup": {
+        "kind": "fixture",
+        "mode": "calculator"
+      },
+      "turn_mode": "retry",
+      "turn": {
+        "target": {
+          "kind": "fixed_norm",
+          "bbox": [
+            200,
+            150,
+            800,
+            850
+          ],
+          "label": "Calculator"
+        },
+        "cursor": {
+          "kind": "target_center"
+        },
+        "expected": {
+          "kind": "any"
+        },
+        "verifier": {
+          "kind": "fixture_equals",
+          "field": "submitted",
+          "value": "92"
+        }
+      },
+      "max_turns": 64
+    },
+    {
+      "id": "multi.chrome.search_3blue1brown",
+      "category": "multi_turn",
+      "instruction": "In Chrome, search for a 3Blue1Brown video, then click the first result to open it.",
+      "setup": {
+        "kind": "chrome",
+        "variant": "search"
+      },
+      "turn_mode": "retry",
+      "turn": {
+        "target": {
+          "kind": "fixed_norm",
+          "bbox": [
+            150,
+            200,
+            860,
+            520
+          ],
+          "label": "Chrome search page"
+        },
+        "cursor": {
+          "kind": "target_center"
+        },
+        "expected": {
+          "kind": "any"
+        },
+        "verifier": {
+          "kind": "active_title_regex",
+          "pattern": "PLAYING_3BLUE1BROWN.*Chrome"
+        }
+      },
+      "max_turns": 64
+    },
+    {
+      "id": "multi.chrome.open_chrome_search_wikipedia",
+      "category": "multi_turn",
+      "instruction": "Open chrome and search for Wikipedia, then click the first result to open it.",
+      "setup": {
+        "kind": "desktop"
+      },
+      "turn_mode": "retry",
+      "turn": {
+        "target": {
+          "kind": "fixed_norm",
+          "bbox": [
+            50,
+            100,
+            950,
+            900
+          ],
+          "label": "Desktop"
+        },
+        "cursor": {
+          "kind": "target_center"
+        },
+        "expected": {
+          "kind": "any"
+        },
+        "verifier": {
+          "kind": "active_title_regex",
+          "pattern": "Wikipedia"
+        }
+      },
+      "max_turns": 64
+    },
+    {
+      "id": "multi.terminal.vim_hello_world_script",
+      "category": "multi_turn",
+      "instruction": "In Terminal, create ~/hello_world.py using Vim so that running it prints \"Hello, World!\" exactly ten times, then run it. Open vim and and write the script, then save and run it.",
+      "setup": {
+        "kind": "native_app",
+        "app": "terminal"
+      },
+      "turn_mode": "retry",
+      "turn": {
+        "target": {
+          "kind": "fixed_norm",
+          "bbox": [
+            100,
+            150,
+            900,
+            850
+          ],
+          "label": "Terminal window"
+        },
+        "cursor": {
+          "kind": "target_center"
+        },
+        "expected": {
+          "kind": "any"
+        },
+        "verifier": {
+          "kind": "guest_command_regex",
+          "command": "python3 ~/hello_world.py 2>/dev/null | grep -c '^Hello, World!$'; true",
+          "pattern": "^10$"
+        }
+      },
+      "max_turns": 64
+    },
+    {
+      "id": "multi.terminal.hello_world_script",
+      "category": "multi_turn",
+      "instruction": "In Terminal, create ~/hello_world.py so that running it prints \"Hello, World!\" exactly ten times, then run it. Write and run the script however you like -- any editor, commands.",
+      "setup": {
+        "kind": "native_app",
+        "app": "terminal"
+      },
+      "turn_mode": "retry",
+      "turn": {
+        "target": {
+          "kind": "fixed_norm",
+          "bbox": [
+            100,
+            150,
+            900,
+            850
+          ],
+          "label": "Terminal window"
+        },
+        "cursor": {
+          "kind": "target_center"
+        },
+        "expected": {
+          "kind": "any"
+        },
+        "verifier": {
+          "kind": "guest_command_regex",
+          "command": "python3 ~/hello_world.py 2>/dev/null | grep -c '^Hello, World!$'; true",
+          "pattern": "^10$"
+        }
+      },
+      "max_turns": 64
+    }
+  ]
+}

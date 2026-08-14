@@ -8,7 +8,9 @@ Flask app on port 5000 with these endpoints we care about:
   GET  /screen_size        -> {"width": int, "height": int}
   POST /execute            -> {"command": ["python", "-c", "<code>"], "shell": false}
                               runs via subprocess. The server does NOT eval strings —
-                              wrap pyautogui calls as a python -c invocation.
+                              wrap pyautogui calls as a python -c invocation. Response is
+                              {"status", "output", "error", "returncode"} — ``execute()``
+                              discards it, ``execute_capture()`` returns ``output``.
 
 There is NO native delta-dispatch endpoint. To drive a BC model that
 emits ``dx dy scroll [; +EV -EV]`` deltas, we:
@@ -50,6 +52,7 @@ import re
 import time
 import urllib.parse
 from dataclasses import dataclass
+from typing import Any
 
 import requests
 from PIL import Image
@@ -290,11 +293,16 @@ class OSWorldClient:
         "import pyautogui; import time; pyautogui.FAILSAFE = False; pyautogui.PAUSE = 0; "
     )
 
-    def execute(self, command: str) -> None:
-        """Run a pyautogui expression in the VM via /execute.
+    def _execute_raw(self, command: str) -> dict:
+        """POST to /execute and return the full JSON response.
 
-        The Flask server runs subprocess, not eval, so we wrap the expression
-        as ``python -c "<prefix>; <command>"``.
+        The in-VM agent captures the subprocess's stdout/stderr and returns
+        ``{"status", "output", "error", "returncode"}`` (upstream OSWorld
+        ``desktop_env/server/main.py``). ``execute()`` discards this for the
+        pyautogui-dispatch path; ``execute_capture()`` uses it to read state
+        back out of the VM (clipboard contents, file existence, etc.) for
+        smoke-eval verification that can't be decided from cursor position
+        alone.
         """
         full_code = self._PYAUTOGUI_PREFIX + command
         r = self._sess.post(
@@ -303,6 +311,49 @@ class OSWorldClient:
             timeout=self.timeout,
         )
         r.raise_for_status()
+        return r.json()
+
+    def execute(self, command: str) -> None:
+        """Run a pyautogui expression in the VM via /execute.
+
+        The Flask server runs subprocess, not eval, so we wrap the expression
+        as ``python -c "<prefix>; <command>"``.
+        """
+        self._execute_raw(command)
+
+    def execute_capture(self, command: str) -> str:
+        """Run a python expression in the VM and return its captured stdout.
+
+        Unlike ``execute()``, this reads the response body back, so
+        ``command`` can print state (clipboard contents, a file's bytes,
+        ``wmctrl`` output, ...) for the caller to inspect. Returns "" if the
+        in-VM agent's response has no ``output`` field.
+        """
+        return self._execute_raw(command).get("output", "")
+
+    def run_command(self, command: list[str] | str, *, shell: bool = False) -> dict:
+        """Run a command in the VM and return the agent's structured result.
+
+        Unlike :meth:`execute`, this is not limited to pyautogui expressions.
+        Micro-evals use it for deterministic setup and state-based verification
+        (for example, reading an instrumented app's JSON state). A non-zero
+        guest return code is surfaced as ``RuntimeError`` so a broken verifier
+        cannot silently turn into a model failure.
+        """
+        r = self._sess.post(
+            f"{self.base_url}/execute",
+            json={"command": command, "shell": shell},
+            timeout=self.timeout,
+        )
+        r.raise_for_status()
+        result = r.json()
+        if result.get("status") != "success" or int(result.get("returncode", 0)) != 0:
+            raise RuntimeError(
+                "VM command failed: "
+                f"status={result.get('status')!r} rc={result.get('returncode')!r} "
+                f"stderr={result.get('error', result.get('message', ''))!r}"
+            )
+        return result
 
     def dispatch_action(self, action: Action) -> StepResult:
         """Apply a parsed BC ``Action`` to the VM.
@@ -606,6 +657,154 @@ class OSWorldClient:
             action_text="",
         )
 
+    def dispatch_ordered_action(self, action: Any) -> StepResult:
+        """Apply a parsed ordered/native action program to the VM.
+
+        Ported from yll/cua-micro-evals for the CUA micro-eval suite. Takes
+        any object shaped like ``cua_micro_action_parser.RelStepAction``
+        (``.no_op``, ``.primitives`` of objects with ``.kind``/``.dx``/``.dy``/
+        ``.name``/``.mouse_button``/``.text``/``.keys``/``.count``) --
+        including one converted from this file's own ``action_parser.
+        OrderedAction`` (see ``cua_micro_eval.native_ordered_to_relstep``),
+        so the same dispatch path serves ``computer_use_rel_step_v1``,
+        ``qwen3vl_native_cua_v1``, AND ``cua_ordered_typing_v1`` alike.
+
+        Primitives execute strictly left to right, matching the training
+        semantics (movement, presses, and typing interleave exactly as
+        emitted).
+
+        ``ordered_events_v3`` kinds:
+
+        - ``move(dx,dy)``   -> absolute ``moveTo`` (the cursor position is
+          tracked locally across primitives, so a click after a move lands
+          where the move left the cursor; each hop is clipped to screen).
+        - ``scroll(dx,dy)`` -> ``pyautogui.scroll(dy)`` (dy > 0 scrolls up,
+          matching pyautogui's sign) and ``pyautogui.hscroll(dx)``.
+        - ``down/up(NAME)`` -> mouseDown/mouseUp / keyDown/keyUp via the
+          same rdev->pyautogui mapping as the canonical format.
+        - ``type("text")``  -> one ``pyautogui.write`` call (the same
+          typing path ``dispatch_computer_use`` uses); no cursor effect.
+
+        ``computer_use_rel_v1`` kinds (mouse_move_rel arrives as ``move``,
+        scroll/hscroll as ``scroll``, type as ``type`` — shared with above):
+
+        - ``click``       -> ``pyautogui.click(clicks=N, button=...)`` at the
+          tracked cursor (no coordinate: clicks land wherever the cursor is).
+        - ``button_down``/``button_up`` -> mouseDown/mouseUp(button=...).
+        - ``key_combo``   -> keyDown each key in order, keyUp in reverse
+          (pyautogui.hotkey semantics); names pass through
+          ``_cua_v4_key_to_pyautogui`` ("command" -> "winleft" on the VM).
+        - ``key_down``/``key_up``       -> keyDown/keyUp (same key remap).
+        - ``wait``        -> NOT dispatched: behaves like NO_OP (the rollout
+          loop's screenshot settle logic already waits for the UI; the
+          contract's ``time`` argument is validated at parse and ignored).
+        - ``terminate``   -> never reaches dispatch (the rollout loop stops
+          on it before dispatching); raises if it does.
+        """
+        cursor_before = self.cursor_position()
+        sw, sh = self.screen_size()
+        executed: list[str] = []
+
+        if action.no_op:
+            return StepResult(
+                cursor_before=cursor_before,
+                cursor_after=cursor_before,
+                intended_target=cursor_before,
+                delta=(0, 0),
+                scroll=0,
+                events_dispatched=[],
+                parse_ok=True,
+                action_text="NO_OP",
+            )
+
+        tx, ty = cursor_before
+        total_dx = total_dy = 0
+        scroll_v = 0
+        for p in action.primitives:
+            if p.kind == "move":
+                total_dx += p.dx
+                total_dy += p.dy
+                ntx = max(0, min(sw - 1, tx + p.dx))
+                nty = max(0, min(sh - 1, ty + p.dy))
+                if (ntx, nty) != (tx, ty):
+                    cmd = f"pyautogui.moveTo({ntx}, {nty})"
+                    self.execute(cmd)
+                    executed.append(cmd)
+                tx, ty = ntx, nty
+            elif p.kind == "scroll":
+                if p.dy:
+                    cmd = f"pyautogui.scroll({int(p.dy)})"
+                    self.execute(cmd)
+                    executed.append(cmd)
+                if p.dx:
+                    cmd = f"pyautogui.hscroll({int(p.dx)})"
+                    self.execute(cmd)
+                    executed.append(cmd)
+                scroll_v += p.dy
+            elif p.kind in ("down", "up"):
+                ev = KeyEvent(
+                    kind="press" if p.kind == "down" else "release",
+                    what=p.name,
+                    mouse_button=p.mouse_button,
+                )
+                cmd = _event_to_pyautogui(ev)
+                if cmd is None:
+                    _LOGGER.debug("skipping unmapped event %r", p)
+                    continue
+                self.execute(cmd)
+                executed.append(cmd)
+            elif p.kind == "type":
+                if p.text:
+                    cmd = _type_write_command(p.text)
+                    self.execute(cmd)
+                    executed.append(cmd)
+            elif p.kind == "click":
+                cmd = f"pyautogui.click(clicks={p.count}, interval=0.05, button={p.name!r})"
+                self.execute(cmd)
+                executed.append(cmd)
+            elif p.kind in ("button_down", "button_up"):
+                op = "mouseDown" if p.kind == "button_down" else "mouseUp"
+                cmd = f"pyautogui.{op}(button={p.name!r})"
+                self.execute(cmd)
+                executed.append(cmd)
+            elif p.kind == "key_combo":
+                py_keys = [
+                    _cua_v4_key_to_pyautogui(_computer_use_key_to_pyautogui(k)) for k in p.keys
+                ]
+                for key in py_keys:
+                    cmd = f"pyautogui.keyDown({key!r})"
+                    self.execute(cmd)
+                    executed.append(cmd)
+                for key in reversed(py_keys):
+                    cmd = f"pyautogui.keyUp({key!r})"
+                    self.execute(cmd)
+                    executed.append(cmd)
+            elif p.kind in ("key_down", "key_up"):
+                op = "keyDown" if p.kind == "key_down" else "keyUp"
+                cmd = f"pyautogui.{op}({_cua_v4_key_to_pyautogui(p.name)!r})"
+                self.execute(cmd)
+                executed.append(cmd)
+            elif p.kind == "wait":
+                # NO dispatch: behaves like NO_OP. The caller's settle logic
+                # already waits for the screen before the next screenshot.
+                pass
+            elif p.kind == "terminate":
+                raise ValueError("terminate is a rollout stop condition, never dispatched")
+            else:
+                raise ValueError(f"unknown ordered primitive kind: {p.kind!r}")
+
+        cursor_after = self.cursor_position()
+        return StepResult(
+            cursor_before=cursor_before,
+            cursor_after=cursor_after,
+            intended_target=(tx, ty),
+            delta=(total_dx, total_dy),
+            scroll=scroll_v,
+            events_dispatched=executed,
+            parse_ok=True,
+            action_text="",  # caller fills the raw text
+        )
+
 
 def _event_to_pyautogui(ev: KeyEvent) -> str | None:
     """Render one parsed key/button event as a pyautogui call."""
@@ -619,3 +818,32 @@ def _event_to_pyautogui(ev: KeyEvent) -> str | None:
     key = _rdev_to_pyautogui(ev.what)
     op = "keyDown" if ev.kind == "press" else "keyUp"
     return f"pyautogui.{op}({key!r})"
+
+
+def _type_write_command(text: str) -> str:
+    """Render a typed string as one ``pyautogui.write`` call.
+
+    ``repr`` produces a valid Python string literal (quotes/backslashes
+    escaped), and ``/execute`` passes the code as an argv element — no
+    shell quoting layer — so arbitrary printable payloads survive intact.
+    """
+    return f"pyautogui.write({text!r}, interval=0)"
+
+
+# computer_use_rel_v1 (cua_v4_thinking) key remaps. Per the contract, key
+# names arrive ALREADY as lowercase pyautogui names — the ONLY remap needed
+# is "command": pyautogui's X11 backend (_pyautogui_x11.keyboardMapping)
+# initialises every KEY_NAMES entry to None and only fills the X11-relevant
+# ones; 'command' (a macOS name) stays None, so keyDown('command') on the
+# Linux VM is a SILENT no-op. 'win'/'winleft' map to Super_L — we use
+# "winleft" to match the existing rdev convention (MetaLeft -> "winleft" in
+# _RDEV_TO_PYAUTOGUI above).
+_CUA_V4_KEY_TO_PYAUTOGUI = {
+    "command": "winleft",
+}
+
+
+def _cua_v4_key_to_pyautogui(name: str) -> str:
+    """computer_use_rel_v1 key name -> pyautogui name (identity but for
+    the documented remaps; names arrive already lowercase per contract)."""
+    return _CUA_V4_KEY_TO_PYAUTOGUI.get(name, name)
