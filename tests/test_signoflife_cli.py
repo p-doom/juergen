@@ -5,7 +5,7 @@ harness construction -> pool adapter -> episode -> `result.json` — and where t
 missing `DesktopFacade.evaluate()` once hid.
 
 This runs the real `main()`. The only substitution is
-`pixeldesk.vm.factory.build_desktop_pool` (see `juergen_fake_desktop`), so
+`desktop.vm.factory.build_desktop_pool` (see `juergen_fake_desktop`), so
 `evals.vm.kvm_desktop_pool` and `DesktopFacade` are the production objects under
 test rather than doubles.
 
@@ -38,7 +38,7 @@ def _fake_desktop(monkeypatch):
     one's pool, its slot directory and its already-checked-out sessions.
     """
     import agent.desktop as desktop
-    import pixeldesk.vm.factory as factory
+    import desktop.vm.factory as factory
 
     juergen_fake_desktop.FakeDesktopPool.instances.clear()
     monkeypatch.setattr(

@@ -1,7 +1,7 @@
-"""A pixeldesk pool that boots nothing, so the whole dispatcher can be run.
+"""A desktop pool that boots nothing, so the whole dispatcher can be run.
 
 The only thing standing between the dispatcher and a booted VM is
-`pixeldesk.vm.factory.build_desktop_pool`, so this substitutes that and only that.
+`desktop.vm.factory.build_desktop_pool`, so this substitutes that and only that.
 `evals.vm.kvm_desktop_pool` runs for real — argument assembly, `DesktopPoolConfig`,
 `_AdaptedPool`, reset-on-reuse, `DesktopFacade` — over a pool whose checkouts are
 these fakes. This is the path every real gate run takes, and where a missing

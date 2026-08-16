@@ -3,7 +3,7 @@
 `harness.py` is the single `Harness`:
 
     screenshot -> prompt from codec.describe() + history policy -> sample
-    -> codec.parse -> codec.compile -> pixeldesk executes -> oracle -> repeat
+    -> codec.parse -> codec.compile -> desktop executes -> oracle -> repeat
 
 `tasks.py` holds the task data/state and the tasksets that enumerate them.
 `oracles.py` holds the state oracles as rewards that declare `runtime` and so

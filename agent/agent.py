@@ -52,17 +52,17 @@ class ModelCallError(RuntimeError):
 
 
 class Codec(Protocol):
-    """The half of `pixeldesk.codec_protocol.Codec` an episode driver touches.
+    """The half of `desktop.codec_protocol.Codec` an episode driver touches.
 
-    `compile` hands back `pixeldesk.ir.Operation`s already in absolute screen
+    `compile` hands back `desktop.ir.Operation`s already in absolute screen
     pixels — every normalisation convention (raw pixel deltas, the normalized
     0-999 grid, the drag-only MOVE form) lives inside the codec. Nothing
     downstream of `compile` may re-resolve a coordinate.
 
-    `geometry` is a `pixeldesk.geometry.DisplayGeometry`, not a `(w, h)` pair: the
+    `geometry` is a `desktop.geometry.DisplayGeometry`, not a `(w, h)` pair: the
     codec needs the full display description to clamp, and handing it a bare size
     would put the clamp back on the caller. `handlers` (each grammar's contribution
-    to pixeldesk's dispatch engine) is part of the protocol but not used here —
+    to desktop's dispatch engine) is part of the protocol but not used here —
     the harness dispatches whole operation streams, not individual handlers.
     """
 
@@ -80,7 +80,7 @@ class Codec(Protocol):
     def describe(self) -> str: ...
 
 
-_ENTRY_POINT_GROUPS = ("juergen.grammars", "pixeldesk.codecs")
+_ENTRY_POINT_GROUPS = ("juergen.grammars", "desktop.codecs")
 
 
 def load_codec(name: str) -> Codec:
@@ -102,8 +102,8 @@ def load_codec(name: str) -> Codec:
         pass
     else:
         # `grammars.load` is the tree's registry and already falls back to scanning
-        # peer directories, so an uninstalled checkout resolves here. The pixeldesk
-        # probe below cannot: pixeldesk is grammar-free and exposes neither
+        # peer directories, so an uninstalled checkout resolves here. The desktop
+        # probe below cannot: desktop is grammar-free and exposes neither
         # `CODECS` nor `load_codec`, so without this branch an uninstalled checkout
         # raised LookupError for every grammar.
         try:
@@ -111,11 +111,11 @@ def load_codec(name: str) -> Codec:
         except KeyError:
             pass
     try:
-        from pixeldesk import codec_protocol  # type: ignore[import-not-found]
+        from desktop import codec_protocol  # type: ignore[import-not-found]
     except ImportError as exc:  # pragma: no cover - environment-dependent
         raise LookupError(
             f"codec {name!r} not found in entry-point groups {_ENTRY_POINT_GROUPS} "
-            "and pixeldesk is not importable"
+            "and desktop is not importable"
         ) from exc
     registry = getattr(codec_protocol, "CODECS", None)
     if isinstance(registry, dict) and name in registry:

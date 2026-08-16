@@ -1,6 +1,6 @@
 """Task fixtures: a task that needs Chrome brings its own Chrome.
 
-pixeldesk owns isolation and port locking, reset attestation, a process-group
+desktop owns isolation and port locking, reset attestation, a process-group
 reaper, the guest JSON-marker protocol (`GuestScript`) and `reset_to_checkpoint`.
 It does not know what a checkbox, a spreadsheet cell or a Nautilus window is;
 those are task knowledge and live here.

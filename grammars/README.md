@@ -5,7 +5,7 @@
 Create a peer directory `grammars/<name>/` holding `codec.py` — a class with
 `parse` · `format` · `compile` · `describe` and a `stop_sequences` tuple,
 exported as `CODEC` — and `vectors/<name>.json` pinning both directions and the
-lowering. `CODEC` must satisfy `pixeldesk.codec_protocol.Codec`;
+lowering. `CODEC` must satisfy `desktop.codec_protocol.Codec`;
 `grammars/test_vectors.py` asserts `isinstance` for every registered grammar.
 Write the grammar's spec as docstrings on the codec: the class docstring is the
 prompt's preamble, each `@_support.production("syntax")` member's docstring is
@@ -64,7 +64,7 @@ scanners and helpers the bare-token and tool-call families share — a new
 grammar may use them or ignore them, but adding one never edits them.
 
 Codecs emit that subset; the lift accepts every kind in
-`pixeldesk.ir.CANONICAL_KINDS`. `drag`, `click` and `ascii_type` are pixeldesk's
+`desktop.ir.CANONICAL_KINDS`. `drag`, `click` and `ascii_type` are desktop's
 — it synthesises `click` itself — and while they fell through to "unknown
 Operation kind" no recorded trajectory containing one could be lifted in any
 grammar. `group_operations` decomposes `drag` into move · press · stroke ·
@@ -77,8 +77,8 @@ two typing primitives; it is pinned as a documented-lossy vector.
 
 A grammar contributes no handler table, and there is no place to put one. Each
 grammar used to ship a `handlers.py` exporting
-`HANDLERS: dict[str, Handler]`, described as its contribution to pixeldesk's
-dispatch engine. No such engine existed — nothing in pixeldesk ever read those
+`HANDLERS: dict[str, Handler]`, described as its contribution to desktop's
+dispatch engine. No such engine existed — nothing in desktop ever read those
 tables — and the `Handler` they were annotated with runs in the opposite
 direction (a parsed call to Operations, not a backend plus args to `None`).
 
@@ -86,7 +86,7 @@ A shared `match` over grammar-specific action names would be wrong, because that
 set is open per grammar. A codec's job ends at `compile`, and the Operation
 vocabulary on the far side is closed: a pointer moves, a button transitions, a
 wheel turns, text arrives. Lowering it is an `if kind ==` chain in
-`pixeldesk.execute.guest_program`, over a set no grammar extends.
+`desktop.execute.guest_program`, over a set no grammar extends.
 
 ## Registry
 

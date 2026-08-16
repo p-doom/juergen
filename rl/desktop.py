@@ -6,7 +6,7 @@ current position. That canvas has the same session surface a real desktop has, s
 both envs run under `evals.harness.DesktopHarness` instead of carrying their own
 rollout loops.
 
-The operation vocabulary is `pixeldesk.ir.Operation`, in absolute screen pixels.
+The operation vocabulary is `desktop.ir.Operation`, in absolute screen pixels.
 This class never divides by 1000: the normalized 0-999 convention is the codec's,
 and no env holds a copy of `round(delta/1000 * screen_dim)`.
 """

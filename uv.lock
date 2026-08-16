@@ -383,6 +383,21 @@ wheels = [
 ]
 
 [[package]]
+name = "desktop"
+version = "0.1.0"
+source = { directory = "../desktop" }
+dependencies = [
+    { name = "pillow" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pillow", specifier = ">=10" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "dill"
 version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -690,7 +705,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "av" },
-    { name = "pixeldesk" },
+    { name = "desktop" },
     { name = "verifiers" },
 ]
 
@@ -702,7 +717,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "av", specifier = ">=16.1.0" },
-    { name = "pixeldesk", directory = "../pixeldesk" },
+    { name = "desktop", directory = "../desktop" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "verifiers", specifier = "==0.2.1" },
 ]
@@ -1037,21 +1052,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/8c/ce/e7dfc873bdd9828f3b6e5c2bbb74e47a98ec23cc5c74fc4e54462f0d9204/pillow-11.3.0-cp312-cp312-win_amd64.whl", hash = "sha256:a6444696fce635783440b7f7a9fc24b3ad10a9ea3f0ab66c5905be1c19ccf17d", size = 6986324, upload-time = "2025-07-01T09:14:31.899Z" },
     { url = "https://files.pythonhosted.org/packages/16/8f/b13447d1bf0b1f7467ce7d86f6e6edf66c0ad7cf44cf5c87a37f9bed9936/pillow-11.3.0-cp312-cp312-win_arm64.whl", hash = "sha256:2aceea54f957dd4448264f9bf40875da0415c83eb85f55069d89c0ed436e3542", size = 2423067, upload-time = "2025-07-01T09:14:33.709Z" },
 ]
-
-[[package]]
-name = "pixeldesk"
-version = "0.1.0"
-source = { directory = "../pixeldesk" }
-dependencies = [
-    { name = "pillow" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "pillow", specifier = ">=10" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
-]
-provides-extras = ["dev"]
 
 [[package]]
 name = "pluggy"

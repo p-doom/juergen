@@ -699,7 +699,7 @@
         ]
       ],
       "error": "a drag stroke cannot be expressed",
-      "documents": "pixeldesk's `drag` kind decomposes into a stroke, and this grammar has no MOVE primitive. It raises for the same reason a glide_to does, and for the same reason it must: the converters this replaces degraded exactly this into a stationary `+LMB -LMB`."
+      "documents": "desktop's `drag` kind decomposes into a stroke, and this grammar has no MOVE primitive. It raises for the same reason a glide_to does, and for the same reason it must: the converters this replaces degraded exactly this into a stationary `+LMB -LMB`."
     }
   ],
   "lift_note": "lift pins operations -> action -> text, and `recompiled` closes the triangle back to operations. Where `recompiled` differs from `operations` the case says why; that difference is the grammar's expressiveness ceiling, never a silent flattening."

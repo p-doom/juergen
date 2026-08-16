@@ -262,7 +262,7 @@ def _scroll_amount(action: dict[str, Any]) -> int | None:
 def _geometry(screen: tuple[int, int]):
     """A ``DisplayGeometry`` for the rollout's screen size.
 
-    Field names are ``desktop_*`` (``pixeldesk.geometry.DisplayGeometry`` is a
+    Field names are ``desktop_*`` (``desktop.geometry.DisplayGeometry`` is a
     verbatim copy of Harbor's dataclass). The window is set to the full desktop:
     freeroll's ``intended_target`` is already a desktop-space pixel, so there is
     no inner window to offset against.
@@ -270,7 +270,7 @@ def _geometry(screen: tuple[int, int]):
     ``grammars/_support.screen_size`` reads ``geometry.desktop_width`` /
     ``geometry.desktop_height``, so it consumes this dataclass as-is.
     """
-    from pixeldesk.geometry import DisplayGeometry  # noqa: PLC0415
+    from desktop.geometry import DisplayGeometry  # noqa: PLC0415
 
     width, height = screen
     return DisplayGeometry(

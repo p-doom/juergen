@@ -58,7 +58,7 @@ __all__ = ["DesktopHarness", "DesktopHarnessConfig"]
 
 
 class Desktop(Protocol):
-    """The session surface an episode needs from `pixeldesk.vm.pool`.
+    """The session surface an episode needs from `desktop.vm.pool`.
 
     Everything optional is probed with `getattr`, so a pool that cannot settle a
     frame or evaluate an OSWorld task still runs the families that do not need it.
@@ -158,7 +158,7 @@ class DesktopPoolConfig(vf.BaseConfig):
     """How often the reaper looks for expired leases and an idle pool."""
     session_kwargs: dict[str, Any] = Field(default_factory=dict)
     """Passed verbatim to the session-pool constructor named by `pool_target`."""
-    pool_target: str = "pixeldesk.vm.pool:DesktopSessionPool"
+    pool_target: str = "desktop.vm.pool:DesktopSessionPool"
     """The session-pool constructor, as `module:attribute`.
 
     A constructor, not a provider name. Override it to inject a fake pool, not to
@@ -272,13 +272,13 @@ def _hidden_gpu(enabled: bool) -> Iterator[None]:
 
 
 def _geometry(session: Any) -> Any:
-    """The `pixeldesk.geometry.DisplayGeometry` a codec compiles against.
+    """The `desktop.geometry.DisplayGeometry` a codec compiles against.
 
     Not a `(w, h)` pair: `codec.compile` clamps against the full display
     description, and handing it a bare size puts the clamp back on the caller,
     which is where the coordinate bugs lived.
     """
-    from pixeldesk.geometry import DisplayGeometry  # type: ignore[import-not-found]
+    from desktop.geometry import DisplayGeometry  # type: ignore[import-not-found]
 
     # Field names are `desktop_width` / `desktop_height`, verbatim from Harbor.
     width, height = session.screen_size()
@@ -398,7 +398,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         """Build the underlying session pool.
 
         The one override point for an environment family. Real desktops come from
-        `pixeldesk.vm.pool.DesktopSessionPool`; the container-free RL envs return an
+        `desktop.vm.pool.DesktopSessionPool`; the container-free RL envs return an
         in-process virtual desktop with the same session surface.
         """
         return default_pool_factory(
@@ -479,7 +479,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             if lease is not None:
                 # `_run` publishes an episode failure as `infra_invalid` instead of
                 # letting it escape, so this flag would otherwise only ever catch an
-                # `acquire` failure. `failed` is what makes pixeldesk retire the VM
+                # `acquire` failure. `failed` is what makes desktop retire the VM
                 # rather than hand it to the next rollout (`vm/pool.py:509-519`):
                 # a wedged guest — dead executor transport, unreadable state — was
                 # being recycled as healthy.

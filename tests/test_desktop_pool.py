@@ -35,7 +35,7 @@ from agent.desktop import (
 from juergen_doubles import FakePool, FakeSession
 
 _REPO = Path(__file__).resolve().parents[1]
-_PATH = os.pathsep.join([str(_REPO), str(_REPO.parent / "pixeldesk")])
+_PATH = os.pathsep.join([str(_REPO), str(_REPO.parent / "desktop")])
 
 
 @pytest.fixture(autouse=True)
@@ -466,7 +466,7 @@ def test_default_pool_factory_defers_the_import_so_a_text_only_eval_stays_light(
 
 
 def test_the_default_target_is_the_desktop_env_constructor_not_a_provider_name() -> None:
-    assert dsk.DEFAULT_POOL_TARGET == "pixeldesk.vm.pool:DesktopSessionPool"
+    assert dsk.DEFAULT_POOL_TARGET == "desktop.vm.pool:DesktopSessionPool"
     assert ":" in dsk.DEFAULT_POOL_TARGET
     module, _, attribute = dsk.DEFAULT_POOL_TARGET.partition(":")
     from importlib import import_module

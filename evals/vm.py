@@ -1,14 +1,14 @@
-"""The one adapter between pixeldesk's session pool and the harness's session.
+"""The one adapter between desktop's session pool and the harness's session.
 
 `DesktopPoolConfig.pool_target` names a constructor and `session_kwargs` is handed
 to it verbatim (`agent.desktop.default_pool_factory`). Its nominal default,
-`pixeldesk.vm.pool:DesktopSessionPool`, cannot be used that way, for two reasons
+`desktop.vm.pool:DesktopSessionPool`, cannot be used that way, for two reasons
 that only show up against a real VM:
 
 1. The constructor is not callable from config. `DesktopSessionPool.__init__`
 requires a `DesktopPoolConfig` dataclass and a `session_factory` callable
 (`pool.py:373-382`). Neither survives a recipe, a TOML file or a JSON
-`session_kwargs`. `pixeldesk.vm.factory:build_desktop_pool` is the
+`session_kwargs`. `desktop.vm.factory:build_desktop_pool` is the
 plain-arguments entry point, but it still takes the dataclass for `config`.
 
 2. `checkout()` does not return a session the harness can drive. It returns a
@@ -312,7 +312,7 @@ def kvm_desktop_pool(
     the function for the same reason `default_pool_factory` is: a text-only eval
     must not pull the VM stack in.
 
-    `lease_timeout_s` defaults to 1800 s rather than pixeldesk's 300 s. The pool's
+    `lease_timeout_s` defaults to 1800 s rather than desktop's 300 s. The pool's
     watchdog reclaims a leased session that has been quiet for that long, and a gate
     cell that waits on a Chrome launch or a model call legitimately is: at 300 s the
     watchdog, not the episode, decides when the VM goes away.
@@ -322,8 +322,8 @@ def kvm_desktop_pool(
     right for a gate run and wrong for a 369-task benchmark array on a node whose
     /tmp is small: name it then, on a filesystem with room.
     """
-    from pixeldesk.vm.factory import build_desktop_pool
-    from pixeldesk.vm.pool import DesktopPoolConfig
+    from desktop.vm.factory import build_desktop_pool
+    from desktop.vm.pool import DesktopPoolConfig
 
     config = DesktopPoolConfig(
         min_ready_sessions=min_ready_sessions,

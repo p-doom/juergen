@@ -38,8 +38,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from pixeldesk.geometry import DisplayGeometry
-from pixeldesk.ir import Operation
+from desktop.geometry import DisplayGeometry
+from desktop.ir import Operation
 
 from .. import _support
 

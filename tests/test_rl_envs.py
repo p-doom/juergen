@@ -33,11 +33,11 @@ from rl.geometry import BOX_EDGE_INCLUSIVE, box_center, draw_box, png_bytes, ren
 from rl.movebox.dataset import CURRICULUM_BANDS, band_sequence, sample_scene
 
 _REPO = Path(__file__).resolve().parents[1]
-_PATH = os.pathsep.join([str(_REPO), str(_REPO.parent / "pixeldesk")])
+_PATH = os.pathsep.join([str(_REPO), str(_REPO.parent / "desktop")])
 
 
 def _op(kind: str, *args):
-    from pixeldesk.ir import Operation
+    from desktop.ir import Operation
 
     return Operation(kind=kind, args=tuple(args))
 
@@ -190,7 +190,7 @@ def test_the_canvas_pool_has_the_checkout_surface_the_lease_expects() -> None:
 def test_a_codec_compiled_action_drives_the_virtual_desktop_end_to_end() -> None:
     """The same compile path as a real desktop, with no env-side arithmetic."""
     from agent.agent import load_codec
-    from pixeldesk.geometry import DisplayGeometry
+    from desktop.geometry import DisplayGeometry
 
     desktop = _desktop(screen=(1920, 1080))
     desktop.configure(canvas=_canvas(1920, 1080), cursor=(100, 100), screen=(1920, 1080))

@@ -49,7 +49,7 @@ def _task(kind: str, **kwargs):
 
 
 def _geo():
-    from pixeldesk.geometry import DisplayGeometry
+    from desktop.geometry import DisplayGeometry
 
     return DisplayGeometry(desktop_width=1920, desktop_height=1080)
 

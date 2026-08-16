@@ -4,10 +4,10 @@ version = "0.1.0"
 description = "Crowd-cast SFT supply-chain monorepo: data pipeline, action grammars, and the closed-loop eval harness. The model trainer (omegalax) is a separate generic library, kept as its own repo."
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    # grammars/ hard-imports pixeldesk: `_support.py` takes Operation and
+    # grammars/ hard-imports desktop: `_support.py` takes Operation and
     # DisplayGeometry from it, and every codec's `compile` signature names
     # DisplayGeometry.
-    "pixeldesk",
+    "desktop",
     "av>=16.1.0",
     # `verifiers.v1` is the framework agent/, evals/ and rl/ are written against:
     # fifteen modules do `import verifiers.v1 as vf`, every Taskset/Harness/Task/
@@ -26,7 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Test-only. `pytest grammars/` runs the grammar conformance vectors, which need
-# nothing but pixeldesk, so this extra stays cheap enough to run the gate without
+# nothing but desktop, so this extra stays cheap enough to run the gate without
 # resolving the training stack.
 dev = ["pytest>=8"]
 
@@ -61,37 +61,30 @@ override-dependencies = [
 # here depends on torch again.
 
 [tool.uv.sources]
-# pixeldesk is a sibling checkout with no remote and no index presence, so a path
+# desktop is a sibling checkout with no remote and no index presence, so a path
 # is the only way to resolve it. It is not a workspace member: it is its own
-# repository, with one runtime dependency (Pillow).
+# repository, with one runtime dependency (Pillow). That repository also holds
+# `desktop-fleet`, a second distribution nothing here depends on.
 #
-# The path is the pin for now. Once pixeldesk has a remote, replace this with
+# The path is the pin for now. Once desktop has a remote, replace this with
 # `{ git = ..., rev = ... }` or a version specifier: a path source resolves to
 # whatever is on disk, so two checkouts of juergen at the same commit can install
-# different pixeldesk code and nothing records which.
+# different desktop code and nothing records which.
 #
-# Renamed 2026-08-06 from `desktop-env`, which collides on PyPI with
-# xlang-ai/desktop_env (OSWorld) in both distribution name and import name. This
-# source entry is only read by uv, so `pip install .` resolved the dependency
-# from PyPI instead, installed OSWorld's package, and the first codec import
-# failed on a missing `desktop_env.geometry`.
-#
-# The collision was also a correctness bug: `evals/osworld.py` imports OSWorld's
-# `desktop_env.controllers.setup` and `desktop_env.evaluators` to score the
-# benchmark, and while our package owned that import name, that import resolved
-# to ours and no $OSWORLD_ROOT could fix it -- sys.path cannot override an entry
-# already in sys.modules. `pixeldesk` is unclaimed (pypi.org 404, and so are the
-# `pixel-desk` / `pixel_desk` normalisations PyPI folds into it).
-#
-# The guard in `grammars/load()` stays, retargeted: the collision is gone but the
-# failure shape is not. pixeldesk still has no index presence, so a `pip install`
-# still cannot resolve it, and a leftover `desktop_env.egg-info` still shadows it
-# -- both surface as the same bare missing-submodule error.
+# The import name is the constraint that fixed the name. `evals/osworld.py`
+# imports OSWorld's `desktop_env.controllers.setup` and `desktop_env.evaluators`
+# to score the benchmark, in this process -- and sys.path cannot override an
+# entry already in sys.modules, so our package must not own `desktop_env`.
+# `desktop` is distinct from it, but it is not unclaimed: PyPI's `desktop` 0.4.2
+# is a different package with the same distribution AND import name. This source
+# entry is read only by uv, so `pip install .` resolves that one from the index
+# and the first codec import fails on a missing `desktop.geometry`. That is the
+# failure the guard in `grammars/load()` explains.
 #
 # Not editable: an editable path source makes this package's installed behaviour
 # change when a sibling directory is edited. Developers working on both do
-# `uv pip install -e ../pixeldesk` explicitly, which overrides this.
-pixeldesk = { path = "../pixeldesk" }
+# `uv pip install -e ../desktop` explicitly, which overrides this.
+desktop = { path = "../desktop" }
 
 [build-system]
 requires = ["setuptools>=68"]

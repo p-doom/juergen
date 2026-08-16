@@ -60,7 +60,7 @@ here rather than quietly skip the `to_dict` contract check below."""
 
 
 def _geometry(width: int = 1920, height: int = 1080):
-    from pixeldesk.geometry import DisplayGeometry
+    from desktop.geometry import DisplayGeometry
 
     return DisplayGeometry(desktop_width=width, desktop_height=height)
 
@@ -450,9 +450,9 @@ def test_dump_prompt_elides_image_bytes() -> None:
 
 
 def test_load_codec_resolves_every_registered_grammar() -> None:
-    """pixeldesk exposes neither `CODECS` nor `load_codec` — it is deliberately
+    """desktop exposes neither `CODECS` nor `load_codec` — it is deliberately
     grammar-free — so the in-tree fallback goes through `grammars.load`, which has
-    its own peer-directory scan. Probing pixeldesk instead would raise
+    its own peer-directory scan. Probing desktop instead would raise
     `LookupError` on any interpreter where juergen's entry points are not
     installed.
     """

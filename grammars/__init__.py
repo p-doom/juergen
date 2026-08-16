@@ -4,13 +4,13 @@ Each directory holds
 
 * ``codec.py`` — ``parse`` · ``format`` · ``compile`` · ``describe`` ·
   ``stop_sequences``, exported as a module-level ``CODEC`` singleton that
-  satisfies ``pixeldesk.codec_protocol.Codec``,
+  satisfies ``desktop.codec_protocol.Codec``,
 * ``vectors/*.json`` — conformance vectors pinning both directions, executed by
   ``grammars/test_vectors.py``.
 
 A grammar contributes no dispatch table. It ``compile``s to ``Operation``s and
 stops there: the Operation vocabulary is closed rather than open per grammar, so
-lowering one is a fixed ``if kind ==`` chain inside pixeldesk
+lowering one is a fixed ``if kind ==`` chain inside desktop
 (``execute/guest_program.py``) over a set no grammar extends. See
 ``_support.py``.
 
@@ -68,38 +68,39 @@ def available() -> tuple[str, ...]:
     return tuple(sorted(_targets()))
 
 
-#: Substring of the ImportError raised when ``pixeldesk`` is importable but is
-#: not the sibling checkout this repo means. See ``_explain_pixeldesk``.
-_WRONG_PIXELDESK = "pixeldesk."
+#: Substring of the ImportError raised when ``desktop`` is importable but is
+#: not the sibling checkout this repo means. See ``_explain_desktop``.
+_WRONG_DESKTOP = "desktop."
 
 
-def _explain_pixeldesk(exc: ImportError) -> ImportError:
+def _explain_desktop(exc: ImportError) -> ImportError:
     """Turn a wrong-package import failure into a sentence that says so.
 
-    ``pixeldesk`` has no index presence, so the dependency is resolved by a
+    Ours has no index presence, so the dependency is resolved by a
     ``[tool.uv.sources]`` path entry that only ``uv`` reads: ``pip install .``
-    fails to resolve it, and a stale wheel, a half-renamed ``.egg-info`` whose
-    ``top_level.txt`` still says ``desktop_env``, or a shadowing directory on
-    ``sys.path`` all produce the same bare submodule error. That message names a
-    submodule, which sends the reader looking for a missing file when the fault
-    is a wrong or missing install — and ``available()`` lists all seven grammars
-    first, because it reads entry-point metadata and imports nothing.
+    reads the index instead and gets PyPI's ``desktop``, a different package
+    owning the same import name, and a stale wheel or a shadowing directory on
+    ``sys.path`` does the same thing. All of them produce the same bare submodule
+    error. That message names a submodule, which sends the reader looking for a
+    missing file when the fault is a wrong or missing install — and
+    ``available()`` lists all seven grammars first, because it reads entry-point
+    metadata and imports nothing.
 
-    ``desktop_env``, the name this package used until 2026-08-06, is also
-    ``xlang-ai/desktop_env`` (OSWorld) on PyPI — same import name, different
-    package. ``pixeldesk`` is a name nobody else owns.
+    Two distinct packages own the names near this one: PyPI's ``desktop`` 0.4.2,
+    and ``xlang-ai/desktop_env`` (OSWorld), which ``evals/osworld.py`` imports in
+    the same process to score the benchmark.
     """
-    installed = sys.modules.get("pixeldesk")
+    installed = sys.modules.get("desktop")
     return ImportError(
-        "grammars needs this workspace's pixeldesk, but the importable "
-        f"`pixeldesk` ({getattr(installed, '__file__', 'not importable')}) "
-        f"has no {exc.name!r}. pixeldesk has no PyPI presence and is resolved "
+        "grammars needs this workspace's desktop, but the importable "
+        f"`desktop` ({getattr(installed, '__file__', 'not importable')}) "
+        f"has no {exc.name!r}. Ours has no PyPI presence and is resolved "
         "only by the [tool.uv.sources] path entry, which uv reads and pip does "
         "not: install with uv, or install ours directly with "
-        "`uv pip install -e ../pixeldesk`. (It was called `desktop-env` until "
-        "2026-08-06; that name is xlang-ai/desktop_env on PyPI — OSWorld — the "
-        "same import name and a different package. A leftover `desktop_env` "
-        "egg-info or wheel produces exactly this error.)"
+        "`uv pip install -e ../desktop`. (PyPI's `desktop` 0.4.2 is a different "
+        "package with the same import name, and pip installs that one. "
+        "xlang-ai/desktop_env — OSWorld — owns the neighbouring name; a leftover "
+        "`desktop_env` egg-info or wheel produces exactly this error too.)"
     )
 
 
@@ -118,11 +119,11 @@ def load(name: str) -> Any:
     try:
         module = import_module(module_path)
     except ImportError as exc:
-        # Only reinterpret a failure to find part of pixeldesk; anything else
+        # Only reinterpret a failure to find part of desktop; anything else
         # is this codec's own problem and must not be dressed up as a packaging
         # one.
-        if (exc.name or "").startswith(_WRONG_PIXELDESK):
-            raise _explain_pixeldesk(exc) from exc
+        if (exc.name or "").startswith(_WRONG_DESKTOP):
+            raise _explain_desktop(exc) from exc
         raise
     codec = getattr(module, attribute or "CODEC")
     _CACHE[name] = codec

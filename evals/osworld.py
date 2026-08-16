@@ -7,7 +7,7 @@ family (`kind="osworld"`, and `kind="grounding"` which inherits its preparer)
 reaches the guest through them.
 
 `DesktopEnv` itself is unusable here: it owns a VM lifecycle through its own
-provider layer, and the lifecycle is ours (qemu + KVM under `pixeldesk`'s pool) —
+provider layer, and the lifecycle is ours (qemu + KVM under `desktop`'s pool) —
 OSWorld's apptainer provider strips KVM ioctls on the hai-* nodes. Two pieces do
 generalise across providers, and they are the ones we take:
 
@@ -39,7 +39,7 @@ playwright, pydrive and requests_toolbelt at module import, and
 `sys.path` and OSWorld's namespace, so a test can substitute it wholesale and
 exercise every line of the binding and the arithmetic without OSWorld installed.
 
-⚠️ `desktop_env` below is OSWorld's package, not ours — ours is `pixeldesk`, and
+⚠️ `desktop_env` below is OSWorld's package, not ours — ours is `desktop`, and
 it must stay that way: `sys.path` cannot override an entry already in
 `sys.modules`, so any local distribution claiming the name `desktop_env` makes
 `import desktop_env.controllers.setup` resolve to it instead, whatever

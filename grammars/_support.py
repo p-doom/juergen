@@ -41,8 +41,8 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from pixeldesk.geometry import DisplayGeometry
-from pixeldesk.ir import Operation, scroll_deltas
+from desktop.geometry import DisplayGeometry
+from desktop.ir import Operation, scroll_deltas
 
 
 # The single point of contact with DisplayGeometry. Its field names are the
@@ -493,7 +493,7 @@ def group_operations(
     "unknown Operation kind" makes a whole recorded trajectory unliftable in every
     grammar at once, so these are handled explicitly:
 
-    * ``click(button)`` — pixeldesk's executor synthesises this itself
+    * ``click(button)`` — desktop's executor synthesises this itself
       (``guest_program.lower_guest_operations``), so it appears in any stream
       that has been through that lowering. It is one press/release pair, and a
       pair spelled this way coalesces with pairs spelled as
@@ -605,7 +605,7 @@ def group_operations(
             groups.append(Group("type", text=str(args[0])))
             index += 1
         elif kind == "scroll":
-            # Both arities, disambiguated by pixeldesk's own scroll_deltas --
+            # Both arities, disambiguated by desktop's own scroll_deltas --
             # the one function ir.py declares as the only place that decides.
             dx, dy = scroll_deltas(args)
             groups.append(Group("scroll", dx=int(dx), dy=int(dy)))
@@ -889,12 +889,12 @@ def normalize_key(value: object, *, error: type[Exception] = ValueError) -> str:
 
 
 # No handler tables live here, and none should be added. There is no dispatch
-# engine in pixeldesk for a grammar to contribute a ``dict[str, Handler]`` to. A
+# engine in desktop for a grammar to contribute a ``dict[str, Handler]`` to. A
 # shared ``match`` over grammar-specific action names would be wrong, because
 # that set is open per grammar; a codec's job ends at ``compile``, and the
 # Operation vocabulary on the far side is closed: a pointer moves, a button
 # transitions, a wheel turns, text arrives. Lowering it is a fixed
-# ``if kind ==`` chain in ``pixeldesk.execute.guest_program`` over something no
+# ``if kind ==`` chain in ``desktop.execute.guest_program`` over something no
 # grammar extends.
 
 

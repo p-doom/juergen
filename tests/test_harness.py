@@ -671,7 +671,7 @@ def test_the_grace_window_keeps_the_vm_readable_for_scoring(tmp_path, preparer, 
 
 
 def test_an_infra_invalid_episode_retires_the_vm(tmp_path, preparer, monkeypatch) -> None:
-    """`failed=True` is what makes pixeldesk retire a session instead of returning it
+    """`failed=True` is what makes desktop retire a session instead of returning it
     to the pool as `ready` (`vm/pool.py:509-519`). `_run` publishes every episode
     exception as `infra_invalid` rather than re-raising, so `launch` must set
     `failed` from that too — otherwise a wedged guest (dead executor transport,
