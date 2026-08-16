@@ -54,15 +54,14 @@ flags.DEFINE_string(
 )
 flags.DEFINE_enum(
     "overflow_mode",
-    "split",
-    ["split", "truncate", "drop"],
-    "Behaviour for conversations longer than max_length. 'split' (default): "
-    "pack into multiple consecutive chunks at turn boundaries (no turns "
-    "dropped). 'truncate': keep only the first fitting chunk and drop the "
-    "overflowing turn plus the rest of the conversation. 'drop': discard the "
-    "whole conversation if it does not fit in a single chunk. Forwarded to "
-    "omegalax/scripts/build_sft_chunk_index.py --overflow_mode; per-split "
-    "truncation stats land in each split's truncation_stats.json.",
+    "drop",
+    ["truncate", "drop"],
+    "Behaviour for conversations longer than max_length. 'truncate': keep "
+    "only the first fitting chunk (the goal-bearing prefix) and drop the "
+    "overflowing turn plus the rest of the conversation. 'drop' (default): "
+    "discard the whole conversation if it does not fit in a single chunk. "
+    "Forwarded to omegalax/scripts/build_sft_chunk_index.py --overflow_mode; "
+    "per-split truncation stats land in each split's truncation_stats.json.",
 )
 flags.DEFINE_string(
     "message_lengths_path",
