@@ -37,6 +37,8 @@ dependencies = [
     # transformers' chat-template renderer pulls jinja2 lazily; needed so
     # apply_chat_template doesn't ImportError on first call.
     "jinja2>=3.1",
+    # stage 06 vision-tokens-per-chunk percentile CDF (Agg backend, PNG only).
+    "matplotlib>=3.8",
 ]
 
 [build-system]
