@@ -220,6 +220,108 @@ class OSWorldClient:
             f"VM agent at {self.base_url} not ready after {timeout_s}s"
         )
 
+    # ------------------------------------------------------- guest hotfix
+    #
+    # The in-VM agent leaks one X server connection per ``/screenshot``.
+    # ``pyxcursor.Xcursor.__init__`` calls ``XOpenDisplay`` (a real socket to
+    # Xorg plus a server-side client slot) and nothing ever calls
+    # ``XCloseDisplay``; the class-level ``display = None`` cache that was
+    # meant to make the connection shared is never filled, because the result
+    # is assigned to ``self.display`` -- an *instance* attribute -- so the
+    # ``if not self.display`` guard passes for every request. Garbage
+    # collection cannot help: the handle is a bare ctypes pointer.
+    #
+    # Xorg refuses clients past its 256 ceiling, so with ~5-6 screenshots per
+    # turn a 64-turn task hits the wall around turn ~55: every subsequent
+    # ``/screenshot`` 500s and the agent then dies outright, ending the
+    # attempt in an exception instead of a score. One word fixes it, but the
+    # qcow2 is shared and boots with ``snapshot=on`` (writes are discarded),
+    # so the patch is applied to each VM after boot rather than to the image.
+    _XCURSOR_FIX_SRC = """
+path = "/home/user/server/pyxcursor.py"
+old = "self.display = self.xlib.XOpenDisplay(display)"
+new = "Xcursor.display = self.xlib.XOpenDisplay(display)"
+with open(path) as fh:
+    src = fh.read()
+if new in src:
+    print("already-patched")
+elif src.count(old) != 1:
+    print("pattern-missing:%d" % src.count(old))
+else:
+    with open(path, "w") as fh:
+        fh.write(src.replace(old, new))
+    print("patched")
+"""
+
+    # Kill delay (1s, so this request can outlive its own server) plus the
+    # unit's RestartSec=5s, plus margin for systemd to notice the death.
+    _AGENT_RESTART_GRACE_S = 9.0
+
+    def patch_xcursor_leak(self, *, ready_timeout_s: float = 120.0) -> str:
+        """Stop the guest agent leaking an X connection per ``/screenshot``.
+
+        Rewrites ``pyxcursor.py`` in the VM and restarts the agent so the
+        patched module is imported. Returns the status string (``patched``,
+        ``already-patched``, ``pattern-missing:N``, ``error``).
+
+        Best effort by design: a VM that refuses the patch still runs the
+        eval, just with the old ~55-turn ceiling, so every failure path logs
+        a warning and returns rather than raising.
+        """
+        try:
+            status = self._execute_python(self._XCURSOR_FIX_SRC).strip()
+        except Exception as exc:  # noqa: BLE001 - never fail an attempt here
+            _LOGGER.warning("xcursor leak patch: could not patch guest (%s)", exc)
+            return "error"
+
+        if status == "already-patched":
+            _LOGGER.info("xcursor leak patch: already applied")
+            return status
+        if status != "patched":
+            _LOGGER.warning(
+                "xcursor leak patch: XOpenDisplay call not found (%s) -- "
+                "guest image changed? VMs will still die around turn ~55",
+                status or "<no output>",
+            )
+            return status or "error"
+
+        try:
+            self._restart_guest_agent()
+            self.wait_ready(timeout_s=ready_timeout_s)
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning(
+                "xcursor leak patch: agent did not come back after restart (%s)", exc
+            )
+            return "error"
+        _LOGGER.info("xcursor leak patch: applied, agent restarted")
+        return status
+
+    def _execute_python(self, source: str) -> str:
+        """Run ``source`` as ``python3 -c`` in the VM, returning its stdout.
+
+        Unlike :meth:`execute_capture` this sends the code verbatim, with no
+        pyautogui prefix, and uses ``shell=False`` so nothing in ``source``
+        needs quoting.
+        """
+        return self.run_command(["python3", "-c", source]).get("output", "")
+
+    def _restart_guest_agent(self) -> None:
+        """Restart the in-VM agent by killing it and letting systemd respawn.
+
+        ``/execute`` runs as the unprivileged ``user`` and sudo in the OSWorld
+        image needs a password, so ``systemctl restart`` is out. The unit is
+        ``Restart=on-failure``/``RestartSec=5s``, and systemd counts SIGKILL
+        as a failure, so a kill brings the agent straight back. The kill is
+        delayed and detached (``setsid``) so this request can return before
+        the process serving it dies.
+        """
+        self.run_command(
+            'PID=$(systemctl show -p MainPID --value osworld.service); '
+            'setsid bash -c "sleep 1; kill -9 $PID" >/dev/null 2>&1 &',
+            shell=True,
+        )
+        time.sleep(self._AGENT_RESTART_GRACE_S)
+
     # ------------------------------------------------------------- query
     def screenshot(self) -> Image.Image:
         r = self._sess.get(f"{self.base_url}/screenshot", timeout=self.timeout)

@@ -21,6 +21,7 @@ import math
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -202,10 +203,13 @@ class Task:
     # "prefix" (default): turns are distinct ordered sub-goals -- the
     # trajectory stops at the first turn whose action+verifier don't match,
     # and success requires every turn to pass in order (see
-    # _finalize_multiturn_result). "retry": every turn shares the same goal
-    # and acts as one attempt out of a budget -- the trajectory keeps going
-    # after a non-matching turn and succeeds as soon as any turn's verifier
-    # passes, however it got there. Only meaningful when ``turns`` is set.
+    # _finalize_multiturn_result). "multiturn": every turn shares the same
+    # end goal and is one try out of a budget -- the cursor is NOT reset
+    # between turns (it's one continuous trajectory building toward that
+    # goal, e.g. clicking several calculator buttons in sequence), the
+    # trajectory keeps going after a non-matching turn, and it succeeds as
+    # soon as any turn's verifier passes, however it got there. Only
+    # meaningful when ``turns`` is set.
     turn_mode: str = "prefix"
 
 
@@ -235,7 +239,7 @@ def load_suite(path: Path) -> tuple[dict[str, Any], list[Task]]:
         common = {"id", "category", "instruction", "setup"}
         atomic = {"target", "cursor", "expected", "verifier"}
         has_turns_list = "turns" in item
-        # Compact form for turn_mode="retry" budgets: one shared turn
+        # Compact form for turn_mode="multiturn" budgets: one shared turn
         # template repeated ``max_turns`` times, instead of writing out N
         # near-identical dicts by hand.
         has_turn_template = "turn" in item
@@ -258,13 +262,13 @@ def load_suite(path: Path) -> tuple[dict[str, Any], list[Task]]:
         if missing or extra:
             raise ValueError(f"task {index}: missing={sorted(missing)} extra={sorted(extra)}")
         turn_mode = str(item.get("turn_mode", "prefix"))
-        if turn_mode not in ("prefix", "retry"):
+        if turn_mode not in ("prefix", "multiturn"):
             raise ValueError(
-                f"task {index}: turn_mode must be 'prefix' or 'retry', got {turn_mode!r}"
+                f"task {index}: turn_mode must be 'prefix' or 'multiturn', got {turn_mode!r}"
             )
-        if has_turn_template and turn_mode != "retry":
+        if has_turn_template and turn_mode != "multiturn":
             raise ValueError(
-                f"task {index}: 'turn'+'max_turns' only makes sense with turn_mode='retry' "
+                f"task {index}: 'turn'+'max_turns' only makes sense with turn_mode='multiturn' "
                 "(every turn shares one goal) -- use an explicit 'turns' list for a sequence "
                 "of distinct sub-goals"
             )
@@ -597,6 +601,89 @@ def serialize_action(action: OrderedAction | None) -> list[dict[str, Any]]:
 
 _NATIVE_MOUSE_BUTTON_NAME = {"LMB": "left", "MMB": "middle", "RMB": "right"}
 
+# Modifier/named-key spellings that mean the same physical key. Side-suffixed
+# forms (ControlLeft/ControlRight) are folded onto the base before lookup.
+_KEY_ALIASES = {
+    "CONTROL": "CTRL",
+    "CTRL": "CTRL",
+    "SHIFT": "SHIFT",
+    "ALT": "ALT",
+    "OPTION": "ALT",
+    "META": "META",
+    "SUPER": "META",
+    "WIN": "META",
+    "CMD": "META",
+    "COMMAND": "META",
+    "RETURN": "ENTER",
+    "ENTER": "ENTER",
+    "ESCAPE": "ESC",
+    "ESC": "ESC",
+    "DELETE": "DELETE",
+    "DEL": "DELETE",
+}
+
+
+def _canonical_key_name(name: Any) -> str:
+    """Fold a key spelling onto one canonical token.
+
+    The model is instructed (see osworld_system_prompts) to emit *rdev* names
+    -- ``KeyS``, ``Num7``, ``ControlLeft`` -- while the task suite writes
+    ``expected.keys`` in human form -- ``S``, ``7``, ``CTRL``. Comparing those
+    with a plain ``.upper()`` never matches, which is why every key task
+    scored expected_action_rate 0.0 under cua_ordered_typing_v1 even when the
+    verifier confirmed the chord fired. Normalize both sides through here.
+    """
+    token = str(name).strip().upper()
+    if not token:
+        return ""
+    # rdev prefixes a bare character: KeyS -> S, Num7 -> 7, Digit7 -> 7.
+    for prefix in ("KEY", "DIGIT", "NUM"):
+        rest = token[len(prefix) :]
+        if token.startswith(prefix) and len(rest) == 1 and rest.isalnum():
+            return rest
+    for suffix in ("LEFT", "RIGHT"):
+        if token.endswith(suffix) and token[: -len(suffix)] in _KEY_ALIASES:
+            token = token[: -len(suffix)]
+            break
+    return _KEY_ALIASES.get(token, token)
+
+
+def _releases_match_presses(downs: Any, ups: Any) -> bool:
+    """True when ``ups`` releases exactly the keys ``downs`` pressed.
+
+    Order-insensitive by design. A chord fires when its last key goes down, so
+    releasing ``S, Ctrl, Shift`` versus ``S, Shift, Ctrl`` produces the same
+    chord and leaves no key stuck. Demanding strict reverse order flagged a
+    working Ctrl+Shift+S as wrong. Multiset equality still rejects the real
+    fault -- an unbalanced chord that leaves a modifier held.
+    """
+    return sorted(_canonical_key_name(p.name) for p in downs) == sorted(
+        _canonical_key_name(p.name) for p in ups
+    )
+
+
+def _repeated_mouse_click_count(primitives: list[OrderedPrimitive]) -> int:
+    """Return N if ``primitives`` is exactly N consecutive down/up pairs on one
+    mouse button, else 0.
+
+    A multi-click is *interleaved* -- ``down(LMB); up(LMB); down(LMB); up(LMB)``
+    for a double-click -- not the nested ``down; down; up; up`` shape a keyboard
+    chord has, so it needs its own recognizer. Single clicks (N=1) go through
+    here too; the shapes are the same sequence at different repeat counts.
+    """
+    if len(primitives) < 2 or len(primitives) % 2 != 0:
+        return 0
+    button = primitives[0].mouse_button
+    if button is None:
+        return 0
+    for index in range(0, len(primitives), 2):
+        down, up = primitives[index], primitives[index + 1]
+        if down.kind != "down" or up.kind != "up":
+            return 0
+        if down.mouse_button != button or up.mouse_button != button:
+            return 0
+    return len(primitives) // 2
+
 
 def _canonicalize_native_ordered_action(action: OrderedAction | None) -> OrderedPrimitive | None:
     """cua_ordered_typing_v1 (this branch's own ordered_events_v3) has no
@@ -628,6 +715,17 @@ def _canonicalize_native_ordered_action(action: OrderedAction | None) -> Ordered
         primitives = primitives[1:]
     if len(primitives) == 1:
         return primitives[0]
+    # Mouse clicks first: they interleave (down/up, down/up), so the nested
+    # chord branch below would split a double-click down the middle, see
+    # `[down, up]` where it demands all-downs, and reject it -- which is why a
+    # correct double-click scored expected_action_ok=false even with the
+    # verifier confirming the folder opened.
+    click_count = _repeated_mouse_click_count(primitives)
+    if click_count:
+        name = primitives[0].name
+        return OrderedPrimitive(
+            kind="click", name=_NATIVE_MOUSE_BUTTON_NAME.get(name, name), count=click_count
+        )
     if (
         len(primitives) >= 2
         and len(primitives) % 2 == 0
@@ -637,21 +735,12 @@ def _canonicalize_native_ordered_action(action: OrderedAction | None) -> Ordered
         downs, ups = primitives[:half], primitives[half:]
         if not (all(p.kind == "down" for p in downs) and all(p.kind == "up" for p in ups)):
             return None
-        # A single down/up pair on a mouse button is a click; everything
-        # else (one keyboard key, or a balanced multi-key chord) is a
-        # key_combo -- both require the ups to mirror the downs exactly
-        # (same names, reverse order; trivially true for a single key).
-        if (
-            len(downs) == 1
-            and downs[0].mouse_button is not None
-            and downs[0].mouse_button == ups[0].mouse_button
-        ):
-            button = _NATIVE_MOUSE_BUTTON_NAME.get(downs[0].name, downs[0].name)
-            return OrderedPrimitive(kind="click", name=button, count=1)
-        if all(p.mouse_button is None for p in primitives) and [p.name for p in downs] == list(
-            reversed([p.name for p in ups])
-        ):
-            return OrderedPrimitive(kind="key_combo", keys=tuple(p.name for p in downs))
+        # A balanced keyboard chord: the ups must release exactly the keys the
+        # downs pressed (order-insensitive, see _releases_match_presses).
+        if all(p.mouse_button is None for p in primitives) and _releases_match_presses(downs, ups):
+            return OrderedPrimitive(
+                kind="key_combo", keys=tuple(_canonical_key_name(p.name) for p in downs)
+            )
     return None
 
 
@@ -675,7 +764,7 @@ def _native_ordered_key_or_type_match(
         return any(p.kind == "type" and p.text == text for p in primitives)
     if kind != "key":
         return False
-    keys = tuple(str(k).upper() for k in expected.get("keys", ()))
+    keys = tuple(_canonical_key_name(k) for k in expected.get("keys", ()))
     if not keys:
         return False
     if len(keys) == 1 and len(keys[0]) == 1:
@@ -690,9 +779,9 @@ def _native_ordered_key_or_type_match(
         ups = primitives[start + n : start + 2 * n]
         if not (all(p.kind == "down" for p in downs) and all(p.kind == "up" for p in ups)):
             continue
-        if tuple(str(p.name).upper() for p in downs) != keys:
+        if tuple(_canonical_key_name(p.name) for p in downs) != keys:
             continue
-        if [p.name for p in downs] != list(reversed([p.name for p in ups])):
+        if not _releases_match_presses(downs, ups):
             continue
         return True
     return False
@@ -702,7 +791,7 @@ def action_matches_expected(
     action: OrderedAction | None, expected: dict[str, Any], action_format: str = _REL_STEP_FORMAT
 ) -> bool:
     if expected.get("kind") == "any":
-        # Outcome-only tasks (turn_mode="retry") don't prescribe a specific
+        # Outcome-only tasks (turn_mode="multiturn") don't prescribe a specific
         # primitive -- any dispatchable, non-no-op action counts, regardless
         # of format or how many primitives it bundles into one reply. Only
         # the verifier decides whether it actually solved the task.
@@ -736,8 +825,8 @@ def action_matches_expected(
         matches = primitive.kind == "type" and primitive.text == expected.get("text")
     elif kind == "key":
         matches = primitive.kind == "key_combo" and tuple(
-            str(key).upper() for key in primitive.keys
-        ) == tuple(str(key).upper() for key in expected.get("keys", []))
+            _canonical_key_name(key) for key in primitive.keys
+        ) == tuple(_canonical_key_name(key) for key in expected.get("keys", []))
     elif kind == "scroll" and (
         primitive.kind == "scroll" and primitive.dx == 0 and primitive.dy != 0
     ):
@@ -890,6 +979,60 @@ def _chrome_html(variant: str) -> dict[str, str]:
             }
           </script>
         """
+    elif variant == "wikipedia":
+        # Same contract as the "search" variant above, re-skinned for an
+        # encyclopedia lookup: a deterministic local stand-in, never the real
+        # wikipedia.org. Nothing in this suite has network egress (every
+        # fixture is a file:// page and Chrome launches with background
+        # networking disabled), and real article titles/rankings drift over
+        # time, so a live search could not be verified reproducibly.
+        # Two title transitions make the two halves of the goal separately
+        # checkable: RESULTS_WIKIPEDIA proves a query was actually submitted,
+        # PASS_TRANSFORMERS_ARTICLE proves the result was opened.
+        body = """
+          <div id='cua-home'>
+            <div class='hero'>Web Search</div>
+            <form id='cua-search-form' onsubmit="cuaSubmitSearch(); return false;">
+              <input id='cua-search-input' autofocus autocomplete='off' placeholder='Search the web'>
+              <button id='cua-search-btn' type='submit'>Search</button>
+            </form>
+          </div>
+          <div id='cua-results' style='display:none'>
+            <div class='hero'>Search results</div>
+            <button id='cua-first-result' onclick='cuaOpenFirstResult()'>
+              <b>Transformer (deep learning architecture)</b><br>
+              Wikipedia — the free encyclopedia
+            </button>
+          </div>
+          <div id='cua-article' style='display:none'>
+            <div class='hero'>Transformer (deep learning architecture) — Wikipedia</div>
+          </div>
+          <style>
+            #cua-search-form{position:fixed;left:30vw;top:44vh;width:56vw;height:8vh;display:flex;gap:1vw}
+            #cua-search-input{flex:1;font-size:22px;padding:0 16px;border:1px solid #c7ccd6;border-radius:8px}
+            #cua-search-btn{width:14vw;font-size:20px;font-weight:700;border:0;border-radius:8px;background:#1769e0;color:#fff}
+            #cua-first-result{position:fixed;left:15vw;top:20vh;width:70vw;height:12vh;display:block;
+              text-align:left;background:#ffffff;border:1px solid #dbe2ee;border-radius:12px;
+              padding:2vh 2vw;cursor:pointer;font-size:20px}
+            #cua-first-result b{color:#1a0dab;font-size:24px}
+          </style>
+          <script>
+            document.title='SEARCH_READY';
+            function cuaSubmitSearch(){
+              var q = document.getElementById('cua-search-input').value || '';
+              if (/wikipedia|transformer/i.test(q)) {
+                document.getElementById('cua-home').style.display='none';
+                document.getElementById('cua-results').style.display='block';
+                document.title='RESULTS_WIKIPEDIA';
+              }
+            }
+            function cuaOpenFirstResult(){
+              document.getElementById('cua-results').style.display='none';
+              document.getElementById('cua-article').style.display='block';
+              document.title='PASS_TRANSFORMERS_ARTICLE';
+            }
+          </script>
+        """
     else:
         body = "<div class='hero'>Chrome micro-eval ready</div><script>document.title='BLANK_READY'</script>"
     return {"/tmp/cua_micro.html": f"<!doctype html><style>{style}</style>{body}"}
@@ -939,6 +1082,70 @@ def _close_browser_popups(client: OSWorldClient, keep_title: str) -> list[str]:
             continue
         closed.append(title)
     return closed
+
+
+_CHROME_STARTUP_INSTALLER = r'''
+import os, glob, shutil, subprocess, sys
+
+URL = sys.argv[1]
+# Flags mirror _launch_chrome's: without them a user-launched Chrome opens the
+# first-run wizard / "make Chrome default" prompt on top of the fixture, which
+# the model would have to dismiss before it could do anything.
+FLAGS = ("--no-first-run --no-default-browser-check "
+         "--disable-session-crashed-bubble --disable-infobars --disable-translate")
+
+candidates = []
+for root in ("/usr/share/applications", "/var/lib/snapd/desktop/applications",
+             "/usr/local/share/applications"):
+    candidates += sorted(glob.glob(os.path.join(root, "*chrom*.desktop")))
+if not candidates:
+    raise SystemExit("no chrome/chromium .desktop file found")
+source = candidates[0]
+
+target_dir = os.path.expanduser("~/.local/share/applications")
+os.makedirs(target_dir, exist_ok=True)
+target = os.path.join(target_dir, os.path.basename(source))
+
+out = []
+for line in open(source, encoding="utf-8", errors="replace").read().splitlines():
+    if line.startswith("Exec="):
+        exec_line = line[len("Exec="):]
+        # Drop field codes (%U/%F/%u/%f) so the desktop entry cannot substitute
+        # a caller-supplied file list in place of our URL.
+        for code in ("%U", "%F", "%u", "%f"):
+            exec_line = exec_line.replace(code, "")
+        line = "Exec=" + " ".join(exec_line.split()) + " " + FLAGS + " " + URL
+    out.append(line)
+open(target, "w", encoding="utf-8").write("\n".join(out) + "\n")
+os.chmod(target, 0o755)
+
+# A stale running Chrome would keep its old tabs and ignore the new entry.
+subprocess.run(["pkill", "-f", "google-chrome|chromium"], check=False)
+if shutil.which("update-desktop-database"):
+    subprocess.run(["update-desktop-database", target_dir], check=False)
+print("installed " + target + " from " + source)
+'''
+
+
+def _install_chrome_startup_page(client: OSWorldClient, variant: str) -> None:
+    """Make a *model-launched* Chrome open the micro-eval fixture.
+
+    Tasks with ``setup.kind == "desktop"`` deliberately leave Chrome closed so
+    the model has to open it itself, which means ``_launch_chrome`` never runs
+    and the fixture URL can't be passed on the command line. Overriding the
+    ``.desktop`` entry in ``~/.local/share/applications`` (which takes
+    precedence over ``/usr/share/applications``) makes every launch path --
+    dock icon, Activities search, terminal -- land on the fixture, and needs no
+    root, unlike a Chrome managed-policy file.
+    """
+    for path, text in _chrome_html(variant).items():
+        _upload_bytes(client, path, text.encode())
+    _upload_bytes(
+        client, "/tmp/cua_install_chrome_startup.py", _CHROME_STARTUP_INSTALLER.encode()
+    )
+    client.run_command(
+        ["python3", "/tmp/cua_install_chrome_startup.py", "file:///tmp/cua_micro.html"]
+    )
 
 
 def _launch_chrome(client: OSWorldClient, variant: str) -> None:
@@ -992,8 +1199,8 @@ def _launch_chrome(client: OSWorldClient, variant: str) -> None:
     time.sleep(1.0)
     _close_browser_popups(client, keep_title=expected_title)
     if activate_title is not None:
-        _wait_until(lambda: _activate_chrome_target(client, activate_title), timeout_s=20)
-    _wait_until(lambda: expected_title in _active_title(client), timeout_s=20)
+        _wait_until(lambda: _activate_chrome_target(client, activate_title), timeout_s=40)
+    _wait_until(lambda: expected_title in _active_title(client), timeout_s=40)
     if variant == "history":
         width, height = client.screen_size()
         client.execute(f"pyautogui.click(x={width // 2}, y={height // 2}, button='left')")
@@ -1187,6 +1394,11 @@ time.sleep(30)
 def prepare_task(client: OSWorldClient, task: Task) -> dict[str, Any]:
     kind = task.setup.get("kind")
     if kind == "desktop":
+        # Optional: preload a Chrome fixture the model will reach by opening
+        # Chrome itself (see _install_chrome_startup_page).
+        chrome_startup = task.setup.get("chrome_startup")
+        if chrome_startup:
+            _install_chrome_startup_page(client, str(chrome_startup))
         try:
             client.run_command(
                 [
@@ -1207,7 +1419,7 @@ def prepare_task(client: OSWorldClient, task: Task) -> dict[str, Any]:
     if kind == "native_app":
         return _launch_native_app(client, str(task.setup["app"]))
     if kind == "native_terminal_capture":
-        # task.expected is empty for turn_mode="retry" tasks -- the shared
+        # task.expected is empty for turn_mode="multiturn" tasks -- the shared
         # expected text lives per-turn (see task_turns); every turn's is
         # identical here since it's the compact 'turn'+'max_turns' template.
         return _launch_native_terminal_capture(
@@ -1373,12 +1585,12 @@ def _finalize_multiturn_result(
     is the length of the leading run of turn successes, and the attempt only
     succeeds if every turn passed in order.
 
-    ``"retry"``: every turn shares the same end goal and is one try out of a
-    fixed budget -- the attempt succeeds as soon as ANY turn's verifier
+    ``"multiturn"``: every turn shares the same end goal and is one try out
+    of a fixed budget -- the attempt succeeds as soon as ANY turn's verifier
     passes, however many tries it took; ``progress`` is binary since there is
     no single ordered path whose prefix defines partial credit.
     """
-    if turn_mode == "retry":
+    if turn_mode == "multiturn":
         success = any(bool(row["success"]) for row in turn_results)
         verified_prefix = len(turn_results) if success else 0
         completed = success or len(turn_results) == len(turns)
@@ -1420,7 +1632,7 @@ def run_multiturn_attempt(
     exceed it, only the newest ``n_history_frames // 2`` frames are kept.
     ``None`` (the default) means unbounded -- history grows for the whole
     trajectory, matching this function's original behavior. This matters now
-    that ``turn_mode="retry"`` tasks can run dozens of turns in one attempt.
+    that ``turn_mode="multiturn"`` tasks can run dozens of turns in one attempt.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     setup_state = prepare_task(client, task)
@@ -1462,8 +1674,15 @@ def run_multiturn_attempt(
             turns=(),
         )
         bbox = resolve_target_bbox(client, turn_task, setup_state, screen)
-        start = resolve_cursor_start(turn.cursor, bbox, screen)
-        client.execute(f"pyautogui.moveTo({start[0]}, {start[1]})")
+        # Only warp the cursor once, at the very start of the trajectory.
+        # Every later turn -- whether "prefix" (a distinct ordered sub-goal)
+        # or "multiturn" (another try at the same end goal) -- is the SAME
+        # continuous trajectory as the one before it, so it must inherit
+        # wherever the previous turn's dispatched action actually left the
+        # cursor, not teleport back to a fixed point.
+        if turn_index == 0:
+            start = resolve_cursor_start(turn.cursor, bbox, screen)
+            client.execute(f"pyautogui.moveTo({start[0]}, {start[1]})")
         actual_start = client.cursor_position()
         before_state = read_verifier_state(client, turn.verifier)
         before = client.screenshot_settled(min_delay_s=0.2, stability_timeout_s=1.0)
@@ -1527,7 +1746,7 @@ def run_multiturn_attempt(
 
         # The model believes the trajectory is done (success or give-up) --
         # honor that immediately rather than dispatching it as an action.
-        # Without this, turn_mode="retry" tasks (no per-turn break-on-failure)
+        # Without this, turn_mode="multiturn" tasks (no per-turn break-on-failure)
         # kept burning the rest of their turn budget on a task the model had
         # already abandoned, e.g. type.text_editor.native_exact running all
         # 32 turns after the model gave up following an early mismatch.
@@ -1567,7 +1786,12 @@ def run_multiturn_attempt(
             success = bool(expected_ok and verifier_ok and location_ok)
 
         if save_frames:
-            after.save(steps_dir / f"step_{turn_index + 1:03d}.png")
+            # NOT `step_{turn_index+1}.png` -- every turn resets the cursor
+            # before capturing its own "before" frame, so that name is the
+            # next turn's before-frame and would silently overwrite this
+            # turn's real result (see the `_after` convention already used
+            # by the synthetic-validation path below).
+            after.save(steps_dir / f"step_{turn_index:03d}_after.png")
             _draw_overlay(
                 before,
                 bbox,
@@ -1624,12 +1848,21 @@ def run_multiturn_attempt(
         )
         recent_actions.append(response)
         if terminated:
-            break  # model ended the trajectory itself -- nothing left to retry
-        if task.turn_mode == "retry":
+            break  # model ended the trajectory itself -- nothing left to try
+        if task.turn_mode == "multiturn":
             if success:
-                break  # goal reached -- stop spending the retry budget
+                break  # goal reached -- stop spending the turn budget
         elif not success:
             break
+
+    if save_frames and turn_results:
+        # The loop only ever writes before-frames under the viewer's
+        # `step_{n}.png` name, so the terminal state -- trajectory.jsonl's last
+        # entry, step_num == len(turn_results) -- had no frame at all and the
+        # rollout viewer showed a blank final step. The last turn's `after`
+        # frame IS that state; give it the terminal index too. No collision:
+        # the loop has exited, so no later turn claims this name.
+        after.save(steps_dir / f"step_{len(turn_results):03d}.png")
 
     verified_prefix, completed, success, progress = _finalize_multiturn_result(
         turn_results, turns, task.turn_mode
@@ -1950,13 +2183,16 @@ def validate_multiturn_task_setup(
             turns=(),
         )
         bbox = resolve_target_bbox(client, turn_task, setup_state, screen)
-        start = resolve_cursor_start(turn.cursor, bbox, screen)
-        client.execute(f"pyautogui.moveTo({start[0]}, {start[1]})")
+        # See the matching comment in run_multiturn_attempt: only reset once,
+        # at the very start of the trajectory (turn 0).
+        if turn_index == 0:
+            start = resolve_cursor_start(turn.cursor, bbox, screen)
+            client.execute(f"pyautogui.moveTo({start[0]}, {start[1]})")
         actual_start = client.cursor_position()
         before_state = read_verifier_state(client, turn.verifier)
         before = client.screenshot_settled(min_delay_s=0.2, stability_timeout_s=1.0)
         if turn.expected.get("kind") == "any":
-            # Outcome-only (turn_mode="retry") turns don't prescribe a
+            # Outcome-only (turn_mode="multiturn") turns don't prescribe a
             # specific primitive, so there is no single "known-correct"
             # synthetic action to replay here -- skip rather than crash.
             # Exercising the underlying verifier/goal for these tasks still
@@ -2336,6 +2572,75 @@ def _launch_vm(
     )
 
 
+def _port_free(port: int) -> bool:
+    """True if we can bind host ``port`` -- i.e. qemu's hostfwd rule would too.
+
+    Mirrors qemu's bind (INADDR_ANY, no SO_REUSEADDR): if another job's qemu (or
+    a leftover of our own) still holds the forwarded port, this returns False,
+    which is exactly the condition under which a fresh qemu aborts with 'Could
+    not set up host forwarding rule' and exits.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("", port))
+            return True
+        except OSError:
+            return False
+
+
+def _wait_ports_free(
+    ports: list[int], *, timeout_s: float = 20.0, poll_s: float = 0.25
+) -> list[int]:
+    """Wait until every port in ``ports`` is bindable; return any still busy."""
+    deadline = time.time() + timeout_s
+    while True:
+        busy = [p for p in ports if not _port_free(p)]
+        if not busy or time.time() >= deadline:
+            return busy
+        time.sleep(poll_s)
+
+
+def _assert_qemu_alive(proc: subprocess.Popen, log_path: Path, *, what: str) -> None:
+    """Fail loudly if qemu died right after spawn (e.g. a fatal hostfwd bind
+    failure), instead of letting wait_ready() burn its full 300s timeout -- or,
+    worse, silently connect to *another job's* VM on the colliding port.
+
+    qemu prints the reason and exits within milliseconds of such a failure, so a
+    short grace period is enough to catch it.
+    """
+    time.sleep(0.7)
+    if proc.poll() is None:
+        return
+    tail = ""
+    try:
+        tail = "\n".join(log_path.read_text().strip().splitlines()[-4:])
+    except Exception:
+        pass
+    raise RuntimeError(
+        f"{what}: qemu exited immediately (code {proc.returncode}). "
+        f"Last lines of {log_path}:\n{tail}"
+    )
+
+
+def _preflight_ports(ports: list[int], *, job_mod: int) -> None:
+    """Fail fast at startup if this job's port window is already occupied.
+
+    ``job_mod`` hashes SLURM_JOB_ID into a 10-wide window, so two concurrently
+    scheduled jobs on the same node whose ids are congruent mod 200 land on
+    identical ports. Without this check the collision only surfaces as every
+    attempt timing out in wait_ready() after 300s apiece.
+    """
+    busy = _wait_ports_free(ports, timeout_s=5.0)
+    if not busy:
+        return
+    raise SystemExit(
+        f"port collision: {busy} already bound on this node "
+        f"(job_mod={job_mod}, from SLURM_JOB_ID % 200 * 10). Another eval job "
+        "with a congruent job id, or a leftover qemu, holds this window -- "
+        "resubmit for a different job id or kill the stale qemu."
+    )
+
+
 def _terminate(proc: subprocess.Popen, *, label: str) -> None:
     if proc.poll() is not None:
         return
@@ -2423,16 +2728,24 @@ def _run_one_task_attempt(
         attempt_index + 1,
         seed,
     )
+    # The previous attempt on this slot has just torn its qemu down; give the
+    # kernel a moment to release the forwards before rebinding them.
+    busy = _wait_ports_free([vm_port, vnc_port])
+    if busy:
+        _LOGGER.warning("ports %s still bound before launch -- qemu may abort", busy)
+    qemu_log = attempt_dir / "qemu.log"
     vm_proc = _launch_vm(
         qemu_bin=args.qemu_bin,
         qcow2=args.qcow2,
         vm_port=vm_port,
         vnc_port=vnc_port,
-        log_path=attempt_dir / "qemu.log",
+        log_path=qemu_log,
     )
     try:
+        _assert_qemu_alive(vm_proc, qemu_log, what=f"task={task.task_id} seed={seed}")
         client = OSWorldClient(f"http://localhost:{vm_port}")
         client.wait_ready(timeout_s=300)
+        client.patch_xcursor_leak()
         result = run_attempt(
             client=client,
             task=task,
@@ -2558,7 +2871,7 @@ def main() -> int:
         type=int,
         default=None,
         help="Cap the rolling per-turn frame history for multi_turn tasks "
-        "(turn_mode='retry' tasks can now run dozens of turns in one "
+        "(turn_mode='multiturn' tasks can now run dozens of turns in one "
         "attempt). Mirrors freeroll.py's StreamingLLM-style block eviction "
         "(osworld_runtime.evict_history): once the window would exceed this, "
         "only the newest n_history_frames // 2 frames are kept, preserving "
@@ -2651,6 +2964,14 @@ def main() -> int:
     logging.getLogger().addHandler(logging.FileHandler(output_dir / "cua_micro_eval.log"))
 
     job_mod = (int(os.environ.get("SLURM_JOB_ID", "0")) % 200) * 10
+    # Every port this job will ever bind, checked once up front so a window
+    # collision costs 5s here instead of 300s per attempt in wait_ready().
+    _n_slots = 1 if args.validate_setups_only else args.vms_per_sglang
+    _preflight_ports(
+        [5000 + job_mod + i for i in range(_n_slots)]
+        + [5900 + job_mod + i for i in range(_n_slots)],
+        job_mod=job_mod,
+    )
     if args.validate_setups_only:
         validations: list[dict[str, Any]] = []
         started = time.time()
@@ -2665,16 +2986,20 @@ def main() -> int:
                 len(tasks),
                 task.task_id,
             )
+            _wait_ports_free([vm_port, vnc_port])
+            qemu_log = attempt_dir / "qemu.log"
             vm_proc = _launch_vm(
                 qemu_bin=args.qemu_bin,
                 qcow2=args.qcow2,
                 vm_port=vm_port,
                 vnc_port=vnc_port,
-                log_path=attempt_dir / "qemu.log",
+                log_path=qemu_log,
             )
             try:
+                _assert_qemu_alive(vm_proc, qemu_log, what=f"validate task={task.task_id}")
                 client = OSWorldClient(f"http://localhost:{vm_port}")
                 client.wait_ready(timeout_s=300)
+                client.patch_xcursor_leak()
                 result = validate_task_setup(
                     client=client,
                     task=task,

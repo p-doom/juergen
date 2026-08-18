@@ -68,7 +68,7 @@ class SuiteContractTests(unittest.TestCase):
             for turn in micro.task_turns(task):
                 self.assertIn(
                     turn.expected["kind"],
-                    # "any" marks outcome-only turns (turn_mode="retry"):
+                    # "any" marks outcome-only turns (turn_mode="multiturn"):
                     # no specific primitive is prescribed, only the verifier
                     # decides success.
                     {"move", "click", "type", "scroll", "key", "any"},
@@ -91,20 +91,20 @@ class SuiteContractTests(unittest.TestCase):
         for task in tasks:
             self.assertGreaterEqual(len(task.turns), 2)
             self.assertEqual(task.category, "multi_turn")
-            self.assertIn(task.turn_mode, ("prefix", "retry"))
+            self.assertIn(task.turn_mode, ("prefix", "multiturn"))
             for turn in task.turns:
                 self.assertTrue(turn.turn_id)
                 self.assertIn("kind", turn.verifier)
 
-    def test_retry_mode_tasks_are_outcome_only(self) -> None:
-        retry_tasks = [task for task in self.tasks if task.turn_mode == "retry"]
-        ids = {task.task_id for task in retry_tasks}
+    def test_multiturn_mode_tasks_are_outcome_only(self) -> None:
+        multiturn_tasks = [task for task in self.tasks if task.turn_mode == "multiturn"]
+        ids = {task.task_id for task in multiturn_tasks}
         self.assertIn("multi.calculator.73_plus_19", ids)
         self.assertIn("multi.terminal.hello_world_script", ids)
-        for task in retry_tasks:
+        for task in multiturn_tasks:
             self.assertGreaterEqual(len(task.turns), 2)
             # Every turn shares the same goal: expected is a wildcard and
-            # the verifier is identical across turns (a fixed retry budget
+            # the verifier is identical across turns (a fixed turn budget
             # toward one outcome, not a chain of distinct sub-goals).
             self.assertTrue(all(turn.expected == {"kind": "any"} for turn in task.turns))
             verifiers = {json.dumps(turn.verifier, sort_keys=True) for turn in task.turns}
@@ -133,7 +133,7 @@ class SuiteContractTests(unittest.TestCase):
         return path
 
     _MULTITURN_TASK_BASE: ClassVar[dict] = {
-        "id": "multi.test.retry",
+        "id": "multi.test.multiturn",
         "category": "multi_turn",
         "instruction": "test",
         "setup": {"kind": "desktop"},
@@ -161,12 +161,12 @@ class SuiteContractTests(unittest.TestCase):
             _, tasks = micro.load_suite(path)
         self.assertEqual(tasks[0].turn_mode, "prefix")
 
-    def test_turn_mode_retry_is_accepted(self) -> None:
-        task = {**self._MULTITURN_TASK_BASE, "turn_mode": "retry"}
+    def test_turn_mode_multiturn_is_accepted(self) -> None:
+        task = {**self._MULTITURN_TASK_BASE, "turn_mode": "multiturn"}
         with tempfile.TemporaryDirectory() as directory:
             path = self._write_suite(directory, self._suite_with(task))
             _, tasks = micro.load_suite(path)
-        self.assertEqual(tasks[0].turn_mode, "retry")
+        self.assertEqual(tasks[0].turn_mode, "multiturn")
 
     def test_turn_mode_rejects_unknown_value(self) -> None:
         task = {**self._MULTITURN_TASK_BASE, "turn_mode": "bogus"}
@@ -185,7 +185,7 @@ class SuiteContractTests(unittest.TestCase):
             "cursor": {"kind": "target_center"},
             "expected": {"kind": "click"},
             "verifier": {"kind": "bbox_hit"},
-            "turn_mode": "retry",
+            "turn_mode": "multiturn",
         }
         with tempfile.TemporaryDirectory() as directory:
             path = self._write_suite(directory, self._suite_with(atomic_task))
@@ -199,13 +199,13 @@ class SuiteContractTests(unittest.TestCase):
         "verifier": {"kind": "bbox_hit"},
     }
 
-    def _retry_budget_task(self, **overrides: object) -> dict:
+    def _multiturn_budget_task(self, **overrides: object) -> dict:
         task = {
             "id": "multi.test.budget",
             "category": "multi_turn",
             "instruction": "test",
             "setup": {"kind": "desktop"},
-            "turn_mode": "retry",
+            "turn_mode": "multiturn",
             "turn": dict(self._TURN_TEMPLATE),
             "max_turns": 60,
         }
@@ -214,7 +214,7 @@ class SuiteContractTests(unittest.TestCase):
 
     def test_compact_turn_template_expands_to_max_turns_identical_turns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            path = self._write_suite(directory, self._suite_with(self._retry_budget_task()))
+            path = self._write_suite(directory, self._suite_with(self._multiturn_budget_task()))
             _, tasks = micro.load_suite(path)
         turns = tasks[0].turns
         self.assertEqual(len(turns), 60)
@@ -225,15 +225,15 @@ class SuiteContractTests(unittest.TestCase):
         self.assertTrue(all(turn.target == self._TURN_TEMPLATE["target"] for turn in turns))
         self.assertTrue(all(turn.verifier == self._TURN_TEMPLATE["verifier"] for turn in turns))
 
-    def test_compact_turn_template_requires_retry_mode(self) -> None:
-        task = self._retry_budget_task(turn_mode="prefix")
+    def test_compact_turn_template_requires_multiturn_mode(self) -> None:
+        task = self._multiturn_budget_task(turn_mode="prefix")
         with tempfile.TemporaryDirectory() as directory:
             path = self._write_suite(directory, self._suite_with(task))
-            with self.assertRaisesRegex(ValueError, "turn_mode='retry'"):
+            with self.assertRaisesRegex(ValueError, "turn_mode='multiturn'"):
                 micro.load_suite(path)
 
     def test_compact_turn_template_rejects_turns_list_combined(self) -> None:
-        task = self._retry_budget_task(turns=self._MULTITURN_TASK_BASE["turns"])
+        task = self._multiturn_budget_task(turns=self._MULTITURN_TASK_BASE["turns"])
         with tempfile.TemporaryDirectory() as directory:
             path = self._write_suite(directory, self._suite_with(task))
             with self.assertRaisesRegex(ValueError, "either 'turns' or 'turn'"):
@@ -241,7 +241,7 @@ class SuiteContractTests(unittest.TestCase):
 
     def test_compact_turn_template_rejects_bad_max_turns(self) -> None:
         for bad in (1, 0, -1, "60", 2.5, True):
-            task = self._retry_budget_task(max_turns=bad)
+            task = self._multiturn_budget_task(max_turns=bad)
             with tempfile.TemporaryDirectory() as directory:
                 path = self._write_suite(directory, self._suite_with(task))
                 with self.assertRaisesRegex(ValueError, "max_turns"):
@@ -250,7 +250,7 @@ class SuiteContractTests(unittest.TestCase):
     def test_compact_turn_template_requires_all_turn_fields(self) -> None:
         incomplete = dict(self._TURN_TEMPLATE)
         del incomplete["verifier"]
-        task = self._retry_budget_task(turn=incomplete)
+        task = self._multiturn_budget_task(turn=incomplete)
         with tempfile.TemporaryDirectory() as directory:
             path = self._write_suite(directory, self._suite_with(task))
             with self.assertRaisesRegex(ValueError, "'turn' fields must be"):
@@ -501,7 +501,7 @@ class ActionAndAggregationTests(unittest.TestCase):
         self.assertTrue(success)
         self.assertEqual(progress, 1.0)
 
-    def test_finalize_multiturn_result_retry_mode_succeeds_on_any_attempt(self) -> None:
+    def test_finalize_multiturn_result_multiturn_mode_succeeds_on_any_attempt(self) -> None:
         turns = tuple(
             micro.Turn(turn_id=f"t{i}", target={}, cursor={}, expected={}, verifier={})
             for i in range(5)
@@ -510,7 +510,7 @@ class ActionAndAggregationTests(unittest.TestCase):
         # have broken right there, so only 3 attempts were ever recorded.
         results = [{"success": False}, {"success": False}, {"success": True}]
         verified_prefix, completed, success, progress = micro._finalize_multiturn_result(
-            results, turns, "retry"
+            results, turns, "multiturn"
         )
         self.assertTrue(success)
         self.assertTrue(completed)
@@ -519,7 +519,7 @@ class ActionAndAggregationTests(unittest.TestCase):
 
         exhausted = [{"success": False} for _ in range(5)]
         verified_prefix, completed, success, progress = micro._finalize_multiturn_result(
-            exhausted, turns, "retry"
+            exhausted, turns, "multiturn"
         )
         self.assertFalse(success)
         self.assertTrue(completed)  # budget exhausted counts as "completed"
