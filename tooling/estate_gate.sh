@@ -178,8 +178,14 @@ for entry in "${SUITES[@]}"; do
       export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
       export JAX_PLATFORMS=cpu
     fi
+    # The options go through PYTEST_ADDOPTS, not argv: tokamax reads its own flags
+    # lazily off `sys.argv` (`_src/config.py`, `flags.FLAGS(sys.argv)`), so any
+    # dash-flag on the pytest command line makes every absltest that reaches
+    # tokamax attention die with `UnrecognizedFlagError: Unknown command line flag
+    # 'p'` -- a harness artifact indistinguishable from a real failure.
+    export PYTEST_ADDOPTS="-q -p no:cacheprovider"
     # shellcheck disable=SC2086  # targets is an intentional word list
-    exec "$python" -m pytest $targets -q -p no:cacheprovider
+    exec "$python" -m pytest $targets
   ) 2>&1 | tee "$log"
   status=${PIPESTATUS[0]}
   elapsed=$((SECONDS - suite_started))
