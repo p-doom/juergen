@@ -37,7 +37,14 @@ from evals.harness import (
 from agent.agent import load_codec
 from desktop.geometry import DisplayGeometry
 from evals.tasks import RESULT_KEY, DesktopState, DesktopTaskData, register_preparer, PREPARERS
-from juergen_doubles import FakeSession, make_ctx, make_task_data, make_trace, png
+from juergen_doubles import (
+    FakeSession,
+    load_convert,
+    make_ctx,
+    make_task_data,
+    make_trace,
+    png,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -699,22 +706,6 @@ def test_artifacts_can_be_switched_off_entirely(tmp_path, preparer) -> None:
     assert not (root / "result.json").exists() and not (root / "steps").exists()
 
 
-def _convert_module():
-    """The real BC reader, loaded by path: `datasets/` has no `__init__.py` and
-    HuggingFace's `datasets` owns the name in this venv. Registered in `sys.modules`
-    before execution because `@dataclass` resolves its own module by name.
-    """
-    import importlib.util
-    import sys
-
-    path = Path(__file__).resolve().parents[1] / "datasets" / "convert.py"
-    spec = importlib.util.spec_from_file_location("juergen_datasets_convert", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 def test_nothing_shells_out_to_register_external(tmp_path) -> None:
     """`labctl register-external` takes only --alias/--path/--kind/--cluster, so no
     invocation of it can populate `metadata.result` — and the rollout viewer is gated
@@ -749,7 +740,7 @@ def test_the_rollout_artifact_is_the_layout_labctl_and_convert_both_read(
     `<out>/<subdir>/steps/step_%03d.png`, with `n_steps + 1` frames so that row
     ordinal, `step_num` and frame index are the same number.
     """
-    convert = _convert_module()
+    convert = load_convert()
     session = FakeSession()
     _, result, _ = _run(
         _config(tmp_path),
@@ -825,7 +816,7 @@ def test_our_own_terminate_survives_the_trip_into_another_grammar(
     rather than re-reading either spelling. Getting this wrong writes a dataset that
     claims a success the rollout never claimed.
     """
-    convert = _convert_module()
+    convert = load_convert()
     _run(
         _config(tmp_path),
         _task(max_steps=2, name="cell_term", instruction="stop"),

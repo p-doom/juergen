@@ -10,7 +10,6 @@ prompt no record contains.
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -21,16 +20,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# Loaded by path, not `from datasets import convert`: HuggingFace's `datasets`
-# distribution owns that import name in every venv here, and the repo's
-# `datasets/` is a script directory with no `__init__.py`, so the name resolves to
-# theirs. Same hazard `grammars.load` explains for `desktop`.
-_SPEC = importlib.util.spec_from_file_location(
-    "juergen_datasets_convert", REPO_ROOT / "datasets" / "convert.py"
-)
-convert = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = convert
-_SPEC.loader.exec_module(convert)
+from juergen_doubles import load_convert  # noqa: E402
+
+convert = load_convert()
 
 SCREEN = [1920, 1080]
 

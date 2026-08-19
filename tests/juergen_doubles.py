@@ -9,13 +9,38 @@ qemu is marked `kvm` and skips itself.
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
+import sys
+from pathlib import Path
 from typing import Any, Callable
 
 import verifiers.v1 as vf
 
 from evals.tasks import DesktopState, DesktopTaskData
+
+_CONVERT = "juergen_datasets_convert"
+
+
+def load_convert():
+    """The real BC reader, `datasets/convert.py`, loaded by path and then cached.
+
+    Not `from datasets import convert`: HuggingFace's `datasets` distribution owns
+    that import name in every venv here, and the repo's `datasets/` is a script
+    directory with no `__init__.py`, so the name resolves to theirs. Same hazard
+    `grammars.load` explains for `desktop`. Registered in `sys.modules` before
+    execution because `@dataclass` resolves its own module by name — which is also
+    why it is cached: two live copies of one module means two `Step` classes that
+    are not each other.
+    """
+    if _CONVERT not in sys.modules:
+        path = Path(__file__).resolve().parent.parent / "datasets" / "convert.py"
+        spec = importlib.util.spec_from_file_location(_CONVERT, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[_CONVERT] = module
+        spec.loader.exec_module(module)
+    return sys.modules[_CONVERT]
 
 
 def png(width: int = 8, height: int = 6, colour: tuple[int, int, int] = (10, 20, 30)) -> bytes:
