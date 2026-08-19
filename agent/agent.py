@@ -383,11 +383,11 @@ def _control_of(action: Any) -> str | None:
 def _calls_after_terminate(action: Any) -> int:
     """Calls the turn placed AFTER its own terminate.
 
-    Nothing can run once the episode has ended, but a tool-call grammar's
-    `compile` lowers them anyway — `grammars/move_rel/codec.py:359` skips the
-    terminate call and keeps iterating — and the flat operation stream no longer
-    says which side of the terminate an operation came from. So the count is
-    published rather than inferred.
+    `compile` now stops at the terminate in the two grammars that order their
+    calls, so nothing after it is lowered. The count is still published because
+    the flat operation stream cannot say which side of the terminate an
+    operation came from, so a non-zero value is the only signal that a model
+    placed calls there at all.
 
     Attribute probe, like `_control_of`: the bare-token grammars spell a control
     outcome as a whole action line, have no call list, and answer 0.
