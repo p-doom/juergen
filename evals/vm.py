@@ -301,7 +301,7 @@ def kvm_desktop_pool(
     max_rollouts_per_session: int = 1,
     checkout_timeout_s: float = 1800.0,
     lease_timeout_s: float = 1800.0,
-    startup_timeout_s: float = 900.0,
+    startup_timeout_s: float = 1200.0,
     reset_on_reuse: bool = True,
     osworld_cache_dir: str | Path | None = None,
 ) -> _AdaptedPool:
@@ -316,6 +316,12 @@ def kvm_desktop_pool(
     watchdog reclaims a leased session that has been quiet for that long, and a gate
     cell that waits on a Chrome launch or a model call legitimately is: at 300 s the
     watchdog, not the episode, decides when the VM goes away.
+
+    `startup_timeout_s` must exceed the QEMU runtime's own worst-case start — QMP
+    connect 60 + boot 300 + snapshot 600 = 960 s — which `qemu_session_factory` now
+    refuses at pool construction. The old 900 was below it and always wrong: the
+    supervisor judged a slow-but-healthy first boot by the smaller number, reaped it
+    mid-snapshot, leaked the VM and repeated.
 
     `osworld_cache_dir` is where OSWorld's getters put the files they pull out of
     the guest to score. Left unset it is a per-process temp directory, which is
