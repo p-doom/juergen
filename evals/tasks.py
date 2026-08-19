@@ -97,6 +97,8 @@ class DesktopState(vf.State):
     released_holds: list[dict[str, Any]] = []
     """The presses the rollout left down and the harness lifted at teardown, before
     `evaluate()` ran. Empty for a rollout that released its own."""
+    screen_size: list[int] | None = None
+    """The guest display the codec resolved its coordinates against."""
     infra_valid: bool = True
     infra_error: dict[str, str] | None = None
     codec: str | None = None

@@ -21,7 +21,6 @@ import json
 import logging
 import os
 import socket
-import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
@@ -133,15 +132,32 @@ class BudgetConfig(vf.BaseConfig):
 
 
 class ArtifactConfig(vf.BaseConfig):
+    """Where the run's browsable artifact lands.
+
+    There is no registration knob. `labctl register-external` accepts only
+    `--alias/--path/--kind/--cluster`, so no invocation of it can populate
+    `metadata.result` — and the rollout viewer is gated on
+    `metadata.result.traj_path`. The runner copies the whole marker file into
+    `metadata.result` for an `eval_result` output (`runner.rs:1885-1891`), so
+    registration goes through the recipe's `[outputs]` block with
+    `marker = "result.json"` pointing at `output_dir`.
+    """
+
     output_dir: str = ""
     save_frames: bool = True
     save_prompts: bool = True
     write_gif: bool = True
     write_result_json: bool = True
-    register_labctl: bool = False
-    """`labctl register-external --kind eval_result`, so the run shows up in the
-    RolloutViewer."""
-    labctl_alias: str = ""
+
+    @model_validator(mode="after")
+    def _the_artifact_needs_its_frames(self) -> "ArtifactConfig":
+        if self.write_result_json and not self.save_frames:
+            raise ValueError(
+                "write_result_json emits the trajectory labctl reads, and every row "
+                "of it is fetched by frame filename; save_frames=False would publish "
+                "an artifact whose every frame is a 404"
+            )
+        return self
 
 
 class DesktopPoolConfig(vf.BaseConfig):
@@ -388,36 +404,91 @@ def _write_gif(frames: list[bytes], path: Path) -> None:
     )
 
 
-def _register_labctl(alias: str, path: Path) -> bool:
-    """Best-effort artifact registration; a registry hiccup must not tank a run."""
-    try:
-        proc = subprocess.run(
-            [
-                "labctl",
-                "register-external",
-                "--alias",
-                alias,
-                "--kind",
-                "eval_result",
-                "--path",
-                str(path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
+_TRAJECTORY = "trajectory.jsonl"
+_FRAME = "step_{index:03d}.png"
+_RESET = "<reset>"
+_PROMOTED_STEP_KEYS = frozenset({"step", "raw_model_output", "prose", "sampling"})
+
+
+def _trajectory_rows(
+    steps_detail: list[dict[str, Any]], n_frames: int
+) -> list[dict[str, Any]]:
+    """The rollout rows labctl's viewer and `datasets/convert.py` both read.
+
+    One row per frame: row 0 is the pre-action observation, row n the turn whose
+    post-action screenshot is `step_{n:03d}.png`. Row ordinal, `step_num` and frame
+    index are all the same number, because the viewer indexes `steps[frame]` and
+    `convert.py:458` reads the frame a step SAW as `step_{step_num - 1:03d}.png`.
+    Hence `n_steps + 1` frames, not `n_steps`.
+
+    A turn whose post-action screenshot never happened — the executor died mid-turn,
+    the token budget cut the turn off — has no frame, so it has no row; `result.json`
+    still carries it in `steps_detail`.
+
+    `action` is the raw model output, not a rendered summary: `convert.py:462` reads
+    prose out of `action or response`, so condensing it there empties the prose
+    channel for every record built from this rollout.
+
+    An episode refused before its first observation has no frames and therefore no
+    rows, not even the reset: `result.json` carries why it was refused.
+    """
+    if n_frames == 0:
+        return []
+    rows: list[dict[str, Any]] = [
+        {
+            "step_num": 0,
+            "action": _RESET,
+            "response": _RESET,
+            "reward": 0.0,
+            "done": False,
+            "info": {"kind": "reset", "frame": _FRAME.format(index=0)},
+        }
+    ]
+    for step in steps_detail[: max(0, n_frames - 1)]:
+        info = {key: value for key, value in step.items() if key not in _PROMOTED_STEP_KEYS}
+        info["parsed"] = info.pop("parsed_action")
+        info["frame"] = _FRAME.format(index=step["step"])
+        rows.append(
+            {
+                "step_num": step["step"],
+                "action": step["raw_model_output"],
+                "response": step["raw_model_output"],
+                "reward": 1.0
+                if (step.get("probe") or {}).get("postcondition_success")
+                else 0.0,
+                "done": False,
+                "info": info,
+            }
         )
-    except (subprocess.SubprocessError, FileNotFoundError) as exc:
-        _LOGGER.warning("register-external invocation failed for %s: %s", alias, exc)
-        return False
-    if proc.returncode != 0:
-        _LOGGER.warning(
-            "register-external failed (rc=%d) for %s: %s",
-            proc.returncode,
-            alias,
-            proc.stderr.strip()[:500],
-        )
-        return False
-    return True
+    rows[-1]["done"] = True
+    return rows
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    """Write, never append: a re-run into the same directory must replace."""
+    path.write_text(
+        "".join(json.dumps(row, default=str) + "\n" for row in rows), encoding="utf-8"
+    )
+
+
+def _assert_frame_set(steps_dir: Path, n_rows: int) -> None:
+    """Exactly `step_000..step_{n-1}.png` under `steps/`, and nothing else.
+
+    labctl never lists the directory. One endpoint formats `step_{n:03}.png` from the
+    index it wants (`server.rs:1655`) while a sibling reports `frame_count` by
+    counting every `*.png` (`server.rs:1606`), so a gap is a frame the viewer offers
+    and cannot fetch, and a stray image — a longer earlier run into the same
+    directory — offers frames that do not exist.
+    """
+    expected = {_FRAME.format(index=index) for index in range(n_rows)}
+    present = {path.name for path in steps_dir.glob("*.png")}
+    if present == expected:
+        return
+    raise RuntimeError(
+        f"{steps_dir}: {len(present)} frame(s) for {n_rows} trajectory row(s) — "
+        f"missing {sorted(expected - present)}, "
+        f"unexpected {sorted(present - expected)}"
+    )
 
 
 def _sha256(payload: bytes) -> str:
@@ -443,6 +514,17 @@ def _codec(name: str) -> Any:
 
 class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
     SUPPORTS_MESSAGE_PROMPT = True
+
+    def __init__(self, config: DesktopHarnessConfig) -> None:
+        super().__init__(config)
+        self._runs: dict[str, dict[str, Any]] = {}
+        """Every episode this process published, keyed by artifact subdir.
+
+        Instance state on purpose, unlike `_codec`: one harness instance serves one
+        run, and the artifact-root `runs[]` index is a property of the run rather
+        than of a rollout. `_persist` runs synchronously inside `_publish`, so
+        concurrent rollouts in one event loop cannot interleave here.
+        """
 
     def pool_factory(self) -> Any:
         """Build the underlying session pool.
@@ -612,6 +694,9 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         try:
             setup_evidence = await _to_thread(preparer.prepare, session, task)
             geometry = await _to_thread(_geometry, session)
+            # Published with the result because `datasets/convert.py:440-447` refuses
+            # a rollout without it: every grammar resolves against the screen.
+            state.screen_size = [geometry.desktop_width, geometry.desktop_height]
             initial = await _to_thread(preparer.probe, session, task)
             state.initial_probe = initial
             self._assert_unsolved(task, initial)
@@ -821,10 +906,14 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         state.temperature = sampling.get("temperature")
         state.temperature_source = sampling.get("temperature_source")
 
+        task = trace.task.data
+        assert isinstance(task, DesktopTaskData)
         trace.info[RESULT_KEY] = {
             "schema_version": RESULT_SCHEMA_VERSION,
             "validity": "valid" if infra_error is None else "infra_invalid",
             "codec": self.config.codec,
+            "instruction": task.instruction,
+            "screen_size": state.screen_size,
             "history_policy": state.history_policy,
             "sampling": sampling,
             "success": state.success,
@@ -1079,26 +1168,78 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             return None
         return score
 
+    @property
+    def _artifact_root(self) -> Path:
+        return Path(self.config.artifacts.output_dir or tempfile.gettempdir())
+
     def _artifact_dir(self, task: DesktopTaskData) -> Path:
-        root = Path(self.config.artifacts.output_dir or tempfile.gettempdir())
-        directory = root / (task.name or f"task_{task.idx:04d}")
+        directory = self._artifact_root / (task.name or f"task_{task.idx:04d}")
         directory.mkdir(parents=True, exist_ok=True)
         return directory
 
     def _persist(self, artifacts: Path, trace: vf.Trace, frames: list[bytes]) -> None:
         config = self.config.artifacts
         if config.write_result_json:
-            _atomic_json(artifacts / "result.json", trace.info.get(RESULT_KEY))
+            result = trace.info[RESULT_KEY]
+            _atomic_json(artifacts / "result.json", result)
+            rows = _trajectory_rows(result["steps_detail"], len(frames))
+            _write_jsonl(artifacts / _TRAJECTORY, rows)
+            _assert_frame_set(artifacts / "steps", len(rows))
+            subdir = artifacts.relative_to(self._artifact_root).as_posix()
+            self._runs[subdir] = {
+                "subdir": subdir,
+                "instruction": result["instruction"],
+                "success": result["success"],
+                "validity": result["validity"],
+                "stop_reason": result["outcome"],
+                "n_steps": len(rows) - 1,
+                "traj_path": str((artifacts / _TRAJECTORY).resolve()),
+            }
+            _atomic_json(self._artifact_root / "result.json", self._artifact_index())
         if config.write_gif and len(frames) > 1:
             try:
                 _write_gif(frames, artifacts / "rollout.gif")
             except Exception as exc:  # noqa: BLE001
                 _LOGGER.warning("GIF write failed: %s", exc)
-        if config.register_labctl:
-            alias = config.labctl_alias or artifacts.name
-            trace.info.setdefault("artifacts", {})["labctl_registered"] = _register_labctl(
-                alias, artifacts
-            )
+
+    def _artifact_index(self) -> dict[str, Any]:
+        """The artifact-root `result.json` a recipe registers as its `eval_result`.
+
+        The runner copies this whole file into `metadata.result` for such an output
+        (`runner.rs:1885-1891`), which is the only way `metadata.result.traj_path`
+        gets set — and that key is what gates the rollout viewer
+        (`server.rs:1577-1588`). `traj_path` names ONE episode because the endpoint
+        takes one path and the viewer has no per-episode selector.
+
+        `tasks` must be a flat metric -> number dict with no nulls: anything else
+        falls through to a raw JSON tree (`ui/src/lib/metrics.ts`), and `primary`
+        is only honoured alongside it. `success_rate` is over the valid episodes
+        only, so an infra failure cannot look like a task failure.
+        """
+        runs = [
+            {"index": index, **run} for index, run in enumerate(self._runs.values())
+        ]
+        valid = [run for run in runs if run["validity"] == "valid"]
+        name = self.config.id
+        tasks = {
+            f"{name}/success_rate": (
+                sum(1 for run in valid if run["success"]) / len(valid) if valid else 0.0
+            ),
+            f"{name}/n_episodes": float(len(runs)),
+            f"{name}/n_valid": float(len(valid)),
+            f"{name}/mean_steps": (
+                sum(run["n_steps"] for run in runs) / len(runs) if runs else 0.0
+            ),
+        }
+        return {
+            "schema_version": RESULT_SCHEMA_VERSION,
+            "task": name,
+            "primary": f"{name}/success_rate",
+            "tasks": tasks,
+            "n_episodes": len(runs),
+            "traj_path": runs[0]["traj_path"],
+            "runs": runs,
+        }
 
 
 def _is_left_click(decision: Decision) -> bool:

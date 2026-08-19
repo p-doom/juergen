@@ -27,11 +27,14 @@ from evals.harness import (
     ImageBudgetConfig,
     ScriptedConfig,
     SettleConfig,
+    _TRAJECTORY,
+    _assert_frame_set,
     _Budget,
     _is_left_click,
     _screenshot,
     _to_thread,
 )
+from agent.agent import load_codec
 from evals.tasks import RESULT_KEY, DesktopState, DesktopTaskData, register_preparer, PREPARERS
 from juergen_doubles import FakeSession, make_ctx, make_task_data, make_trace, png
 
@@ -682,26 +685,199 @@ def test_artifacts_can_be_switched_off_entirely(tmp_path, preparer) -> None:
     assert not (root / "result.json").exists() and not (root / "steps").exists()
 
 
-def test_labctl_registration_is_best_effort(tmp_path, preparer, monkeypatch) -> None:
-    """A registry hiccup must not tank a run."""
+def _convert_module():
+    """The real BC reader, loaded by path: `datasets/` has no `__init__.py` and
+    HuggingFace's `datasets` owns the name in this venv. Registered in `sys.modules`
+    before execution because `@dataclass` resolves its own module by name.
+    """
+    import importlib.util
+    import sys
+
+    path = Path(__file__).resolve().parents[1] / "datasets" / "convert.py"
+    spec = importlib.util.spec_from_file_location("juergen_datasets_convert", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_nothing_shells_out_to_register_external(tmp_path) -> None:
+    """`labctl register-external` takes only --alias/--path/--kind/--cluster, so no
+    invocation of it can populate `metadata.result` — and the rollout viewer is gated
+    on `metadata.result.traj_path`. Registration goes through the recipe's
+    `[outputs]` marker instead, so there is no knob and no subprocess.
+    """
     from evals import harness as harness_module
+    from pydantic import ValidationError
 
-    monkeypatch.setattr(harness_module, "_register_labctl", lambda alias, path: False)
-    config = _config(
-        tmp_path,
-        artifacts=ArtifactConfig(
-            output_dir=str(tmp_path), register_labctl=True, save_prompts=False, write_gif=False
-        ),
+    assert not hasattr(harness_module, "_register_labctl")
+    assert not hasattr(harness_module, "subprocess"), "nothing here shells out"
+    for field in ("register_labctl", "labctl_alias"):
+        with pytest.raises(ValidationError):
+            ArtifactConfig(**{field: True})
+
+
+def test_the_artifact_refuses_to_publish_frameless_rows(tmp_path) -> None:
+    """Every trajectory row is fetched by frame filename, so a trajectory without
+    frames is an artifact whose every frame is a 404."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="404"):
+        ArtifactConfig(output_dir=str(tmp_path), save_frames=False, write_result_json=True)
+
+
+def test_the_rollout_artifact_is_the_layout_labctl_and_convert_both_read(
+    tmp_path, preparer
+) -> None:
+    """The whole contract in one place, read back through the real consumer.
+
+    `<out>/result.json` (runs[] + traj_path) / `<out>/<subdir>/trajectory.jsonl` /
+    `<out>/<subdir>/steps/step_%03d.png`, with `n_steps + 1` frames so that row
+    ordinal, `step_num` and frame index are the same number.
+    """
+    convert = _convert_module()
+    session = FakeSession()
+    _, result, _ = _run(
+        _config(tmp_path),
+        _task(max_steps=3, name="cell_contract", instruction="do the thing"),
+        replies=["10 10 0 ;", "10 10 0 ;", "10 10 0 ;"],
+        session=session,
     )
-    trace, result, _ = _run(config, _task(max_steps=1, name="cell_labctl"), replies=["0 0 0 ;"])
-    assert result["validity"] == "valid"
-    assert trace.info["artifacts"]["labctl_registered"] is False
+    run_dir = tmp_path / "cell_contract"
+
+    assert convert.discover_run_dirs(str(tmp_path)) == [run_dir], (
+        "the reader discovers a rollout by result.json + trajectory.jsonl"
+    )
+
+    rows = [json.loads(line) for line in (run_dir / _TRAJECTORY).read_text().splitlines()]
+    assert [row["step_num"] for row in rows] == [0, 1, 2, 3]
+    assert rows[0]["action"] == "<reset>", "convert.py and evals/tasks.py both skip it"
+    assert [row["done"] for row in rows] == [False, False, False, True]
+    frames = sorted(p.name for p in (run_dir / "steps").glob("*.png"))
+    assert frames == ["step_000.png", "step_001.png", "step_002.png", "step_003.png"], (
+        "n_steps + 1 frames: frame 0 is the initial observation"
+    )
+
+    # The alignment itself: `convert.py:458` reads the frame a step SAW as
+    # `step_{step_num - 1}`, and the harness observed screenshot k as frame k.
+    observed = [
+        (run_dir / "steps" / f"step_{index:03d}.png").read_bytes() for index in range(4)
+    ]
+    assert len(set(observed)) == 4, "the fake session hands out distinguishable frames"
+    for row in rows[1:]:
+        seen = run_dir / "steps" / f"step_{row['step_num'] - 1:03d}.png"
+        assert seen.is_file()
+        assert seen.read_bytes() == observed[row["step_num"] - 1]
+
+    # And through the reader, not around it: every row resolved its frame, so all
+    # three land in `source_parse_errors` rather than being skipped for a missing one.
+    record = convert.convert_rollout(
+        run_dir,
+        load_codec("move_rel"),
+        min_valid_actions=0,
+        max_parse_error_frac=1.0,
+    )
+    assert record is not None, "convert.py refuses a rollout with no screen_size"
+    assert record["instruction"] == "do the thing"
+    assert record["source_parse_errors"] == 3, (
+        "three rows read, three frames resolved; the grammar's own action dict is not "
+        "the teacher's computer_use vocabulary, which is a separate gap"
+    )
+    assert result["screen_size"] == [1920, 1080]
 
 
-def test_register_labctl_survives_a_missing_binary(tmp_path) -> None:
-    from evals.harness import _register_labctl
+def test_the_artifact_root_index_is_what_labctl_reads(tmp_path, preparer) -> None:
+    """One `Harness` serves every rollout, so the runs[] index accumulates across
+    them; `tasks` must stay a flat metric -> number dict or the UI falls back to a
+    JSON tree."""
+    import juergen_harness_pool
 
-    assert _register_labctl("alias", tmp_path) in (True, False)
+    juergen_harness_pool.Pool.session = FakeSession()
+    config = _config(tmp_path)
+    harness = DesktopHarness(config)
+    for name, replies in (("cell_a", ["0 0 0 ;"]), ("cell_b", ["TERMINATE"])):
+        trace = vf.Trace(
+            task=vf.TraceTask(type="DesktopTask", data=_task(max_steps=1, name=name)),
+            state=DesktopState(),
+        )
+        asyncio.run(harness.launch(make_ctx(replies=replies), trace, None, "", "", {}))
+
+    index = json.loads((tmp_path / "result.json").read_text())
+    assert [run["subdir"] for run in index["runs"]] == ["cell_a", "cell_b"]
+    assert [run["index"] for run in index["runs"]] == [0, 1]
+    assert index["primary"] == f"{config.id}/success_rate"
+    assert index["primary"] in index["tasks"]
+    assert all(isinstance(v, float) for v in index["tasks"].values()), (
+        "a null or a nested object drops the whole table to a raw JSON tree"
+    )
+    assert index["tasks"][f"{config.id}/n_valid"] == 2.0
+    assert index["traj_path"] == str((tmp_path / "cell_a" / _TRAJECTORY).resolve()), (
+        "the viewer endpoint takes one path and derives steps/ from its parent"
+    )
+
+
+def test_an_infra_invalid_episode_is_counted_but_kept_out_of_the_rate(
+    tmp_path, preparer
+) -> None:
+    preparer.probes = [{"postcondition_status": "ok", "postcondition_success": True}]
+    _run(_config(tmp_path), _task(max_steps=1, name="cell_refused"), replies=["0 0 0 ;"])
+    index = json.loads((tmp_path / "result.json").read_text())
+    (run,) = index["runs"]
+    assert run["validity"] == "infra_invalid" and run["success"] is None
+    assert index["tasks"][f"{index['task']}/n_episodes"] == 1.0
+    assert index["tasks"][f"{index['task']}/n_valid"] == 0.0
+    assert index["tasks"][index["primary"]] == 0.0
+
+
+def test_a_stray_frame_is_refused_by_name(tmp_path, preparer) -> None:
+    """The viewer counts every `*.png` as a frame and fetches it by index, so a
+    leftover from a longer earlier run offers frames that do not exist."""
+    run_dir = tmp_path / "cell_stray"
+    (run_dir / "steps").mkdir(parents=True)
+    (run_dir / "steps" / "step_009.png").write_bytes(png())
+    with pytest.raises(RuntimeError, match="cell_stray/steps"):
+        _run(_config(tmp_path), _task(max_steps=1, name="cell_stray"), replies=["0 0 0 ;"])
+
+
+def test_a_missing_frame_is_refused_by_name(tmp_path, preparer) -> None:
+    from evals.harness import _assert_frame_set
+
+    steps = tmp_path / "steps"
+    steps.mkdir()
+    for index in (0, 2):
+        (steps / f"step_{index:03d}.png").write_bytes(png())
+    with pytest.raises(RuntimeError, match=r"missing \['step_001.png'\]"):
+        _assert_frame_set(steps, 3)
+    assert _assert_frame_set(steps / "absent", 0) is None, "no frames, no rows, no error"
+
+
+def test_a_step_with_no_post_action_frame_gets_no_row(tmp_path, preparer) -> None:
+    """The executor died mid-turn, so there is no screenshot to show for that step —
+    but a row without a frame is a hole the viewer cannot fetch. `result.json` still
+    carries the step in `steps_detail`."""
+
+    class Broken(FakeSession):
+        def execute_atomic(self, operations):
+            raise ConnectionError("transport died")
+
+    _, result, _ = _run(
+        _config(tmp_path),
+        _task(max_steps=2, name="cell_broken"),
+        replies=["10 10 0 ; +LMB -LMB"],
+        session=Broken(),
+    )
+    assert result["outcome"] == "executor_error" and len(result["steps_detail"]) == 1
+    run_dir = tmp_path / "cell_broken"
+    rows = [json.loads(line) for line in (run_dir / _TRAJECTORY).read_text().splitlines()]
+    assert [row["step_num"] for row in rows] == [0]
+    assert sorted(p.name for p in (run_dir / "steps").glob("*.png")) == ["step_000.png"]
+
+
+def test_a_rerun_replaces_the_trajectory_rather_than_doubling_it(tmp_path, preparer) -> None:
+    for _ in range(2):
+        _run(_config(tmp_path), _task(max_steps=1, name="cell_rerun"), replies=["0 0 0 ;"])
+    rows = (tmp_path / "cell_rerun" / _TRAJECTORY).read_text().splitlines()
+    assert len(rows) == 2, rows
 
 
 def test_the_prompt_report_never_raises_and_records_the_baseline_caveat(tmp_path) -> None:
