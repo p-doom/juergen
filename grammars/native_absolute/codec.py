@@ -357,7 +357,14 @@ class NativeAbsoluteCodec:
                     operations.append(_support.scroll(call.scroll, 0))
             elif name == "wait":
                 operations.append(_support.wait(call.seconds))
-            elif name in ("terminate", "answer"):
+            elif name == "terminate":
+                # The episode ends here, so calls the turn placed after it are not
+                # lowered. `agent.Decision.ignored_after_terminate` counts them,
+                # because the flat operation stream cannot show they were there.
+                break
+            elif name == "answer":
+                # Reports a string. It dispatches nothing, and unlike `terminate` it
+                # is not a control outcome, so the calls after it still run.
                 continue
             else:  # pragma: no cover - validate_call fixes the set
                 raise NativeAbsoluteError(f"unsupported action: {name!r}")

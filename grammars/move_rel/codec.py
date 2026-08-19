@@ -357,7 +357,10 @@ class MoveRelCodec:
             elif name == "wait":
                 operations.append(_support.wait(call.seconds))
             elif name == "terminate":
-                continue
+                # The episode ends here, so calls the turn placed after it are not
+                # lowered. `agent.Decision.ignored_after_terminate` counts them,
+                # because the flat operation stream cannot show they were there.
+                break
             else:  # pragma: no cover - validate_call fixes the set
                 raise MoveRelError(f"unsupported action: {name!r}")
         return tuple(operations)

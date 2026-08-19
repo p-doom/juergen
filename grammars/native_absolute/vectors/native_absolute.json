@@ -509,6 +509,54 @@
       "operations": []
     },
     {
+      "name": "calls_after_a_terminate_are_not_lowered",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [700, 400]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"right_click\"}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [700, 400]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"right_click\"}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "mouse_move",
+            "coordinate": [
+              700,
+              400
+            ]
+          },
+          {
+            "action": "left_click"
+          },
+          {
+            "action": "terminate",
+            "status": "success"
+          },
+          {
+            "action": "right_click"
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            700,
+            400
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "The turn parses and renders whole -- the right_click really is in the text -- but compile stops at the terminate, because nothing dispatches once the episode has ended. agent.Decision.ignored_after_terminate is what publishes that there were 1."
+    },
+    {
       "name": "drag_to_is_accepted_as_an_alias",
       "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"drag_to\", \"coordinate\": [1240, 700]}}\n</tool_call>",
       "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [1240, 700]}}\n</tool_call>",
