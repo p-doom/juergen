@@ -81,6 +81,7 @@ before believing any format comparison.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import re
@@ -936,6 +937,13 @@ def main(argv: list[str] | None = None) -> int:
         # The grammar's own spec digest, so a dataset is traceable to the exact
         # grammar revision that produced it.
         "codec_digest": codec.digest,
+        # The digest of the prompt actually written into every record, which the
+        # eval harness compares against the prompt it renders. Under
+        # ``keep_prose`` that is THINKING_PREAMBLE + describe(), so it differs
+        # from ``codec_digest`` and only this field identifies the artifact.
+        "system_prompt_sha256": hashlib.sha256(
+            system_prompt(codec, thinking=bool(args.keep_prose)).encode()
+        ).hexdigest(),
         "rollouts_dir": args.rollouts_dir,
         "recursive": args.recursive,
         "keep_slugs": args.keep_slugs,
