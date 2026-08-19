@@ -30,6 +30,8 @@ from typing import Any, Iterator, Literal, Protocol
 import verifiers.v1 as vf
 from pydantic import Field, model_validator
 
+import grammars
+
 from agent.agent import (
     Agent,
     Decision,
@@ -190,13 +192,22 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     """Grammar entry-point name. The one field a grammar A/B changes."""
     system_prompt_override: str | None = None
     system_prompt_sha256: str | None = None
-    """A checkpoint's sealed training-prompt digest. Recorded, never enforced.
+    """A checkpoint's training-prompt digest. ENFORCED unless a mismatch is
+    justified in writing by `expect_prompt_mismatch`.
 
-    `codec.describe()` is docstring-derived and not byte-identical to a
-    checkpoint's sealed training prompt, so a hash gate here would fail every run.
-    The digests ride `trace.info["prompt"]` as data alongside the codec's own
-    `report()`, so a run that must not be compared across the prompt boundary is
-    identifiable from the record."""
+    Accepted without a justification are exactly the two prompts this codec can
+    legitimately produce: the bare `describe()` and `THINKING_PREAMBLE +
+    describe()`, which is what `datasets/convert.py` writes under `--keep_prose`.
+    Anything else means the checkpoint was trained on a different grammar
+    revision or a different prompt, and evaluating it here would produce a number
+    that looks comparable and is not."""
+    expect_prompt_mismatch: str | None = None
+    """Why THIS arm's digest legitimately differs, or `None` to require a match.
+
+    A sealed historical prompt cannot be derived from any codec, so no predicate
+    can tell one apart from the wrong checkpoint entirely -- only the arm's author
+    knows. Stating the reason here makes it data that lands in the record instead
+    of a comment nobody can check, and leaves the unjustified case loud."""
     history: HistoryConfig = HistoryConfig()
     images: ImageBudgetConfig = ImageBudgetConfig()
     settle: SettleConfig = SettleConfig()
@@ -1088,8 +1099,19 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             _LOGGER.warning("grounding cell %s starts inside its bbox", task.name)
 
     def _prompt_report(self, codec: Any) -> dict[str, Any]:
-        """Prompt provenance as data. Never raises; a digest mismatch is recorded,
-        never enforced.
+        """Prompt provenance as data, and the one check that must not be skipped.
+
+        A digest mismatch means the checkpoint was trained under a prompt this run
+        does not render, so its score is not the number it appears to be. That is
+        refused here rather than recorded, with two exceptions and no others:
+
+        * the thinking form. `datasets/convert.py --keep_prose` writes
+          `THINKING_PREAMBLE + describe()`, and eval renders the bare
+          `describe()`. Both are prompts THIS codec produces, so both are computed
+          and accepted with no configuration.
+        * an arm that states in `expect_prompt_mismatch` why its own digest cannot
+          match -- a prompt sealed before `describe()` existed cannot be recomputed
+          from anything, so only the arm's author can vouch for it.
 
         Baseline warning, recorded on every run: the off-the-shelf Qwen3-VL-8B =
         33.9% OSWorld-Verified figure is our only calibrated reference and was
@@ -1098,17 +1120,37 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         not byte-identical to those prompts, so numbers must not be compared across
         that boundary and the baseline needs re-measuring through the new prompt.
         """
-        prompt = self.config.system_prompt_override
-        if prompt is None:
-            prompt = codec.describe()
-        observed = hashlib.sha256(prompt.encode()).hexdigest()
+        override = self.config.system_prompt_override
+        rendered = codec.describe() if override is None else override
+        observed = hashlib.sha256(rendered.encode()).hexdigest()
+        # Both renderings of THIS codec's prompt, so a thinking checkpoint needs no
+        # flag. An override is taken verbatim: the caller supplied the exact bytes.
+        accepted = {observed}
+        if override is None:
+            accepted.add(
+                hashlib.sha256(
+                    grammars.system_prompt(codec, thinking=True).encode()
+                ).hexdigest()
+            )
         expected = self.config.system_prompt_sha256
+        justification = self.config.expect_prompt_mismatch
+        matches = None if expected is None else expected in accepted
+        if matches is False and justification is None:
+            raise ValueError(
+                f"system_prompt_sha256={expected} is not a prompt the {self.config.codec!r} "
+                f"codec renders (accepted: {sorted(accepted)}). This checkpoint was "
+                f"trained under a different prompt, so a score from this run would not "
+                f"be the number it looks like. Set expect_prompt_mismatch=<why> on the "
+                f"arm if the difference is known and intended."
+            )
         report = getattr(codec, "report", None)
         return {
             "codec": self.config.codec,
             "prompt_sha256": observed,
             "expected_prompt_sha256": expected,
-            "matches_expected": None if expected is None else observed == expected,
+            "matches_expected": matches,
+            "accepted_prompt_sha256": sorted(accepted),
+            "expect_prompt_mismatch": justification,
             "codec_report": report() if callable(report) else None,
             "comparable_to_sealed_baseline": False,
             "baseline_note": (

@@ -31,6 +31,7 @@ import evals.indicators as indicators
 import evals.signoflife.guest as guest
 from evals.signoflife.cells import (
     ARMS,
+    PHASEB_SYSTEM_PROMPT_SHA256,
     CONTROL_ARMS,
     COMPACT_CODEC,
     MODEL_ARMS,
@@ -520,3 +521,30 @@ def test_the_gate_reports_oracle_metrics_in_a_stable_order() -> None:
     assert {"failure_modes", "mouse", "sampling", "postcondition_recorded"} <= set(names)
     rewards = [fn.__name__ for fn in discover_decorated(task, "reward")]
     assert rewards == ["postcondition"], rewards
+
+
+def test_every_shipped_arm_passes_its_own_prompt_digest_check(tmp_path) -> None:
+    """The digest check is enforced, so a shipped arm that cannot pass it is a
+    calibration cell that no longer runs.
+
+    `phaseb_compact` is the case that matters: its expected digest is a prompt
+    sealed before `describe()` existed, so it cannot match and cannot be
+    recomputed. It carries the reason in `expect_prompt_mismatch`, which is what
+    keeps the 4-cell gate whole while an UNjustified mismatch still fails loudly.
+    """
+    from agent.agent import load_codec
+    from evals.harness import DesktopHarness
+
+    for name, arm in ARMS.items():
+        harness = DesktopHarness(arm.model_copy(update={"artifacts": arm.artifacts}))
+        report = harness._prompt_report(load_codec(arm.codec))
+        assert report["matches_expected"] in (None, True) or arm.expect_prompt_mismatch, (
+            f"{name} would refuse to run"
+        )
+
+    phaseb = ARMS["phaseb_compact"]
+    assert phaseb.system_prompt_sha256 == PHASEB_SYSTEM_PROMPT_SHA256
+    assert phaseb.expect_prompt_mismatch, "the sealed-prompt arm must state why"
+    report = DesktopHarness(phaseb)._prompt_report(load_codec(phaseb.codec))
+    assert report["matches_expected"] is False
+    assert "sealed" in report["expect_prompt_mismatch"]

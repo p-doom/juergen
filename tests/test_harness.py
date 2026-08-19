@@ -880,19 +880,64 @@ def test_a_rerun_replaces_the_trajectory_rather_than_doubling_it(tmp_path, prepa
     assert len(rows) == 2, rows
 
 
-def test_the_prompt_report_never_raises_and_records_the_baseline_caveat(tmp_path) -> None:
-    """`_prompt_report` returns data; it never raises on a digest mismatch."""
-    from agent.agent import load_codec
-    from evals import harness as harness_module
+def test_an_unjustified_digest_mismatch_is_refused(tmp_path) -> None:
+    """A digest that is not a prompt this codec renders means the checkpoint was
+    trained under a different one, so its score is not the number it looks like.
 
-    assert not hasattr(harness_module, "_assert_prompt_pin")
+    This used to be recorded and not enforced, which made "evaluated under the
+    wrong prompt" a field in a JSON blob nobody reads rather than a failure.
+    """
+    from agent.agent import load_codec
+
     harness = DesktopHarness(_config(tmp_path, system_prompt_sha256="0" * 64))
+    with pytest.raises(ValueError, match="not a prompt the 'deltatype_v2' codec renders"):
+        harness._prompt_report(load_codec("deltatype_v2"))
+
+
+def test_a_justified_mismatch_passes_and_the_reason_lands_in_the_record(tmp_path) -> None:
+    """A prompt sealed before `describe()` existed cannot be recomputed from any
+    codec, so only the arm's author can vouch for it -- in writing, as data."""
+    from agent.agent import load_codec
+
+    harness = DesktopHarness(
+        _config(
+            tmp_path,
+            system_prompt_sha256="0" * 64,
+            expect_prompt_mismatch="sealed before describe() existed",
+        )
+    )
     report = harness._prompt_report(load_codec("deltatype_v2"))
+    assert report["matches_expected"] is False
+    assert report["expect_prompt_mismatch"] == "sealed before describe() existed"
     assert report["comparable_to_sealed_baseline"] is False
     assert "33.9%" in report["baseline_note"] and "Re-measure" in report["baseline_note"]
-    assert report["matches_expected"] is False, "a mismatch is recorded, not raised"
     assert report["expected_prompt_sha256"] == "0" * 64
     assert len(report["prompt_sha256"]) == 64
+
+
+def test_the_thinking_prompt_is_accepted_with_no_configuration(tmp_path) -> None:
+    """`datasets/convert.py --keep_prose` trains on `THINKING_PREAMBLE +
+    describe()` while eval renders the bare `describe()`. Both are prompts THIS
+    codec produces, so the thinking digest is computed and accepted -- otherwise
+    every thinking arm would need a written excuse for a difference we create."""
+    import hashlib
+
+    import grammars
+    from agent.agent import load_codec
+
+    codec = load_codec("deltatype_v2")
+    thinking = hashlib.sha256(
+        grammars.system_prompt(codec, thinking=True).encode()
+    ).hexdigest()
+    plain = hashlib.sha256(codec.describe().encode()).hexdigest()
+    assert thinking != plain
+
+    for digest in (thinking, plain):
+        report = DesktopHarness(
+            _config(tmp_path, system_prompt_sha256=digest)
+        )._prompt_report(codec)
+        assert report["matches_expected"] is True
+        assert set(report["accepted_prompt_sha256"]) == {thinking, plain}
 
 
 def test_no_expected_digest_reports_none_rather_than_a_false_match(tmp_path) -> None:
@@ -903,8 +948,16 @@ def test_no_expected_digest_reports_none_rather_than_a_false_match(tmp_path) -> 
 
 
 def test_every_episode_records_the_baseline_caveat(tmp_path, preparer) -> None:
+    """The caveat rides every episode, including one whose digest legitimately
+    differs -- the justification excuses the mismatch, not the incomparability."""
     trace, _, _ = _run(
-        _config(tmp_path, system_prompt_sha256="a" * 64), _task(max_steps=1), replies=["0 0 0 ;"]
+        _config(
+            tmp_path,
+            system_prompt_sha256="a" * 64,
+            expect_prompt_mismatch="sealed producer prompt",
+        ),
+        _task(max_steps=1),
+        replies=["0 0 0 ;"],
     )
     prompt = trace.info["prompt"]
     assert prompt["comparable_to_sealed_baseline"] is False
@@ -913,27 +966,37 @@ def test_every_episode_records_the_baseline_caveat(tmp_path, preparer) -> None:
     assert prompt["codec"] == "deltatype_v2"
 
 
-def test_a_digest_mismatch_does_not_change_the_episode_outcome(tmp_path, preparer) -> None:
+def test_a_justified_mismatch_does_not_change_the_episode_outcome(tmp_path, preparer) -> None:
+    """The check gates whether the run happens, not what it scores. Once an arm has
+    vouched for its digest, the mismatch must not perturb the episode itself."""
     good = _run(_config(tmp_path), _task(max_steps=1, name="a"), replies=["0 0 0 ;"])[1]
     mismatched = _run(
-        _config(tmp_path, system_prompt_sha256="f" * 64), _task(max_steps=1, name="b"),
+        _config(
+            tmp_path,
+            system_prompt_sha256="f" * 64,
+            expect_prompt_mismatch="sealed producer prompt",
+        ),
+        _task(max_steps=1, name="b"),
         replies=["0 0 0 ;"],
     )[1]
     assert good["outcome"] == mismatched["outcome"] == "max_steps"
     assert good["validity"] == mismatched["validity"] == "valid"
 
 
-def test_no_module_in_the_tree_raises_on_a_prompt_digest() -> None:
-    repo = Path(__file__).resolve().parents[1]
-    for module in ("agent", "evals", "rl"):
-        for path in (repo / module).rglob("*.py"):
-            text = path.read_text()
-            for line in text.splitlines():
-                stripped = line.strip()
-                if stripped.startswith("raise") and (
-                    "prompt_sha" in stripped or "sealed_contract" in stripped
-                ):
-                    raise AssertionError(f"{path}: {stripped}")
+def test_an_unjustified_mismatch_fails_the_run_rather_than_scoring_it(
+    tmp_path, preparer
+) -> None:
+    """The replacement for the tree-wide "nothing may raise on a prompt digest"
+    grep. That guard was written when `describe()` could not reproduce any sealed
+    prompt, so any gate would have failed every run; now two renderings are
+    computed and a mismatch means the checkpoint really is foreign. Refusing to
+    produce a number beats producing an incomparable one."""
+    with pytest.raises(ValueError, match="not a prompt the"):
+        _run(
+            _config(tmp_path, system_prompt_sha256="f" * 64),
+            _task(max_steps=1, name="c"),
+            replies=["0 0 0 ;"],
+        )
 
 
 def test_a_system_prompt_override_is_honoured_and_hashed(tmp_path) -> None:

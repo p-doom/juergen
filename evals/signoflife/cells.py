@@ -211,10 +211,13 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
         # assistant's prose preserved ahead of the final bare action line.
         history=HistoryConfig(name="prose_summarised_window"),
         images=ImageBudgetConfig(max_images=5),
-        # Recorded, not enforced: `describe()` renders a superset of the sealed
-        # producer prompt (which omits `type()`, always accepted by its parser), so a
-        # mismatch here is expected and is not an error.
         system_prompt_sha256=PHASEB_SYSTEM_PROMPT_SHA256,
+        expect_prompt_mismatch=(
+            "the s900 checkpoint's prompt was sealed before describe() existed and "
+            "cannot be recomputed from the codec; describe() renders a superset of "
+            "it (the sealed prompt omits type(), which its parser accepts anyway), "
+            "so the two digests differ by construction"
+        ),
         settle=_settle(),
         max_tokens=256,
         artifacts=ArtifactConfig(save_prompts=True, write_gif=True),
