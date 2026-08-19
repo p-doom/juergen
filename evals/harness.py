@@ -331,6 +331,29 @@ def _screenshot(session: Any, settle: SettleConfig, kind: str) -> bytes:
     return session.screenshot()
 
 
+_RELEASE_OF = {"mouse_down": "mouse_up", "key_down": "key_up"}
+
+
+def _update_held(held: list[tuple[str, tuple]], operations: Any) -> None:
+    """Track the presses a dispatched turn left down, in press order.
+
+    Our own prompt advertises `mouse_down` as a hold that survives the turn
+    (`grammars/move_rel/codec.py:199`) and the guest honours it, so a rollout that
+    never emits the matching release runs `evaluate()` — and the whole scoring
+    window — with the button down.
+
+    `click`, `drag` and the typing kinds press and release inside one operation, so
+    only the explicit `*_down` / `*_up` pair is tracked.
+    """
+    for operation in operations:
+        kind, args = operation.kind, tuple(operation.args)
+        release = _RELEASE_OF.get(kind)
+        if release is not None:
+            held.append((release, args))
+        elif (kind, args) in held:
+            held.remove((kind, args))
+
+
 def _atomic_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, raw = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
@@ -580,6 +603,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
 
         steps_detail: list[dict[str, Any]] = []
         frames: list[bytes] = []
+        held: list[tuple[str, tuple]] = []
         outcome = "max_steps"
         infra_error: dict[str, str] | None = None
         sampling_record: dict[str, Any] = {}
@@ -659,6 +683,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                             session.execute_atomic, decision.operations
                         )
                         budget.dispatched(len(decision.operations))
+                        _update_held(held, decision.operations)
                     except (TypeError, ValueError) as exc:
                         action_error = {"type": type(exc).__name__, "message": str(exc)}
                         state.action_errors += 1
@@ -717,10 +742,15 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             state.final_probe = probe
             state.reach_frame = reach_frame
             state.best_distance = best_distance
-            if self.config.evaluate_on_finish and infra_error is None:
-                state.task_reward = await self._evaluate(
-                    session, declared=state.control_terminate
-                )
+            if infra_error is None:
+                # Before `evaluate()`, and before the reaper hands the VM to the
+                # next rollout. A guest already declared broken is retired, not
+                # cleaned.
+                state.released_holds = await self._release_held(session, held)
+                if self.config.evaluate_on_finish:
+                    state.task_reward = await self._evaluate(
+                        session, declared=state.control_terminate
+                    )
         except ModelCallError as exc:
             # The orchestrator halts a rollout by stamping `stop_condition` and
             # refusing the call with a 400 (`interception/server.py:400-406`,
@@ -806,6 +836,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             "control_terminate": state.control_terminate,
             "terminate_step": state.terminate_step,
             "ignored_after_terminate": state.ignored_after_terminate,
+            "released_holds": state.released_holds,
             "reach_frame": state.reach_frame,
             "best_distance": state.best_distance,
             "task_reward": state.task_reward,
@@ -1008,6 +1039,23 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         if state.infra_error is not None:
             return False
         return bool(state.success) is not state.negative_control
+
+    async def _release_held(
+        self, session: Any, held: list[tuple[str, tuple]]
+    ) -> list[dict[str, Any]]:
+        """Undo the presses the rollout left down, newest first.
+
+        A failure here is an episode failure, not a swallowed warning: a guest whose
+        buttons cannot be lifted is wedged, and `_run`'s handler retires the VM
+        instead of recycling it into the next rollout with the button still down.
+        """
+        if not held:
+            return []
+        from desktop.ir import Operation  # type: ignore[import-not-found]
+
+        operations = tuple(Operation(kind, args) for kind, args in reversed(held))
+        await _to_thread(session.execute_atomic, operations)
+        return [operation.as_dict() for operation in operations]
 
     async def _evaluate(self, session: Any, *, declared: str | None = None) -> float | None:
         evaluate = getattr(session, "evaluate", None)

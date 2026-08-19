@@ -94,6 +94,9 @@ class DesktopState(vf.State):
     ignored_after_terminate: int = 0
     """Calls the rollout emitted after its own terminate; see
     `agent.agent._calls_after_terminate`."""
+    released_holds: list[dict[str, Any]] = []
+    """The presses the rollout left down and the harness lifted at teardown, before
+    `evaluate()` ran. Empty for a rollout that released its own."""
     infra_valid: bool = True
     infra_error: dict[str, str] | None = None
     codec: str | None = None

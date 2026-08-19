@@ -1006,6 +1006,89 @@ def test_the_gpu_is_hidden_during_boot_when_asked(tmp_path, monkeypatch) -> None
         assert "CUDA_VISIBLE_DEVICES" not in os.environ
 
 
+def test_a_button_left_down_is_lifted_at_teardown(tmp_path, preparer) -> None:
+    """`+LMB` with no `-LMB` is a press the prompt advertises as surviving the turn
+    (`grammars/move_rel/codec.py:199`) and the guest honours it. Closing only the
+    agent ran `evaluate()`, and the whole scoring window, with the button down.
+    """
+    session = FakeSession()
+    _, result, _ = _run(
+        _config(tmp_path), _task(max_steps=1), replies=["10 10 0 ; +LMB"], session=session
+    )
+    assert result["released_holds"] == [{"kind": "mouse_up", "args": ["left"]}]
+    (_, teardown) = session.operations_log
+    assert [(op.kind, op.args) for op in teardown] == [("mouse_up", ("left",))]
+
+
+def test_every_kind_of_hold_is_lifted_newest_first(tmp_path, preparer) -> None:
+    session = FakeSession()
+    _, result, _ = _run(
+        _config(tmp_path),
+        _task(max_steps=2),
+        replies=["0 0 0 ; +ctrl", "0 0 0 ; +RMB"],
+        session=session,
+    )
+    assert result["released_holds"] == [
+        {"kind": "mouse_up", "args": ["right"]},
+        {"kind": "key_up", "args": ["ctrl"]},
+    ]
+
+
+def test_a_rollout_that_releases_its_own_presses_leaves_nothing_to_lift(
+    tmp_path, preparer
+) -> None:
+    """The other half: teardown must not synthesise a second release."""
+    session = FakeSession()
+    _, result, _ = _run(
+        _config(tmp_path),
+        _task(max_steps=2),
+        replies=["10 10 0 ; +LMB", "0 0 0 ; -LMB"],
+        session=session,
+    )
+    assert result["released_holds"] == []
+    assert len(session.operations_log) == 2, "no teardown dispatch"
+
+
+def test_the_holds_are_lifted_before_the_scorer_reads_the_guest(tmp_path, preparer) -> None:
+    order: list[str] = []
+
+    class Watching(FakeSession):
+        def execute_atomic(self, operations):
+            ops = list(operations)
+            order.append("+".join(op.kind for op in ops))
+            return {"dispatched": len(ops)}
+
+        def evaluate(self) -> float:
+            order.append("evaluate")
+            return 1.0
+
+    session = Watching()
+    config = _config(tmp_path, evaluate_on_finish=True)
+    _, result, _ = _run(
+        config, _task(max_steps=1), replies=["10 10 0 ; +LMB"], session=session
+    )
+    assert order == ["move_to+mouse_down", "mouse_up", "evaluate"], order
+    assert result["task_reward"] == 1.0
+
+
+def test_a_guest_that_cannot_be_unwedged_retires_its_vm(tmp_path, preparer, monkeypatch) -> None:
+    class Stuck(FakeSession):
+        def execute_atomic(self, operations):
+            ops = list(operations)
+            if [op.kind for op in ops] == ["mouse_up"]:
+                raise ConnectionError("transport died during teardown")
+            return {"dispatched": len(ops)}
+
+    captured = _captured_lease(monkeypatch)
+    _, result, _ = _run(
+        _config(tmp_path), _task(max_steps=1), replies=["10 10 0 ; +LMB"], session=Stuck()
+    )
+    assert result["validity"] == "infra_invalid" and result["success"] is None
+    assert result["infra_error"]["type"] == "ConnectionError"
+    (lease,) = captured
+    assert lease.failed is True, "a guest with a stuck button must not be recycled"
+
+
 def test_evaluate_on_finish_publishes_the_osworld_score(tmp_path, preparer) -> None:
     session = FakeSession()
     session.evaluate_value = 1.0
