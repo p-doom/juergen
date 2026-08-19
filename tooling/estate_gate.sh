@@ -20,8 +20,7 @@
 #                                      itself, in its own .venv.
 #   omegalax-rearch                    jax + tokamax + transformers + a CPU torch
 #                                      (transformers' AutoImageProcessor needs
-#                                      torchvision) + the `renderers` package
-#                                      from prime-rl/deps.
+#                                      torchvision) + `renderers` from PyPI.
 #
 # Every suite runs even if an earlier one fails. Exit status: 0 all green, 1 a
 # suite failed, 2 an environment is missing (nothing was measured -- do not read
@@ -89,7 +88,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --list) LIST_ONLY=1; shift ;;
     --only) ONLY="${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,51p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,50p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
