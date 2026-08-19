@@ -91,6 +91,9 @@ class DesktopState(vf.State):
     executor_errors: int = 0
     control_terminate: str | None = None
     terminate_step: int | None = None
+    ignored_after_terminate: int = 0
+    """Calls the rollout emitted after its own terminate; see
+    `agent.agent._calls_after_terminate`."""
     infra_valid: bool = True
     infra_error: dict[str, str] | None = None
     codec: str | None = None

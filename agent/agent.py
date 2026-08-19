@@ -321,6 +321,9 @@ class Decision:
     truncated: bool = False
     """The turn hit `max_tokens`. Neither a parse failure nor a model decision:
     `max_tokens` is ours, so the action was never finished being emitted."""
+    ignored_after_terminate: int = 0
+    """Calls the turn placed after its own terminate. Published because the
+    operation stream cannot show them: see `_calls_after_terminate`."""
 
     @property
     def terminated(self) -> bool:
@@ -336,6 +339,7 @@ class Decision:
             "control": self.control,
             "parse_error": self.parse_error,
             "truncated": self.truncated,
+            "ignored_after_terminate": self.ignored_after_terminate,
             "sampling": self.sampling.as_dict(),
         }
 
@@ -374,6 +378,24 @@ def _control_of(action: Any) -> str | None:
         if getattr(action, flag, False):
             return flag
     return None
+
+
+def _calls_after_terminate(action: Any) -> int:
+    """Calls the turn placed AFTER its own terminate.
+
+    Nothing can run once the episode has ended, but a tool-call grammar's
+    `compile` lowers them anyway — `grammars/move_rel/codec.py:359` skips the
+    terminate call and keeps iterating — and the flat operation stream no longer
+    says which side of the terminate an operation came from. So the count is
+    published rather than inferred.
+
+    Attribute probe, like `_control_of`: the bare-token grammars spell a control
+    outcome as a whole action line, have no call list, and answer 0.
+    """
+    names = [str(getattr(call, "action", "")) for call in getattr(action, "calls", ())]
+    if "terminate" not in names:
+        return 0
+    return len(names) - names.index("terminate") - 1
 
 
 def _action_record(action: Any) -> Any:
@@ -527,23 +549,26 @@ class Agent:
                 sampling=sampling,
             )
         control = _control_of(action)
-        operations: tuple[Any, ...] = ()
-        if control is None:
-            try:
-                operations = tuple(self.codec.compile(text, geometry, cursor))
-            except (TypeError, ValueError) as exc:
-                return Decision(
-                    step=step,
-                    text=text,
-                    prose=prose,
-                    action=action,
-                    operations=(),
-                    control=None,
-                    parse_error={"type": type(exc).__name__, "message": str(exc)},
-                    sampling=sampling,
-                )
-            if not operations:
-                control = "no_op"
+        # Compiled whichever way the control went. A multi-call turn like
+        # `[move_rel, left_click, terminate]` carries real work, every grammar's
+        # compile already drops the terminate itself, and skipping compile scored
+        # that turn as a bare terminate with nothing dispatched — which is what the
+        # premature-terminate audit was measuring.
+        try:
+            operations = tuple(self.codec.compile(text, geometry, cursor))
+        except (TypeError, ValueError) as exc:
+            return Decision(
+                step=step,
+                text=text,
+                prose=prose,
+                action=action,
+                operations=(),
+                control=None,
+                parse_error={"type": type(exc).__name__, "message": str(exc)},
+                sampling=sampling,
+            )
+        if control is None and not operations:
+            control = "no_op"
         return Decision(
             step=step,
             text=text,
@@ -553,6 +578,7 @@ class Agent:
             control=control,
             parse_error=None,
             sampling=sampling,
+            ignored_after_terminate=_calls_after_terminate(action),
         )
 
     async def close(self) -> None:

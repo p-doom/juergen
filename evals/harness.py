@@ -639,6 +639,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                         break
                 if decision.parse_error:
                     state.parse_errors += 1
+                state.ignored_after_terminate += decision.ignored_after_terminate
 
                 frame = await self._observe(preparer, session, task)
                 frames.append(frame)
@@ -767,6 +768,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             "executor_errors": state.executor_errors,
             "control_terminate": state.control_terminate,
             "terminate_step": state.terminate_step,
+            "ignored_after_terminate": state.ignored_after_terminate,
             "reach_frame": state.reach_frame,
             "best_distance": state.best_distance,
             "task_reward": state.task_reward,

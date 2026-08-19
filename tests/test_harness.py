@@ -147,6 +147,55 @@ def test_a_model_terminate_without_the_postcondition_is_recorded_as_such(tmp_pat
     assert result["success"] is False
 
 
+def test_a_terminating_turn_dispatches_its_work_before_the_episode_stops(
+    tmp_path, preparer
+) -> None:
+    """`[move_rel, left_click, terminate]` used to dispatch nothing at all, so the
+    TERMINATE audit read it as a bare premature terminate.
+    """
+    calls = [
+        {"action": "move_rel", "coordinate": [50, 50]},
+        {"action": "left_click"},
+        {"action": "terminate", "status": "success"},
+    ]
+    reply = "\n".join(
+        "<tool_call>\n"
+        + json.dumps({"name": "computer_use", "arguments": call})
+        + "\n</tool_call>"
+        for call in calls
+    )
+    session = FakeSession()
+    _, result, _ = _run(
+        _config(tmp_path, codec="move_rel"),
+        _task(max_steps=4),
+        replies=[reply],
+        session=session,
+    )
+    assert result["control_terminate"] == "terminate" and result["terminate_step"] == 1
+    assert result["outcome"] == "model_terminate_without_postcondition"
+    (dispatched,) = session.operations_log
+    kinds = [op.kind for op in dispatched]
+    assert kinds == ["move_to", "mouse_down", "mouse_up"], kinds
+    assert result["ignored_after_terminate"] == 0
+
+
+def test_calls_after_a_terminate_are_published_as_a_count(tmp_path, preparer) -> None:
+    reply = "\n".join(
+        "<tool_call>\n"
+        + json.dumps({"name": "computer_use", "arguments": call})
+        + "\n</tool_call>"
+        for call in (
+            {"action": "terminate", "status": "success"},
+            {"action": "left_click"},
+            {"action": "left_click"},
+        )
+    )
+    _, result, _ = _run(
+        _config(tmp_path, codec="move_rel"), _task(max_steps=4), replies=[reply]
+    )
+    assert result["ignored_after_terminate"] == 2
+
+
 def test_a_self_declared_fail_is_recorded_as_fail_not_terminate(tmp_path, preparer) -> None:
     _, result, _ = _run(_config(tmp_path), _task(max_steps=4), replies=["FAIL"])
     assert result["control_terminate"] == "fail"

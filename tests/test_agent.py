@@ -199,6 +199,56 @@ def test_a_control_action_compiles_to_no_operations(codec_name: str) -> None:
     assert decision.control == "terminate" and decision.operations == ()
 
 
+@pytest.mark.parametrize("codec_name", TOOL_CALL_GRAMMARS)
+def test_the_work_a_terminating_turn_carries_still_compiles(codec_name: str) -> None:
+    """Skipping `compile` once a control outcome was found dispatched ZERO operations
+    for `[move, click, terminate]` and scored it as a bare terminate, which is what
+    the premature-terminate audit was reading.
+    """
+    move = (
+        {"action": "move_rel", "coordinate": [50, 50]}
+        if codec_name == "move_rel"
+        else {"action": "mouse_move", "coordinate": [600, 600]}
+    )
+    text = "\n".join(
+        [
+            _tool_call(move),
+            _tool_call({"action": "left_click"} if codec_name == "move_rel" else
+                       {"action": "left_click", "coordinate": [600, 600]}),
+            _tool_call({"action": "terminate", "status": "success"}),
+        ]
+    )
+    decision = _agent(codec_name).decide(
+        text, step=1, geometry=_geometry(), cursor=(100, 100), sampling=_sampling()
+    )
+    assert decision.control == "terminate" and decision.terminated
+    kinds = [op.kind for op in decision.operations]
+    assert "move_to" in kinds and "mouse_down" in kinds and "mouse_up" in kinds
+    assert decision.ignored_after_terminate == 0
+    assert decision.as_record()["ignored_after_terminate"] == 0
+
+
+def test_calls_placed_after_a_terminate_are_counted() -> None:
+    """`grammars/move_rel/codec.py:359` skips the terminate and keeps iterating, so
+    the flat operation stream cannot say which side of it an operation came from."""
+    from agent.agent import _calls_after_terminate
+
+    text = "\n".join(
+        [
+            _tool_call({"action": "terminate", "status": "success"}),
+            _tool_call({"action": "left_click"}),
+        ]
+    )
+    decision = _agent("move_rel").decide(
+        text, step=1, geometry=_geometry(), cursor=(100, 100), sampling=_sampling()
+    )
+    assert decision.ignored_after_terminate == 1
+    assert _calls_after_terminate(load_codec("deltatype_v2").parse("TERMINATE")) == 0, (
+        "a bare-token grammar has no call list"
+    )
+    assert _calls_after_terminate(None) == 0
+
+
 def test_a_real_click_compiles_to_absolute_pixel_operations() -> None:
     decision = _agent("deltatype_v2").decide(
         "10 10 0 ; +LMB -LMB",
