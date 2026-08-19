@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One converter: absolute teacher rollouts -> training records in any target grammar.
+"""One converter: recorded rollouts -> training records in any target grammar.
 
 Replaces the five ``convert_abs_to_{absolute,relative,moverel,diffabs,deltatype}.py``
 scripts (1,389 LOC). Rollout walking, task-success / slug filtering, per-step frame
@@ -16,18 +16,26 @@ The seam between this converter and a grammar is the absolute-Operation
 vocabulary documented in ``grammars/_support.py`` (``move_to``, ``glide_to``,
 ``mouse_down/up``, ``scroll``, ``key_down/up``, ``coalesced_type``, ``wait`` — every
 coordinate an absolute, clamped screen pixel). It is the same seam
-``Codec.compile_action`` uses in the other direction: the converter lowers the
-teacher's absolute ``computer_use`` call into Operations, and the codec lifts
-Operations into its own Action in its own coordinate convention. No coordinate
-space is named here — the convention is a property of the grammar you pick, so
-there is no ``--coord_space`` flag.
+``Codec.compile_action`` uses in the other direction: a source reader resolves one
+recorded step into Operations, and the target codec lifts Operations into its own
+Action in its own coordinate convention. No coordinate space is named here — the
+convention is a property of the grammar you pick, so there is no ``--coord_space``
+flag.
 
-The geometry the lift needs comes from the freeroll log, not from the model's text:
-``cursor_before`` (the real VM cursor before the action) and ``intended_target``
-(the absolute pixel the teacher's coordinate resolved to, post-scale, post-clip).
-Because ``cursor_before[t] == intended_target[t-1]``, a relative codec's diff
-telescopes exactly — the cursor motion is identical to the teacher's, only the
-encoding changes.
+Two producers write the rollout layout this reads, and the artifact DECLARES which
+(see :func:`source_reader`). Our own harness records the grammar it ran, so a
+rollout carrying ``result.json["codec"]`` is read through :func:`rollout_step`,
+which takes the Operation stream the harness dispatched; the external
+absolute-teacher collections carry no such field and go through
+:func:`teacher_step`. There is still exactly one action vocabulary in the estate —
+Operations — and no grammar is asked to emit ``computer_use``.
+
+The geometry the teacher lift needs comes from the freeroll log, not from the
+model's text: ``cursor_before`` (the real VM cursor before the action) and
+``intended_target`` (the absolute pixel the teacher's coordinate resolved to,
+post-scale, post-clip). Because ``cursor_before[t] == intended_target[t-1]``, a
+relative codec's diff telescopes exactly — the cursor motion is identical to the
+teacher's, only the encoding changes.
 
 Prose is preserved by default (``--keep_prose``, on unless ``--no_keep_prose``).
 Measured over ``/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/
@@ -86,7 +94,7 @@ import json
 import random
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -125,13 +133,18 @@ _COORD_ACTIONS = frozenset(
 
 @dataclass(frozen=True)
 class Step:
-    """One teacher step, normalized, before any grammar is applied.
+    """One source step at the converter's seam, before any target grammar is applied.
 
-    ``action`` is the teacher's parsed absolute ``computer_use`` arguments verbatim
-    (private ``_``-prefixed keys already stripped). A terminal turn instead sets
-    ``terminate`` / ``terminate_status`` with an empty ``action``, because every
-    grammar spells termination differently (a ``terminate{status}`` tool call vs a
-    bare ``TERMINATE`` / ``FAIL`` token).
+    ``operations`` is the absolute-Operation vocabulary documented in
+    ``grammars/_support.py`` — the one action vocabulary the estate has, and what
+    every source reader below resolves to. ``None`` means the SOURCE could not
+    express the step at all (an off-grammar teacher action), which is a dropped
+    turn rather than a lift that raises.
+
+    ``terminate`` is ``None`` for a normal turn, else ``"success"`` / ``"failure"``.
+    It stays a status here because every grammar spells termination differently (a
+    ``terminate{status}`` tool call vs a bare ``TERMINATE`` / ``FAIL`` token), and
+    which one the record gets is the target codec's decision, not this file's.
 
     ``screen`` has no default. Every relative grammar clamps against it and
     ``move_rel`` normalizes against it, so an invented size is a silently wrong
@@ -139,25 +152,29 @@ class Step:
     """
 
     screen: tuple[int, int]
-    action: dict[str, Any] = field(default_factory=dict)
-    terminate: bool = False
-    terminate_status: str = "success"
+    operations: tuple[Any, ...] | None = ()
     cursor_before: tuple[int, int] | None = None
-    intended_target: tuple[int, int] | None = None
+    terminate: str | None = None
 
 
-def step_to_operations(step: Step) -> tuple[Any, ...] | None:
-    """Lower one teacher step into absolute Operations. ``None`` if off-grammar.
+def teacher_operations(
+    action: dict[str, Any],
+    *,
+    target: tuple[int, int] | None,
+    cursor: tuple[int, int] | None,
+) -> tuple[Any, ...] | None:
+    """Lower one teacher ``computer_use`` call into absolute Operations.
 
-    Coordinates come from ``intended_target``, which is already the post-scale,
-    post-clip absolute pixel the VM acted on — so this never re-resolves a
-    coordinate convention, it only re-expresses an action the VM already executed.
+    ``None`` if off-grammar. Coordinates come from ``target``
+    (``info["intended_target"]``), which is already the post-scale, post-clip
+    absolute pixel the VM acted on — so this never re-resolves a coordinate
+    convention, it only re-expresses an action the VM already executed. The call's
+    own ``coordinate`` is NOT a pixel: every collection in scope was sampled on a
+    normalized grid (``result.json["coord_grid"] == 1000``).
     """
-    a = step.action
+    a = action
     kind = str(a.get("action", "")).strip().lower()
     ops: list[Any] = []
-    target = step.intended_target
-    cursor = step.cursor_before
 
     if kind == "hscroll":
         amount = _scroll_amount(a)
@@ -272,13 +289,13 @@ def _geometry(screen: tuple[int, int]):
     )
 
 
-def _lift(codec: Any, ops: tuple[Any, ...], step: Step, terminate: str | None) -> Any:
+def _lift(codec: Any, step: Step) -> Any:
     """Absolute Operations -> this grammar's Action (the inverse of compile_action).
 
-    The codec owns its coordinate convention and how it spells termination, so
-    the same call takes ``terminate`` (``None`` for a normal turn, else
-    ``"success"`` / ``"failure"``, with ``ops`` empty). A terminal turn is spelled
-    two ways across the seven grammars — a flag on the Action
+    The codec owns its coordinate convention and how it spells termination, so the
+    same call takes ``step.terminate`` (``None`` for a normal turn, else
+    ``"success"`` / ``"failure"``). A terminal turn is spelled two ways across the
+    seven grammars — a flag on the Action
     (``deltatype_v2.fail``, ``diffabs.terminate``, ``ordered_events_v3.terminate``)
     or a ``terminate`` call inside it (``native_absolute``, ``move_rel``) — while
     ``compact_raw`` and ``native_absolute_control`` cannot express one and raise.
@@ -302,31 +319,103 @@ def _lift(codec: Any, ops: tuple[Any, ...], step: Step, terminate: str | None) -
             "TERMINATE / FAIL."
         )
     return lift(
-        ops,
+        step.operations,
         geometry=_geometry(step.screen),
         cursor=step.cursor_before or (0, 0),
-        terminate=terminate,
+        terminate=step.terminate,
     )
 
 
 def format_step(codec: Any, step: Step) -> str | None:
     """One :class:`Step` -> this grammar's assistant text (``None`` = drop the turn)."""
-    if step.terminate:
-        ops: tuple[Any, ...] | None = ()
-        terminate: str | None = step.terminate_status
-    else:
-        ops = step_to_operations(step)
-        terminate = None
-        if ops is None:
-            return None
+    if step.operations is None:
+        return None
     try:
-        return codec.format(_lift(codec, ops, step, terminate))
+        return codec.format(_lift(codec, step))
     except ValueError:
         # An expressiveness ceiling, and the only thing a dropped turn may mean.
         # Every codec's error type subclasses ValueError; an AssertionError or a
         # KeyError out of a lift is a broken codec invariant, and swallowing one
         # here booked a bug as a per-arm `n_turns_dropped_by_codec`.
         return None
+
+
+def teacher_step(info: dict[str, Any], screen: tuple[int, int]) -> Step | None:
+    """One step of an external absolute-teacher collection -> the seam.
+
+    ``info["parsed"]`` is the teacher's own payload: the absolute ``computer_use``
+    arguments (private ``_``-prefixed keys stripped), or a ``terminate`` flag with
+    ``computer_use_status`` beside it. ``None`` when the row does not speak that
+    vocabulary at all, which is a source parse error, not a codec drop.
+    """
+    parsed = info["parsed"]
+    if parsed.get("terminate"):
+        status = str(parsed.get("computer_use_status") or "success").strip().lower()
+        return Step(screen=screen, terminate=status)
+    arguments = parsed.get("computer_use")
+    if not isinstance(arguments, dict):
+        return None
+    cursor = _pair(info.get("cursor_before"))
+    return Step(
+        screen=screen,
+        operations=teacher_operations(
+            {k: v for k, v in arguments.items() if not str(k).startswith("_")},
+            target=_pair(info.get("intended_target")),
+            cursor=cursor,
+        ),
+        cursor_before=cursor,
+    )
+
+
+#: The harness's grammar-independent control verdict -> the lift's terminate status.
+#: `no_op` is deliberately absent: idling is not a termination, and it arrives as
+#: the empty operation stream every target grammar already spells its own way.
+_TERMINAL_CONTROL = {"terminate": "success", "fail": "failure"}
+
+
+def rollout_step(info: dict[str, Any], screen: tuple[int, int]) -> Step | None:
+    """One step of one of OUR OWN rollouts -> the seam.
+
+    The harness records the absolute Operation stream it dispatched, so the seam is
+    read back rather than re-derived. That is the point: ``info["parsed"]`` is the
+    SOURCE grammar's own ``to_dict()`` — seven different vocabularies, none of them
+    the teacher's ``computer_use`` — while Operations are the one vocabulary every
+    grammar resolves to, and they are what the guest actually executed. Reading
+    them needs no source codec, so a dataset built from an old rollout does not
+    change meaning when that grammar is next edited.
+
+    ``info["control"]`` is the grammar-independent terminal verdict the harness
+    already resolved (``agent.agent._control_of``), so termination is not recovered
+    by introspecting an Action dataclass either.
+    """
+    operations = info.get("operations")
+    if not isinstance(operations, list):
+        return None
+    return Step(
+        screen=screen,
+        # `Operation.from_dict` raises on a malformed row rather than shrinking the
+        # dataset by one turn: a corrupt artifact is not an expressiveness ceiling.
+        operations=tuple(_support.Operation.from_dict(item) for item in operations),
+        cursor_before=_pair(info.get("cursor_before")),
+        terminate=_TERMINAL_CONTROL.get(str(info.get("control") or "")),
+    )
+
+
+def source_reader(result: dict[str, Any]):
+    """Which source vocabulary this rollout speaks, from what it DECLARES.
+
+    Two producers write this layout. Our own harness records the grammar it ran
+    (``evals/harness.py`` -> ``result.json["codec"]``), and a rollout that declares
+    one carries that grammar's action dict and the Operation stream it dispatched.
+    The external absolute-teacher collections have no such field and carry the
+    teacher's ``computer_use`` arguments plus a post-scale ``intended_target``.
+
+    Keyed on the declared field, never on the shape of the payload. Assuming one
+    vocabulary is what marked every step of our own rollouts a source parse error —
+    which silently blocked the whole rollouts-to-training path — and sniffing the
+    other way round is how a 0..999 grid gets read as pixels.
+    """
+    return rollout_step if result.get("codec") else teacher_step
 
 
 _TOOLCALL_RE = re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL | re.IGNORECASE)
@@ -431,6 +520,7 @@ def convert_rollout(
             "labels for the whole rollout."
         )
     steps_dir = run_dir / "steps"
+    read_step = source_reader(result)
 
     turns: list[tuple[str, str, str]] = []  # (frame_path, assistant_text, prose)
     n_steps = n_parse_err = n_codec_drop = 0
@@ -450,20 +540,10 @@ def convert_rollout(
             n_parse_err += 1
             continue
 
-        if parsed.get("terminate"):
-            status = str(parsed.get("computer_use_status") or "success").strip().lower()
-            step = Step(terminate=True, terminate_status=status, screen=screen)
-        else:
-            abs_args = parsed.get("computer_use")
-            if not isinstance(abs_args, dict):
-                n_parse_err += 1
-                continue
-            step = Step(
-                action={k: v for k, v in abs_args.items() if not str(k).startswith("_")},
-                cursor_before=_pair(info.get("cursor_before")),
-                intended_target=_pair(info.get("intended_target")),
-                screen=screen,
-            )
+        step = read_step(info, screen)
+        if step is None:
+            n_parse_err += 1
+            continue
 
         text = format_step(codec, step)
         if text is None:

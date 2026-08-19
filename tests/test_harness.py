@@ -35,6 +35,7 @@ from evals.harness import (
     _to_thread,
 )
 from agent.agent import load_codec
+from desktop.geometry import DisplayGeometry
 from evals.tasks import RESULT_KEY, DesktopState, DesktopTaskData, register_preparer, PREPARERS
 from juergen_doubles import FakeSession, make_ctx, make_task_data, make_trace, png
 
@@ -782,21 +783,70 @@ def test_the_rollout_artifact_is_the_layout_labctl_and_convert_both_read(
         assert seen.is_file()
         assert seen.read_bytes() == observed[row["step_num"] - 1]
 
-    # And through the reader, not around it: every row resolved its frame, so all
-    # three land in `source_parse_errors` rather than being skipped for a missing one.
+    # And through the reader, not around it: a rollout of ours is BC input, so every
+    # row must convert, not be booked as a parse error for speaking its own grammar.
+    target = load_codec("move_rel")
     record = convert.convert_rollout(
-        run_dir,
-        load_codec("move_rel"),
-        min_valid_actions=0,
-        max_parse_error_frac=1.0,
+        run_dir, target, min_valid_actions=0, max_parse_error_frac=1.0
     )
     assert record is not None, "convert.py refuses a rollout with no screen_size"
     assert record["instruction"] == "do the thing"
-    assert record["source_parse_errors"] == 3, (
-        "three rows read, three frames resolved; the grammar's own action dict is not "
-        "the teacher's computer_use vocabulary, which is a separate gap"
+    assert record["source_parse_errors"] == 0, (
+        "the source grammar is declared by result.json['codec'], so none of these "
+        "rows is a parse error"
     )
-    assert result["screen_size"] == [1920, 1080]
+    assert result["codec"] == "deltatype_v2", "the declaration the reader keys on"
+
+    # The actions themselves, not just the count: each assistant target recompiles
+    # to exactly the operations the harness dispatched for that turn, from the same
+    # cursor. `10 10 0` in deltatype_v2 and `move_rel [5, 9]` in move_rel are the
+    # same move — the encoding changed and the guest-visible effect did not.
+    geometry = DisplayGeometry(desktop_width=1920, desktop_height=1080)
+    written = [
+        message["content"][0]["text"]
+        for message in record["messages"]
+        if message["role"] == "assistant"
+    ]
+    assert len(written) == 3
+    for row, assistant in zip(rows[1:], written, strict=True):
+        cursor = tuple(row["info"]["cursor_before"])
+        dispatched = [tuple(op["args"]) for op in row["info"]["operations"]]
+        assert dispatched == [(110, 110)], "the fake guest moved +10,+10 each turn"
+        recompiled = target.compile(assistant, geometry, cursor)
+        assert [tuple(op.args) for op in recompiled] == dispatched, assistant
+        assert '"action": "move_rel"' in assistant and '[5, 9]' in assistant
+
+
+def test_our_own_terminate_survives_the_trip_into_another_grammar(
+    tmp_path, preparer
+) -> None:
+    """A control token is a whole action line in the source grammar and a tool call
+    in the target one, so the converter carries the harness's own `control` verdict
+    rather than re-reading either spelling. Getting this wrong writes a dataset that
+    claims a success the rollout never claimed.
+    """
+    convert = _convert_module()
+    _run(
+        _config(tmp_path),
+        _task(max_steps=2, name="cell_term", instruction="stop"),
+        replies=["10 10 0 ;", "TERMINATE"],
+    )
+    run_dir = tmp_path / "cell_term"
+
+    for name, expected in (
+        ("deltatype_v2", "TERMINATE"),
+        ("move_rel", '"action": "terminate", "status": "success"'),
+    ):
+        record = convert.convert_rollout(
+            run_dir, load_codec(name), min_valid_actions=0, max_parse_error_frac=1.0
+        )
+        written = [
+            message["content"][0]["text"]
+            for message in record["messages"]
+            if message["role"] == "assistant"
+        ]
+        assert record["source_parse_errors"] == 0, name
+        assert expected in written[-1], (name, written)
 
 
 def test_the_artifact_root_index_is_what_labctl_reads(tmp_path, preparer) -> None:

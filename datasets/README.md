@@ -1,6 +1,6 @@
 # `datasets/` — dataset construction from rollouts
 
-One file: `convert.py`, the absolute-teacher-rollout → training-record
+One file: `convert.py`, the rollout → training-record
 converter, parameterized by target grammar (`--codec <name>` → `grammars/<name>/`
 via `grammars.load`). It replaces
 `convert_abs_to_{absolute,relative,moverel,diffabs,deltatype}.py` (1,389 LOC):
@@ -24,7 +24,7 @@ you pick, resolved inside its codec, never named here.
 
 ## The seam
 
-`convert.py` lowers each teacher step into the absolute-Operation vocabulary
+`convert.py` resolves each recorded step into the absolute-Operation vocabulary
 documented in `grammars/_support.py` (`move_to`, `glide_to`, `mouse_down/up`,
 `scroll`, `key_down/up`, `coalesced_type`, `wait`; every coordinate an absolute,
 clamped screen pixel). The codec then lifts Operations into its own Action:
@@ -39,6 +39,26 @@ the terminal spelling (a flag on the Action for `deltatype_v2` / `diffabs` /
 `ordered_events_v3`, a `terminate` call inside it for `native_absolute` /
 `move_rel`). `convert.py` raises `NotImplementedError` naming this method if a
 grammar has not implemented it, rather than guessing.
+
+## Two source vocabularies, one declared
+
+The rollout layout has two producers, and the artifact says which it is:
+
+* our own harness records the grammar it ran, so `result.json` carries a `codec`
+  field and each row carries the absolute Operation stream the harness dispatched
+  plus the `control` verdict it resolved — that stream IS the seam, so it is read
+  back rather than re-derived, and no source codec is loaded;
+* the external absolute-teacher collections carry no `codec` field, and their rows
+  carry the teacher's `computer_use` arguments plus `intended_target`, the
+  post-scale post-clip pixel the VM acted on (the argument's own `coordinate` is on
+  a normalized grid, `coord_grid = 1000`, and is not a pixel).
+
+`source_reader` keys on the declared field and never on the shape of the payload.
+Assuming the teacher vocabulary marked every step of our own rollouts a source
+parse error, which silently blocked the rollouts → training path; sniffing the
+other way round is how a 0..999 grid gets read as pixels. Nothing here asks a
+grammar to emit `computer_use`: the estate keeps one action vocabulary, and it is
+Operations.
 
 ## Prose
 
