@@ -1,5 +1,6 @@
 {
   "grammar": "native_absolute",
+  "prompt_sha256": "3aa8d36758e5d8c9723ffe839270e875d1e49d023c3aced623cc5158ce38daf5",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080

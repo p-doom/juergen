@@ -1,5 +1,6 @@
 {
   "grammar": "diffabs",
+  "prompt_sha256": "bc83a89a84c3e82a4334c336e287c1c7bfb30078ae23d549de0bb2b4c13e5a31",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080

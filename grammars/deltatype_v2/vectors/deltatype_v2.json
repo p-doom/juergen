@@ -1,5 +1,6 @@
 {
   "grammar": "deltatype_v2",
+  "prompt_sha256": "a65d9b9cde56f72647b0d80962288cf56a2cd7ed242567ebc4e81ef08a6b81ed",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080

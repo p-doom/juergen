@@ -1,5 +1,6 @@
 {
   "grammar": "native_absolute_control",
+  "prompt_sha256": "d5e34243b113ef1667733dbb2c947defa5fe1c949d937589c614ea498ea3f782",
   "paired_with": "compact_raw",
   "geometry": {
     "desktop_width": 1920,

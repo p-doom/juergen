@@ -1,5 +1,6 @@
 {
   "grammar": "compact_raw",
+  "prompt_sha256": "080bcd24f802ba519362bd2aa6ea29b517f59d0422acffb5a40d6afd785bb3c0",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080

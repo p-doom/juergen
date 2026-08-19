@@ -329,9 +329,21 @@ def test_describe_is_deterministic(name):
     codec = _codec(name)
     first = codec.describe()
     assert all(codec.describe() == first for _ in range(5))
-    assert _support.spec_digest(first) == codec.digest
     for production in _support.productions(codec):
         assert production.syntax in first
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_prompt_digest_matches_its_pin(name):
+    """``describe()`` is what a trained model saw, so its digest is pinned here.
+
+    ``codec.digest`` is computed from ``describe()``, so comparing the two in
+    code cannot fail. The pin lives in the vectors file — outside the module
+    whose docstrings it measures — so editing any docstring that reaches the
+    prompt turns this red. Rewrite the pin in the same commit as the edit, and
+    the digest change is then reviewable as a line of the diff.
+    """
+    assert _codec(name).digest == _vectors(name)["prompt_sha256"]
 
 
 @pytest.mark.parametrize("name", NAMES)

@@ -1,5 +1,6 @@
 {
   "grammar": "move_rel",
+  "prompt_sha256": "816950fe9f806dcee36c5da41e1b000b02604c1285dac62762ed514309a2c3f0",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080

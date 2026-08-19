@@ -1,5 +1,6 @@
 {
   "grammar": "ordered_events_v3",
+  "prompt_sha256": "d88fded4beb1927de805ec508bb7941cce08cfbb56fccad99b368395a973662b",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080

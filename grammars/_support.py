@@ -223,7 +223,14 @@ def render_tool_prompt(codec: Any, *, properties: dict[str, Any]) -> str:
 
 
 def spec_digest(text: str) -> str:
-    """sha256 of a rendered spec. Reported, never enforced."""
+    """sha256 of a rendered spec.
+
+    Pinned per grammar in ``vectors/*.json`` (``prompt_sha256``) and asserted by
+    ``test_vectors.test_prompt_digest_matches_its_pin``: the prompt is training
+    and eval surface, so it may not move without a line in a diff. Never raised
+    at import — a blocking check inside the module made in-place editing of a
+    grammar expensive enough that forking a worktree was cheaper.
+    """
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
