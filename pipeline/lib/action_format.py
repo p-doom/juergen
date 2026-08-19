@@ -27,6 +27,10 @@ at its exact position. The aggregate format cannot represent
 ``move -> click -> move``; this one can. Held-state anomaly accounting
 (redundant press / dangling release / held at end) lives in the shared label
 policy's ``PolicyCounters``.
+
+``OrderedTypingFormatter`` (``ordered_events_v3``) is that same extraction with
+balanced typing runs collapsed into one ``type("...")`` primitive. Both emit the
+``ordered_events_v3`` grammar, whose ``type()`` production only this one reaches.
 """
 
 from __future__ import annotations
@@ -151,15 +155,151 @@ class CanonicalFormatter:
         )
 
 
-def _render_primitives(primitives: Sequence[Primitive]) -> str:
-    """One window's primitives -> its ``ordered_events_v3`` label.
+def _ordered_result(
+    primitives: Sequence[Sequence[Primitive]],
+    counters: PolicyCounters,
+    kinds: tuple[str, ...],
+) -> FormatResult:
+    """Per-window primitives -> their ``ordered_events_v3`` labels + counts.
 
     An empty window is NO_OP; the grammar's TERMINATE is unreachable from a
     keylog, which records no intent to terminate.
     """
-    return ORDERED_EVENTS_V3.format(
-        OrderedEventsV3Action(primitives=tuple(primitives), no_op=not primitives)
+    counts = Counter(p.kind for window in primitives for p in window)
+    return FormatResult(
+        labels=[
+            ORDERED_EVENTS_V3.format(
+                OrderedEventsV3Action(
+                    primitives=tuple(window), no_op=not window
+                )
+            )
+            for window in primitives
+        ],
+        counters=counters,
+        primitive_counts={k: counts.get(k, 0) for k in kinds},
     )
+
+
+# US-layout printable map: key name -> (base char, shifted char). The names are
+# the rdev namespace ``common.resolve_key_name`` passes through from the keylog
+# (top-row digits are Num0..Num9); the char pairs mirror the viewer's keyToChar
+# map (tooling/visualize_frame_records.py), the project's existing convention.
+# Keypad digits, Return, Tab, Backspace, Escape, arrows, F-keys and modifiers are
+# deliberately absent: they render as down()/up() and break typing runs.
+_US_PRINTABLE: dict[str, tuple[str, str]] = {
+    "Space": (" ", " "),
+    **{f"Key{c}": (c.lower(), c) for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"},
+    **{f"Num{d}": (d, s) for d, s in zip("1234567890", "!@#$%^&*()", strict=True)},
+    "BackQuote": ("`", "~"),
+    "Minus": ("-", "_"),
+    "Equal": ("=", "+"),
+    "BracketLeft": ("[", "{"),
+    "BracketRight": ("]", "}"),
+    "BackSlash": ("\\", "|"),
+    "SemiColon": (";", ":"),
+    "Quote": ("'", '"'),
+    "Comma": (",", "<"),
+    "Dot": (".", ">"),
+    "Slash": ("/", "?"),
+}
+
+_SHIFT_KEYS = frozenset({"ShiftLeft", "ShiftRight"})
+# A held non-Shift modifier vetoes typing pairs (Ctrl+C is a chord, not typing).
+_NON_SHIFT_MODIFIERS = frozenset({
+    "ControlLeft", "ControlRight", "Control",
+    "Alt", "AltLeft", "AltRight", "AltGr",
+    "MetaLeft", "MetaRight", "Meta", "MetaGr",
+    "Function",
+})
+_MODIFIER_KEYS = _SHIFT_KEYS | _NON_SHIFT_MODIFIERS
+
+
+def _collapse_typing(
+    prims: Sequence[Primitive], held_mods: set[str]
+) -> list[Primitive]:
+    """One window's primitives with typing runs collapsed to ``type("...")``.
+
+    A *typing run* is a maximal contiguous span of ``down``/``up`` primitives of
+    printable and Shift keys ONLY, that is BALANCED (every key pressed in the
+    span is released in it and vice versa), entered while no non-Shift modifier
+    is held. Characters are emitted in ``down`` order — so key *rollover*
+    (``down h; down e; up h; up e`` from natural fast typing, where releases
+    interleave or reorder) still collapses to ``type("he")`` instead of a string
+    of per-key events.
+
+    A span that never balances before a breaker renders explicitly instead: a
+    printable key held across a window boundary (its ``up`` is in another window)
+    -> ``down``/``up``; a Shift enclosing a non-typing primitive (move, Tab, …)
+    -> the Shift renders while inner printable keys still ``type`` under it; a
+    bare Shift tap (zero characters) -> ``down``/``up``. Any non-key primitive
+    (move, scroll, mouse button, Return/Backspace/arrow, a non-Shift modifier)
+    breaks the run. ``held_mods`` is updated in place for the next window.
+    """
+    n = len(prims)
+    out: list[Primitive] = []
+    mods = set(held_mods)
+
+    def _is_typing_key(p: Primitive) -> bool:
+        return p.kind in ("down", "up") and (
+            p.name in _US_PRINTABLE or p.name in _SHIFT_KEYS
+        )
+
+    i = 0
+    while i < n:
+        p = prims[i]
+        # A typing run can only OPEN on a printable/Shift key down, and only
+        # when no non-Shift modifier is physically held.
+        if p.kind == "down" and _is_typing_key(p) and not (mods & _NON_SHIFT_MODIFIERS):
+            # Scan the longest BALANCED prefix of the contiguous key-only span
+            # starting at i (balanced == every down matched by a later up in
+            # the span). ``run_end`` is exclusive; None if it never balances.
+            open_counts: dict[str, int] = {}
+            run_end: int | None = None
+            j = i
+            while j < n and _is_typing_key(prims[j]):
+                q = prims[j]
+                if q.kind == "down":
+                    open_counts[q.name] = open_counts.get(q.name, 0) + 1
+                else:
+                    c = open_counts.get(q.name, 0)
+                    if c == 0:
+                        break  # up with no matching down in-span -> held from before
+                    open_counts[q.name] = c - 1
+                    if open_counts[q.name] == 0:
+                        del open_counts[q.name]
+                j += 1
+                if not open_counts:
+                    run_end = j  # balanced here — candidate maximal run end
+            if run_end is not None:
+                # Emit the run [i, run_end): chars in down order, Shift folded
+                # and absorbed. Non-Shift modifiers cannot occur inside (the
+                # span is printable/Shift only and we entered with none held).
+                shift_held = bool(mods & _SHIFT_KEYS)
+                chars: list[str] = []
+                for k in range(i, run_end):
+                    q = prims[k]
+                    if q.name in _SHIFT_KEYS:
+                        shift_held = q.kind == "down"
+                        continue
+                    if q.kind == "down":
+                        base, shifted = _US_PRINTABLE[q.name]
+                        chars.append(shifted if shift_held else base)
+                if chars:
+                    out.append(Primitive("type", text="".join(chars)))
+                    i = run_end
+                    continue
+                # Zero characters (e.g. a bare Shift tap) — fall through and
+                # render the run's primitives explicitly rather than type("").
+        if p.kind == "down" and p.name in _MODIFIER_KEYS:
+            mods.add(p.name)
+        elif p.kind == "up" and p.name in _MODIFIER_KEYS:
+            mods.discard(p.name)
+        out.append(p)
+        i += 1
+
+    held_mods.clear()
+    held_mods.update(mods)
+    return out
 
 
 class OrderedFormatter:
@@ -189,6 +329,20 @@ class OrderedFormatter:
         *,
         master_fps: float,
     ) -> FormatResult:
+        primitives, counters = self._window_primitives(
+            events, windows, dead_zones, master_fps=master_fps
+        )
+        return _ordered_result(primitives, counters, ("move", "scroll", "down", "up"))
+
+    def _window_primitives(
+        self,
+        events: Sequence[RawEvent],
+        windows: Sequence[Window],
+        dead_zones: Sequence[DeadZone],
+        *,
+        master_fps: float,
+    ) -> tuple[list[list[Primitive]], PolicyCounters]:
+        """One ordered primitive list per window (the shared v2/v3 core)."""
         labeled, counters = apply_label_policy(
             events, windows, dead_zones, master_fps=master_fps
         )
@@ -226,18 +380,46 @@ class OrderedFormatter:
                     Primitive("down" if e.kind == "press" else "up", name=e.name)
                 )
         flush()
+        return primitives, counters
 
-        counts = Counter(p.kind for window in primitives for p in window)
-        return FormatResult(
-            labels=[_render_primitives(window) for window in primitives],
-            counters=counters,
-            primitive_counts={k: counts.get(k, 0) for k in ("move", "scroll", "down", "up")},
+
+class OrderedTypingFormatter(OrderedFormatter):
+    """``ordered_events_v2`` plus a ``type("...")`` primitive: maximal runs of
+    plain typing collapse into one quoted string (the typing action the base
+    model natively knows; per-key down/up typing costs ~8 tokens per character
+    and truncated downstream). ShiftLeft/ShiftRight are absorbed into the run
+    when they enclose only typing pairs — exactly one Shift held, no other
+    modifier, giving the shifted US-layout character; a Shift whose scope
+    includes anything else renders as normal down/up and breaks the run, as does
+    every other rendered primitive. Everything else — motor grid, ordering,
+    NO_OP, held-state accounting — is byte-identical to v2."""
+
+    name = "ordered_events_v3"
+
+    def format_segment(
+        self,
+        events: Sequence[RawEvent],
+        windows: Sequence[Window],
+        dead_zones: Sequence[DeadZone],
+        *,
+        master_fps: float,
+    ) -> FormatResult:
+        primitives, counters = self._window_primitives(
+            events, windows, dead_zones, master_fps=master_fps
+        )
+        # The physical modifier held-set crosses windows: a balanced typing run
+        # nets it to zero, so only explicitly-rendered modifier events move it.
+        held_mods: set[str] = set()
+        collapsed = [_collapse_typing(window, held_mods) for window in primitives]
+        return _ordered_result(
+            collapsed, counters, ("move", "scroll", "down", "up", "type")
         )
 
 
 FORMATTERS: dict[str, Callable[[float], ActionFormatter]] = {
     CanonicalFormatter.name: lambda hz: CanonicalFormatter(),
     OrderedFormatter.name: OrderedFormatter,
+    OrderedTypingFormatter.name: OrderedTypingFormatter,
 }
 
 

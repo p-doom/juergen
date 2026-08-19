@@ -278,6 +278,136 @@ class OrderedFormatterTest(unittest.TestCase):
             self.one_window_label([_key(0, 0.1, "press", "bad name")])
 
 
+def _type(seq: int, t_s: float, name: str) -> list[RawEvent]:
+    """One printable key's press+release, 10 ms apart."""
+    return [_key(seq, t_s, "press", name), _key(seq + 1, t_s + 0.01, "release", name)]
+
+
+class OrderedTypingFormatterTest(unittest.TestCase):
+    """The ``ordered_events_v3`` emitter: v2's extraction with balanced typing
+    runs collapsed into one ``type("...")``.
+
+    The emitter was cut when the repo was rearchitected while the parser was
+    kept, so v3 could be read but not written — and v3 is the format the
+    crowd-cast ``eov3`` datasets are in.
+    """
+
+    def labels(self, events: list[RawEvent], windows: list[Window] | None = None) -> list[str]:
+        return get_formatter("ordered_events_v3").format_segment(
+            events,
+            windows or [Window(master_idx=0, start=0, end=30)],
+            [],
+            master_fps=MASTER_FPS,
+        ).labels
+
+    def test_a_balanced_run_becomes_one_type_call(self) -> None:
+        events = [*_type(0, 0.01, "KeyH"), *_type(2, 0.03, "KeyI")]
+        self.assertEqual(self.labels(events), ['type("hi")'])
+
+    def test_shift_is_absorbed_into_the_shifted_character(self) -> None:
+        events = [
+            _key(0, 0.01, "press", "ShiftLeft"),
+            *_type(1, 0.02, "KeyH"),
+            _key(3, 0.05, "release", "ShiftLeft"),
+            *_type(4, 0.07, "KeyI"),
+        ]
+        self.assertEqual(self.labels(events), ['type("Hi")'])
+
+    def test_rollover_still_collapses(self) -> None:
+        """Natural fast typing releases out of order; characters follow the
+        ``down`` order, not the release order."""
+        events = [
+            _key(0, 0.01, "press", "KeyH"),
+            _key(1, 0.02, "press", "KeyE"),
+            _key(2, 0.03, "release", "KeyH"),
+            _key(3, 0.04, "release", "KeyE"),
+        ]
+        self.assertEqual(self.labels(events), ['type("he")'])
+
+    def test_a_non_typing_primitive_breaks_the_run(self) -> None:
+        events = [
+            *_type(0, 0.01, "KeyH"),
+            _key(2, 0.03, "press", "Return"),
+            _key(3, 0.04, "release", "Return"),
+            *_type(4, 0.06, "KeyI"),
+        ]
+        self.assertEqual(
+            self.labels(events),
+            ['type("h"); down(Return); up(Return); type("i")'],
+        )
+
+    def test_a_held_non_shift_modifier_vetoes_typing(self) -> None:
+        """Ctrl+C is a chord, not typed text."""
+        events = [
+            _key(0, 0.01, "press", "ControlLeft"),
+            *_type(1, 0.02, "KeyC"),
+            _key(3, 0.05, "release", "ControlLeft"),
+        ]
+        self.assertEqual(
+            self.labels(events),
+            ["down(ControlLeft); down(KeyC); up(KeyC); up(ControlLeft)"],
+        )
+
+    def test_a_bare_shift_tap_renders_explicitly(self) -> None:
+        events = [
+            _key(0, 0.01, "press", "ShiftLeft"),
+            _key(1, 0.02, "release", "ShiftLeft"),
+        ]
+        self.assertEqual(self.labels(events), ["down(ShiftLeft); up(ShiftLeft)"])
+
+    def test_a_key_held_across_a_window_boundary_never_collapses(self) -> None:
+        windows = [
+            Window(master_idx=0, start=0, end=15),
+            Window(master_idx=15, start=15, end=30),
+        ]
+        events = [_key(0, 0.5, "press", "KeyH"), _key(1, 1.5, "release", "KeyH")]
+        self.assertEqual(self.labels(events, windows), ["down(KeyH)", "up(KeyH)"])
+
+    def test_shift_held_across_a_boundary_still_shifts_the_next_window(self) -> None:
+        """``held_mods`` crosses windows, so the second window's character is
+        capital even though its Shift down is in the first."""
+        windows = [
+            Window(master_idx=0, start=0, end=15),
+            Window(master_idx=15, start=15, end=30),
+        ]
+        events = [
+            _key(0, 0.5, "press", "ShiftLeft"),
+            *_type(1, 1.2, "KeyH"),
+            _key(3, 1.5, "release", "ShiftLeft"),
+        ]
+        self.assertEqual(
+            self.labels(events, windows),
+            ["down(ShiftLeft)", 'type("H"); up(ShiftLeft)'],
+        )
+
+    def test_the_quote_payload_is_escaped_by_the_codec(self) -> None:
+        events = [*_type(0, 0.01, "Quote"), *_type(2, 0.03, "BackSlash")]
+        self.assertEqual(self.labels(events), ['type("\'\\\\")'])
+
+    def test_v2_never_types_and_v3_shares_its_extraction(self) -> None:
+        events = [_move(0, 0.01, 3.0, 0.0), *_type(1, 0.03, "KeyH")]
+        self.assertEqual(
+            get_formatter("ordered_events_v2").format_segment(
+                events, [Window(master_idx=0, start=0, end=30)], [],
+                master_fps=MASTER_FPS,
+            ).labels,
+            ["move(3,0); down(KeyH); up(KeyH)"],
+        )
+        self.assertEqual(self.labels(events), ['move(3,0); type("h")'])
+
+    def test_type_is_counted(self) -> None:
+        result = get_formatter("ordered_events_v3").format_segment(
+            [_move(0, 0.01, 3.0, 0.0), *_type(1, 0.03, "KeyH")],
+            [Window(master_idx=0, start=0, end=30)],
+            [],
+            master_fps=MASTER_FPS,
+        )
+        self.assertEqual(
+            result.primitive_counts,
+            {"move": 1, "scroll": 0, "down": 0, "up": 0, "type": 1},
+        )
+
+
 class EmitterSpeaksItsGrammarTest(unittest.TestCase):
     """Every label a formatter writes must parse — and re-render identically —
     under the codec of the grammar it names.
@@ -346,8 +476,20 @@ class EmitterSpeaksItsGrammarTest(unittest.TestCase):
         )
 
     def test_idle_window_round_trips_as_the_grammar_spells_it(self) -> None:
-        for format_name in ("canonical", "ordered_events_v2"):
+        for format_name in sorted(FORMATTERS):
             self.assertEqual(self.round_trip(format_name, []), ["NO_OP", "NO_OP"])
+
+    def test_a_typed_payload_round_trips_through_the_codec_escapes(self) -> None:
+        labels = self.round_trip(
+            "ordered_events_v3",
+            [
+                _key(0, 0.01, "press", "Quote"),
+                _key(1, 0.02, "release", "Quote"),
+                _key(2, 0.03, "press", "BackSlash"),
+                _key(3, 0.04, "release", "BackSlash"),
+            ],
+        )
+        self.assertEqual(labels, ['type("\'\\\\")', "NO_OP"])
 
     def emit(self, format_name: str, name: str) -> list[str]:
         return get_formatter(format_name).format_segment(
@@ -368,8 +510,8 @@ class EmitterSpeaksItsGrammarTest(unittest.TestCase):
             self.emit("canonical", "KC_-1")
         self.assertEqual(self.emit("ordered_events_v2", "KC_-1"), ["down(KC_-1)"])
         # `resolve_button_name` spells an unrecognised button `M_<name>`, so a
-        # parenthesised one reaches both emitters and neither can express it.
-        for format_name in ("canonical", "ordered_events_v2"):
+        # parenthesised one reaches every emitter and none can express it.
+        for format_name in sorted(FORMATTERS):
             with self.assertRaises(ValueError):
                 self.emit(format_name, "M_Unknown(8)")
 
@@ -378,7 +520,7 @@ class SystemPromptTest(unittest.TestCase):
     """Stage 04 has no prompt of its own: it is the grammar's ``describe()``."""
 
     def test_prompt_is_the_grammars_own(self) -> None:
-        for format_name in ("canonical", "ordered_events_v2"):
+        for format_name in sorted(FORMATTERS):
             formatter = get_formatter(format_name)
             self.assertEqual(
                 grammars.describe(formatter.grammar),

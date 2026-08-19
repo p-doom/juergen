@@ -10,7 +10,9 @@ reruns:
   * action format  --action-format (lib/action_format registry; ``canonical``
                    is byte-identical to the historical format on dead-zone-free
                    stretches; ``ordered_events_v2`` renders each window as an
-                   ordered mini-program on a --continuous-action-hz motor grid)
+                   ordered mini-program on a --continuous-action-hz motor grid;
+                   ``ordered_events_v3`` is that plus ``type("...")`` for
+                   balanced typing runs)
   * goals          --goals-dir (a stage-03b artifact; goals are half-open
                    master-tick intervals, projected onto the actual selected
                    frames — one conversation per goal, instruction on the
@@ -346,10 +348,11 @@ def parse_args() -> argparse.Namespace:
                    choices=sorted(FORMATTERS),
                    help="Registered assistant-turn action formatter ('canonical': aggregate "
                         "'<dx> <dy> <scroll> ; +KEY -KEY'; 'ordered_events_v2': ordered "
-                        "'move(dx,dy); down(LMB); ...' mini-programs).")
+                        "'move(dx,dy); down(LMB); ...' mini-programs; 'ordered_events_v3': "
+                        "the same with balanced typing runs as 'type(\"...\")').")
     p.add_argument("--continuous-action-hz", type=float,
                    default=DEFAULT_CONTINUOUS_ACTION_HZ,
-                   help="ordered_events_v2 only: internal motor-grid rate for accumulating "
+                   help="ordered formats only: internal motor-grid rate for accumulating "
                         "move/scroll deltas within a window (NOT a frame rate; recorded as "
                         "null for formats that ignore it).")
     p.add_argument("--goals-dir", type=Path, default=None,
