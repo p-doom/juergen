@@ -590,6 +590,10 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 f"task kind {task.kind!r} has no scripted arm; scripted.enabled "
                 "requires a preparer implementing script_plan() + render_step()"
             )
+        # Same reason: the digest gate needs the codec and nothing else, so an
+        # unjustified mismatch must be refused here rather than one boot and one
+        # guest setup per task into a 369-cell array.
+        trace.info["prompt"] = self._prompt_report(codec)
 
         spec = PoolSpec(
             key=self.config.pool.key,
@@ -658,7 +662,6 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
     ) -> None:
         state = trace.state
         assert isinstance(state, DesktopState)
-        trace.info["prompt"] = self._prompt_report(codec)
         budget = _Budget(self.config.budget)
         max_steps = self.config.max_steps or task.max_steps
         artifacts = self._artifact_dir(task)

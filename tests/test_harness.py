@@ -999,6 +999,23 @@ def test_an_unjustified_mismatch_fails_the_run_rather_than_scoring_it(
         )
 
 
+def test_a_foreign_checkpoint_is_refused_before_a_vm_is_booted(
+    tmp_path, preparer, monkeypatch
+) -> None:
+    """The digest needs the codec and nothing else, so it belongs with the rest of
+    the config resolution. Checked after the boot it costs one VM and one guest
+    setup per task across a 369-cell array before refusing every one of them."""
+    captured = _captured_lease(monkeypatch)
+    with pytest.raises(ValueError, match="not a prompt the"):
+        _run(
+            _config(tmp_path, system_prompt_sha256="e" * 64),
+            _task(max_steps=1, name="d"),
+            replies=["0 0 0 ;"],
+        )
+    assert captured == [], "no VM may be leased for a run that cannot be scored"
+    assert preparer.prepared == 0
+
+
 def test_a_system_prompt_override_is_honoured_and_hashed(tmp_path) -> None:
     import hashlib
 
