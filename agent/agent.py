@@ -206,9 +206,14 @@ def resolve_sampling(
 
 
 class Transport(Protocol):
+    """`(content, finish_reason)`. The finish reason is not optional to report: a
+    turn cut off at `max_tokens` arrives as text that either fails to parse — a
+    fake parse error attributed to the model — or parses as a fragment of the
+    action it was still emitting."""
+
     async def complete(
         self, ctx: vf.ModelContext, body: dict[str, Any], *, session_id: str | None
-    ) -> str: ...
+    ) -> tuple[str, str | None]: ...
 
     async def close(self) -> None: ...
 
@@ -230,7 +235,7 @@ class EndpointTransport:
 
     async def complete(
         self, ctx: vf.ModelContext, body: dict[str, Any], *, session_id: str | None
-    ) -> str:
+    ) -> tuple[str, str | None]:
         from openai import AsyncOpenAI
 
         if self._client is None:
@@ -245,7 +250,8 @@ class EndpointTransport:
             )
         except Exception as exc:  # noqa: BLE001 - surfaced as infrastructure
             raise ModelCallError(f"{type(exc).__name__}: {exc}") from exc
-        return completion.choices[0].message.content or ""
+        choice = completion.choices[0]
+        return choice.message.content or "", choice.finish_reason
 
     async def close(self) -> None:
         if self._client is not None:
@@ -268,7 +274,7 @@ class ContextTransport:
 
     async def complete(
         self, ctx: vf.ModelContext, body: dict[str, Any], *, session_id: str | None
-    ) -> str:
+    ) -> tuple[str, str | None]:
         wire = dict(body)
         wire["messages"] = [message_to_wire(m) for m in body["messages"]]
         try:
@@ -281,13 +287,14 @@ class ContextTransport:
             )
         except Exception as exc:  # noqa: BLE001 - surfaced as infrastructure
             raise ModelCallError(f"{type(exc).__name__}: {exc}") from exc
+        finish_reason = getattr(response, "finish_reason", None)
         message = getattr(response, "message", None)
         content = getattr(message, "content", None)
         if isinstance(content, list):
             return "".join(
                 part.get("text", "") for part in content if isinstance(part, dict)
-            )
-        return content or ""
+            ), finish_reason
+        return content or "", finish_reason
 
     async def close(self) -> None:
         return None
@@ -311,6 +318,9 @@ class Decision:
     control: str | None
     parse_error: dict[str, Any] | None
     sampling: EffectiveSampling
+    truncated: bool = False
+    """The turn hit `max_tokens`. Neither a parse failure nor a model decision:
+    `max_tokens` is ours, so the action was never finished being emitted."""
 
     @property
     def terminated(self) -> bool:
@@ -325,6 +335,7 @@ class Decision:
             "operations": [_operation_record(op) for op in self.operations],
             "control": self.control,
             "parse_error": self.parse_error,
+            "truncated": self.truncated,
             "sampling": self.sampling.as_dict(),
         }
 
@@ -463,7 +474,25 @@ class Agent:
         program = {k: v for k, v in body.items() if k == "messages"}
         program.update(program_sampling(ctx, {k: v for k, v in body.items() if k != "messages"}))
         _, effective = resolve_sampling(ctx, body)
-        text = await self.transport.complete(ctx, program, session_id=session_id)
+        text, finish_reason = await self.transport.complete(
+            ctx, program, session_id=session_id
+        )
+        if finish_reason == "length":
+            # Not handed to `decide`: parsing a truncated turn either invents an
+            # action the model never finished emitting or, worse, succeeds on a
+            # fragment and dispatches it. `pipeline/annotation/lib/labeler.py:270`
+            # refuses the same response for the same reason.
+            return Decision(
+                step=step,
+                text=text,
+                prose=_first_prose(text),
+                action=None,
+                operations=(),
+                control=None,
+                parse_error=None,
+                sampling=effective,
+                truncated=True,
+            )
         return self.decide(
             text, step=step, geometry=geometry, cursor=cursor, sampling=effective
         )

@@ -599,6 +599,17 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 if decision is None:
                     outcome = "script_exhausted"
                     break
+                if decision.truncated:
+                    # `max_tokens` is our knob, so this is a measurement that did
+                    # not happen: dispatching the fragment, or scoring the rest of
+                    # the rollout, would publish our own token cap as model
+                    # behaviour. Distinct from `parse_errors`, which counts the
+                    # system under test.
+                    outcome = "truncated_action"
+                    steps_detail.append(
+                        self._record(decision, step, cursor, cursor, None, None, None)
+                    )
+                    break
 
                 receipt: Any = None
                 action_error: dict[str, Any] | None = None

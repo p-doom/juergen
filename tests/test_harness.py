@@ -162,6 +162,30 @@ def test_a_parse_error_is_counted_and_the_episode_continues(tmp_path, preparer) 
     assert result["steps_detail"][0]["parse_ok"] is False
 
 
+def test_a_token_capped_turn_is_a_truncation_not_a_parse_error(tmp_path, preparer) -> None:
+    """`max_tokens` is a harness knob, so a turn cut off at the cap is a measurement
+    that did not happen. Scored as a parse error it becomes model behaviour, and a
+    truncation that happens to parse dispatches a fragment of the real action.
+    """
+    session = FakeSession()
+    _, result, _ = _run(
+        _config(tmp_path),
+        _task(max_steps=4),
+        replies=[("thinking about it\n10 10 0 ; +LM", "length"), "0 0 0 ;"],
+        session=session,
+    )
+    assert result["outcome"] == "truncated_action"
+    assert result["parse_errors"] == 0, "the model did not emit an unparseable action"
+    assert result["steps_detail"][-1]["truncated"] is True
+    assert session.operations_log == [], "a truncated action must not be dispatched"
+
+
+def test_a_whole_turn_is_not_flagged_as_truncated(tmp_path, preparer) -> None:
+    _, result, _ = _run(_config(tmp_path), _task(max_steps=2), replies=["0 0 0 ;"] * 2)
+    assert result["outcome"] == "max_steps"
+    assert [step["truncated"] for step in result["steps_detail"]] == [False, False]
+
+
 def test_stop_on_click_turns_a_free_rollout_into_a_single_decision_probe(tmp_path, preparer) -> None:
     config = _config(tmp_path, stop_on_click=True)
     _, result, _ = _run(config, _task(max_steps=8), replies=["0 0 0 ; +LMB -LMB"] * 8)

@@ -25,7 +25,9 @@ from juergen_doubles import FakeSession, make_ctx, make_task_data, png
 class FakeOpenAI:
     """Serves `/chat/completions` and records every request body."""
 
-    def __init__(self, *, reply: str = "0 0 0 ;", status: int = 200) -> None:
+    def __init__(
+        self, *, reply: str = "0 0 0 ;", status: int = 200, finish_reason: str = "stop"
+    ) -> None:
         self.requests: list[dict] = []
         self.headers: list[dict] = []
         outer = self
@@ -58,7 +60,7 @@ class FakeOpenAI:
                                 {
                                     "index": 0,
                                     "message": {"role": "assistant", "content": reply},
-                                    "finish_reason": "stop",
+                                    "finish_reason": finish_reason,
                                 }
                             ],
                             "usage": {
@@ -121,7 +123,7 @@ def test_the_endpoint_transport_posts_and_returns_the_content(endpoint) -> None:
         finally:
             await transport.close()
 
-    assert asyncio.run(body()) == "10 20 0 ; +LMB -LMB"
+    assert asyncio.run(body()) == ("10 20 0 ; +LMB -LMB", "stop")
     request = server.requests[0]
     assert request["model"] == "my-model", "ctx.model is what goes on the wire"
     assert request["max_tokens"] == 32
@@ -264,7 +266,22 @@ def test_an_empty_completion_is_an_empty_string_not_none(endpoint) -> None:
         finally:
             await transport.close()
 
-    assert asyncio.run(body()) == ""
+    assert asyncio.run(body()) == ("", "stop")
+
+
+def test_a_length_finish_is_reported_by_the_transport_not_swallowed(endpoint) -> None:
+    """A turn cut off at `max_tokens` reaches the caller as a distinct fact. Reading
+    only the content makes it a fake parse error, or a dispatched fragment."""
+    server = endpoint(reply="10 20 0 ; +LM", finish_reason="length")
+
+    async def body():
+        transport = EndpointTransport(endpoint=server.base_url, secret="s")
+        try:
+            return await transport.complete(make_ctx(), {"messages": []}, session_id=None)
+        finally:
+            await transport.close()
+
+    assert asyncio.run(body()) == ("10 20 0 ; +LM", "length")
 
 
 def _geometry():

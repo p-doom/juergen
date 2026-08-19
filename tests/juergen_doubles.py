@@ -134,9 +134,13 @@ class FakePool:
 
 
 class FakeClient:
-    """A `Client` stand-in for `ContextTransport`. Records every wire body."""
+    """A `Client` stand-in for `ContextTransport`. Records every wire body.
 
-    def __init__(self, replies: list[str] | None = None) -> None:
+    A reply is either the content or a `(content, finish_reason)` pair; a bare
+    string finishes on `"stop"`, which is what a whole turn reports.
+    """
+
+    def __init__(self, replies: list[str | tuple[str, str]] | None = None) -> None:
         self.replies = list(replies or [])
         self.calls: list[dict[str, Any]] = []
 
@@ -146,14 +150,19 @@ class FakeClient:
         self.calls.append(
             {"body": body, "model": model, "sampling": sampling, "kwargs": kwargs}
         )
-        text = self.replies.pop(0) if self.replies else ""
-        return type("Response", (), {"message": type("M", (), {"content": text})()})()
+        reply = self.replies.pop(0) if self.replies else ""
+        text, finish_reason = reply if isinstance(reply, tuple) else (reply, "stop")
+        return type(
+            "Response",
+            (),
+            {"message": type("M", (), {"content": text})(), "finish_reason": finish_reason},
+        )()
 
 
 def make_ctx(
     *,
     model: str = "test-model",
-    replies: list[str] | None = None,
+    replies: list[str | tuple[str, str]] | None = None,
     **sampling: Any,
 ) -> vf.ModelContext:
     return vf.ModelContext(

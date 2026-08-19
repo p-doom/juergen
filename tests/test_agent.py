@@ -403,14 +403,18 @@ def test_context_transport_flattens_list_content() -> None:
     class ListClient(FakeClient):
         async def get_response(self, dialect, body, model, sampling, **kwargs):
             return type(
-                "R", (), {"message": type("M", (), {"content": [{"text": "a"}, {"text": "b"}]})()}
+                "R",
+                (),
+                {
+                    "message": type("M", (), {"content": [{"text": "a"}, {"text": "b"}]})(),
+                    "finish_reason": "stop",
+                },
             )()
 
     ctx = vf.ModelContext(model="m", client=ListClient(), sampling=vf.Sampling())
-    text = asyncio.run(
+    assert asyncio.run(
         ContextTransport().complete(ctx, {"messages": []}, session_id="s")
-    )
-    assert text == "ab"
+    ) == ("ab", "stop")
 
 
 def test_a_transport_failure_becomes_a_model_call_error() -> None:
