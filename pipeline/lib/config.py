@@ -86,14 +86,6 @@ BUCKET_LIMITS = {
     "256k": 262_144,
 }
 
-# SFT system prompt: the computer-use agent's action format.
-SYSTEM_PROMPT = (
-    "You operate a desktop computer. The first user turn shows the initial "
-    "screen and the user's goal; subsequent user turns show the current screen. "
-    "Reply with the next action toward that goal as `<dx> <dy> <scroll>` "
-    "optionally followed by ` ; +KEY -KEY` events, or `NO_OP` if no action."
-)
-
 
 def ffmpeg_bin() -> str | None:
     configured = os.environ.get("JUERGEN_ANNOTATION_FFMPEG_BIN") or os.environ.get("FFMPEG_BIN")

@@ -282,7 +282,13 @@ def action_line(text: str, *, error: type[Exception] = ValueError) -> str:
 
 BUTTONS = {"LMB": "left", "RMB": "right", "MMB": "middle"}
 
-_EVENT_RE = re.compile(r"^([+-])([A-Za-z_][A-Za-z0-9_]*)$")
+#: The key/button names a bare-token tail can spell. ``Element`` enforces it on
+#: construction, so a label emitter cannot write a name this family's parser then
+#: calls malformed -- the pipeline's ``format_action`` did exactly that, spelling
+#: an unmapped keycode ``KC_-1``.
+EVENT_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+_EVENT_RE = re.compile(rf"^([+-])({EVENT_NAME_RE.pattern})$")
 _MOVE_RE = re.compile(r"MOVE\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)")
 
 
@@ -299,6 +305,15 @@ class Element:
     pressed: bool | None = None
     text: str = ""
     delta: tuple[int, int] | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind == "event" and not (
+            isinstance(self.name, str) and EVENT_NAME_RE.fullmatch(self.name)
+        ):
+            raise ValueError(
+                f"{self.name!r} is not a name a bare-token action can spell "
+                f"(must match {EVENT_NAME_RE.pattern})"
+            )
 
     def render(self) -> str:
         if self.kind == "event":

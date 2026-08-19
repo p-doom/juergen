@@ -6,7 +6,8 @@ the new path buckets to master ticks (``int(t_s * M)``) and owns them via
 contiguous windows ``[j*stride, (j+1)*stride)``. For integer strides these are
 the same partition (``floor(floor(x*M)/stride) == floor(x*M/stride)``), so the
 labels must match exactly — including held-set dedup, dangling-release drops,
-and delta rounding.
+and delta rounding. Since the formatter renders through the ``deltatype_v2``
+codec and the legacy path does not, this gate now compares the two renderers too.
 """
 
 from __future__ import annotations
@@ -15,13 +16,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import grammars
 import msgpack
 
-from pipeline.lib.action_format import get_formatter
-from pipeline.lib.common import aggregate_actions, format_action
-from pipeline.lib.config import SYSTEM_PROMPT
+from pipeline.lib.action_format import FORMATTERS, get_formatter
+from pipeline.lib.common import aggregate_actions, format_action, resolve_key_name
 from pipeline.lib.events import RawEvent, Window, load_events
-from pipeline.stage_04_build_conversations import default_system_prompt
 
 MASTER_FPS = 15.0
 TARGET_FPS = 1.0
@@ -122,6 +122,12 @@ class ByteIdentityTest(unittest.TestCase):
             ],
             duration_s=2.0,
         )
+
+    def test_negative_keycode_is_not_a_keycode(self) -> None:
+        """``Unknown(-1)`` used to resolve to the name ``KC_-1``, which the
+        bare-token parser rejects — a label no eval could read."""
+        self.assertEqual(resolve_key_name([0, "Unknown(-1)"]), None)
+        self.assertEqual(resolve_key_name([0, "Unknown(1)"]), "KC_1")
 
     def test_idle_bins_are_noop(self) -> None:
         self.assert_identical(
@@ -268,34 +274,120 @@ class OrderedFormatterTest(unittest.TestCase):
             get_formatter("ordered_events_v2", continuous_action_hz=0.0)
 
     def test_invalid_input_name_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "invalid input name"):
+        with self.assertRaisesRegex(ValueError, "is not a name down\\(\\) can spell"):
             self.one_window_label([_key(0, 0.1, "press", "bad name")])
 
 
-class DefaultSystemPromptTest(unittest.TestCase):
-    """Canonical prompts must stay byte-identical to the historical constants."""
+class EmitterSpeaksItsGrammarTest(unittest.TestCase):
+    """Every label a formatter writes must parse — and re-render identically —
+    under the codec of the grammar it names.
 
-    def test_canonical_goal_prompt_matches_legacy(self) -> None:
+    The emitter and the eval parser used to be independent implementations:
+    ``format_action`` interpolated ``f"{sign}{name}"`` with no name validation
+    while the bare-token parser rejected anything outside
+    ``[A-Za-z_][A-Za-z0-9_]*``, so nothing detected a label no eval could read.
+    """
+
+    def round_trip(self, format_name: str, events: list[RawEvent]) -> list[str]:
+        formatter = get_formatter(format_name)
+        codec = grammars.load(formatter.grammar)
+        windows = [
+            Window(master_idx=0, start=0, end=15),
+            Window(master_idx=15, start=15, end=30),
+        ]
+        labels = formatter.format_segment(
+            events, windows, [], master_fps=MASTER_FPS
+        ).labels
+        for label in labels:
+            self.assertEqual(codec.format(codec.parse(label)), label, label)
+        return labels
+
+    def stream(self) -> list[RawEvent]:
+        """Motion, a click, a chord, an unmapped keycode, a press held across the
+        window boundary, and an idle stretch."""
+        return [
+            _move(0, 0.10, 4.0, -1.2),
+            _key(1, 0.20, "press", "LMB"),
+            _key(2, 0.25, "release", "LMB"),
+            _scroll(3, 0.30, 0.0, -3.0),
+            _key(4, 0.40, "press", "ControlLeft"),
+            _key(5, 0.45, "press", "KeyC"),
+            _key(6, 0.50, "release", "KeyC"),
+            _key(7, 0.55, "release", "ControlLeft"),
+            _key(8, 0.60, "press", "KC_999"),
+            _key(9, 0.65, "release", "KC_999"),
+            _key(10, 0.90, "press", "ShiftLeft"),
+            _key(11, 1.40, "release", "ShiftLeft"),
+        ]
+
+    def test_canonical_labels_are_deltatype_v2(self) -> None:
+        self.assertEqual(get_formatter("canonical").grammar, "deltatype_v2")
+        labels = self.round_trip("canonical", self.stream())
         self.assertEqual(
-            default_system_prompt(get_formatter("canonical"), goal_conditioned=True),
-            SYSTEM_PROMPT,
+            labels,
+            [
+                "4 -1 -3 ; +LMB -LMB +ControlLeft +KeyC -KeyC -ControlLeft "
+                "+KC_999 -KC_999 +ShiftLeft",
+                "0 0 0 ; -ShiftLeft",
+            ],
         )
 
-    def test_canonical_goal_free_prompt_matches_legacy(self) -> None:
+    def test_ordered_labels_are_ordered_events_v3(self) -> None:
+        self.assertEqual(get_formatter("ordered_events_v2").grammar, "ordered_events_v3")
+        labels = self.round_trip("ordered_events_v2", self.stream())
         self.assertEqual(
-            default_system_prompt(get_formatter("canonical"), goal_conditioned=False),
-            "You operate a desktop computer. Each user turn shows the current screen. "
-            "Reply with the next action as `<dx> <dy> <scroll>` optionally followed by "
-            "` ; +KEY -KEY` events, or `NO_OP` if no action.",
+            labels,
+            [
+                "move(4,-1); down(LMB); up(LMB); scroll(0,-3); down(ControlLeft); "
+                "down(KeyC); up(KeyC); up(ControlLeft); down(KC_999); up(KC_999); "
+                "down(ShiftLeft)",
+                "up(ShiftLeft)",
+            ],
         )
 
-    def test_ordered_prompt_describes_the_grammar(self) -> None:
-        prompt = default_system_prompt(
-            get_formatter("ordered_events_v2"), goal_conditioned=True
-        )
-        self.assertIn("the next action toward that goal", prompt)
-        self.assertIn("move(<dx>,<dy>)", prompt)
-        self.assertIn("NO_OP", prompt)
+    def test_idle_window_round_trips_as_the_grammar_spells_it(self) -> None:
+        for format_name in ("canonical", "ordered_events_v2"):
+            self.assertEqual(self.round_trip(format_name, []), ["NO_OP", "NO_OP"])
+
+    def emit(self, format_name: str, name: str) -> list[str]:
+        return get_formatter(format_name).format_segment(
+            [_key(0, 0.1, "press", name)],
+            [Window(master_idx=0, start=0, end=15)],
+            [],
+            master_fps=MASTER_FPS,
+        ).labels
+
+    def test_a_name_the_grammar_cannot_spell_is_never_written(self) -> None:
+        """Each emitter is held to its OWN grammar's name class, and the two
+        differ: a bare-token tail spells a name after a ``+``/``-`` sign, so it
+        must be an identifier, while a mini-program spells it inside parentheses
+        and only needs to avoid the punctuation. ``KC_-1`` is the name
+        ``resolve_key_name`` used to build for ``Unknown(-1)``.
+        """
+        with self.assertRaises(ValueError):
+            self.emit("canonical", "KC_-1")
+        self.assertEqual(self.emit("ordered_events_v2", "KC_-1"), ["down(KC_-1)"])
+        # `resolve_button_name` spells an unrecognised button `M_<name>`, so a
+        # parenthesised one reaches both emitters and neither can express it.
+        for format_name in ("canonical", "ordered_events_v2"):
+            with self.assertRaises(ValueError):
+                self.emit(format_name, "M_Unknown(8)")
+
+
+class SystemPromptTest(unittest.TestCase):
+    """Stage 04 has no prompt of its own: it is the grammar's ``describe()``."""
+
+    def test_prompt_is_the_grammars_own(self) -> None:
+        for format_name in ("canonical", "ordered_events_v2"):
+            formatter = get_formatter(format_name)
+            self.assertEqual(
+                grammars.describe(formatter.grammar),
+                grammars.load(formatter.grammar).describe(),
+            )
+
+    def test_every_formatter_names_a_registered_grammar(self) -> None:
+        for format_name in sorted(FORMATTERS):
+            self.assertIn(get_formatter(format_name).grammar, grammars.available())
 
 
 class FormatterRegistryTest(unittest.TestCase):

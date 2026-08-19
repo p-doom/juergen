@@ -14,9 +14,9 @@ from typing import Any
 
 import msgpack
 
-from pipeline.lib.config import SYSTEM_PROMPT
-
-UNKNOWN_RE = re.compile(r"^Unknown\((-?\d+)\)$")
+# A keycode is a non-negative integer. Accepting a sign here spelled
+# ``Unknown(-1)`` as the key name ``KC_-1``, which no grammar can parse.
+UNKNOWN_RE = re.compile(r"^Unknown\((\d+)\)$")
 MACOS_UNKNOWN_NAME_BY_CODE: dict[int, str] = {
     10: "ISO_Section",
     62: "ControlRight",
@@ -111,10 +111,6 @@ def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> int:
 def write_json(path: Path, value: Any) -> None:
     ensure_dir(path.parent)
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
-
-
-def system_message() -> dict[str, Any]:
-    return {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]}
 
 
 def image_message_content(image_path: str | Path, text: str | None = None) -> list[dict[str, Any]]:

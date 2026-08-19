@@ -21,7 +21,12 @@ reruns:
   * terminal token --terminal-token (appended to the final assistant message
                    as ``<action>\\n<token>`` — never a standalone turn, which
                    would train an out-of-distribution state)
-  * system prompt  --system-prompt / --system-prompt-file / --no-system-prompt
+
+The system prompt is not a flag. It is ``grammars.describe()`` of the grammar the
+selected formatter renders its labels in, so the prompt trained against a label
+is the prompt the eval harness and the RL rollout put in front of the model. Its
+sha256 is recorded in the manifest as ``system_prompt_sha256``, and the grammar's
+conformance vectors pin the same digest, so neither side can move alone.
 
 Dead-zone accounting: every segment row carries the label-policy counters
 (discarded deltas, clamped/dropped pairs); segments whose discard fraction
@@ -53,6 +58,7 @@ Run::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import multiprocessing as mp
 import sys
@@ -62,16 +68,17 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-# Make the ``pipeline`` package importable when run directly
+# Make the ``pipeline`` and ``grammars`` packages importable when run directly
 # (mirrors the other stages).
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import grammars  # noqa: E402
+
 from pipeline.lib.action_format import (  # noqa: E402
     DEFAULT_CONTINUOUS_ACTION_HZ,
     FORMATTERS,
-    ActionFormatter,
     get_formatter,
 )
 from pipeline.lib.common import (  # noqa: E402
@@ -96,29 +103,6 @@ from pipeline.lib.views import (  # noqa: E402
     build_segment_view,
 )
 
-# Default system prompts: a fixed framing prefix + the formatter's own reply
-# contract, so the prompt always describes the selected action format. For
-# ``canonical`` the composition is byte-identical to the historical prompts
-# (goal-conditioned == config.SYSTEM_PROMPT — the regression gate in
-# tests/test_action_format.py).
-GOAL_FREE_PROMPT_PREFIX = (
-    "You operate a desktop computer. Each user turn shows the current screen. "
-)
-GOAL_PROMPT_PREFIX = (
-    "You operate a desktop computer. The first user turn shows the initial "
-    "screen and the user's goal; subsequent user turns show the current screen. "
-)
-
-
-def default_system_prompt(formatter: ActionFormatter, *, goal_conditioned: bool) -> str:
-    if goal_conditioned:
-        return GOAL_PROMPT_PREFIX + formatter.reply_contract.format(
-            what="the next action toward that goal"
-        )
-    return GOAL_FREE_PROMPT_PREFIX + formatter.reply_contract.format(
-        what="the next action"
-    )
-
 # Plans carrying these quality flags are unusable as training prose; the
 # conversation falls back to a plan-less first turn (same as the fold
 # pipeline's assemble step).
@@ -137,7 +121,7 @@ def build_messages(
     turns: list[tuple[str, str]],  # ordered (image, action) pairs
     *,
     instruction: str | None,
-    system_prompt: str | None,
+    system_prompt: str,
     plan: str | None = None,
     terminal_token: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -146,9 +130,9 @@ def build_messages(
     later turns, one assistant turn per frame carrying its action. The plan
     prefixes the first assistant turn (``<plan>\\n<action>``); the terminal
     token rides at the end of the final assistant message."""
-    messages: list[dict[str, Any]] = []
-    if system_prompt:
-        messages.append({"role": "system", "content": [_text_block(system_prompt)]})
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": [_text_block(system_prompt)]}
+    ]
     last = len(turns) - 1
     for idx, (image, action) in enumerate(turns):
         content: list[dict[str, Any]] = []
@@ -377,10 +361,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--instruction-field", type=str, default=None,
                    help="Goal-free: read a per-segment instruction from this key on the "
                         "filter index row (then the segment filter doc).")
-    p.add_argument("--system-prompt", type=str, default=None, help="System message text.")
-    p.add_argument("--system-prompt-file", type=Path, default=None,
-                   help="Read the system message from a file (wins over --system-prompt).")
-    p.add_argument("--no-system-prompt", action="store_true", help="Emit no system message.")
     p.add_argument("--use-plans", nargs="?", const=True, type=str2bool, default=False,
                    metavar="BOOL",
                    help="Goal mode: prefix the goal's plan prose to the first assistant turn "
@@ -430,24 +410,16 @@ def main() -> None:
         goals_map = goals_by_segment(load_goals(args.goals_dir / "goals.jsonl"))
         goals_id = make_artifact_id(args.goals_dir)
 
-    # Fails fast on an unknown format / invalid hz; also carries the format's
-    # provenance attributes (reply contract, hz) for the prompt and manifest.
+    # Fails fast on an unknown format / invalid hz, and resolves the grammar
+    # whose codec renders this run's labels and prompt.
     formatter = get_formatter(
         args.action_format, continuous_action_hz=args.continuous_action_hz
     )
     continuous_action_hz = getattr(formatter, "continuous_action_hz", None)
+    system_prompt = grammars.describe(formatter.grammar)
+    system_prompt_sha256 = hashlib.sha256(system_prompt.encode()).hexdigest()
 
     goal_mode = goals_map is not None
-    if args.no_system_prompt:
-        system_prompt = None
-    elif args.system_prompt_file is not None:
-        system_prompt = args.system_prompt_file.read_text().strip()
-    elif args.system_prompt is not None:
-        system_prompt = args.system_prompt
-    else:
-        goal_conditioned = goal_mode or bool(args.instruction or args.instruction_field)
-        system_prompt = default_system_prompt(formatter, goal_conditioned=goal_conditioned)
-
     rows_in = art.usable_rows()
     if args.limit is not None:
         rows_in = rows_in[: args.limit]
@@ -529,12 +501,13 @@ def main() -> None:
         "stride": stride,
         "master_fps": art.master_fps,
         "action_format": args.action_format,
+        "grammar": formatter.grammar,
         "continuous_action_hz": continuous_action_hz,
         "primitive_counts": dict(prim_totals) if prim_totals else None,
         "n_noop_turns": sum(r["n_turns"] - r["n_non_noop"] for r in records),
         "instruction": args.instruction,
         "instruction_field": args.instruction_field,
-        "has_system_prompt": system_prompt is not None,
+        "system_prompt_sha256": system_prompt_sha256,
         "use_plans": args.use_plans,
         "include_variants": args.include_variants,
         "min_frames": args.min_frames,

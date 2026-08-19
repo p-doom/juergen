@@ -6,6 +6,12 @@ label policy's dispositions (label layer) via ``events.apply_label_policy`` — 
 stateful format (e.g. cumulative cursor position) folds over every event while
 emitting labels only for owned ones.
 
+A formatter owns the extraction (binning, motor grid, label policy) and nothing
+else: the label text itself is rendered by the codec of the grammar named in its
+``grammar`` attribute, and stage 04 takes that grammar's ``describe()`` as the
+system prompt. So the emitter cannot write a line the eval parser calls
+malformed, and cannot be trained under a prompt describing another syntax.
+
 ``CanonicalFormatter`` reproduces the historical format byte-for-byte on
 dead-zone-free stretches (``common.format_action`` over per-window bins with
 segment-global held-set dedup) — that identity is the regression gate
@@ -26,13 +32,18 @@ policy's ``PolicyCounters``.
 from __future__ import annotations
 
 import math
-import re
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from pipeline.lib.common import ActionBin, format_action
+from grammars._support import Element
+from grammars.deltatype_v2 import CODEC as DELTATYPE_V2
+from grammars.deltatype_v2 import DeltatypeV2Action
+from grammars.ordered_events_v3 import CODEC as ORDERED_EVENTS_V3
+from grammars.ordered_events_v3 import OrderedEventsV3Action, Primitive
+
+from pipeline.lib.common import ActionBin
 from pipeline.lib.events import (
     DeadZone,
     LabeledEvent,
@@ -43,9 +54,6 @@ from pipeline.lib.events import (
 )
 
 DEFAULT_CONTINUOUS_ACTION_HZ = 10.0
-
-# Rendered names must be unambiguous inside the mini-program syntax.
-_INPUT_NAME_RE = re.compile(r"^[^\s(),;]+$")
 
 
 @dataclass
@@ -58,9 +66,9 @@ class FormatResult:
 
 class ActionFormatter(Protocol):
     name: str
-    # ``{what}`` is "the next action" / "the next action toward that goal";
-    # stage 04 composes the default system prompts from this.
-    reply_contract: str
+    #: The grammar whose codec renders this formatter's labels and whose
+    #: ``describe()`` is the system prompt trained against them.
+    grammar: str
 
     def format_segment(
         self,
@@ -82,14 +90,36 @@ def _ordered_owned(labeled: Sequence[LabeledEvent]) -> list[LabeledEvent]:
     )
 
 
+def _render_bin(action_bin: ActionBin) -> str:
+    """One aggregate bin -> its ``deltatype_v2`` label.
+
+    The subset of that grammar this formatter can reach: no ``type()``, no
+    ``MOVE()`` drag, and NO_OP as the only control token — a keylog records no
+    intent to terminate.
+    """
+    dx = round(action_bin.move_dx)
+    dy = round(action_bin.move_dy)
+    scroll = round(action_bin.scroll)
+    if dx == 0 and dy == 0 and scroll == 0 and not action_bin.events:
+        return DELTATYPE_V2.format(DeltatypeV2Action(no_op=True))
+    return DELTATYPE_V2.format(
+        DeltatypeV2Action(
+            dx,
+            dy,
+            scroll,
+            elements=tuple(
+                Element("event", name=name, pressed=sign == "+")
+                for sign, name in action_bin.events
+            ),
+        )
+    )
+
+
 class CanonicalFormatter:
     """Per-window ``round(dx) round(dy) round(scroll) [; +KEY -KEY]`` / ``NO_OP``."""
 
     name = "canonical"
-    reply_contract = (
-        "Reply with {what} as `<dx> <dy> <scroll>` optionally followed by "
-        "` ; +KEY -KEY` events, or `NO_OP` if no action."
-    )
+    grammar = "deltatype_v2"
 
     def format_segment(
         self,
@@ -116,22 +146,20 @@ class CanonicalFormatter:
             else:
                 b.events.append(("-", e.name))
         return FormatResult(
-            labels=[format_action(b) for b in bins],
+            labels=[_render_bin(b) for b in bins],
             counters=counters,
         )
 
 
-@dataclass(frozen=True)
-class ActionPrimitive:
-    kind: str  # "move" | "scroll" | "down" | "up"
-    dx: int | None = None
-    dy: int | None = None
-    input_name: str | None = None
+def _render_primitives(primitives: Sequence[Primitive]) -> str:
+    """One window's primitives -> its ``ordered_events_v3`` label.
 
-    def render(self) -> str:
-        if self.kind in ("move", "scroll"):
-            return f"{self.kind}({self.dx},{self.dy})"
-        return f"{self.kind}({self.input_name})"
+    An empty window is NO_OP; the grammar's TERMINATE is unreachable from a
+    keylog, which records no intent to terminate.
+    """
+    return ORDERED_EVENTS_V3.format(
+        OrderedEventsV3Action(primitives=tuple(primitives), no_op=not primitives)
+    )
 
 
 class OrderedFormatter:
@@ -146,11 +174,7 @@ class OrderedFormatter:
     and ``scroll(0,0)`` are omitted; an empty window renders ``NO_OP``."""
 
     name = "ordered_events_v2"
-    reply_contract = (
-        "Reply with {what} as `; `-separated primitives in the order performed "
-        "— `move(<dx>,<dy>)`, `scroll(<dx>,<dy>)`, `down(<KEY>)`, `up(<KEY>)` "
-        "— or `NO_OP` if no action."
-    )
+    grammar = "ordered_events_v3"
 
     def __init__(self, continuous_action_hz: float = DEFAULT_CONTINUOUS_ACTION_HZ):
         if not math.isfinite(continuous_action_hz) or continuous_action_hz <= 0:
@@ -169,7 +193,7 @@ class OrderedFormatter:
             events, windows, dead_zones, master_fps=master_fps
         )
         hz = self.continuous_action_hz
-        primitives: list[list[ActionPrimitive]] = [[] for _ in windows]
+        primitives: list[list[Primitive]] = [[] for _ in windows]
         # (window, motor tick, kind, dx sum, dy sum)
         pending: tuple[int, int, str, float, float] | None = None
 
@@ -180,7 +204,7 @@ class OrderedFormatter:
             win, _tick, kind, dx, dy = pending
             rdx, rdy = round(dx), round(dy)
             if rdx != 0 or rdy != 0:
-                primitives[win].append(ActionPrimitive(kind=kind, dx=rdx, dy=rdy))
+                primitives[win].append(Primitive(kind, dx=rdx, dy=rdy))
             pending = None
 
         for le in _ordered_owned(labeled):
@@ -198,20 +222,14 @@ class OrderedFormatter:
                     pending = (win, tick, e.kind, e.dx, e.dy)
             else:
                 flush()
-                if not isinstance(e.name, str) or not _INPUT_NAME_RE.fullmatch(e.name):
-                    raise ValueError(f"invalid input name for ordered action: {e.name!r}")
                 primitives[win].append(
-                    ActionPrimitive(kind="down" if e.kind == "press" else "up",
-                                    input_name=e.name)
+                    Primitive("down" if e.kind == "press" else "up", name=e.name)
                 )
         flush()
 
         counts = Counter(p.kind for window in primitives for p in window)
         return FormatResult(
-            labels=[
-                "; ".join(p.render() for p in window) if window else "NO_OP"
-                for window in primitives
-            ],
+            labels=[_render_primitives(window) for window in primitives],
             counters=counters,
             primitive_counts={k: counts.get(k, 0) for k in ("move", "scroll", "down", "up")},
         )

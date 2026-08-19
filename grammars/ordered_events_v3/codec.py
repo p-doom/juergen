@@ -36,8 +36,11 @@ from desktop.ir import Operation
 
 from .. import _support
 
-#: Rendered names must be unambiguous inside the mini-program syntax.
-_NAME_RE = re.compile(r"[^\s(),;]+")
+#: Rendered names must be unambiguous inside the mini-program syntax. Wider than
+#: the bare-token family's ``_support.EVENT_NAME_RE`` because a name here sits
+#: inside parentheses instead of after a ``+``/``-`` sign. ``Primitive`` enforces
+#: it on construction, so a label emitter cannot write a name ``_scan`` rejects.
+NAME_RE = re.compile(r"[^\s(),;]+")
 _CALL_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 _PAIR_RE = re.compile(r"\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)")
 _ARG_RE = re.compile(r"\(\s*([^\s(),;]+)\s*\)")
@@ -92,6 +95,15 @@ class Primitive:
     dy: int = 0
     name: str = ""
     text: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind in ("down", "up") and not (
+            isinstance(self.name, str) and NAME_RE.fullmatch(self.name)
+        ):
+            raise OrderedEventsV3Error(
+                f"{self.name!r} is not a name {self.kind}() can spell "
+                f"(must match {NAME_RE.pattern})"
+            )
 
     def render(self) -> str:
         if self.kind in ("move", "scroll"):
@@ -430,7 +442,7 @@ class OrderedEventsV3Codec:
                 index = pair.end()
             elif kind in ("down", "up"):
                 argument = _ARG_RE.match(line, open_paren)
-                if argument is None or not _NAME_RE.fullmatch(argument[1]):
+                if argument is None or not NAME_RE.fullmatch(argument[1]):
                     raise OrderedEventsV3Error(f"{kind}() takes one key or button name")
                 primitives.append(Primitive(kind, name=argument[1]))
                 index = argument.end()
