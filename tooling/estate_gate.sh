@@ -125,6 +125,15 @@ if [ -n "$ONLY" ] && [ ${#planned[@]} -eq 0 ]; then
   exit 2
 fi
 
+# tests/test_packaging.py builds the juergen and desktop wheels to prove the five
+# flat plugin ids resolve outside a checkout. uv is the estate's build front end
+# and is in none of the suites' venvs, so it is preflight, not a suite failure.
+case " ${planned[*]} " in
+  *" juergen "*)
+    command -v uv >/dev/null 2>&1 || problems+=("juergen: uv not on PATH -- tests/test_packaging.py builds a wheel with it")
+    ;;
+esac
+
 if [ "$LIST_ONLY" = 1 ]; then
   bold "estate gate plan"
   for entry in "${SUITES[@]}"; do

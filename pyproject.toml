@@ -91,10 +91,29 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = []
+# The five flat plugin ids. verifiers 0.2.1 cannot resolve a dotted one (see
+# signoflife.py), so each is a module at the repo root -- and a root module is
+# not a package, so `packages.find` never sees it. Left out of the wheel they
+# resolve only from a cwd that happens to be the checkout, and every
+# `--taskset.id` breaks the moment a run is dispatched from anywhere else.
+py-modules = [
+    "osworld_bench",
+    "rl_grounding",
+    "rl_movebox",
+    "rl_target_box",
+    "signoflife",
+]
 
 [tool.setuptools.packages.find]
-include = ["grammars", "grammars.*"]
+# The import closure of those five: they re-export from evals/ and rl/, evals/
+# imports agent/, and agent/ imports grammars/. Shipping only grammars/ made
+# every one of them uninstallable. pipeline/ is deliberately absent: labctl
+# invokes its stages as file paths in a checkout, nothing imports it.
+include = ["agent", "agent.*", "evals", "evals.*", "grammars", "grammars.*", "rl", "rl.*"]
 
 [tool.setuptools.package-data]
 "*" = ["vectors/*.json"]
+# `SUITE_PATH = Path(__file__).with_name("suite.json")`: the sign-of-life cell
+# table is read beside its module, and a wheel built straight from the tree (what
+# `uv sync` and `pip install .` do) carries no data file nobody names here.
+"evals.signoflife" = ["suite.json"]
