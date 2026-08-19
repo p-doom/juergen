@@ -573,6 +573,9 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 if budget.failure:
                     outcome = f"budget_{budget.failure}"
                     break
+                if trace.stop_condition is not None:
+                    outcome = f"framework_stop_{trace.stop_condition}"
+                    break
                 cursor = tuple(await asyncio.to_thread(session.cursor_position))
                 decision, step_sampling = await self._decide(
                     agent,
@@ -681,8 +684,20 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                     session, declared=state.control_terminate
                 )
         except ModelCallError as exc:
-            infra_error = {"stage": "model", "type": type(exc).__name__, "message": str(exc)}
-            outcome = "model_error"
+            # The orchestrator halts a rollout by stamping `stop_condition` and
+            # refusing the call with a 400 (`interception/server.py:400-406`,
+            # `:445-449`), which arrives here as a transport failure. Publishing
+            # that as `infra_invalid` scores a healthy rollout the framework ended
+            # as a booted-VM failure and drops it from N.
+            if trace.stop_condition is None:
+                infra_error = {
+                    "stage": "model",
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+                outcome = "model_error"
+            else:
+                outcome = f"framework_stop_{trace.stop_condition}"
         except Exception as exc:  # noqa: BLE001 - published as infra-invalid
             infra_error = {
                 "stage": "episode",

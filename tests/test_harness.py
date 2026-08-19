@@ -304,6 +304,83 @@ def test_a_model_call_failure_is_infrastructure(tmp_path, preparer) -> None:
     assert result["infra_error"]["stage"] == "model"
 
 
+def _launch(config, task_data, client) -> tuple[vf.Trace, dict]:
+    import juergen_harness_pool
+
+    juergen_harness_pool.Pool.session = FakeSession()
+    trace = vf.Trace(
+        task=vf.TraceTask(type="DesktopTask", data=task_data), state=DesktopState()
+    )
+    ctx = vf.ModelContext(model="m", client=client(trace), sampling=vf.Sampling())
+    asyncio.run(DesktopHarness(config).launch(ctx, trace, None, "", "", {}))
+    return trace, trace.info[RESULT_KEY]
+
+
+def test_a_framework_stop_that_refuses_the_call_is_not_an_infra_failure(
+    tmp_path, preparer
+) -> None:
+    """The orchestrator halts a rollout by stamping `stop_condition` and answering the
+    next call with a 400 (`interception/server.py:400-406`). Reading only the transport
+    failure marks a healthy rollout `infra_invalid` with `success=None`, so prime-rl
+    drops it and N deflates by exactly the rollouts the batch terminated.
+    """
+
+    class Refusing:
+        def __init__(self, trace) -> None:
+            self.trace = trace
+            self.turns = 0
+
+        async def get_response(self, *args, **kwargs):
+            self.turns += 1
+            if self.turns > 1:
+                self.trace.stop("max_turns")
+                raise RuntimeError("rollout stopped: max_turns")
+            return type(
+                "R",
+                (),
+                {"message": type("M", (), {"content": "0 0 0 ;"})(), "finish_reason": "stop"},
+            )()
+
+    trace, result = _launch(_config(tmp_path), _task(max_steps=9), Refusing)
+    assert result["outcome"] == "framework_stop_max_turns"
+    assert result["validity"] == "valid" and result["infra_error"] is None
+    assert result["success"] is False, "counted, not dropped: None deflates N"
+    assert result["steps"] == 1
+    assert trace.stop_condition == "max_turns"
+
+
+def test_a_framework_stop_ends_the_loop_instead_of_replaying_the_last_turn(
+    tmp_path, preparer
+) -> None:
+    """The other half of the same server path: once a turn has been served, a refusal
+    returns that turn again with a 200 (`interception/server.py:401-407`). Without
+    consulting `stop_condition` the harness re-dispatches it to `max_steps`.
+    """
+
+    class Stopping:
+        def __init__(self, trace) -> None:
+            self.trace = trace
+            self.turns = 0
+
+        async def get_response(self, *args, **kwargs):
+            self.turns += 1
+            if self.turns > 1:
+                self.trace.stop("context_length")
+            return type(
+                "R",
+                (),
+                {
+                    "message": type("M", (), {"content": "0 0 0 ; +LMB -LMB"})(),
+                    "finish_reason": "stop",
+                },
+            )()
+
+    _, result = _launch(_config(tmp_path), _task(max_steps=9), Stopping)
+    assert result["outcome"] == "framework_stop_context_length"
+    assert result["steps"] == 2, "the served repeat is not dispatched a third time"
+    assert result["validity"] == "valid" and result["success"] is False
+
+
 def test_a_scripted_oracle_arm_that_passes_is_control_conformant(tmp_path, preparer) -> None:
     preparer.plan = ["0 0 0 ;", "0 0 0 ;"]
     preparer.probes = [
