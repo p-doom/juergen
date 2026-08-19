@@ -1,16 +1,20 @@
 """The ordered mini-program grammar, v3.
 
-v2 (``pipeline/lib/action_format.py::OrderedFormatter``, prompt
-``pipeline/system_prompts/cua_v2_thinking.txt``) preserved the relative order of
-movement, scrolling and key/button transitions inside one turn:
+v2 (``pipeline/lib/action_format.py::OrderedFormatter``) preserved the relative
+order of movement, scrolling and key/button transitions inside one turn:
 ``move(4,-1); down(LMB); move(2,0); up(LMB)``. It had a formatter and no parser
-at all, so eval and RL could not read what training wrote.
+at all, so eval and RL could not read what training wrote, and its prompt was a
+hand-written file (``pipeline/system_prompts/cua_v2_thinking.txt``) that nothing
+compared to a parser.
 
 v3 adds two things:
 
 * ``type("text")``, so a typing burst is one primitive instead of a shift-keyed
   ``down(KeyH); up(KeyH)`` spelling of every character,
 * a parser, so the same object writes training targets and reads completions.
+
+Both emitters now render through this codec and take this prompt, so v2 is the
+subset of this grammar that never types.
 
 Escaping inside ``type()`` is minimal: only ``\\\\`` and ``\\"``. Return is an
 event — ``down(Return); up(Return)`` — never a character inside ``type()``. The
