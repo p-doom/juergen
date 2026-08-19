@@ -140,10 +140,35 @@ def describe(name: str) -> str:
     return load(name).describe()
 
 
+# Prepended to a codec's ``describe()`` for thinking+action records so training
+# matches the thinking eval prompt (and is disambiguated from a tool-call-only
+# retention set under an anneal mix). Grammar-independent: it describes the shape
+# of the turn, never the action syntax.
+#
+# It lives here, not in ``datasets/convert.py``, because the dataset builder and
+# the eval harness have to assemble the SAME prompt from the same codec and the
+# harness compares digests against what the builder wrote. With a copy on each
+# side the two drift and the comparison silently stops meaning anything, and the
+# harness must not import the dataset tool to avoid that.
+THINKING_PREAMBLE = (
+    "For each step, first reason in a single <think>...</think> block — your current "
+    "sub-goal and what you observe on the screen — then a one-line `Action:` describing "
+    "the move, then the action itself.\n\n"
+)
+
+
+def system_prompt(codec: Any, *, thinking: bool) -> str:
+    """The grammar's system prompt, in its thinking or plain form."""
+    described = codec.describe()
+    return (THINKING_PREAMBLE + described) if thinking else described
+
+
 __all__ = [
     "ENTRY_POINT_GROUP",
+    "THINKING_PREAMBLE",
     "available",
     "codecs",
     "describe",
     "load",
+    "system_prompt",
 ]

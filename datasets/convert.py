@@ -98,16 +98,6 @@ if str(REPO_ROOT) not in sys.path:
 import grammars  # noqa: E402
 from grammars import _support  # noqa: E402
 
-# Prepended to a codec's ``describe()`` for thinking+action records so training
-# matches the thinking eval prompt (and is disambiguated from a tool-call-only
-# retention set under an anneal mix). Grammar-independent: it describes the
-# shape of the turn, never the action syntax.
-THINKING_PREAMBLE = (
-    "For each step, first reason in a single <think>...</think> block — your current "
-    "sub-goal and what you observe on the screen — then a one-line `Action:` describing "
-    "the move, then the action itself.\n\n"
-)
-
 # Duration used when lowering a teacher drag into a timed stroke.
 DRAG_SECONDS = 0.5
 
@@ -339,12 +329,6 @@ def format_step(codec: Any, step: Step) -> str | None:
         return None
 
 
-def system_prompt(codec: Any, *, thinking: bool) -> str:
-    """The grammar's system prompt, in its thinking or plain form."""
-    described = codec.describe()
-    return (THINKING_PREAMBLE + described) if thinking else described
-
-
 _TOOLCALL_RE = re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL | re.IGNORECASE)
 
 
@@ -500,7 +484,7 @@ def convert_rollout(
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
-            "content": [{"type": "text", "text": system_prompt(codec, thinking=bool(keep_prose))}],
+            "content": [{"type": "text", "text": grammars.system_prompt(codec, thinking=bool(keep_prose))}],
         }
     ]
     n_prose_turns = 0
@@ -942,7 +926,7 @@ def main(argv: list[str] | None = None) -> int:
         # ``keep_prose`` that is THINKING_PREAMBLE + describe(), so it differs
         # from ``codec_digest`` and only this field identifies the artifact.
         "system_prompt_sha256": hashlib.sha256(
-            system_prompt(codec, thinking=bool(args.keep_prose)).encode()
+            grammars.system_prompt(codec, thinking=bool(args.keep_prose)).encode()
         ).hexdigest(),
         "rollouts_dir": args.rollouts_dir,
         "recursive": args.recursive,
