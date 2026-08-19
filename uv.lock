@@ -296,6 +296,7 @@ source = { editable = "data_pipeline" }
 dependencies = [
     { name = "absl-py" },
     { name = "array-record" },
+    { name = "desktop" },
     { name = "imageio-ffmpeg" },
     { name = "msgpack" },
     { name = "numpy" },
@@ -309,6 +310,7 @@ dependencies = [
 requires-dist = [
     { name = "absl-py", specifier = ">=2.0" },
     { name = "array-record", specifier = ">=0.5.1" },
+    { name = "desktop", directory = "../desktop" },
     { name = "imageio-ffmpeg", specifier = ">=0.5.1" },
     { name = "msgpack", specifier = ">=1.0" },
     { name = "numpy", specifier = ">=2.0" },

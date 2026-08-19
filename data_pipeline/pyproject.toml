@@ -26,6 +26,12 @@ dependencies = [
     "openai>=2.26.0",              # VLM labeler (Azure/OpenAI-compatible) + local Qwen: pipeline/annotation/lib/labeler.py
     "PyYAML>=6.0",                 # prompts.yaml loaders: pipeline/annotation/lib/prompts.py
     "opencv-python-headless>=4.10.0.84",  # video probing / frame decode: pipeline/stage_00_clip_manifest.py + pipeline/lib; matches sglang workspace pin
+    # Unfloored because it is the path-sourced sibling checkout, not an index
+    # package. Four stages import `grammars` (via the repo-root sys.path their
+    # entrypoints set up) and `grammars` hard-imports desktop, so a stage
+    # dispatched against this venv fails at import without it. The suites do not
+    # catch that: conftest.py appends the sibling checkout for them.
+    "desktop",                     # via grammars: pipeline/stage_03_filter.py + stage_04_build_conversations.py + annotation/stage_annotate.py + annotation/lib/days.py
 ]
 
 [build-system]
