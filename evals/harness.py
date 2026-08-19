@@ -255,6 +255,33 @@ class _Budget:
         }
 
 
+async def _to_thread(function: Any, *args: Any) -> Any:
+    """Run a blocking guest call without abandoning its thread on cancellation.
+
+    `asyncio.to_thread` cannot stop a function that has already started, so a bare
+    `await` on it hands control back the instant the rollout is cancelled while the
+    thread keeps driving the VM. `lease.finish` then hands that VM to the scoring
+    phase — or the reaper releases it into the pool — with an `execute_atomic` still
+    in flight against it.
+
+    Every cancellation is deferred until the thread has finished, and only then
+    re-raised. `asyncio.shield` alone is not enough: the shield's own await is what
+    gets cancelled, so it has to be re-entered until the task is done.
+    """
+    task = asyncio.ensure_future(asyncio.to_thread(function, *args))
+    cancelled: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+        except BaseException:  # noqa: BLE001 - owned by the task, re-raised below
+            pass
+    if cancelled is not None:
+        raise cancelled from task.exception()
+    return task.result()
+
+
 @contextlib.contextmanager
 def _hidden_gpu(enabled: bool) -> Iterator[None]:
     if not enabled:
@@ -463,9 +490,19 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         lease = None
         failed = True
         error: str | None = None
+
+        def acquire() -> None:
+            # Stored, not returned: `_to_thread` re-raises a cancellation once the
+            # thread has finished, which discards whatever the await would have
+            # produced. A lease that never reaches `lease` is never `finish`ed, so
+            # its node slot stays checked out — a handful of cancellations wedge a
+            # node at `max_node_slots`.
+            nonlocal lease
+            lease = pool.acquire(trace.id)
+
         try:
             with _hidden_gpu(self.config.pool.hide_gpu_during_boot):
-                lease = await asyncio.to_thread(pool.acquire, trace.id)
+                await _to_thread(acquire)
             trace.info["desktop_session"] = getattr(lease.session, "session_id", None)
             await self._run(
                 ctx, trace, task, lease.session, endpoint, secret, codec, preparer
@@ -549,9 +586,9 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         setup_evidence: dict[str, Any] = {}
 
         try:
-            setup_evidence = await asyncio.to_thread(preparer.prepare, session, task)
-            geometry = await asyncio.to_thread(_geometry, session)
-            initial = await asyncio.to_thread(preparer.probe, session, task)
+            setup_evidence = await _to_thread(preparer.prepare, session, task)
+            geometry = await _to_thread(_geometry, session)
+            initial = await _to_thread(preparer.probe, session, task)
             state.initial_probe = initial
             self._assert_unsolved(task, initial)
 
@@ -576,7 +613,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 if trace.stop_condition is not None:
                     outcome = f"framework_stop_{trace.stop_condition}"
                     break
-                cursor = tuple(await asyncio.to_thread(session.cursor_position))
+                cursor = tuple(await _to_thread(session.cursor_position))
                 decision, step_sampling = await self._decide(
                     agent,
                     ctx,
@@ -618,7 +655,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 action_error: dict[str, Any] | None = None
                 if decision.operations:
                     try:
-                        receipt = await asyncio.to_thread(
+                        receipt = await _to_thread(
                             session.execute_atomic, decision.operations
                         )
                         budget.dispatched(len(decision.operations))
@@ -646,8 +683,8 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 if self.config.artifacts.save_frames:
                     (artifacts / "steps" / f"step_{step:03d}.png").write_bytes(frame)
                 history.append(decision.text, frame)
-                cursor_after = tuple(await asyncio.to_thread(session.cursor_position))
-                probe = await asyncio.to_thread(preparer.probe, session, task)
+                cursor_after = tuple(await _to_thread(session.cursor_position))
+                probe = await _to_thread(preparer.probe, session, task)
                 steps_detail.append(
                     self._record(
                         decision, step, cursor, cursor_after, frame, probe, action_error
@@ -820,7 +857,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             )
             # Rendered here, not up front: the relative arms resolve their delta
             # against a cursor read taken now.
-            text = await asyncio.to_thread(
+            text = await _to_thread(
                 self._render_step, preparer, session, task, codec, script[step - 1]
             )
             decision = agent.decide(
@@ -876,12 +913,12 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         task; threading it through the session would mean mutating a shared,
         concurrently-checked-out object.
         """
-        frame = await asyncio.to_thread(
+        frame = await _to_thread(
             _screenshot, session, self.config.settle, task.kind
         )
         observe = getattr(preparer, "observe", None)
         if callable(observe):
-            frame = await asyncio.to_thread(observe, frame, task)
+            frame = await _to_thread(observe, frame, task)
         return frame
 
     def _script_plan(self, preparer: Any, task: DesktopTaskData) -> list[Any]:
@@ -988,7 +1025,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         if callable(declare):
             declare(declared)
         try:
-            score = float(await asyncio.to_thread(evaluate))
+            score = float(await _to_thread(evaluate))
         except Exception as exc:  # noqa: BLE001 - recorded as missing, never as 0.0
             _LOGGER.warning("evaluate() failed: %r", exc)
             return None

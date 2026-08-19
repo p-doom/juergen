@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,7 @@ from evals.harness import (
     _Budget,
     _is_left_click,
     _screenshot,
+    _to_thread,
 )
 from evals.tasks import RESULT_KEY, DesktopState, DesktopTaskData, register_preparer, PREPARERS
 from juergen_doubles import FakeSession, make_ctx, make_task_data, make_trace, png
@@ -862,6 +865,121 @@ def test_a_clean_episode_returns_the_vm_for_reuse(tmp_path, preparer, monkeypatc
     assert result["validity"] == "valid"
     (lease,) = captured
     assert lease.failed is False and lease.error is None
+
+
+def test_to_thread_defers_a_cancellation_until_the_thread_has_finished() -> None:
+    """`asyncio.to_thread` cannot stop a function that has already started, so a bare
+    `await` on it returns the instant the rollout is cancelled while the thread keeps
+    driving the VM. `lease.finish` then hands that VM to the scoring phase with an
+    `execute_atomic` still in flight against it.
+    """
+    running = threading.Event()
+    finished: list[str] = []
+
+    def blocking() -> str:
+        running.set()
+        time.sleep(0.2)
+        finished.append("done")
+        return "receipt"
+
+    async def body() -> list[str]:
+        task = asyncio.ensure_future(_to_thread(blocking))
+        while not running.is_set():
+            await asyncio.sleep(0.005)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # Read inside the loop: `asyncio.run` shuts the default executor down on
+        # its way out, so after it returns the thread has finished either way.
+        return list(finished)
+
+    assert asyncio.run(body()) == ["done"], "the cancellation must not outrun the guest call"
+
+
+def _cancel_once(event: threading.Event):
+    """Drive `launch` and cancel it as soon as `event` is set by the guest thread."""
+
+    async def body(harness, trace, ctx) -> None:
+        task = asyncio.ensure_future(harness.launch(ctx, trace, None, "", "", {}))
+        while not event.is_set():
+            await asyncio.sleep(0.005)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    return body
+
+
+def test_a_cancellation_during_acquire_still_finishes_the_lease(
+    tmp_path, preparer, monkeypatch
+) -> None:
+    """`lease` was assigned from the await's result, which a cancellation discards —
+    so the VM and its node slot were checked out by a thread that ran to completion
+    and then owned by nobody. At `max_node_slots=14` a handful of cancellations wedge
+    the node.
+    """
+    import juergen_harness_pool
+
+    captured = _captured_lease(monkeypatch)
+    checking_out = threading.Event()
+    session = FakeSession()
+
+    def slow_checkout(self):
+        checking_out.set()
+        time.sleep(0.2)
+        return session
+
+    monkeypatch.setattr(juergen_harness_pool.Pool, "checkout", slow_checkout)
+    config = _config(tmp_path)
+    trace = vf.Trace(
+        task=vf.TraceTask(type="DesktopTask", data=_task(max_steps=1)), state=DesktopState()
+    )
+    harness = DesktopHarness(config)
+    asyncio.run(_cancel_once(checking_out)(harness, trace, make_ctx(replies=["0 0 0 ;"])))
+
+    (lease,) = captured
+    assert lease.failed is True, "a cancelled rollout must retire its VM"
+    assert "Cancelled" in (lease.error or "")
+    assert lease.expired(), "with scoring_grace_s=0 the reaper can take it now"
+    lease.release()
+    assert session.released == [(True, lease.error)]
+
+
+def test_a_cancelled_episode_finishes_the_lease_only_after_the_guest_call_returns(
+    tmp_path, preparer, monkeypatch
+) -> None:
+    """The ordering the shield buys: `lease.finish` starts the scoring window, and the
+    reaper releases the VM into the pool from there, so it must not run while a
+    detached thread is still dispatching into that guest.
+    """
+    order: list[str] = []
+    dispatching = threading.Event()
+
+    class Slow(FakeSession):
+        def execute_atomic(self, operations):
+            dispatching.set()
+            time.sleep(0.2)
+            order.append("dispatched")
+            return {"dispatched": len(list(operations))}
+
+    original = dsk.DesktopLease.finish
+
+    def spy(self, **kwargs):
+        order.append("lease_finished")
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(dsk.DesktopLease, "finish", spy)
+    import juergen_harness_pool
+
+    juergen_harness_pool.Pool.session = Slow()
+    trace = vf.Trace(
+        task=vf.TraceTask(type="DesktopTask", data=_task(max_steps=2)), state=DesktopState()
+    )
+    harness = DesktopHarness(_config(tmp_path))
+    asyncio.run(
+        _cancel_once(dispatching)(harness, trace, make_ctx(replies=["0 0 0 ; +LMB -LMB"] * 2))
+    )
+    assert order == ["dispatched", "lease_finished"], order
 
 
 def test_the_desktop_session_id_rides_the_trace(tmp_path, preparer) -> None:
