@@ -185,7 +185,13 @@ def test_a_terminating_turn_dispatches_its_work_before_the_episode_stops(
     assert result["ignored_after_terminate"] == 0
 
 
-def test_calls_after_a_terminate_are_published_as_a_count(tmp_path, preparer) -> None:
+def test_calls_after_a_terminate_are_counted_and_never_dispatched(
+    tmp_path, preparer
+) -> None:
+    """The count alone would pass whether or not the clicks reached the guest, and
+    dispatch is unconditional, so the guest is asserted on too: `compile_action`
+    stops at the terminate.
+    """
     reply = "\n".join(
         "<tool_call>\n"
         + json.dumps({"name": "computer_use", "arguments": call})
@@ -196,10 +202,17 @@ def test_calls_after_a_terminate_are_published_as_a_count(tmp_path, preparer) ->
             {"action": "left_click"},
         )
     )
+    session = FakeSession()
     _, result, _ = _run(
-        _config(tmp_path, codec="move_rel"), _task(max_steps=4), replies=[reply]
+        _config(tmp_path, codec="move_rel"),
+        _task(max_steps=4),
+        replies=[reply],
+        session=session,
     )
     assert result["ignored_after_terminate"] == 2
+    assert [op.kind for batch in session.operations_log for op in batch] == [], (
+        "nothing runs once the episode has ended"
+    )
 
 
 def test_a_self_declared_fail_is_recorded_as_fail_not_terminate(tmp_path, preparer) -> None:
