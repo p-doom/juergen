@@ -46,8 +46,8 @@
 # `--only <name>` runs one suite (juergen | data_pipeline | desktop |
 # desktop_fleet | omegalax_rearch).
 #
-# omegalax-rearch: only the three test files the rearchitecture touches are run
-# (25 tests). The rest of that repo's tests want real GPUs and real checkpoints
+# omegalax-rearch: only the four test files the rearchitecture touches are run
+# (30 tests). The rest of that repo's tests want real GPUs and real checkpoints
 # and would fail on a CPU node.
 
 set -uo pipefail
@@ -66,11 +66,12 @@ VENVS=/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/venvs
 : "${DESKTOP_FLEET_PYTHON:=$DESKTOP_FLEET_ROOT/.venv/bin/python}"
 : "${OMEGALAX_PYTHON:=$VENVS/omegalax-rearch-testgate-venv/bin/python}"
 
-# omegalax-rearch's 25-test gate: what the rearchitecture changed, nothing GPU-bound.
+# omegalax-rearch's 30-test gate: what the rearchitecture changed, nothing GPU-bound.
 OMEGALAX_TESTS=(
   tests/test_sft_collators.py
   tests/test_arrayrecord_image_refs.py
   tests/test_renderers_loss_mask_gate.py
+  tests/test_chatml_loss_mask_leakage.py
 )
 
 # name | root | interpreter | marker module | pytest targets
