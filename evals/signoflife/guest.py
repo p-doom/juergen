@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from grammars.ordered_events_v3.codec import escape
+
 from evals.signoflife.oracle import evaluate_postcondition
 from evals.signoflife.suite import ALLOWED_KINDS
 from evals.tasks import DesktopTaskData, register_preparer
@@ -412,11 +414,34 @@ def _render_relative(intent: Intent, session: Any, task: DesktopTaskData) -> str
     raise ValueError(intent.kind)
 
 
+def _render_ordered_events_v3(
+    intent: Intent, session: Any, task: DesktopTaskData
+) -> str:
+    """`ordered_events_v3` — the ordered mini-program: `move(dx,dy); down(EV); up(EV)`.
+
+    Relative like `_render_relative`, so the click delta needs the cursor read now.
+    The `type()` payload is escaped by the grammar's own `escape`, not by
+    `json.dumps`: this grammar accepts only `\\\\` and `\\"`, so a JSON-escaped
+    payload is a parse error the moment a cell's text contains anything else.
+    """
+    if intent.kind == "type":
+        return f'type("{escape(intent.text)}")'
+    if intent.kind == "submit":
+        return "down(Return); up(Return)"
+    if intent.kind == "click":
+        cursor = tuple(session.cursor_position())
+        target = intent.target or _click_target(session, task)
+        delta = (int(target[0]) - cursor[0], int(target[1]) - cursor[1])
+        return f"move({delta[0]},{delta[1]}); down(LMB); up(LMB)"
+    raise ValueError(intent.kind)
+
+
 SCRIPT_RENDERERS: dict[str, Callable[[Intent, Any, DesktopTaskData], str]] = {
     "native_absolute": _render_native_absolute,
     "native_absolute_control": _render_native_absolute_control,
     "deltatype_v2": _render_relative,
     "compact_raw": _render_relative,
+    "ordered_events_v3": _render_ordered_events_v3,
 }
 """Exact codec name -> renderer.
 

@@ -215,6 +215,31 @@ def test_the_result_is_written_atomically_and_leaves_no_partial(tmp_path) -> Non
     assert not (output / "result.json.partial").exists()
 
 
+@pytest.mark.slow
+def test_the_ordered_events_v3_arm_runs_the_whole_dispatch(tmp_path) -> None:
+    """The production format had no arm at all — no model leg and no renderer.
+
+    Only the negative half is reachable without a VM: this guest reports a desktop
+    where nothing happened, which is exactly the negative control's calibrated
+    reading. The oracle's 4/4 is a real-VM calibration and a fixture that produced
+    it would be fiction, so it is not asserted here.
+    """
+    output = tmp_path / "run"
+    code, result = _run(output, tmp_path, "--arm", "ordered_negative")
+
+    assert code == 0, result["infrastructure_errors"]
+    assert result["codec"] == "ordered_events_v3"
+    assert result["arm_kind"] == "scripted_negative"
+    aggregate = result["aggregate"]
+    assert sorted(aggregate["per_cell"]) == sorted(CELL_IDS), "the gate is all four cells"
+    for cell, row in aggregate["per_cell"].items():
+        assert row["valid_trials"] == 1, f"{cell}: {result['infrastructure_errors']}"
+        assert row["pass_rate"] == 0.0, f"{cell} is a negative control"
+    assert aggregate["controls_ok"] is True
+    # Every scripted step went through this grammar's own parse and compile.
+    assert all(episode["parse_errors"] == 0 for episode in result["episodes"])
+
+
 def test_a_scripted_arm_refuses_a_model_it_would_silently_ignore(tmp_path) -> None:
     """Recorded and ignored, the run record would name a checkpoint that never
     answered a single token."""

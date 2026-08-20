@@ -9,9 +9,10 @@ The calibration semantics:
     artefact of the harness;
   * both exist per grammar, since a control that certified only one grammar would
     leave the other's parse/compile path unmeasured;
-  * the model arms are what the four controls calibrate. Their published readings
-    are off-the-shelf-4B-native 4/4 and Phase-B-compact 2/4. A model number is
-    uncalibrated without its two controls in the same configuration.
+  * the model arms are what the controls calibrate. Their published readings are
+    off-the-shelf-4B-native 4/4 and Phase-B-compact 2/4; the ordered arm has none
+    yet. A model number is uncalibrated without its two controls in the same
+    configuration.
 
 Baseline incomparability — read this before quoting a number. The only calibrated
 external reference we have is off-the-shelf Qwen3-VL-8B = 33.9% OSWorld-Verified,
@@ -35,7 +36,7 @@ stale, while `native_absolute_control.from_target` needs only element geometry. 
 scripted arms render one intent per step so that asymmetry is exercised rather than
 papered over.
 
-Four control arms + two model arms over one taskset: the arm is the config.
+Six control arms + three model arms over one taskset: the arm is the config.
 """
 
 from __future__ import annotations
@@ -60,6 +61,7 @@ __all__ = [
     "COMPACT_CODEC",
     "MODEL_ARMS",
     "NATIVE_CODEC",
+    "ORDERED_CODEC",
     "PHASEB_EXPORT_MANIFEST_SHA256",
     "PHASEB_SYSTEM_PROMPT_SHA256",
     "verify_phaseb_provenance",
@@ -70,6 +72,10 @@ COMPACT_CODEC = "deltatype_v2"
 """The Phase-B compact grammar. `compact_raw` is its NO_OP-free sibling and is the
 arm paired with `native_absolute_control`; `deltatype_v2` is the one the s900
 checkpoint was trained on, so it is the one the model arm uses."""
+ORDERED_CODEC = "ordered_events_v3"
+"""The production format. It had no eval leg at all — no model arm and no scripted
+renderer — while a training job was already running on it, so every number it
+produced would have been uncalibrated."""
 
 PHASEB_SYSTEM_PROMPT_SHA256 = (
     "57f7d0b230974068618b48151b73215d5517d5445a99dbf5abdc05557e3482e6"
@@ -185,12 +191,18 @@ CONTROL_ARMS: dict[str, DesktopHarnessConfig] = {
     "native_negative": _control(NATIVE_CODEC, negative=True, name="sol_native_negative"),
     "compact_oracle": _control(COMPACT_CODEC, negative=False, name="sol_compact_oracle"),
     "compact_negative": _control(COMPACT_CODEC, negative=True, name="sol_compact_negative"),
+    "ordered_oracle": _control(ORDERED_CODEC, negative=False, name="sol_ordered_oracle"),
+    "ordered_negative": _control(ORDERED_CODEC, negative=True, name="sol_ordered_negative"),
 }
-"""The four control arms: {oracle, negative} x {native, compact}.
+"""The six control arms: {oracle, negative} x {native, compact, ordered}.
 
 Not the four suite cells — those are `terminal_ls`, `terminal_exact_text`,
 `desktop_open_chrome` and `focus_terminal_and_type`, and they live in `suite.json`
-behind `suite.load_suite()`. Every arm here runs all four of them."""
+behind `suite.load_suite()`. Every arm here runs all four of them.
+
+A model arm never ships without its pair: the pair is what says a reading is the
+model's and not the harness's. `ordered_events_v3` had a model arm's worth of
+training behind it and no arm at all, which is the same defect one step earlier."""
 
 
 MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
@@ -226,9 +238,23 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
         max_tokens=256,
         artifacts=ArtifactConfig(save_prompts=True, write_gif=True),
     ),
+    "ordered": DesktopHarnessConfig(
+        id="sol_ordered",
+        codec=ORDERED_CODEC,
+        history=HistoryConfig(name="interleaved_frames", n_history_frames=8),
+        images=ImageBudgetConfig(max_images=8),
+        settle=_settle(),
+        max_tokens=256,
+        artifacts=ArtifactConfig(save_prompts=True, write_gif=True),
+    ),
 }
-"""The arms the four controls calibrate. Reference readings: off-the-shelf
-Qwen3-VL-4B native = 4/4, Phase-B step-900 compact = 2/4."""
+"""The arms the controls calibrate. Reference readings: off-the-shelf Qwen3-VL-4B
+native = 4/4, Phase-B step-900 compact = 2/4.
+
+`ordered` has no reference reading and no `system_prompt_sha256`, because no
+checkpoint is pinned to it yet: whichever model the runner serves is scored under
+`ordered_events_v3.describe()`. Pin the digest when the first eov3 checkpoint is
+evaluated, or the arm will happily score a checkpoint trained on another prompt."""
 
 
 ARMS: dict[str, DesktopHarnessConfig] = {**CONTROL_ARMS, **MODEL_ARMS}

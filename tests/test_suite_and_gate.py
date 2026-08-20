@@ -36,6 +36,7 @@ from evals.signoflife.cells import (
     COMPACT_CODEC,
     MODEL_ARMS,
     NATIVE_CODEC,
+    ORDERED_CODEC,
     verify_phaseb_provenance,
 )
 from evals.signoflife.oracle import evaluate_postcondition, history_has_exact
@@ -269,24 +270,35 @@ def test_14m_the_cell_id_and_kind_coincidence_that_hid_the_coupling() -> None:
     assert cell.id == cell.kind == EXACT_TEXT_CELL
 
 
-def test_the_gate_is_four_controls_plus_two_model_arms() -> None:
+def test_the_gate_is_six_controls_plus_three_model_arms() -> None:
     assert set(CONTROL_ARMS) == {
         "native_oracle",
         "native_negative",
         "compact_oracle",
         "compact_negative",
+        "ordered_oracle",
+        "ordered_negative",
     }
-    assert set(MODEL_ARMS) == {"offshelf_native", "phaseb_compact"}
+    assert set(MODEL_ARMS) == {"offshelf_native", "phaseb_compact", "ordered"}
     assert set(ARMS) == set(CONTROL_ARMS) | set(MODEL_ARMS)
-    assert len(ARMS) == 6
+    assert len(ARMS) == 9
 
 
-def test_both_controls_exist_per_grammar() -> None:
-    """A control that certified only one grammar leaves the other's parse path unmeasured."""
+def test_both_controls_exist_for_every_grammar_with_a_model_arm() -> None:
+    """A model arm without its pair is an uncalibrated number.
+
+    `ordered_events_v3` — the production format — had a training job running on it
+    and no arm here at all, which is the same defect one step earlier.
+    """
     by_codec: dict[str, set[bool]] = {}
     for config in CONTROL_ARMS.values():
         by_codec.setdefault(config.codec, set()).add(config.scripted.negative)
-    assert by_codec == {NATIVE_CODEC: {False, True}, COMPACT_CODEC: {False, True}}
+    assert by_codec == {
+        NATIVE_CODEC: {False, True},
+        COMPACT_CODEC: {False, True},
+        ORDERED_CODEC: {False, True},
+    }
+    assert {config.codec for config in MODEL_ARMS.values()} <= set(by_codec)
 
 
 def test_control_arms_are_scripted_and_model_arms_are_not() -> None:

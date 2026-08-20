@@ -4,7 +4,7 @@ The renderer table is exact, not a substring heuristic: `native_absolute` and
 `native_absolute_control` are prefixes of one another, and `move_rel` contains
 neither "compact" nor "absolute" while being relative.
 
-The fourth renderer emits `native_absolute_control`'s bare-line absolute form, where
+One renderer emits `native_absolute_control`'s bare-line absolute form, where
 `0 0 0 ; +LMB -LMB` is a click at the top-left corner while the same bytes in
 `compact_raw` mean "don't move, click here".
 
@@ -19,6 +19,7 @@ import json
 import pytest
 
 from agent.agent import load_codec
+from evals.signoflife.cells import ARMS
 from evals.signoflife.guest import (
     DOCK_CHROME_COORDINATE,
     SCRIPT_RENDERERS,
@@ -54,13 +55,21 @@ def _geo():
     return DisplayGeometry(desktop_width=1920, desktop_height=1080)
 
 
-def test_the_renderer_table_is_exact_and_covers_the_four_paired_grammars() -> None:
+def test_the_renderer_table_is_exact_and_covers_every_arm_with_a_model_leg() -> None:
+    """Every grammar `cells.ARMS` names must have a scripted renderer.
+
+    Asserted against `ARMS` rather than a literal set: a model arm added without
+    its oracle and negative pair produces an uncalibrated number, and a control
+    arm without a renderer cannot run at all.
+    """
     assert set(SCRIPT_RENDERERS) == {
         "native_absolute",
         "native_absolute_control",
         "deltatype_v2",
         "compact_raw",
+        "ordered_events_v3",
     }
+    assert {arm.codec for arm in ARMS.values()} <= set(SCRIPT_RENDERERS)
 
 
 def test_a_prefix_grammar_name_gets_its_own_renderer_not_the_others() -> None:
@@ -71,7 +80,7 @@ def test_a_prefix_grammar_name_gets_its_own_renderer_not_the_others() -> None:
     )
 
 
-@pytest.mark.parametrize("missing", ["move_rel", "diffabs", "ordered_events_v3"])
+@pytest.mark.parametrize("missing", ["move_rel", "diffabs"])
 def test_a_grammar_with_no_scripted_arm_is_a_loud_lookup_error(missing: str) -> None:
     """A missing renderer must never be a silently substituted grammar."""
     with pytest.raises(LookupError, match="no scripted control arm"):
