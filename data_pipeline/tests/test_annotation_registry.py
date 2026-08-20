@@ -180,16 +180,22 @@ class WindowActivityTest(unittest.TestCase):
             self.assertEqual(is_typing(deltatype), is_typing(ordered), name)
             self.assertEqual(_is_submission(deltatype), _is_submission(ordered), name)
 
-    def test_a_burst_is_the_text_keys_plus_the_two_that_edit_or_commit_one(self) -> None:
+    def test_a_burst_is_the_text_keys_plus_the_ones_that_edit_or_commit_one(self) -> None:
         """Parity alone would hold with both grammars always reading False, so the
         verdict itself is pinned. The seven punctuation names are the ones the
-        reconciliation moved: the substring marker list called them non-typing."""
+        reconciliation moved: the substring marker list called them non-typing.
+
+        Both directions of delete count, or the same correction is a burst or not by
+        which way the demonstrator deleted — real keylogs hold windows that are
+        nothing but forward-deletes retracting the text typed in the window before,
+        and those may not be cut through. ``ForwardDelete`` is the macOS spelling of
+        ``Delete``, so dropping either one reinstates the asymmetry per platform."""
         for name in ("KeyA", "Num1", "Space", "Minus", "Slash", "BackSlash", "Comma",
-                     "Return", "Backspace",
+                     "Return", "Backspace", "Delete", "ForwardDelete",
                      "BackQuote", "Dot", "Equal", "Quote", "SemiColon",
                      "LeftBracket", "RightBracket"):
             self.assertTrue(is_typing(_one_key("canonical", name)[1]), name)
-        for name in ("Escape", "Tab", "Delete", "LMB", "ShiftLeft", "ControlLeft",
+        for name in ("Escape", "Tab", "LMB", "ShiftLeft", "ControlLeft",
                      "UpArrow", "VolumeMute", "KC_160", "ISO_Section"):
             self.assertFalse(is_typing(_one_key("canonical", name)[1]), name)
 
