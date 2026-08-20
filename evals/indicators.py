@@ -31,6 +31,7 @@ __all__ = [
     "SUBMIT_KEYS",
     "FailureModeIndicators",
     "MouseIndicators",
+    "UnreadableAction",
     "delta_histogram",
     "on_lattice",
     "step_records",
@@ -47,6 +48,22 @@ healthy relative policy emits arbitrary integers, a collapsed one emits digits."
 
 _LITERAL_ESCAPES = ("\\n", "\\r", "\\t")
 
+#: The key a grammar's action `to_dict` publishes its ordered items under. Three
+#: shapes across the seven in-tree grammars: `elements` for the bare-token family,
+#: `primitives` for `ordered_events_v3`, `calls` for the tool-call family.
+_CONTAINERS = ("elements", "primitives", "calls")
+
+
+class UnreadableAction(ValueError):
+    """A `parsed_action` in a shape no indicator can read.
+
+    Raised rather than read as empty. The readers below used to try `elements`,
+    then `calls`, and return `[]` for anything else — so every typing and
+    submission indicator read zero on `ordered_events_v3`, whose container is
+    `primitives`, and the reading looked like "the model never typed" for the
+    format a live training arm was using.
+    """
+
 
 def step_records(trace: vf.Trace) -> list[dict[str, Any]]:
     result = trace.info.get(RESULT_KEY) or {}
@@ -54,21 +71,51 @@ def step_records(trace: vf.Trace) -> list[dict[str, Any]]:
     return [s for s in steps if isinstance(s, dict)] if isinstance(steps, list) else []
 
 
-def _elements(parsed: Any) -> list[dict[str, Any]]:
-    """The bare-token grammars' ordered element list, as dicts.
+def _items(parsed: Any) -> list[dict[str, Any]]:
+    """One parsed action's ordered items, in the `elements` vocabulary.
 
-    `deltatype_v2` / `compact_raw` serialise an element to
-    `{"kind": "event", "name": ..., "pressed": ...}`,
-    `{"kind": "type", "text": ...}` or `{"kind": "move", "delta": [dx, dy]}`. Cached
-    traces from before the grammar consolidation carry the older `(kind, value)`
-    pair form, so both are accepted — a metric that silently returned 0 on old
-    traces would look like a fixed defect.
+    The three containers are translated into one item vocabulary here and nowhere
+    else, so each indicator reads a single shape and an unrecognised action fails
+    once, loudly, rather than three times as an empty reading.
+
+    `None` is the absence of an action — a parse error, or a turn that only
+    terminated — and reads as no items.
     """
+    if parsed is None:
+        return []
     if not isinstance(parsed, dict):
-        return []
-    raw = parsed.get("elements")
+        raise UnreadableAction(
+            f"a parsed action is a grammar's to_dict(), got {type(parsed).__name__}"
+        )
+    containers = [key for key in _CONTAINERS if key in parsed]
+    if len(containers) != 1:
+        # One call's own arguments dict, which is what `calls` holds.
+        if not containers and "action" in parsed:
+            return _from_calls([parsed])
+        raise UnreadableAction(
+            f"a parsed action publishes exactly one of {_CONTAINERS}; "
+            f"{sorted(parsed)} publishes {containers}"
+        )
+    container = containers[0]
+    raw = parsed[container]
     if not isinstance(raw, (list, tuple)):
-        return []
+        raise UnreadableAction(
+            f"{container!r} is an ordered list, got {type(raw).__name__}"
+        )
+    if container == "elements":
+        return _from_elements(raw)
+    if container == "primitives":
+        return _from_primitives(raw)
+    return _from_calls(raw)
+
+
+def _from_elements(raw: Sequence[Any]) -> list[dict[str, Any]]:
+    """The bare-token family's elements, which are already this vocabulary.
+
+    Cached traces from before the grammar consolidation carry the older
+    `(kind, value)` pair form, so both are accepted — a metric that silently
+    returned 0 on old traces would look like a fixed defect.
+    """
     out: list[dict[str, Any]] = []
     for item in raw:
         if isinstance(item, dict):
@@ -88,34 +135,68 @@ def _legacy_element(kind: str, value: Any) -> dict[str, Any]:
     return {"kind": kind}
 
 
-def _calls(parsed: Any) -> list[dict[str, Any]]:
-    """The tool-call grammars' calls (`native_absolute`, `move_rel`).
+def _from_primitives(raw: Sequence[Any]) -> list[dict[str, Any]]:
+    """`ordered_events_v3`'s primitives.
 
-    Each call serialises to its `computer_use` arguments dict, so `action`, `text`,
-    `keys` and `coordinate` read the same way whether the turn carried one call or
-    several.
+    `down` / `up` are the two halves of one event, and a `move` carries `dx` / `dy`
+    where an element carries a delta pair. `scroll` has no indicator.
     """
-    if not isinstance(parsed, dict):
-        return []
-    raw = parsed.get("calls")
-    if isinstance(raw, (list, tuple)):
-        return [call for call in raw if isinstance(call, dict)]
-    return [parsed] if "action" in parsed else []
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("kind")
+        if kind == "type":
+            out.append({"kind": "type", "text": item.get("text", "")})
+        elif kind in ("down", "up"):
+            out.append(
+                {
+                    "kind": "event",
+                    "name": item.get("name", ""),
+                    "pressed": kind == "down",
+                }
+            )
+        elif kind == "move":
+            out.append({"kind": "move", "delta": [item.get("dx"), item.get("dy")]})
+    return out
+
+
+def _from_calls(raw: Sequence[Any]) -> list[dict[str, Any]]:
+    """The tool-call family's `computer_use` arguments dicts.
+
+    Only the three actions an indicator reads are translated. The schema's action
+    set is open per grammar, so unlike the two item vocabularies it is a filter
+    rather than something to be exhaustive over.
+    """
+    out: list[dict[str, Any]] = []
+    for call in raw:
+        if not isinstance(call, dict):
+            continue
+        action = str(call.get("action", "")).strip().lower()
+        if action == "type":
+            text = call.get("text")
+            if isinstance(text, str):
+                out.append({"kind": "type", "text": text})
+        elif action in ("key", "key_down"):
+            keys = call.get("keys")
+            if isinstance(keys, str):
+                keys = [keys]
+            if isinstance(keys, (list, tuple)):
+                out.extend(
+                    {"kind": "event", "name": str(key), "pressed": True} for key in keys
+                )
+        elif action == "move_rel":
+            coordinate = call.get("coordinate")
+            if isinstance(coordinate, (list, tuple)) and len(coordinate) == 2:
+                out.append({"kind": "move", "delta": list(coordinate)})
+    return out
 
 
 def typed_texts(parsed: Any) -> list[str]:
-    """Every string this action types, under either grammar family."""
-    out = [
-        str(element.get("text", ""))
-        for element in _elements(parsed)
-        if element.get("kind") == "type"
+    """Every string this action types, in whichever grammar wrote it."""
+    return [
+        str(item.get("text", "")) for item in _items(parsed) if item.get("kind") == "type"
     ]
-    for call in _calls(parsed):
-        if str(call.get("action", "")).strip().lower() == "type":
-            text = call.get("text")
-            if isinstance(text, str):
-                out.append(text)
-    return out
 
 
 def submit_keys(parsed: Any) -> list[str]:
@@ -125,53 +206,36 @@ def submit_keys(parsed: Any) -> list[str]:
     halves of `+Return -Return` would double every B and D reading.
     """
     out: list[str] = []
-    for element in _elements(parsed):
-        if element.get("kind") != "event" or not element.get("pressed"):
+    for item in _items(parsed):
+        if item.get("kind") != "event" or not item.get("pressed"):
             continue
-        name = str(element.get("name", ""))
+        name = str(item.get("name", ""))
         if name in SUBMIT_KEYS:
             out.append(name)
-    for call in _calls(parsed):
-        if str(call.get("action", "")).strip().lower() not in {"key", "key_down"}:
-            continue
-        keys = call.get("keys")
-        if isinstance(keys, str):
-            keys = [keys]
-        if isinstance(keys, (list, tuple)):
-            out.extend(str(k) for k in keys if str(k) in SUBMIT_KEYS)
     return out
 
 
 def deltas(parsed: Any) -> list[tuple[int, int]]:
     """Mouse deltas this action requests, in the grammar's own unit.
 
-    Only meaningful for relative grammars: `deltatype_v2` / `compact_raw` in raw
-    pixels, `move_rel` in normalized 0-999. `native_absolute` carries a target
-    rather than a delta and reports nothing; differencing consecutive targets to
-    invent one would fabricate a distribution.
+    Only meaningful for relative grammars: `deltatype_v2` / `compact_raw` /
+    `diffabs` in raw pixels on the head, `ordered_events_v3` in raw pixels per
+    `move` primitive, `move_rel` in normalized 0-999. `native_absolute` and
+    `native_absolute_control` carry a target rather than a delta and report
+    nothing; differencing consecutive targets to invent one would fabricate a
+    distribution.
     """
-    if not isinstance(parsed, dict):
-        return []
     out: list[tuple[int, int]] = []
-    if "dx" in parsed and "dy" in parsed:
+    if isinstance(parsed, dict) and "dx" in parsed and "dy" in parsed:
         try:
             out.append((int(parsed["dx"]), int(parsed["dy"])))
         except (TypeError, ValueError):
             pass
-    for element in _elements(parsed):
-        delta = element.get("delta") if element.get("kind") == "move" else None
+    for item in _items(parsed):
+        delta = item.get("delta") if item.get("kind") == "move" else None
         if isinstance(delta, (list, tuple)) and len(delta) == 2:
             try:
                 out.append((int(delta[0]), int(delta[1])))
-            except (TypeError, ValueError):
-                pass
-    for call in _calls(parsed):
-        if str(call.get("action", "")).strip().lower() != "move_rel":
-            continue
-        coord = call.get("coordinate")
-        if isinstance(coord, (list, tuple)) and len(coord) == 2:
-            try:
-                out.append((int(coord[0]), int(coord[1])))
             except (TypeError, ValueError):
                 pass
     return out

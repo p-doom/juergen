@@ -1,8 +1,11 @@
 """Indicator generalisation, the digit lattice, and `_never_moved`.
 
-A/B/D read `native_absolute` / `move_rel` `calls` as well as the bare grammars'
-`elements`, and legacy `(kind, value)` element pairs are still accepted so a cached
-trace does not silently read 0 (which would look like a fixed defect).
+The indicators read all three parsed-action containers — `elements` (bare-token),
+`primitives` (`ordered_events_v3`), `calls` (tool-call) — and a shape that is none
+of them raises instead of reading empty. `test_every_grammar_...` below drives the
+loop over `grammars.available()` that stops a fourth shape from appearing unnoticed;
+legacy `(kind, value)` element pairs are still accepted so a cached trace does not
+silently read 0 (which would look like a fixed defect).
 
 `on_lattice` / `delta_histogram` implement a documented finding
 (`{0, ±1, ±10, ±100}`, mode `(±10, ±10)` = 14.1 px).
@@ -16,12 +19,16 @@ import math
 
 import pytest
 
+import grammars
+from desktop.geometry import DisplayGeometry
+from desktop.ir import Operation
 from evals.indicators import (
     DIGIT_LATTICE,
     SUBMIT_KEYS,
     FailureModeIndicators,
     MouseIndicators,
     SamplingProvenance,
+    UnreadableAction,
     delta_histogram,
     deltas,
     on_lattice,
@@ -69,9 +76,96 @@ def test_step_records_ignores_a_missing_or_malformed_result() -> None:
     assert step_records(make_trace(episode={"steps_detail": [1, {"a": 1}]})) == [{"a": 1}]
 
 
+_GEOMETRY = DisplayGeometry(desktop_width=1920, desktop_height=1080)
+_CURSOR = (100, 200)
+
+
+def _own_spelling(name: str, operations):
+    """What grammar `name` writes for `operations`, as the harness records it.
+
+    Through each codec's own lift rather than a hand-written line per grammar, so
+    a grammar cannot drift out of this test's coverage by respelling itself.
+    """
+    codec = grammars.load(name)
+    action = codec.action_from_operations(
+        operations, geometry=_GEOMETRY, cursor=_CURSOR
+    )
+    return action.to_dict()
+
+
+def test_every_grammar_reports_its_own_typing_and_submission() -> None:
+    """The blindness this guards: `typed_texts` sniffed `elements` then `calls`,
+    so `ordered_events_v3` — whose container is `primitives` — read `[]` for both,
+    and every typing and submission indicator reported zero for the format a live
+    training arm was using.
+    """
+    cannot_type = set()
+    for name in grammars.available():
+        submission = _own_spelling(
+            name, [Operation("key_down", ("Return",)), Operation("key_up", ("Return",))]
+        )
+        assert submit_keys(submission) == ["Return"], name
+        try:
+            typing = _own_spelling(name, [Operation("coalesced_type", ("hi",))])
+        except ValueError:
+            cannot_type.add(name)
+            continue
+        assert typed_texts(typing) == ["hi"], name
+    assert cannot_type == {"diffabs"}, (
+        "diffabs is the one grammar with no type() production — it spells literal "
+        "text as key transitions. Every other grammar must report what it typed"
+    )
+
+
+def test_every_relative_grammar_reports_its_own_move() -> None:
+    """`MouseIndicators` was blind the same way: the lattice-collapse rate read
+    zero on `ordered_events_v3` because its move lives in `primitives`."""
+    absolute = set()
+    for name in grammars.available():
+        parsed = _own_spelling(name, [Operation("move_to", (110, 220))])
+        read = deltas(parsed)
+        if not read:
+            absolute.add(name)
+            continue
+        assert read == [(10, 20)] or name == "move_rel", (name, read)
+    assert absolute == {"native_absolute", "native_absolute_control"}, (
+        "only the two absolute grammars carry a target rather than a delta"
+    )
+
+
+def test_an_unrecognised_action_shape_raises_instead_of_reading_empty() -> None:
+    """A silent `[]` is what kept the `primitives` miss invisible for a whole arm."""
+    for reader in (typed_texts, submit_keys, deltas):
+        with pytest.raises(UnreadableAction, match="publishes exactly one"):
+            reader({"no_op": False, "terminate": None})
+        with pytest.raises(UnreadableAction, match="publishes exactly one"):
+            reader({"elements": [], "primitives": []})
+        with pytest.raises(UnreadableAction, match="ordered list"):
+            reader({"elements": "nope"})
+        with pytest.raises(UnreadableAction, match="to_dict"):
+            reader("0 0 0 ; type(\"hi\")")
+
+
+def test_a_step_that_parsed_nothing_reads_empty_rather_than_raising() -> None:
+    """`parsed_action` is None on a parse error and on a bare termination, and both
+    are ordinary steps a metric has to score."""
+    assert typed_texts(None) == [] and submit_keys(None) == [] and deltas(None) == []
+
+
 def test_typed_texts_reads_the_bare_token_element_shape() -> None:
     parsed = _parsed("deltatype_v2", '0 0 0 ; type("hello")')
     assert typed_texts(parsed) == ["hello"]
+
+
+def test_typed_texts_reads_the_ordered_events_v3_primitive_shape() -> None:
+    parsed = _parsed("ordered_events_v3", 'type("hello")')
+    assert typed_texts(parsed) == ["hello"]
+    assert submit_keys(_parsed("ordered_events_v3", "down(Return); up(Return)")) == [
+        "Return"
+    ]
+    assert deltas(_parsed("ordered_events_v3", "move(10,-20); down(LMB); up(LMB)")) == [
+        (10, -20)
+    ]
 
 
 def test_typed_texts_reads_the_tool_call_shape() -> None:
@@ -85,11 +179,6 @@ def test_typed_texts_reads_the_kind_value_pair_shape() -> None:
     """A cached pre-consolidation trace must not silently read 0."""
     assert typed_texts({"elements": [("type", "hello"), ("move", (1, 2))]}) == ["hello"]
     assert typed_texts({"elements": [["type", "bye"]]}) == ["bye"]
-
-
-def test_typed_texts_tolerates_a_non_dict_action() -> None:
-    for bad in (None, "text", 3, [], {"elements": "nope"}):
-        assert typed_texts(bad) == []
 
 
 def test_submit_keys_counts_presses_only() -> None:
@@ -337,10 +426,10 @@ def test_deltas_reads_the_element_move_shape_and_the_legacy_pair() -> None:
 
 
 def test_deltas_survives_a_malformed_coordinate() -> None:
-    assert deltas({"dx": "a", "dy": 1}) == []
+    assert deltas({"dx": "a", "dy": 1, "elements": []}) == []
     assert deltas({"elements": [{"kind": "move", "delta": ["x", "y"]}]}) == []
+    assert deltas({"primitives": [{"kind": "move", "dx": "x", "dy": "y"}]}) == []
     assert deltas({"action": "move_rel", "coordinate": [1]}) == []
-    assert deltas(None) == []
 
 
 def test_the_mouse_metric_reports_lattice_collapse_end_to_end() -> None:
