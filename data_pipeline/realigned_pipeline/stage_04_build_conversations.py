@@ -1236,11 +1236,17 @@ def _process_goal_segment(task: tuple[dict[str, Any], list[dict[str, Any]]]) -> 
 
 
 def resolve_workers(requested: int) -> int:
-    """``--workers 0`` (the default) means "the CPUs this process may run on" --
-    under Slurm that is exactly ``cpus``. Capped so an interactive run on a
-    64-core login node does not fork 64 readers."""
+    """``--workers 0`` (the default) means "the CPUs this run was given".
+
+    ``SLURM_CPUS_PER_TASK`` wins where it is set: a Slurm allocation's affinity
+    mask includes the SMT siblings of the allocated cores (``-c 16`` reports 32),
+    so the mask would silently double the pool. The affinity mask is the fallback
+    for interactive runs, capped so a login node does not fork 64 readers."""
     if requested > 0:
         return requested
+    slurm = os.environ.get("SLURM_CPUS_PER_TASK")
+    if slurm and slurm.isdigit() and int(slurm) > 0:
+        return int(slurm)
     try:
         available = len(os.sched_getaffinity(0))
     except AttributeError:  # pragma: no cover - non-Linux
