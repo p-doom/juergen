@@ -350,6 +350,36 @@ class MoveRelCodec:
                 raise MoveRelError(f"unsupported action: {name!r}")
         return tuple(operations)
 
+    def intended_cursor(
+        self,
+        action: MoveRelAction,
+        geometry: DisplayGeometry,
+        cursor: tuple[int, int],
+    ) -> _support.IntendedCursor | None:
+        """Each ``move_rel`` delta, denormalized here and nowhere else.
+
+        The deltas are thousandths of an axis, so the pixel intent depends on the
+        display: at 1920 wide a delta of 10 is 19 px, and reading the delta as
+        pixels downstream would be wrong by ``dim/1000``. That is why this is a
+        codec method — the driver holds seven conventions and may not resolve any
+        of them. ``None`` when the turn calls no ``move_rel`` at all.
+        """
+        width, height = _support.screen_size(geometry)
+        return _support.fold_requests(
+            tuple(
+                (
+                    "rel",
+                    pixels_from_norm(call.delta[0], width),
+                    pixels_from_norm(call.delta[1], height),
+                )
+                for call in action.calls
+                if call.action == "move_rel" and call.delta is not None
+            ),
+            geometry=geometry,
+            cursor=cursor,
+            error=MoveRelError,
+        )
+
     def validate_call(self, arguments: dict[str, Any]) -> MoveRelCall:
         name = str(arguments.get("action", "")).strip()
         known = {item.syntax for item in _support.productions(self)}

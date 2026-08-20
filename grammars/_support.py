@@ -63,6 +63,73 @@ def clamp(point: tuple[int, int], geometry: DisplayGeometry) -> tuple[int, int]:
     return (max(0, min(width - 1, int(x))), max(0, min(height - 1, int(y))))
 
 
+@dataclass(frozen=True)
+class IntendedCursor:
+    """Where a turn asked the cursor to go, and whether the display refused.
+
+    ``x``/``y`` are the last request's target BEFORE ``clamp``, in absolute screen
+    pixels. ``clamped`` is true when any request in the turn resolved off the
+    display.
+
+    Both fields exist because six of the seven grammars emit no ``move_to`` at all
+    when a resolved move does not change the position, so an off-display delta and
+    a delta of zero produce the same empty operation stream and the same ``no_op``
+    control. In a closed-loop rollout the cursor pins to an edge and every further
+    move in that direction records as an idle turn. This is the only place that
+    difference survives, which is why ``clamped`` is published rather than derived
+    from ``x``/``y``: a mid-turn clamp is invisible in the final target.
+    """
+
+    x: int
+    y: int
+    clamped: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"x": self.x, "y": self.y, "clamped": self.clamped}
+
+
+#: One cursor request in absolute pixel space: ``("rel", dx, dy)`` folds onto the
+#: current position, ``("abs", x, y)`` names it. The codec converts its own
+#: convention first — ``move_rel`` denormalizes thousandths against the display,
+#: the raw-delta grammars pass their delta through — so nothing here knows which
+#: convention it was, exactly as with every other helper in this module.
+CursorRequest = tuple[str, int, int]
+
+
+def fold_requests(
+    requests: Sequence[CursorRequest],
+    *,
+    geometry: DisplayGeometry,
+    cursor: tuple[int, int],
+    error: type[Exception] = ValueError,
+) -> IntendedCursor | None:
+    """A turn's cursor requests -> its final pre-clamp target, or ``None``.
+
+    ``None`` means the turn named no cursor position at all — an idle action, or a
+    tool call with no coordinate — as opposed to naming the one it is already on.
+
+    Each request resolves against the CLAMPED position the previous one reached,
+    because that is where the pointer actually is; that makes this fold identical
+    to ``compile_action``'s, so the clamped result agrees with the dispatched
+    stream by construction rather than by two functions staying in step.
+    ``test_vectors`` asserts that agreement for every vector of every grammar.
+    """
+    here = clamp(cursor, geometry)
+    target: tuple[int, int] | None = None
+    clamped = False
+    for kind, first, second in requests:
+        if kind == "rel":
+            target = (here[0] + first, here[1] + second)
+        elif kind == "abs":
+            target = (first, second)
+        else:
+            raise error(f"unknown cursor request kind: {kind!r}")
+        landed = clamp(target, geometry)
+        clamped = clamped or landed != target
+        here = landed
+    return None if target is None else IntendedCursor(target[0], target[1], clamped)
+
+
 def move_to(point: tuple[int, int]) -> Operation:
     return Operation("move_to", (int(point[0]), int(point[1])))
 

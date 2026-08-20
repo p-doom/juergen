@@ -191,6 +191,100 @@ def test_invalid_compile(name, payload, case):
         _codec(name).compile(case["text"], geometry, cursor)
 
 
+_MOVE_KINDS = ("move_to", "glide_to")
+
+#: Per grammar: a move the display cannot honour, the same turn asking to stay
+#: where it is, and whether ``compile`` still emits a move operation for the
+#: first. The cursor is placed on the right edge, so both turns dispatch the
+#: same thing in the six grammars that drop a zero-extent move — which is the
+#: blind spot ``IntendedCursor`` exists to remove. Declared per grammar rather
+#: than discovered at runtime, so a grammar that starts or stops dropping the
+#: move fails here instead of quietly changing what an idle turn means.
+_EDGE_OF_DISPLAY = {
+    "compact_raw": ("5000 0 0", "0 0 0", False),
+    "deltatype_v2": ("5000 0 0", "0 0 0", False),
+    "diffabs": ("5000 0 0", "0 0 0", False),
+    "compact_absolute": ("99999 540 0", "1919 540 0", False),
+    "ordered_events_v3": ("move(5000,0)", "move(0,0)", False),
+    "move_rel": (
+        '<tool_call>\n{"name": "computer_use", "arguments": '
+        '{"action": "move_rel", "coordinate": [999, 0]}}\n</tool_call>',
+        '<tool_call>\n{"name": "computer_use", "arguments": '
+        '{"action": "move_rel", "coordinate": [0, 0]}}\n</tool_call>',
+        False,
+    ),
+    "native_absolute": (
+        '<tool_call>\n{"name": "computer_use", "arguments": '
+        '{"action": "mouse_move", "coordinate": [99999, 540]}}\n</tool_call>',
+        '<tool_call>\n{"name": "computer_use", "arguments": '
+        '{"action": "mouse_move", "coordinate": [1919, 540]}}\n</tool_call>',
+        True,
+    ),
+}
+
+
+@pytest.mark.parametrize(("name", "payload", "case"), _cases("cases"))
+def test_intended_cursor_agrees_with_what_compile_dispatched(name, payload, case):
+    """The anti-drift half: two functions resolve a coordinate, so they are tied.
+
+    ``intended_cursor`` folds the same requests ``compile_action`` does, and its
+    clamped result must therefore be the position the dispatched stream ends on.
+    Nothing else would stop the two from drifting apart, and a drifted intent is
+    worse than none: it would be read as the model's request.
+    """
+    codec = _codec(name)
+    geometry, cursor = _context(payload, case)
+    intent = codec.intended_cursor(codec.parse(case["text"]), geometry, cursor)
+    moves = [
+        operation
+        for operation in codec.compile(case["text"], geometry, cursor)
+        if operation.kind in _MOVE_KINDS
+    ]
+    if intent is None:
+        assert not moves, "reported no cursor request, yet moved the pointer"
+        return
+    landed = _support.clamp((intent.x, intent.y), geometry)
+    if moves:
+        assert tuple(moves[-1].args)[:2] == landed
+    else:
+        assert landed == _support.clamp(cursor, geometry)
+    if landed != (intent.x, intent.y):
+        assert intent.clamped, "the target left the display and was not flagged"
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_a_clamped_move_is_distinguishable_from_asking_to_stay(name):
+    """The measurement this exists for.
+
+    Six of the seven grammars emit no operation when a resolved move does not
+    change the position, so at the edge of the display a large delta and a delta
+    of zero dispatch the same empty stream and land as the same ``no_op``. Every
+    closed-loop "the policy stopped moving the mouse" reading is taken off that
+    stream. ``clamped`` is what separates them.
+    """
+    clamped_text, stay_text, expect_move = _EDGE_OF_DISPLAY[name]
+    codec = _codec(name)
+    payload = _vectors(name)
+    geometry = _geometry(payload["geometry"])
+    edge = (geometry.desktop_width - 1, 540)
+
+    refused = codec.intended_cursor(codec.parse(clamped_text), geometry, edge)
+    stayed = codec.intended_cursor(codec.parse(stay_text), geometry, edge)
+    assert refused is not None and stayed is not None
+    assert refused.clamped is True
+    assert stayed.clamped is False
+    assert (refused.x, refused.y) != (stayed.x, stayed.y)
+    assert refused.x > geometry.desktop_width - 1, "the request must be off-display"
+
+    dispatched = codec.compile(clamped_text, geometry, edge)
+    assert bool([o for o in dispatched if o.kind in _MOVE_KINDS]) is expect_move
+    if not expect_move:
+        assert dispatched == codec.compile(stay_text, geometry, edge), (
+            "the two turns must be indistinguishable in the operation stream; "
+            "that is the blind spot, and IntendedCursor is the only way out of it"
+        )
+
+
 @pytest.mark.parametrize(("name", "payload", "case"), _cases("lift"))
 def test_lift(name, payload, case):
     """The full triangle. ``recompiled`` closes it; where it differs, the case says why."""

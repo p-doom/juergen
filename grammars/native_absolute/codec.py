@@ -368,6 +368,30 @@ class NativeAbsoluteCodec:
                 raise NativeAbsoluteError(f"unsupported action: {name!r}")
         return tuple(operations)
 
+    def intended_cursor(
+        self,
+        action: NativeAbsoluteAction,
+        geometry: DisplayGeometry,
+        cursor: tuple[int, int],
+    ) -> _support.IntendedCursor | None:
+        """Every coordinate the turn named, in order, as absolute pixels.
+
+        A coordinate on any call moves the pointer here — a click, a drag and a
+        button transition all move to theirs first — so every one of them is a
+        request. ``None`` when no call carries a coordinate, which is the whole
+        coordinate-less half of this schema.
+        """
+        return _support.fold_requests(
+            tuple(
+                ("abs", call.coordinate[0], call.coordinate[1])
+                for call in action.calls
+                if call.coordinate is not None
+            ),
+            geometry=geometry,
+            cursor=cursor,
+            error=NativeAbsoluteError,
+        )
+
     def action_from_operations(
         self,
         operations: Sequence[Operation],

@@ -181,6 +181,24 @@ class CompactRawCodec:
         )
         return tuple(operations)
 
+    def intended_cursor(
+        self,
+        action: CompactRawAction,
+        geometry: DisplayGeometry,
+        cursor: tuple[int, int],
+    ) -> _support.IntendedCursor | None:
+        """The raw delta as this grammar means it: pixels, folded onto ``cursor``.
+
+        Always a request, never ``None``: the head of every action of this family
+        is a delta, so ``0 0`` asks to stay where it is.
+        """
+        return _support.fold_requests(
+            (("rel", action.dx, action.dy),),
+            geometry=geometry,
+            cursor=cursor,
+            error=CompactRawError,
+        )
+
     def action_from_operations(
         self,
         operations: Sequence[Operation],

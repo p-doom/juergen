@@ -211,6 +211,34 @@ class DeltatypeV2Codec:
             )
         return tuple(operations)
 
+    def intended_cursor(
+        self,
+        action: DeltatypeV2Action,
+        geometry: DisplayGeometry,
+        cursor: tuple[int, int],
+    ) -> _support.IntendedCursor | None:
+        """The head delta, then each ``MOVE`` element of the drag form.
+
+        Every one of them is a request in pixels, and a stroke moves the pointer
+        exactly as the head does, so the last one is where the turn asked to end
+        up. ``None`` only for the idle action, which names no position.
+        """
+        if action.no_op:
+            return None
+        return _support.fold_requests(
+            (
+                ("rel", action.dx, action.dy),
+                *(
+                    ("rel", element.delta[0], element.delta[1])
+                    for element in action.elements
+                    if element.kind == "move" and element.delta is not None
+                ),
+            ),
+            geometry=geometry,
+            cursor=cursor,
+            error=DeltatypeV2Error,
+        )
+
     def action_from_operations(
         self,
         operations: Sequence[Operation],

@@ -321,6 +321,30 @@ class OrderedEventsV3Codec:
                 raise OrderedEventsV3Error(f"unknown primitive kind: {item.kind!r}")
         return tuple(operations)
 
+    def intended_cursor(
+        self,
+        action: OrderedEventsV3Action,
+        geometry: DisplayGeometry,
+        cursor: tuple[int, int],
+    ) -> _support.IntendedCursor | None:
+        """Every interleaved ``move`` primitive, in order, as pixel deltas.
+
+        ``None`` for the idle action, and for a turn of keys and clicks alone:
+        this is the one grammar where an action can carry no move at all.
+        """
+        if action.no_op:
+            return None
+        return _support.fold_requests(
+            tuple(
+                ("rel", item.dx, item.dy)
+                for item in action.primitives
+                if item.kind == "move"
+            ),
+            geometry=geometry,
+            cursor=cursor,
+            error=OrderedEventsV3Error,
+        )
+
     def action_from_operations(
         self,
         operations: Sequence[Operation],

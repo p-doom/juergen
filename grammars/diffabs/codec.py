@@ -221,6 +221,23 @@ class DiffabsCodec:
         )
         return tuple(operations)
 
+    def intended_cursor(
+        self,
+        action: DiffabsAction,
+        geometry: DisplayGeometry,
+        cursor: tuple[int, int],
+    ) -> _support.IntendedCursor | None:
+        """The diff added back onto ``cursor``, in pixels. ``None`` for the idle
+        action, which names no position at all."""
+        if action.no_op:
+            return None
+        return _support.fold_requests(
+            (("rel", action.dx, action.dy),),
+            geometry=geometry,
+            cursor=cursor,
+            error=DiffabsError,
+        )
+
     def action_from_operations(
         self,
         operations: Sequence[Operation],

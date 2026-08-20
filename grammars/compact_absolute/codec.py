@@ -204,6 +204,20 @@ class CompactAbsoluteCodec:
         )
         return tuple(operations)
 
+    def intended_cursor(
+        self,
+        action: CompactAbsoluteAction,
+        geometry: DisplayGeometry,
+        cursor: tuple[int, int],
+    ) -> _support.IntendedCursor | None:
+        """The named position, which ``cursor`` never contributes to."""
+        return _support.fold_requests(
+            (("abs", action.x, action.y),),
+            geometry=geometry,
+            cursor=cursor,
+            error=CompactAbsoluteError,
+        )
+
     def action_from_operations(
         self,
         operations: Sequence[Operation],
