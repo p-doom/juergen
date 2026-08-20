@@ -46,7 +46,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from tqdm import tqdm  # progress bar; arrives transitively via transformers/datasets
+from tqdm import tqdm
 
 # Make the ``pipeline`` package importable when this script
 # is run directly from its own folder (mirrors run_dataset's PYTHONPATH setup).

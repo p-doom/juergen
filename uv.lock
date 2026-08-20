@@ -304,6 +304,7 @@ dependencies = [
     { name = "opencv-python-headless" },
     { name = "pillow" },
     { name = "pyyaml" },
+    { name = "tqdm" },
 ]
 
 [package.metadata]
@@ -318,6 +319,7 @@ requires-dist = [
     { name = "opencv-python-headless", specifier = ">=4.10.0.84" },
     { name = "pillow", specifier = ">=11.3.0" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "tqdm", specifier = ">=4.66" },
 ]
 
 [[package]]
