@@ -14,8 +14,10 @@ the frames they actually produced.
 | 03 (alt) | `stage_03_filter.py` | Mask-only variant: a keep/drop mask over the master axis, consumed at any fps via `lib/views`. |
 | 03b | `stage_03b_reference_goals.py` | Bridge annotated goals onto realigned frames → `goal_frame_index.jsonl`. |
 | 04 | `stage_04_build_conversations.py` | Assemble conversations (per segment, per app run, or per goal); re-derive action labels; **filter by application**. |
+| 04b | `stage_04b_filter_key_combo.py` | Re-cut a stage-04 artifact into short trajectories that each **begin with a chord**. |
+| 04c | `stage_04c_annotate_conversations.py` | Hindsight-annotate an **already cut** conversations artifact: one goal instruction per conversation. |
 | 05 | `stage_05_measure_lengths.py` | Payload-free tokenizer cache (`message_lengths.jsonl`), shardable as a SLURM array. |
-| 06 | `stage_06_training_records.py` | Inline SFT records straight from `chat.jsonl`, reusing the stage-05 cache. |
+| 06 | `stage_06_training_records.py` | Inline SFT records straight from `chat.jsonl`, reusing the stage-05 cache; plots the per-chunk vision-token CDF. |
 
 Every stage writes `<output_dir>/manifest.json` as its completion marker.
 
@@ -303,3 +305,67 @@ Whole-corpus chord presses over the 8024-conversation browser build: `Meta+KeyT`
 
 Recipe: `…/dataset_v5_application_filter/stage_04b_key_combo_new_tab.toml` — the
 clone-per-combo template.
+
+## Annotating cut conversations (stage 04c)
+
+Goals normally enter at stage 03b, over a *filter view* of the corpus, and the
+goal windows then define what a conversation is. `stage_04c_annotate_conversations.py`
+inverts that for the case where **the cut is the filter**: a 04b row is "the user
+pressed `Meta+KeyT`, then did this for ≤30 turns", and the instruction has to
+describe *that window* — a segment-level goal spanning ten minutes of browsing
+says nothing about the new tab.
+
+```bash
+uv run --locked -- python -m realigned_pipeline.stage_04c_annotate_conversations \
+  --source-dir <a stage-04 or 04b artifact> --output-dir <out> \
+  --method describe_extract --models Kimi-K2.6,Kimi-K2.5 --limit 3
+```
+
+### Why it needs nothing but `chat.jsonl`
+
+A stage-04 row is a lossless description of its own frames' master coordinates.
+The user turns carry `ar://<master store>/frames/<seg>/images.array_record#N`
+and that **`N` is the master tick** — stage 01 packs one record per tick
+(`source_time_s = record_index / master_fps`) — while the assistant turns carry
+the derived action label the keystroke-burst start-snap needs. So each row
+rebuilds an exact `SegmentView` (real ticks, real label windows, gaps where
+stage 03 dropped black/idle frames) and becomes one `AnnotationUnit`. Goal spans
+land as genuine master intervals, joinable to any other view of the corpus.
+Conversations past the context budget split into several units exactly as a
+segment does; their goals pool back per conversation before one is selected.
+
+Only `INPUT_KIND=frames` methods apply (`describe_extract`); `days`/`goals`
+methods consume something a cut conversation is not.
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--goal-select {cover-first,longest,first}` | `cover-first` | Which extracted goal conditions the row when a method returns several. `cover-first` takes the one whose span covers turn 0 — for a key-combo window, the goal the chord itself opened. |
+| `--on-no-goal {drop,keep}` | `drop` | Rows the method found no bounded goal for. `drop` keeps the output purely goal-conditioned. |
+| `--system-prompt-id ID` | — | Replace the source's system message (same table and grammar check as 04b). A goal-*free* source prompt stops describing the artifact once an instruction is on the first turn. |
+| `--target-fps` / `--master-fps` | from the row / the store manifest | Override the frame period told to the labeler, or skip the master-store lookup. |
+
+Everything else — `--models`, `--target-tpm`, `--param`, the window knobs, the
+governor — matches `annotation/stage_annotate.py`, and so does the resume story:
+`progress.jsonl` skips finished conversations, `calls/` makes re-running an
+unfinished one free.
+
+### What lands on the output
+
+`chat.jsonl` / `conversations.jsonl` are the SAME rows with the instruction
+prepended as a leading text block on the first user turn (stage 04's canonical
+layout), plus `instruction`, `instruction_variants`, `goal_conditioned: true`,
+`goal_{start,end}_turn_idx`, `goal_{start,end}_master_idx` and
+`annotation_goals` (every candidate, for audit). Assistant turns are copied
+verbatim, so stages 05/06 consume it unchanged. `goals.jsonl` holds every
+extracted goal as a uniform goals row.
+
+Recipe: `…/dataset_v5_application_filter/stage_04c_annotate_goals_key_combo_new_tab.toml`.
+Note it resolves the caveat in the 04b recipe: `cua_ordered_typing_v1` says "the
+first user turn states the goal", which only becomes true after this stage.
+
+### Tests
+
+`tests/test_stage_04c_conversations.py` — the tick round-trip (`ar://#N` →
+master idx → projected span), label windows across dropped-frame gaps, goal
+selection, and the message rewrite (first turn only, assistant turns untouched,
+source row not mutated).
