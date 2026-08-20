@@ -1,6 +1,6 @@
 {
   "grammar": "diffabs",
-  "prompt_sha256": "814054703e12fe8bd71fb914ca3dffa8ca98fcc0729170e90257bae041dc1f00",
+  "prompt_sha256": "e3b05a2647dcc4f1db0e9af931bbd4f2963da25257038945dcc7c220b60be8c9",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080
@@ -158,8 +158,8 @@
       "documents": "this grammar has no type() element: literal text is spelled as key transitions."
     },
     {
-      "name": "action_marker_wins_over_the_last_line",
-      "text": "Reasoning: the save icon is right and above the cursor.\nAction: 200 -100 0 ; +LMB -LMB",
+      "name": "an_action_marker_introduces_the_description_not_the_action",
+      "text": "<think>the save icon is right and above the cursor</think>\nAction: click the save icon\n200 -100 0 ; +LMB -LMB",
       "canonical": "200 -100 0 ; +LMB -LMB",
       "action": {
         "dx": 200,
@@ -200,28 +200,7 @@
           ]
         ]
       ],
-      "documents": "the cot_directions_v1 two-line shape."
-    },
-    {
-      "name": "last_action_marker_wins_when_examples_are_echoed",
-      "text": "Action: 1 1 0\nsome more thinking\nAction: 2 2 0",
-      "canonical": "2 2 0",
-      "action": {
-        "dx": 2,
-        "dy": 2,
-        "scroll": 0,
-        "elements": [],
-        "no_op": false
-      },
-      "operations": [
-        [
-          "move_to",
-          [
-            962,
-            542
-          ]
-        ]
-      ]
+      "documents": "the THINKING_PREAMBLE turn shape: think, then a one-line `Action:` description, then the action. Reading the marker's body instead — which this codec did — parses the description and discards the action."
     },
     {
       "name": "prose_then_action_on_the_last_line",
@@ -457,6 +436,11 @@
     {
       "name": "action_buried_mid_sentence",
       "text": "I will move 100 0 0 to the right.",
+      "error": "three mouse integers"
+    },
+    {
+      "name": "a_marker_carrying_the_action_is_not_read",
+      "text": "Action: 1 1 0\nsome more thinking\nAction: 2 2 0",
       "error": "three mouse integers"
     },
     {

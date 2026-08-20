@@ -260,9 +260,6 @@ def drift_report(codec: Any, *, producer: dict[str, str]) -> dict[str, Any]:
     }
 
 
-_ACTION_MARKER_RE = re.compile(r"(?im)^\s*action\s*:\s*(.+?)\s*$")
-
-
 class NoAction(ValueError):
     """The text holds no action of this grammar, as opposed to a broken one.
 
@@ -277,25 +274,19 @@ class NoAction(ValueError):
 
 
 def final_line(text: str) -> str:
-    """The last non-empty line. Reasoning before the action line is legal."""
+    """The last non-empty line. Reasoning before the action line is legal.
+
+    Every bare-line grammar picks its action this way, including under
+    ``THINKING_PREAMBLE``, whose ``Action:`` marker introduces the one-line
+    DESCRIPTION and not the action. A variant that preferred the marker's body
+    lived here for ``diffabs`` alone and read the description in its place.
+    """
     if not isinstance(text, str):
         raise TypeError(f"expected str, got {type(text)!r}")
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         raise NoAction("empty action text")
     return lines[-1]
-
-
-def action_line(text: str) -> str:
-    """The last ``Action: <body>`` marker if present, else the last non-empty line."""
-    if not isinstance(text, str):
-        raise TypeError(f"expected str, got {type(text)!r}")
-    markers = list(_ACTION_MARKER_RE.finditer(text))
-    if markers:
-        body = markers[-1].group(1).strip()
-        if body:
-            return body
-    return final_line(text)
 
 
 # the bare-token family:  dx dy scroll [ ; elements ]

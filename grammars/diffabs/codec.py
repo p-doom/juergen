@@ -22,10 +22,12 @@ Collapses into one codec:
 
 Semantics chosen where the sources disagreed:
 
-* The action is the last ``Action: <body>`` marker if present, otherwise the
-  last non-empty line; every prompt in this family puts reasoning before the
-  action. ``parse_action`` cut the text at the first newline while
-  ``parse_action_tolerant`` fell back to the last line.
+* The action is the last non-empty line, as in every other bare-line grammar;
+  every prompt in this family puts reasoning before the action. ``parse_action``
+  cut the text at the first newline while ``parse_action_tolerant`` fell back to
+  the last line. Preferring the body of an ``Action:`` marker — which this codec
+  did — reads the one-line description ``grammars.THINKING_PREAMBLE`` asks for
+  and discards the action below it.
 * Termination is not in this grammar at all — it is the harness's control
   channel (``_support.CONTROL_SPEC``). ``psai_v1`` documents only ``NO_OP``;
   ``yll_v1`` added a bare ``TERMINATE`` action line and no ``FAIL``, and the
@@ -116,14 +118,13 @@ class DiffabsCodec:
     The first user turn shows the initial screen and the user's goal; subsequent
     user turns show the current screen, with the cursor visible as a small arrow.
     Reply with the next action toward that goal as one line. Reasoning may
-    precede it: the action is the last `Action:` line if you write one, otherwise
-    the last line of your reply.
+    precede it: the action is the last non-empty line of your reply.
     """
 
     name = "diffabs"
 
-    #: Empty by design: reasoning and an `Action:` marker legally precede the
-    #: action line, so no token sequence marks the end of a turn.
+    #: Empty by design: reasoning legally precedes the action line, so no token
+    #: sequence marks the end of a turn.
     stop_sequences: tuple[str, ...] = ()
 
     @_support.production("dx dy scroll")
@@ -171,7 +172,7 @@ class DiffabsCodec:
         return _support.drift_report(self, producer=PRODUCER)
 
     def parse(self, text: str) -> DiffabsAction:
-        line = _support.action_line(text)
+        line = _support.final_line(text)
         digest = self.digest
         if line == "NO_OP":
             return DiffabsAction(no_op=True, prompt_digest=digest)
