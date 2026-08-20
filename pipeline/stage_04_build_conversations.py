@@ -90,7 +90,7 @@ from pipeline.lib.common import (  # noqa: E402
     write_json,
     write_jsonl,
 )
-from pipeline.lib.events import load_events  # noqa: E402
+from pipeline.lib.events import EventStats, load_events  # noqa: E402
 from pipeline.lib.goals import (  # noqa: E402
     SNAP_START_MODES,
     assert_same_artifact,
@@ -207,7 +207,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
             return {**base, "status": "empty_view", "rows": []}
 
         keylog = Path(view.keylog_path) if view.keylog_path else None
-        events, _ = load_events(keylog) if keylog else ([], None)
+        events, event_stats = load_events(keylog) if keylog else ([], EventStats())
         fmt = get_formatter(
             task["action_format"], continuous_action_hz=task["continuous_action_hz"]
         )
@@ -265,6 +265,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
                 "status": "ok",
                 "rows": rows,
                 "primitive_counts": result.primitive_counts,
+                "parse_counters": asdict(event_stats),
             }
 
         seg_goals = task["goals_by_segment"].get(seg, [])
@@ -310,6 +311,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
             "status": "ok" if rows else "no_projected_goals",
             "rows": rows,
             "primitive_counts": result.primitive_counts,
+            "parse_counters": asdict(event_stats),
             "projection": {
                 "n_goals": proj_stats.n_goals,
                 "n_projected": proj_stats.n_projected,
@@ -344,12 +346,12 @@ def parse_args() -> argparse.Namespace:
                         "nearest its ideal time (spacing jitters by up to half a tick, "
                         "e.g. 4 fps on a 15 fps master -> ticks 0,4,8,11,...).")
     p.add_argument("--output-dir", type=Path, required=True)
-    p.add_argument("--action-format", type=str, default="canonical",
+    p.add_argument("--action-format", type=str, required=True,
                    choices=sorted(FORMATTERS),
-                   help="Registered assistant-turn action formatter ('canonical': aggregate "
-                        "'<dx> <dy> <scroll> ; +KEY -KEY'; 'ordered_events_v2': ordered "
-                        "'move(dx,dy); down(LMB); ...' mini-programs; 'ordered_events_v3': "
-                        "the same with balanced typing runs as 'type(\"...\")').")
+                   help="Registered assistant-turn action formatter (lib/action_format). "
+                        "Required: it picks the grammar that every label AND the system "
+                        "prompt are rendered in, so a default would silently decide the "
+                        "dataset's target format for a caller who forgot the flag.")
     p.add_argument("--continuous-action-hz", type=float,
                    default=DEFAULT_CONTINUOUS_ACTION_HZ,
                    help="ordered formats only: internal motor-grid rate for accumulating "

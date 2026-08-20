@@ -46,7 +46,7 @@ Dead-zone label policy:
 from __future__ import annotations
 
 from bisect import bisect_right
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,7 +86,14 @@ class RawEvent:
 
 @dataclass
 class EventStats:
-    """Parse-layer counts over the whole keylog (before any window logic)."""
+    """Parse-layer counts over the whole keylog (before any window logic).
+
+    The ``n_dropped_*`` counters close the parse layer: an entry counted in
+    ``n_events`` either becomes a RawEvent, is a deliberate ignore
+    (``ContextChanged`` / an event type this pipeline does not model), or is
+    dropped as unparseable — and the last kind loses real demonstrator input,
+    so it is counted rather than skipped invisibly. ``Unknown(-1)`` key names
+    from the macOS recorder are the known live instance."""
 
     n_events: int = 0
     n_mousemove: int = 0
@@ -95,6 +102,10 @@ class EventStats:
     n_keyrelease: int = 0
     n_mousepress: int = 0
     n_mouserelease: int = 0
+    n_dropped_unresolved_name: int = 0
+    n_dropped_bad_payload: int = 0
+    n_dropped_bad_timestamp: int = 0
+    n_ignored_other_type: int = 0
 
 
 @dataclass(frozen=True)
@@ -151,88 +162,72 @@ class PolicyCounters:
             self.n_discarded_no_coverage += 1
 
 
-def iter_events(
-    keylog_path: Path,
-    timemap: Callable[[float], float] | None = None,
-) -> Iterator[RawEvent]:
-    """Parse a (realigned) msgpack keylog into an ordered RawEvent stream.
+_PER_TYPE_COUNTER = {
+    "MouseMove": "n_mousemove",
+    "MouseScroll": "n_scroll",
+    "KeyPress": "n_keypress",
+    "KeyRelease": "n_keyrelease",
+    "MousePress": "n_mousepress",
+    "MouseRelease": "n_mouserelease",
+}
 
-    Same tolerance as ``common.aggregate_actions``: malformed entries,
-    ``ContextChanged``, and press/release events whose name cannot be resolved
-    are skipped. ``timemap`` optionally remaps each timestamp (seconds) before
-    it is yielded; the realigned pipeline consumes corrected keylogs, so the
-    default identity clock is the master clock."""
-    seq = 0
+
+def load_events(keylog_path: Path) -> tuple[list[RawEvent], EventStats]:
+    """Parse a realigned msgpack keylog into an ordered RawEvent stream + stats.
+
+    One pass, so the counts describe exactly the stream returned. Every entry
+    counted in ``n_events`` is accounted for: emitted, deliberately ignored, or
+    counted into an ``n_dropped_*`` bucket. The realigned pipeline consumes
+    corrected keylogs, so the timestamps are already master-clock."""
+    stats = EventStats()
+    events: list[RawEvent] = []
     for entry in load_keylog_entries(keylog_path):
         if not isinstance(entry, list) or len(entry) < 2:
             continue
         timestamp, event = entry[0], entry[1]
         if not isinstance(event, list) or not event:
             continue
+        stats.n_events += 1
+        event_type = str(event[0])
+        counter = _PER_TYPE_COUNTER.get(event_type)
+        if counter is not None:
+            setattr(stats, counter, getattr(stats, counter) + 1)
         try:
             timestamp_us = int(timestamp)
         except (TypeError, ValueError):
+            stats.n_dropped_bad_timestamp += 1
             continue
-        event_type = str(event[0])
         if event_type == "ContextChanged":
             continue
         payload = event[1] if len(event) > 1 else None
         t_s = timestamp_us / 1_000_000
-        if timemap is not None:
-            t_s = timemap(t_s)
+        seq = len(events)
 
         if event_type == "MouseMove":
-            if isinstance(payload, list) and len(payload) >= 2:
-                yield RawEvent(seq, t_s, "move", dx=float(payload[0]), dy=float(payload[1]))
-                seq += 1
+            if not (isinstance(payload, list) and len(payload) >= 2):
+                stats.n_dropped_bad_payload += 1
+                continue
+            events.append(RawEvent(seq, t_s, "move", dx=float(payload[0]), dy=float(payload[1])))
         elif event_type == "MouseScroll":
-            if isinstance(payload, list) and len(payload) >= 2:
-                value = payload[1] if payload[1] != 0 else payload[0]
-                yield RawEvent(
-                    seq, t_s, "scroll",
-                    dx=float(payload[0]), dy=float(payload[1]), scroll=float(value),
-                )
-                seq += 1
+            if not (isinstance(payload, list) and len(payload) >= 2):
+                stats.n_dropped_bad_payload += 1
+                continue
+            value = payload[1] if payload[1] != 0 else payload[0]
+            events.append(RawEvent(
+                seq, t_s, "scroll",
+                dx=float(payload[0]), dy=float(payload[1]), scroll=float(value),
+            ))
         elif event_type in ("KeyPress", "MousePress", "KeyRelease", "MouseRelease"):
-            if event_type.startswith("Key"):
-                name = resolve_key_name(payload)
-            else:
-                name = resolve_button_name(payload)
+            name = (resolve_key_name(payload) if event_type.startswith("Key")
+                    else resolve_button_name(payload))
             if name is None:
+                stats.n_dropped_unresolved_name += 1
                 continue
             kind = "press" if event_type.endswith("Press") else "release"
-            yield RawEvent(seq, t_s, kind, name=name)
-            seq += 1
-
-
-def load_events(
-    keylog_path: Path,
-    timemap: Callable[[float], float] | None = None,
-) -> tuple[list[RawEvent], EventStats]:
-    """``iter_events`` materialized, plus parse-layer stats (counted on the raw
-    entries, so unresolved names still show up in the per-type counts)."""
-    stats = EventStats()
-    for entry in load_keylog_entries(keylog_path):
-        if not isinstance(entry, list) or len(entry) < 2:
-            continue
-        event = entry[1]
-        if not isinstance(event, list) or not event:
-            continue
-        stats.n_events += 1
-        event_type = str(event[0])
-        if event_type == "MouseMove":
-            stats.n_mousemove += 1
-        elif event_type == "MouseScroll":
-            stats.n_scroll += 1
-        elif event_type == "KeyPress":
-            stats.n_keypress += 1
-        elif event_type == "KeyRelease":
-            stats.n_keyrelease += 1
-        elif event_type == "MousePress":
-            stats.n_mousepress += 1
-        elif event_type == "MouseRelease":
-            stats.n_mouserelease += 1
-    return list(iter_events(keylog_path, timemap)), stats
+            events.append(RawEvent(seq, t_s, kind, name=name))
+        else:
+            stats.n_ignored_other_type += 1
+    return events, stats
 
 
 class _Locator:
