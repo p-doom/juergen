@@ -475,6 +475,21 @@ def test_a_missing_target_box_result_raises() -> None:
         asyncio.run(TargetBoxTask(data).score(make_trace(data), _Runtime()))
 
 
+def test_the_target_box_shaping_raises_on_an_infra_invalid_rollout_with_no_runtime() -> None:
+    """The verdict is runtime-gated; the shaping term must not be.
+
+    Offline, `target_box` is skipped for want of a runtime and `shaped_progress` is
+    the only reward left. Unguarded it reads the -1.0 `best_distance` an
+    infrastructure failure publishes and returns -NO_SIGNAL_PENALTY: the minimum of
+    the whole range, trained for a VM that never booted.
+    """
+    data = make_task_data(kind="target_box")
+    trace = make_trace(data, episode={"validity": "infra_invalid", "infra_error": {"stage": "boot"}})
+    with pytest.raises(Exception, match="infrastructure-invalid"):
+        asyncio.run(TargetBoxTask(data).score(trace, None))
+    assert "shaped_progress" not in trace.rewards
+
+
 def test_the_target_box_verdict_needs_a_runtime_but_the_shaping_does_not() -> None:
     from verifiers.v1.task import _requires_runtime
 

@@ -34,8 +34,7 @@ class TargetBoxTask(MouseIndicators, SamplingProvenance, DesktopTask):
     async def target_box(self, trace: vf.Trace, runtime: vf.Runtime) -> float:
         """Success requires reaching the box AND declaring it.
 
-        Declares `runtime` because the verdict is a live-VM cursor read; offline
-        replay skips it rather than scoring an unreachable VM as a failure.
+        Declares `runtime` because the verdict is a live-VM cursor read.
         """
         del runtime
         result = valid_result(trace, "target_box")
@@ -43,7 +42,9 @@ class TargetBoxTask(MouseIndicators, SamplingProvenance, DesktopTask):
 
     @vf.reward
     async def shaped_progress(self, trace: vf.Trace) -> float:
-        result = trace.info.get(RESULT_KEY) or {}
+        # The verdict above is runtime-gated, so without a runtime this is the only
+        # reward left; unguarded it floors at -NO_SIGNAL_PENALTY, below any real miss.
+        result = valid_result(trace, "target_box")
         if result.get("outcome") == "postcondition_reached":
             return 0.0
         best = float(result.get("best_distance", -1.0))
