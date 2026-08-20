@@ -73,6 +73,7 @@ OMEGALAX_TESTS=(
   tests/test_chatml_loss_mask_leakage.py
   tests/test_grain_pipeline.py
   tests/test_export_roundtrip_smoke.py
+  tests/test_deltanet_kernel_dispatch.py
 )
 
 # name | root | interpreter | marker module | pytest targets
