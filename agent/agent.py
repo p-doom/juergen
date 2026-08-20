@@ -346,13 +346,11 @@ class Decision:
     `control` names a non-dispatching outcome, so `operations` can be empty without
     a parse error: `terminate` / `fail` come from the grammar-independent control
     channel (`grammars.split_control`), `no_op` is derived from an action that
-    compiled to nothing. `prose` is the reasoning that preceded the action line;
-    the Phase-B history policy needs it.
+    compiled to nothing.
     """
 
     step: int
     text: str
-    prose: str
     action: Any | None
     operations: tuple[Any, ...]
     control: str | None
@@ -375,7 +373,6 @@ class Decision:
         return {
             "step": self.step,
             "raw_model_output": self.text,
-            "prose": self.prose,
             "parsed_action": _action_record(self.action),
             "operations": [_operation_record(op) for op in self.operations],
             "control": self.control,
@@ -417,11 +414,6 @@ def _operation_record(operation: Any) -> Any:
 
         return asdict(operation)
     return repr(operation)
-
-
-def _first_prose(text: str) -> str:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return " ".join(lines[:-1]).strip() if len(lines) > 1 else ""
 
 
 @dataclass
@@ -513,7 +505,6 @@ class Agent:
             return Decision(
                 step=step,
                 text=text,
-                prose=_first_prose(text),
                 action=None,
                 operations=(),
                 control=None,
@@ -547,7 +538,6 @@ class Agent:
         """
         control = grammars.split_control(text)
         terminal = _TERMINAL[control.status] if control.status else None
-        prose = _first_prose(control.body)
         try:
             action = self.codec.parse(control.body)
         except (TypeError, ValueError) as exc:
@@ -564,7 +554,6 @@ class Agent:
                 return Decision(
                     step=step,
                     text=text,
-                    prose=prose,
                     action=self.codec.action_from_operations(
                         (), geometry=geometry, cursor=cursor, terminate=control.status
                     ),
@@ -577,7 +566,6 @@ class Agent:
             return Decision(
                 step=step,
                 text=text,
-                prose=prose,
                 action=None,
                 operations=(),
                 control=terminal,
@@ -591,7 +579,6 @@ class Agent:
             return Decision(
                 step=step,
                 text=text,
-                prose=prose,
                 action=action,
                 operations=(),
                 control=terminal,
@@ -604,7 +591,6 @@ class Agent:
         return Decision(
             step=step,
             text=text,
-            prose=prose,
             action=action,
             operations=operations,
             control=terminal,

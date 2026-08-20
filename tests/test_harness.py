@@ -334,7 +334,7 @@ def test_is_left_click_reads_the_compiled_operations_not_the_grammar(tmp_path) -
     sampling = EffectiveSampling("m", None, None, None, (), "harness_default", ())
 
     def decision(ops):
-        return Decision(1, "t", "", None, tuple(ops), None, None, sampling)
+        return Decision(1, "t", None, tuple(ops), None, None, sampling)
 
     assert _is_left_click(decision([{"kind": "mouse_down", "args": ("left",)}]))
     assert _is_left_click(decision([{"kind": "mouse_down", "args": (1,)}]))

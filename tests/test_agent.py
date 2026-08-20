@@ -31,7 +31,6 @@ from agent.agent import (
     EndpointTransport,
     ModelCallError,
     _action_record,
-    _first_prose,
     build_transport,
     dump_prompt,
     load_codec,
@@ -88,7 +87,7 @@ def _tool_call(arguments: dict) -> str:
 def test_terminated_is_true_for_both_terminate_and_fail(codec_name: str) -> None:
     sampling = EffectiveSampling("m", None, None, None, (), "harness_default", ())
     for control, terminated in (("terminate", True), ("fail", True), ("no_op", False), (None, False)):
-        decision = Decision(1, "t", "", None, (), control, None, sampling)
+        decision = Decision(1, "t", None, (), control, None, sampling)
         assert decision.terminated is terminated
 
 
@@ -354,12 +353,6 @@ def test_a_real_click_compiles_to_absolute_pixel_operations() -> None:
     assert moves and tuple(moves[0].args[:2]) == (110, 110), (
         "the codec resolves the relative delta; nothing downstream re-resolves it"
     )
-
-
-def test_prose_is_everything_before_the_final_line() -> None:
-    assert _first_prose("thinking here\nmore\n0 0 0 ;") == "thinking here more"
-    assert _first_prose("0 0 0 ;") == ""
-    assert _first_prose("") == ""
 
 
 def test_parsed_action_comes_from_the_grammars_own_to_dict() -> None:

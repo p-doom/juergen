@@ -437,7 +437,7 @@ def _write_gif(frames: list[bytes], path: Path) -> None:
 _TRAJECTORY = "trajectory.jsonl"
 _FRAME = "step_{index:03d}.png"
 _RESET = "<reset>"
-_PROMOTED_STEP_KEYS = frozenset({"step", "raw_model_output", "prose", "sampling"})
+_PROMOTED_STEP_KEYS = frozenset({"step", "raw_model_output", "sampling"})
 
 
 def _trajectory_rows(
