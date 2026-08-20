@@ -168,12 +168,26 @@ class ReachOracle:
         result = trace.info.get(RESULT_KEY)
         if not isinstance(result, dict):
             raise RuntimeError("grounding rollout published no result")
+        # Same rule as `OSWorldEvaluateOracle.task_success`: a booted-VM failure is
+        # not a grounding failure. Scoring 0.0 here trains one as the other, and a
+        # cursor that never got a chance to move is indistinguishable from a miss.
+        if result.get("validity") != "valid":
+            raise RuntimeError(
+                f"grounding rollout is infrastructure-invalid: {result.get('infra_error')}"
+            )
         if int(result.get("reach_frame", -1)) >= 0:
             return 1.0
+        bbox = task.bbox
+        if bbox is None:
+            raise RuntimeError("grounding task carries no bbox, so reach is undefined")
         probe, _ = probe_now(trace, task)
         cursor = tuple((probe or {}).get("cursor") or (-1, -1))
-        bbox = task.bbox
-        return 1.0 if (bbox and cursor != (-1, -1) and in_bbox(cursor, bbox)) else 0.0
+        if cursor == (-1, -1):
+            raise RuntimeError(
+                "grounding oracle has no cursor evidence (neither live nor recorded) — "
+                "infrastructure-invalid, not a miss"
+            )
+        return 1.0 if in_bbox(cursor, bbox) else 0.0
 
     @vf.reward
     async def shaped_progress(self, trace: vf.Trace) -> float:

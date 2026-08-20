@@ -247,7 +247,7 @@ class Reach(ReachOracle, DesktopTask):
 
 def _reach(**result):
     data = make_task_data(kind="grounding", bbox=(10, 10, 50, 50))
-    return data, make_trace(data, episode={"steps_detail": [], **result})
+    return data, make_trace(data, episode={"validity": "valid", "steps_detail": [], **result})
 
 
 def test_reach_is_reach_at_any_frame_not_final_frame_containment() -> None:
@@ -278,7 +278,8 @@ def test_the_shaped_term_is_zero_once_the_target_is_reached() -> None:
 
 
 def test_the_shaped_term_is_zero_when_distance_is_the_unset_sentinel() -> None:
-    data, trace = _reach(reach_frame=-1, best_distance=-1.0)
+    """A rollout that broke before its first bbox measurement still probed a cursor."""
+    data, trace = _reach(reach_frame=-1, best_distance=-1.0, final_probe={"cursor": [900, 900]})
     asyncio.run(Reach(data).score(trace, _Runtime()))
     assert trace.rewards["shaped_progress"] == 0.0, "-1.0 means undefined, not adjacent"
 
@@ -297,6 +298,44 @@ def test_a_missing_result_raises_rather_than_training_a_zero() -> None:
     data = make_task_data(kind="grounding", bbox=(10, 10, 50, 50))
     with pytest.raises(Exception, match="published no result"):
         asyncio.run(Reach(data).score(make_trace(data), _Runtime()))
+
+
+def test_an_infra_invalid_grounding_rollout_raises_instead_of_scoring_a_miss() -> None:
+    """The cursor here is a genuine miss, so without the guard this scores 0.0."""
+    data, trace = _reach(
+        validity="infra_invalid",
+        infra_error={"stage": "boot"},
+        reach_frame=-1,
+        best_distance=80.0,
+        final_probe={"cursor": [900, 900]},
+    )
+    with pytest.raises(Exception, match="infrastructure-invalid"):
+        asyncio.run(Reach(data).score(trace, _Runtime()))
+    assert "reach" not in trace.rewards, "a booted-VM failure is not a grounding failure"
+
+
+def test_a_grounding_task_with_no_bbox_raises_because_reach_is_undefined() -> None:
+    data = make_task_data(kind="grounding", bbox=None)
+    trace = make_trace(
+        data,
+        episode={
+            "validity": "valid",
+            "steps_detail": [],
+            "reach_frame": -1,
+            "final_probe": {"cursor": [20, 20]},
+        },
+    )
+    with pytest.raises(Exception, match="no bbox"):
+        asyncio.run(Reach(data).score(trace, _Runtime()))
+    assert "reach" not in trace.rewards
+
+
+@pytest.mark.parametrize("probe", [None, {}, {"cursor": [-1, -1]}])
+def test_no_cursor_evidence_raises_instead_of_scoring_a_miss(probe) -> None:
+    data, trace = _reach(reach_frame=-1, best_distance=80.0, final_probe=probe)
+    with pytest.raises(Exception, match="no cursor evidence"):
+        asyncio.run(Reach(data).score(trace, _Runtime()))
+    assert "reach" not in trace.rewards, "the sentinel is absent evidence, not a miss"
 
 
 class OSWorld(OSWorldEvaluateOracle, DesktopTask):
