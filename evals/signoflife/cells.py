@@ -77,6 +77,12 @@ ORDERED_CODEC = "ordered_events_v3"
 renderer — while a training job was already running on it, so every number it
 produced would have been uncalibrated."""
 
+ORDERED_SYSTEM_PROMPT_SHA256 = (
+    "13e761cbbc49bca83ea87befd0da7413bf66f4d5475d8c8eba93fb537e267c38"
+)
+"""`ordered_events_v3.describe()` — the prompt stage 04 writes into `chat.jsonl`,
+so a checkpoint trained under any other one is refused rather than scored."""
+
 PHASEB_SYSTEM_PROMPT_SHA256 = (
     "57f7d0b230974068618b48151b73215d5517d5445a99dbf5abdc05557e3482e6"
 )
@@ -244,6 +250,7 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
         codec=ORDERED_CODEC,
         history=HistoryConfig(name="interleaved_frames", n_history_frames=8),
         images=ImageBudgetConfig(max_images=8),
+        system_prompt_sha256=ORDERED_SYSTEM_PROMPT_SHA256,
         settle=_settle(),
         max_tokens=256,
         artifacts=ArtifactConfig(save_prompts=True, write_gif=True),
@@ -252,10 +259,8 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
 """The arms the controls calibrate. Reference readings: off-the-shelf Qwen3-VL-4B
 native = 4/4, Phase-B step-900 compact = 2/4.
 
-`ordered` has no reference reading and no `system_prompt_sha256`, because no
-checkpoint is pinned to it yet: whichever model the runner serves is scored under
-`ordered_events_v3.describe()`. Pin the digest when the first eov3 checkpoint is
-evaluated, or the arm will happily score a checkpoint trained on another prompt."""
+`ordered` has no reference reading yet, but its prompt digest is pinned: a
+checkpoint trained under any other prompt is refused instead of scored."""
 
 
 ARMS: dict[str, DesktopHarnessConfig] = {**CONTROL_ARMS, **MODEL_ARMS}
