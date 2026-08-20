@@ -364,6 +364,15 @@ class Decision:
     neither parsed nor dispatched. Only the vendor tool-call spelling can have any
     — the control line has to be last — so a non-zero value means an off-the-shelf
     model kept acting after declaring it was done."""
+    intended_cursor: Any = None
+    """Where the turn asked the cursor to go, before the display clamped it
+    (`grammars._support.IntendedCursor`), or None when it named no position.
+
+    Resolved from the same action, geometry and cursor as `operations`, and
+    published beside them because six of the seven grammars emit no move at all
+    when the resolved target equals the current position. At an edge that makes a
+    +5000 delta and a 0 delta the same empty stream and the same `no_op`: this is
+    the only field in which they differ."""
 
     @property
     def terminated(self) -> bool:
@@ -379,6 +388,9 @@ class Decision:
             "parse_error": self.parse_error,
             "truncated": self.truncated,
             "ignored_after_terminate": self.ignored_after_terminate,
+            "intended_cursor": (
+                None if self.intended_cursor is None else self.intended_cursor.to_dict()
+            ),
             "sampling": self.sampling.as_dict(),
         }
 
@@ -597,6 +609,11 @@ class Agent:
             parse_error=None,
             sampling=sampling,
             ignored_after_terminate=control.ignored,
+            # Resolved from the same three inputs as `operations`, and only here:
+            # a "cursor_before + parsed delta" reconstruction downstream is wrong
+            # by a grid step for `move_rel`, whose deltas are thousandths of an
+            # axis (~19 px per unit at 1920 wide), not pixels.
+            intended_cursor=self.codec.intended_cursor(action, geometry, cursor),
         )
 
     async def close(self) -> None:

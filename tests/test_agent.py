@@ -696,3 +696,50 @@ def test_every_grammar_satisfies_the_codec_protocol_slice_the_driver_uses() -> N
         for attribute in ("name", "stop_sequences", "parse", "format", "compile", "describe"):
             assert hasattr(codec, attribute), (name, attribute)
         assert isinstance(codec.describe(), str) and codec.describe()
+
+
+def test_a_clamped_move_is_distinguishable_from_no_move_at_all() -> None:
+    """The whole reason `intended_cursor` is published, in one comparison.
+
+    `deltatype_v2` emits no operation when the resolved target equals the current
+    position, so at the right edge a +5000 delta and a 0 delta compile to the same
+    empty stream and land as the same `no_op`. Every closed-loop "the policy never
+    moves the mouse" number is measured off that control, and until now nothing in
+    the record could say which of the two it was.
+    """
+    agent = _agent("deltatype_v2")
+    geometry = _geometry(1920, 1080)
+    at_the_edge = (1919, 540)
+
+    def decide(text: str):
+        return agent.decide(
+            text, step=1, geometry=geometry, cursor=at_the_edge, sampling=_sampling()
+        )
+
+    refused, idle = decide("5000 0 0"), decide("0 0 0")
+
+    # Indistinguishable everywhere the record used to look.
+    assert refused.operations == idle.operations == ()
+    assert refused.control == idle.control == "no_op"
+    assert refused.parse_error is None and idle.parse_error is None
+
+    # And distinguishable here, in the published record.
+    assert refused.intended_cursor.clamped is True
+    assert idle.intended_cursor.clamped is False
+    assert refused.intended_cursor.x == 1919 + 5000
+    assert idle.intended_cursor.x == 1919
+    assert refused.as_record()["intended_cursor"] == {
+        "x": 6919,
+        "y": 540,
+        "clamped": True,
+    }
+
+
+def test_the_idle_action_names_no_position() -> None:
+    """`NO_OP` asked for nothing, which is not the same as asking for where it is."""
+    decision = _agent("deltatype_v2").decide(
+        "NO_OP", step=1, geometry=_geometry(), cursor=(10, 10), sampling=_sampling()
+    )
+    assert decision.control == "no_op"
+    assert decision.intended_cursor is None
+    assert decision.as_record()["intended_cursor"] is None
