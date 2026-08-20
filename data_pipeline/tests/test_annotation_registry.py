@@ -23,7 +23,7 @@ from pipeline.annotation.methods.describe_extract.annotator import (
     snap_goal_starts,
 )
 from pipeline.annotation.methods.plans.annotator import goal_start_frame, plan_flags
-from pipeline.lib.action_format import WindowKeyboard, get_formatter
+from pipeline.lib.action_format import _US_PRINTABLE, WindowKeyboard, get_formatter
 from pipeline.lib.events import RawEvent, Window
 from pipeline.lib.goals import validate_goal_row, view_span_to_master
 from pipeline.lib.views import build_segment_view
@@ -161,6 +161,21 @@ def _one_key(action_format: str, name: str) -> tuple[str, WindowKeyboard]:
     return result.labels[0], result.keyboard[0]
 
 
+class PrintableNameTest(unittest.TestCase):
+    """``lib/action_format._US_PRINTABLE`` against the names keylogs really spell."""
+
+    def test_every_printable_name_is_one_the_keylogs_spell(self) -> None:
+        """A name that cannot occur folds nothing, so the map is silently short of
+        that character. ``BracketLeft``/``BracketRight`` were spelled backwards of
+        the keylogs' ``LeftBracket``/``RightBracket``, so ``[`` and ``]`` trained as
+        a key press where a printable character belongs."""
+        self.assertEqual(set(_US_PRINTABLE) - set(_OBSERVED_KEY_NAMES), set())
+
+    def test_the_bracket_keys_reach_a_typing_burst(self) -> None:
+        for name, char in (("LeftBracket", "["), ("RightBracket", "]")):
+            self.assertEqual(_one_key("ordered_events_v3", name)[0], f'type("{char}")')
+
+
 class WindowActivityTest(unittest.TestCase):
     """The planner's two predicates, now read off the formatter's structured
     keyboard projection rather than off a rendered label."""
@@ -190,7 +205,11 @@ class WindowActivityTest(unittest.TestCase):
         typing burst and the other a bare key. Reconciling them is the open
         decision (it moves ~2% of snapped goal starts, measured), and this
         assertion goes red the moment either set moves — including when the
-        reconciliation lands and this exception list should be deleted."""
+        reconciliation lands and this exception list should be deleted.
+
+        ``LeftBracket``/``RightBracket`` joined the list when ``_US_PRINTABLE``
+        stopped spelling them backwards: they now fold into ``type()`` while the
+        marker set still calls them bare keys."""
         diverging = set()
         for name in _OBSERVED_KEY_NAMES:
             _, deltatype = _one_key("canonical", name)
@@ -198,7 +217,11 @@ class WindowActivityTest(unittest.TestCase):
             if is_typing(deltatype) != is_typing(ordered):
                 diverging.add(name)
             self.assertEqual(_is_submission(deltatype), _is_submission(ordered), name)
-        self.assertEqual(diverging, {"BackQuote", "Dot", "Equal", "Quote", "SemiColon"})
+        self.assertEqual(
+            diverging,
+            {"BackQuote", "Dot", "Equal", "LeftBracket", "Quote", "RightBracket",
+             "SemiColon"},
+        )
 
 
 class ViewLocalConversionTest(unittest.TestCase):

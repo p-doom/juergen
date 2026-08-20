@@ -219,10 +219,13 @@ def _ordered_result(
 
 # US-layout printable map: key name -> (base char, shifted char). The names are
 # the rdev namespace ``common.resolve_key_name`` passes through from the keylog
-# (top-row digits are Num0..Num9); the char pairs mirror the viewer's keyToChar
-# map (tooling/visualize_frame_records.py), the project's existing convention.
-# Keypad digits, Return, Tab, Backspace, Escape, arrows, F-keys and modifiers are
-# deliberately absent: they render as down()/up() and break typing runs.
+# (top-row digits are Num0..Num9, and the brackets are Left/RightBracket, not
+# Bracket Left/Right — spelled the other way round this map never fired and
+# trained a key press where a character belongs); the char pairs mirror the
+# viewer's keyToChar map (tooling/visualize_frame_records.py), the project's
+# existing convention. Keypad digits, Return, Tab, Backspace, Escape, arrows,
+# F-keys and modifiers are deliberately absent: they render as down()/up() and
+# break typing runs.
 _US_PRINTABLE: dict[str, tuple[str, str]] = {
     "Space": (" ", " "),
     **{f"Key{c}": (c.lower(), c) for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"},
@@ -230,8 +233,8 @@ _US_PRINTABLE: dict[str, tuple[str, str]] = {
     "BackQuote": ("`", "~"),
     "Minus": ("-", "_"),
     "Equal": ("=", "+"),
-    "BracketLeft": ("[", "{"),
-    "BracketRight": ("]", "}"),
+    "LeftBracket": ("[", "{"),
+    "RightBracket": ("]", "}"),
     "BackSlash": ("\\", "|"),
     "SemiColon": (";", ":"),
     "Quote": ("'", '"'),
