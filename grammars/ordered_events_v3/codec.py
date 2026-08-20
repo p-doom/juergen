@@ -237,7 +237,8 @@ class OrderedEventsV3Codec:
           type "Hi":           type("Hi")
           press Return:        down(Return); up(Return)
 
-        Emit only the action line — no JSON, no tool calls, no other commentary.
+        Emit one action line per turn, and nothing else except the control line
+        below — no JSON, no tool calls, no other commentary.
         """
 
     def describe(self) -> str:
