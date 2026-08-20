@@ -45,7 +45,7 @@
 # `--only <name>` runs one suite (juergen | data_pipeline | desktop |
 # desktop_fleet | omegalax_rearch).
 #
-# omegalax-rearch: only the test files the rearchitecture touches are run (38
+# omegalax-rearch: only the test files the rearchitecture touches are run (44
 # tests). The rest of that repo's tests want real GPUs and real checkpoints and
 # would fail on a CPU node.
 
@@ -72,6 +72,7 @@ OMEGALAX_TESTS=(
   tests/test_renderers_loss_mask_gate.py
   tests/test_chatml_loss_mask_leakage.py
   tests/test_grain_pipeline.py
+  tests/test_export_roundtrip_smoke.py
 )
 
 # name | root | interpreter | marker module | pytest targets
