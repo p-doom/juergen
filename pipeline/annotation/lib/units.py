@@ -90,7 +90,7 @@ def est_frame_tokens(ref: str) -> int:
 #: label emitter cannot disagree about a key: the substring marker list this
 #: replaces called ``.``/``;``/``'``/``=``/``[``/``]`` non-typing while the grammar
 #: folded them into a burst. Exact names now, because three of those markers
-#: (``Digit``, ``Period``, ``Enter``) matched none of the 86 names real keylogs
+#: (``Digit``, ``Period``, ``Enter``) matched none of the names real keylogs
 #: spell. Both directions of delete are in: with ``Backspace`` alone, the same
 #: correction read as typing or not by which way the demonstrator deleted, so a
 #: window could be cut through a run of forward-deletes retracting the text of the

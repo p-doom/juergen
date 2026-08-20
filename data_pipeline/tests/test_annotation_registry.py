@@ -117,21 +117,29 @@ class UnitTest(unittest.TestCase):
         self.assertEqual(wins, [(0, 9), (9, 20)])
 
 
-#: Every key/button name the crowd-cast keylogs actually spell, from 400 real
-#: keylogs (328 segments, 58,829 windows) of crowd-cast-2026-07-27. Includes the
-#: awkward ones on purpose: unmapped macOS keycodes (``KC_*``), ``ISO_Section``,
-#: and the media keys.
+#: Every key/button name the crowd-cast keylogs spell. Measured 2026-08-20 over
+#: the first 3,000 keylogs by segment id of ccast0618d_dataset_full_v3 stage
+#: 01+02 -- 2,436 segments with events, 388,113 windows, at the planner's 0.5 fps
+#: geometry. Re-measure there; do not extend this by hand. A name that slice does
+#: not spell stays pinned: ``common.resolve_key_name`` synthesises ``KC_<code>``
+#: for macOS codes it does not map, and widening from 346 segments to 2,436 is
+#: what turned up ``Delete`` and ``MMB``. So the awkward ones are here on
+#: purpose: ``KC_*``, ``ISO_Section``, the media keys.
 _OBSERVED_KEY_NAMES = (
     "Alt", "AltGr", "BackQuote", "BackSlash", "Backspace", "BrightnessDown",
-    "CapsLock", "Comma", "ControlLeft", "ControlRight", "Delete", "Dot",
-    "DownArrow", "End", "Equal", "Escape", "ForwardDelete", "ISO_Section",
-    "KC_160", "KC_325", "KC_330", "KC_333", "KC_334",
+    "BrightnessUp", "CapsLock", "Comma", "ControlLeft", "ControlRight",
+    "Delete", "Dot", "DownArrow", "End", "Equal", "Escape", "F12", "F2", "F3",
+    "ForwardDelete", "Home", "ISO_Section", "IntlBackslash",
+    "KC_143", "KC_160", "KC_176", "KC_179", "KC_325", "KC_330", "KC_333",
+    "KC_334", "KC_76",
     *(f"Key{c}" for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
-    "LMB", "LeftArrow", "LeftBracket", "MMB", "MetaLeft", "MetaRight", "Minus",
-    "NextTrack", *(f"Num{d}" for d in "0123456789"),
-    "PageDown", "PageUp", "PlayCd", "PlayPause", "Quote", "RMB", "Return",
-    "RightArrow", "RightBracket", "SemiColon", "ShiftLeft", "ShiftRight",
-    "Slash", "Space", "Tab", "UpArrow", "VolumeDown", "VolumeMute", "VolumeUp",
+    "LMB", "LeftArrow", "LeftBracket", "MMB", "M_Other_3", "M_Other_4",
+    "MetaLeft", "MetaRight", "Minus", "NextTrack",
+    *(f"Num{d}" for d in "0123456789"),
+    "PageDown", "PageUp", "PlayCd", "PlayPause", "PreviousTrack",
+    "PrintScreen", "Quote", "RMB", "Return", "RightArrow", "RightBracket",
+    "SemiColon", "ShiftLeft", "ShiftRight", "Slash", "Space", "Tab",
+    "UpArrow", "VolumeDown", "VolumeMute", "VolumeUp",
 )
 
 
