@@ -12,6 +12,13 @@ else: the label text itself is rendered by the codec of the grammar named in its
 system prompt. So the emitter cannot write a line the eval parser calls
 malformed, and cannot be trained under a prompt describing another syntax.
 
+Beside the labels every formatter publishes each window's ``WindowKeyboard``,
+the grammar action projected to what the demonstrator typed. A consumer that
+needs the activity rather than the text reads that instead of parsing a label
+back — the annotation window planner did parse them back, and its typing-burst
+invariant went silently inoperative the moment a grammar spelled typing
+differently.
+
 ``CanonicalFormatter`` reproduces the historical format byte-for-byte on
 dead-zone-free stretches (``common.format_action`` over per-window bins with
 segment-global held-set dedup) — that identity is the regression gate
@@ -60,9 +67,27 @@ from pipeline.lib.events import (
 DEFAULT_CONTINUOUS_ACTION_HZ = 10.0
 
 
+@dataclass(frozen=True)
+class WindowKeyboard:
+    """One window's keyboard content, as the grammar action spells it.
+
+    The projection of an action every consumer that asks *what the demonstrator
+    typed* needs, and the only one that survives a change of grammar: names are
+    the key/button transitions (press and release alike, unordered as far as any
+    consumer cares), texts the coalesced typing bursts. A consumer reading this
+    instead of the rendered label cannot be broken by a grammar that spells the
+    same activity differently — ``ordered_events_v3`` collapses a typing run into
+    ``type("...")``, where ``deltatype_v2`` spells every keystroke.
+    """
+
+    names: tuple[str, ...]
+    texts: tuple[str, ...]
+
+
 @dataclass
 class FormatResult:
     labels: list[str]  # one per window, same order
+    keyboard: list[WindowKeyboard]  # one per window, same order
     counters: PolicyCounters
     # Provenance for primitive-based formats (None for the aggregate format).
     primitive_counts: dict[str, int] | None = None
@@ -94,8 +119,8 @@ def _ordered_owned(labeled: Sequence[LabeledEvent]) -> list[LabeledEvent]:
     )
 
 
-def _render_bin(action_bin: ActionBin) -> str:
-    """One aggregate bin -> its ``deltatype_v2`` label.
+def _bin_action(action_bin: ActionBin) -> DeltatypeV2Action:
+    """One aggregate bin -> its ``deltatype_v2`` action.
 
     The subset of that grammar this formatter can reach: no ``type()``, no
     ``MOVE()`` drag, and NO_OP as the only control token — a keylog records no
@@ -105,17 +130,29 @@ def _render_bin(action_bin: ActionBin) -> str:
     dy = round(action_bin.move_dy)
     scroll = round(action_bin.scroll)
     if dx == 0 and dy == 0 and scroll == 0 and not action_bin.events:
-        return DELTATYPE_V2.format(DeltatypeV2Action(no_op=True))
-    return DELTATYPE_V2.format(
-        DeltatypeV2Action(
-            dx,
-            dy,
-            scroll,
-            elements=tuple(
-                Element("event", name=name, pressed=sign == "+")
-                for sign, name in action_bin.events
-            ),
-        )
+        return DeltatypeV2Action(no_op=True)
+    return DeltatypeV2Action(
+        dx,
+        dy,
+        scroll,
+        elements=tuple(
+            Element("event", name=name, pressed=sign == "+")
+            for sign, name in action_bin.events
+        ),
+    )
+
+
+def _element_keyboard(action: DeltatypeV2Action) -> WindowKeyboard:
+    return WindowKeyboard(
+        names=tuple(e.name for e in action.elements if e.kind == "event"),
+        texts=tuple(e.text for e in action.elements if e.kind == "type"),
+    )
+
+
+def _primitive_keyboard(action: OrderedEventsV3Action) -> WindowKeyboard:
+    return WindowKeyboard(
+        names=tuple(p.name for p in action.primitives if p.kind in ("down", "up")),
+        texts=tuple(p.text for p in action.primitives if p.kind == "type"),
     )
 
 
@@ -149,8 +186,10 @@ class CanonicalFormatter:
                 b.events.append(("+", e.name))
             else:
                 b.events.append(("-", e.name))
+        actions = [_bin_action(b) for b in bins]
         return FormatResult(
-            labels=[_render_bin(b) for b in bins],
+            labels=[DELTATYPE_V2.format(a) for a in actions],
+            keyboard=[_element_keyboard(a) for a in actions],
             counters=counters,
         )
 
@@ -166,15 +205,13 @@ def _ordered_result(
     keylog, which records no intent to terminate.
     """
     counts = Counter(p.kind for window in primitives for p in window)
+    actions = [
+        OrderedEventsV3Action(primitives=tuple(window), no_op=not window)
+        for window in primitives
+    ]
     return FormatResult(
-        labels=[
-            ORDERED_EVENTS_V3.format(
-                OrderedEventsV3Action(
-                    primitives=tuple(window), no_op=not window
-                )
-            )
-            for window in primitives
-        ],
+        labels=[ORDERED_EVENTS_V3.format(a) for a in actions],
+        keyboard=[_primitive_keyboard(a) for a in actions],
         counters=counters,
         primitive_counts={k: counts.get(k, 0) for k in kinds},
     )
