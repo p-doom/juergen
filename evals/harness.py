@@ -1088,7 +1088,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
 
         Not rendered up front. `compact_raw.from_target` (and the relative renderers
         generally) need one fresh cursor read and are wrong if that read is stale,
-        while `native_absolute_control.from_target` needs only element geometry.
+        while `compact_absolute.from_target` needs only element geometry.
         Rendering the whole script before the first action would make every click
         after the first resolve against a stale cursor.
         """
@@ -1147,7 +1147,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         Baseline warning, recorded on every run: the off-the-shelf Qwen3-VL-8B =
         33.9% OSWorld-Verified figure is our only calibrated reference and was
         measured through the old sealed prompts. `native_absolute`, `move_rel` and
-        `native_absolute_control` now describe themselves from docstrings and are
+        `compact_absolute` now describe themselves from docstrings and are
         not byte-identical to those prompts, so numbers must not be compared across
         that boundary and the baseline needs re-measuring through the new prompt.
         """
