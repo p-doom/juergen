@@ -105,9 +105,8 @@ def _harness_rollout(root: Path, slug: str, n_steps: int = 4, **result_extra) ->
                 "action": f"<think>step {step}</think>\n0 0 0 ;",
                 "info": {
                     "operations": [{"kind": "move_to", "args": [100 + step, 200]}],
-                    # `rollout_step` reads `operations`, but the loop still requires
-                    # a truthy `parsed` before it gets there, so a real rollout's
-                    # source-grammar `to_dict()` has to be here too.
+                    # Present because the harness always writes it, and read by
+                    # nothing on this path: `rollout_step` reads `operations`.
                     "parsed": {
                         "dx": 90 + step,
                         "dy": 190,
@@ -267,3 +266,48 @@ def test_the_stop_reason_is_read_in_the_producers_own_spelling(tmp_path):
     out_theirs = tmp_path / "out_theirs"
     assert _convert(theirs, out_theirs) == 0
     assert [r["source_stop_reason"] for r in _records(out_theirs)] == ["terminate"]
+
+
+def _drop_parsed(run: Path, step_num: int | None = None) -> None:
+    """Remove ``info["parsed"]`` from one row, or from every row.
+
+    It is the teacher payload. Our own rollouts carry it and this path never reads
+    it; a teacher row without it has nothing to read at all.
+    """
+    path = run / "trajectory.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    for row in rows:
+        if step_num in (None, row["step_num"]):
+            row["info"].pop("parsed", None)
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+
+def test_our_own_rollout_is_read_from_its_operations_not_its_parsed_action(tmp_path):
+    """`rollout_step` reads `operations`, so nothing above it may gate on `parsed`.
+
+    `parsed` is the SOURCE grammar's own action dict — seven vocabularies, none of
+    them this seam. Requiring it discarded one of our own rollout turns as a parse
+    error with the dispatched Operation stream sitting in the same row.
+    """
+    rollouts = tmp_path / "rollouts"
+    rollouts.mkdir(parents=True)
+    _harness_rollout(rollouts, "mine")
+    _drop_parsed(rollouts / "mine")
+    out = tmp_path / "out"
+    assert _convert(rollouts, out) == 0
+    manifest = json.loads((out / "convert_manifest.json").read_text())
+    assert manifest["n_turns"] == 4
+    assert manifest["n_turns_teacher_parse_error"] == 0
+
+
+def test_a_teacher_row_with_no_payload_is_a_counted_parse_error_not_a_crash(tmp_path):
+    """`teacher_step` reads the payload, so it is the one that requires it."""
+    rollouts = tmp_path / "rollouts"
+    rollouts.mkdir(parents=True)
+    _rollout(rollouts, "theirs")
+    _drop_parsed(rollouts / "theirs", 1)
+    out = tmp_path / "out"
+    assert _convert(rollouts, out) == 0
+    manifest = json.loads((out / "convert_manifest.json").read_text())
+    assert manifest["n_turns"] == 3
+    assert manifest["n_turns_teacher_parse_error"] == 1

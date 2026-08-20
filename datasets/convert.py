@@ -346,9 +346,12 @@ def teacher_step(info: dict[str, Any], screen: tuple[int, int]) -> Step | None:
     ``info["parsed"]`` is the teacher's own payload: the absolute ``computer_use``
     arguments (private ``_``-prefixed keys stripped), or a ``terminate`` flag with
     ``computer_use_status`` beside it. ``None`` when the row does not speak that
-    vocabulary at all, which is a source parse error, not a codec drop.
+    vocabulary at all, which is a source parse error, not a codec drop — including
+    when there is no payload, which is why the caller need not pre-check one.
     """
-    parsed = info["parsed"]
+    parsed = info.get("parsed")
+    if not parsed:
+        return None
     if parsed.get("terminate"):
         status = str(parsed.get("computer_use_status") or "success").strip().lower()
         return Step(screen=screen, terminate=status)
@@ -563,8 +566,11 @@ def convert_rollout(
             continue
 
         prose = extract_prose(entry.get("action") or entry.get("response") or "")
-        parsed = info.get("parsed")
-        if info.get("parse_error") or not parsed:
+        # `parsed` is NOT read here. It is the source grammar's own action dict,
+        # which only `teacher_step` speaks; `rollout_step` reads `operations`, so
+        # requiring a truthy `parsed` discarded one of our own rollouts as a parse
+        # error while its dispatched Operation stream sat right there.
+        if info.get("parse_error"):
             n_parse_err += 1
             continue
 
@@ -697,8 +703,9 @@ def _assert_prose_coverage(stats: ConvertStats, keep_prose: bool) -> None:
             "--rollouts_dir points at dirs holding `result.json` + "
             "`trajectory.jsonl` (add --recursive for nested layouts), and that "
             "result.json carries the fields this converter reads "
-            "(`instruction`, `screen_size`) and each trajectory "
-            "entry an `info.parsed` payload."
+            "(`instruction`, `screen_size`) and each trajectory entry the payload "
+            "its producer's reader wants (`info.operations` for one of ours, "
+            "`info.parsed` for a teacher collection)."
         )
     if not keep_prose:
         return
