@@ -11,14 +11,27 @@ from pathlib import Path
 
 from pipeline.annotation.lib.prompts import PromptPack
 from pipeline.annotation.lib.registry import discover_methods, load_method
-from pipeline.annotation.lib.units import AnnotationUnit, build_units, plan_windows
+from pipeline.annotation.lib.units import (
+    AnnotationUnit,
+    _is_submission,
+    build_units,
+    is_typing,
+    plan_windows,
+)
 from pipeline.annotation.methods.describe_extract.annotator import (
     clean_goals,
     snap_goal_starts,
 )
 from pipeline.annotation.methods.plans.annotator import goal_start_frame, plan_flags
+from pipeline.lib.action_format import WindowKeyboard, get_formatter
+from pipeline.lib.events import RawEvent, Window
 from pipeline.lib.goals import validate_goal_row, view_span_to_master
 from pipeline.lib.views import build_segment_view
+
+
+def _kb(*names: str) -> WindowKeyboard:
+    """One frame's keyboard content. No arguments == nothing typed."""
+    return WindowKeyboard(names=names, texts=())
 
 
 def _view(n_records: int = 150, fps: float = 1.0):
@@ -69,7 +82,7 @@ class UnitTest(unittest.TestCase):
     def test_single_window_keeps_segment_id(self) -> None:
         view = _view()
         # max_frames_per_window set explicitly: no image decode needed.
-        units = build_units(view, ["NO_OP"] * len(view.frames),
+        units = build_units(view, [_kb()] * len(view.frames),
                             context_limit=10_000_000, completion_reserve=32000,
                             safety_margin=28000, max_frames_per_window=1000)
         self.assertEqual(len(units), 1)
@@ -79,9 +92,9 @@ class UnitTest(unittest.TestCase):
     def test_split_units_snap_to_submission_and_get_tail_buffer(self) -> None:
         view = _view()
         n = len(view.frames)  # 10 frames
-        actions = ["1 0 0 ; +KeyA -KeyA"] * n
-        actions[6] = "0 0 0 ; +Return -Return"  # submission: ideal cut after it
-        units = build_units(view, actions,
+        keyboard = [_kb("KeyA", "KeyA")] * n
+        keyboard[6] = _kb("Return", "Return")  # submission: ideal cut after it
+        units = build_units(view, keyboard,
                             context_limit=10_000_000, completion_reserve=32000,
                             safety_margin=28000, max_frames_per_window=8,
                             snap_slack=3, tail_buffer=2)
@@ -97,11 +110,95 @@ class UnitTest(unittest.TestCase):
         # All frames mid typing-burst except an idle pair at 8/9: the cut moves
         # off the ideal boundary (10, cost 3: both sides typing) to 9 (cost 1:
         # neither side typing), within the ±3 slack.
-        actions = ["0 0 0 ; +KeyA"] * 20
-        actions[8] = actions[9] = "NO_OP"
-        wins = plan_windows(20, 12, actions=actions, times=[float(i) for i in range(20)],
-                            slack=3)
+        keyboard = [_kb("KeyA")] * 20
+        keyboard[8] = keyboard[9] = _kb()
+        wins = plan_windows(20, 12, keyboard=keyboard,
+                            times=[float(i) for i in range(20)], slack=3)
         self.assertEqual(wins, [(0, 9), (9, 20)])
+
+
+#: Every key/button name the crowd-cast keylogs actually spell, from 400 real
+#: keylogs (328 segments, 58,829 windows) of crowd-cast-2026-07-27. Includes the
+#: awkward ones on purpose: unmapped macOS keycodes (``KC_*``), ``ISO_Section``,
+#: and the media keys.
+_OBSERVED_KEY_NAMES = (
+    "Alt", "AltGr", "BackQuote", "BackSlash", "Backspace", "BrightnessDown",
+    "CapsLock", "Comma", "ControlLeft", "ControlRight", "Delete", "Dot",
+    "DownArrow", "End", "Equal", "Escape", "ForwardDelete", "ISO_Section",
+    "KC_160", "KC_325", "KC_330", "KC_333", "KC_334",
+    *(f"Key{c}" for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+    "LMB", "LeftArrow", "LeftBracket", "MMB", "MetaLeft", "MetaRight", "Minus",
+    "NextTrack", *(f"Num{d}" for d in "0123456789"),
+    "PageDown", "PageUp", "PlayCd", "PlayPause", "Quote", "RMB", "Return",
+    "RightArrow", "RightBracket", "SemiColon", "ShiftLeft", "ShiftRight",
+    "Slash", "Space", "Tab", "UpArrow", "VolumeDown", "VolumeMute", "VolumeUp",
+)
+
+
+def _surface_is_typing(label: str) -> bool:
+    """The classifier this file's subject replaced: substring-match the rendered
+    ``deltatype_v2`` label. Kept as the regression reference — every goal
+    boundary in every dataset built so far was cut by exactly this."""
+    if not label or label == "NO_OP":
+        return False
+    tail = label.split(";", 1)[1] if ";" in label else label
+    return any(tok in tail for tok in ("Key", "Return", "Backspace", "Space", "Enter",
+                                       "Digit", "Num", "Minus", "Slash", "Period",
+                                       "Comma"))
+
+
+def _surface_is_submission(label: str) -> bool:
+    return bool(label) and ("Return" in label or "Enter" in label)
+
+
+def _one_key(action_format: str, name: str) -> tuple[str, WindowKeyboard]:
+    """One window holding a single balanced press/release of ``name``."""
+    events = [RawEvent(0, 0.01, "press", name=name),
+              RawEvent(1, 0.02, "release", name=name)]
+    result = get_formatter(action_format).format_segment(
+        events, [Window(master_idx=0, start=0, end=30)], [], master_fps=15.0
+    )
+    return result.labels[0], result.keyboard[0]
+
+
+class WindowActivityTest(unittest.TestCase):
+    """The planner's two predicates, now read off the formatter's structured
+    keyboard projection rather than off a rendered label."""
+
+    def test_deltatype_v2_verdicts_match_the_surface_parse_they_replace(self) -> None:
+        """The licence to land: annotation hardcodes the ``canonical`` formatter,
+        so ``deltatype_v2`` is the only format that has ever reached this
+        planner. Every verdict on it must be what it was, or a live dataset's
+        goal boundaries move."""
+        for name in _OBSERVED_KEY_NAMES:
+            label, keyboard = _one_key("canonical", name)
+            self.assertEqual(is_typing(keyboard), _surface_is_typing(label), name)
+            self.assertEqual(_is_submission(keyboard), _surface_is_submission(label), name)
+
+    def test_the_two_grammars_render_the_same_activity_differently(self) -> None:
+        """Guards the test below from passing because both formatters happened to
+        emit the same text."""
+        self.assertEqual(_one_key("canonical", "KeyH")[0], "0 0 0 ; +KeyH -KeyH")
+        self.assertEqual(_one_key("ordered_events_v3", "KeyH")[0], 'type("h")')
+
+    def test_the_two_grammars_agree_except_where_typing_has_two_definitions(self) -> None:
+        """NOT a parity guarantee — a pinned inventory of the gap.
+
+        ``lib/action_format._US_PRINTABLE`` decides what ``ordered_events_v3``
+        folds into ``type()``; ``units._TYPING_KEY_MARKERS`` decides what the
+        planner calls typing. Where the two sets disagree, one grammar reports a
+        typing burst and the other a bare key. Reconciling them is the open
+        decision (it moves ~2% of snapped goal starts, measured), and this
+        assertion goes red the moment either set moves — including when the
+        reconciliation lands and this exception list should be deleted."""
+        diverging = set()
+        for name in _OBSERVED_KEY_NAMES:
+            _, deltatype = _one_key("canonical", name)
+            _, ordered = _one_key("ordered_events_v3", name)
+            if is_typing(deltatype) != is_typing(ordered):
+                diverging.add(name)
+            self.assertEqual(_is_submission(deltatype), _is_submission(ordered), name)
+        self.assertEqual(diverging, {"BackQuote", "Dot", "Equal", "Quote", "SemiColon"})
 
 
 class ViewLocalConversionTest(unittest.TestCase):
@@ -120,12 +217,12 @@ class ViewLocalConversionTest(unittest.TestCase):
 
     def test_snap_goal_starts_walks_back_typing_burst(self) -> None:
         view = _view()
-        actions = ["NO_OP"] * len(view.frames)
-        actions[3] = "0 0 0 ; +KeyH -KeyH"
-        actions[4] = "0 0 0 ; +KeyI -KeyI"
-        actions[5] = "0 0 0 ; +Return -Return"
+        keyboard = [_kb()] * len(view.frames)
+        keyboard[3] = _kb("KeyH", "KeyH")
+        keyboard[4] = _kb("KeyI", "KeyI")
+        keyboard[5] = _kb("Return", "Return")
         unit = AnnotationUnit(unit_id="s0", view=view, window_index=0, n_windows=1,
-                              lo=0, hi=len(view.frames), tail_buffer=0, actions=actions)
+                              lo=0, hi=len(view.frames), tail_buffer=0, keyboard=keyboard)
         goals = [{"instruction": "x", "start_frame": 4, "end_frame": 6}]
         snap_goal_starts(goals, unit)
         self.assertEqual(goals[0]["start_frame"], 3)  # pulled to burst start

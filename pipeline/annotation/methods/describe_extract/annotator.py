@@ -24,8 +24,8 @@ from pipeline.annotation.lib.registry import MethodContext
 from pipeline.annotation.lib.units import (
     AnnotationUnit,
     _is_submission,
-    frame_activity,
     frames_to_data_urls,
+    is_typing,
 )
 
 INPUT_KIND = "frames"
@@ -75,11 +75,11 @@ def clean_goals(parsed: dict[str, Any], frame_lo: int, frame_hi: int,
 
 def snap_goal_starts(goals: list[dict[str, Any]], unit: AnnotationUnit) -> list[dict[str, Any]]:
     """Pull each typed goal's start back to the first keystroke of its input
-    burst, using the derived per-frame action labels. Walk back over the
+    burst, using what the keylog says was typed per frame. Walk back over the
     contiguous typing run, stopping at a submission (Return/Enter — that ended
     the PREVIOUS action) or any non-typing frame. Mouse/scroll-initiated goals
     are untouched. Finally re-enforce non-overlap."""
-    acts = unit.actions
+    kb = unit.keyboard
     sent = set(unit.sent_view_indices)
     first_vi = unit.sent_view_indices[0] if unit.sent_view_indices else 0
     for g in goals:
@@ -87,11 +87,9 @@ def snap_goal_starts(goals: list[dict[str, Any]], unit: AnnotationUnit) -> list[
         if sf is None or sf not in sent:
             continue
         p = sf
-        if frame_activity(acts[p]) != "type" and not (
-            p > first_vi and frame_activity(acts[p - 1]) == "type"
-        ):
+        if not is_typing(kb[p]) and not (p > first_vi and is_typing(kb[p - 1])):
             continue
-        while p > first_vi and frame_activity(acts[p - 1]) == "type" and not _is_submission(acts[p - 1]):
+        while p > first_vi and is_typing(kb[p - 1]) and not _is_submission(kb[p - 1]):
             p -= 1
         g["start_frame"] = p
         if g.get("end_frame") is not None and g["end_frame"] < p:

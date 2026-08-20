@@ -24,6 +24,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from pipeline.lib.action_format import WindowKeyboard
 from pipeline.lib.image_store import read_jpeg_bytes
 from pipeline.lib.views import SegmentView, ViewFrame
 
@@ -83,43 +84,47 @@ def est_frame_tokens(ref: str) -> int:
     return math.ceil(h / 28) * math.ceil(w / 28)
 
 
-def frame_activity(action: str | None) -> str:
-    """Classify a frame by its derived action label: "idle" (NO_OP), "type"
-    (mid keyboard-burst), or "other". A lone idle frame is not a reliable
-    boundary — people pause a beat mid-typing — so cutting keys on submissions
-    and real time-gaps, using this only to avoid cutting between two "type"
-    frames."""
-    if not action or action == "NO_OP":
-        return "idle"
-    tail = action.split(";", 1)[1] if ";" in action else action
-    if any(tok in tail for tok in ("Key", "Return", "Backspace", "Space", "Enter",
-                                   "Digit", "Num", "Minus", "Slash", "Period", "Comma")):
-        return "type"
-    return "other"
+#: Substrings of a key name that mark a text-producing key. Frozen deliberately:
+#: every goal boundary in every dataset built so far was cut by exactly this set,
+#: and it is coarser than the ``type()`` collapse in lib/action_format, so
+#: ``.``/``;``/``'``/``=`` read as non-typing here while that grammar folds them
+#: into a typing burst. Widening it to agree moves ~2% of snapped goal starts.
+_TYPING_KEY_MARKERS = ("Key", "Return", "Backspace", "Space", "Enter",
+                       "Digit", "Num", "Minus", "Slash", "Period", "Comma")
 
 
-def _is_submission(action: str | None) -> bool:
-    """A Return/Enter keypress commits a typed command / prompt / message —
-    the real boundary between activities in continuous work."""
-    return bool(action) and ("Return" in action or "Enter" in action)
+def is_typing(keyboard: WindowKeyboard) -> bool:
+    """Whether a frame's window is mid keyboard-burst.
+
+    A lone idle frame is not a reliable boundary — people pause a beat
+    mid-typing — so cutting keys on submissions and real time-gaps, and this
+    only keeps a cut from landing between two typing frames."""
+    return bool(keyboard.texts) or any(
+        marker in name
+        for name in keyboard.names
+        for marker in _TYPING_KEY_MARKERS
+    )
 
 
-def _best_cut(lo: int, hi: int, ideal: int, actions: list[str | None],
+def _is_submission(keyboard: WindowKeyboard) -> bool:
+    """A Return/Enter transition commits a typed command / prompt / message —
+    the real boundary between activities in continuous work. Press and release
+    alike: either half of the pair marks the same commit."""
+    return any("Return" in name or "Enter" in name for name in keyboard.names)
+
+
+def _best_cut(lo: int, hi: int, ideal: int, keyboard: list[WindowKeyboard],
               times: list[float] | None, big_gap_s: float) -> int:
     """Cut index in [lo, hi] (window splits BEFORE this frame) least likely to
     slice an in-progress action, nearest ``ideal`` among equals."""
     best, best_key = ideal, None
     for i in range(lo, hi + 1):
-        a_prev, a_cur = frame_activity(actions[i - 1]), frame_activity(actions[i])
         gap = (times[i] - times[i - 1]) if times else 0.0
-        if _is_submission(actions[i - 1]) or gap >= big_gap_s:
+        if _is_submission(keyboard[i - 1]) or gap >= big_gap_s:
             cost = 0                              # just submitted, or a real pause
-        elif a_prev != "type" and a_cur != "type":
-            cost = 1
-        elif a_prev != "type" or a_cur != "type":
-            cost = 2
         else:
-            cost = 3                              # both sides typing — mid-burst
+            # 1 neither side typing, 2 one side, 3 both — mid-burst.
+            cost = 1 + int(is_typing(keyboard[i - 1])) + int(is_typing(keyboard[i]))
         key = (cost, abs(i - ideal))
         if best_key is None or key < best_key:
             best_key, best = key, i
@@ -127,18 +132,18 @@ def _best_cut(lo: int, hi: int, ideal: int, actions: list[str | None],
 
 
 def plan_windows(n: int, max_frames: int, overlap: int = 0, *,
-                 actions: list[str | None] | None = None,
+                 keyboard: list[WindowKeyboard],
                  times: list[float] | None = None,
                  slack: int = 0, big_gap_s: float = 6.0) -> list[tuple[int, int]]:
     """Partition [0, n) into (lo, hi) half-open windows, each <= max_frames.
     A split happens only when needed (n > max_frames); otherwise one window.
-    With ``actions`` + ``slack``, each interior boundary snaps within ±slack to
-    a submission or genuine time-gap, never inside an unsubmitted typing burst."""
+    With ``slack`` > 0, each interior boundary snaps within ±slack to a
+    submission or genuine time-gap, never inside an unsubmitted typing burst."""
     if n <= 0:
         return []
     if n <= max_frames:
         return [(0, n)]
-    snap = bool(actions) and slack > 0
+    snap = slack > 0
     n_win = math.ceil(n / max_frames)             # fewest windows that fit budget
     boundaries: list[int] = []
     prev = 0
@@ -153,7 +158,7 @@ def plan_windows(n: int, max_frames: int, overlap: int = 0, *,
             if lo > hi:                            # snap range infeasible — forced cut
                 p = min(max(ideal, prev + 1), prev + max_frames, n - 1)
             else:
-                p = _best_cut(lo, hi, min(max(ideal, lo), hi), actions, times, big_gap_s)
+                p = _best_cut(lo, hi, min(max(ideal, lo), hi), keyboard, times, big_gap_s)
         else:
             p = min(max(ideal, prev + 1), prev + max_frames, n - 1)
         boundaries.append(p)
@@ -173,8 +178,8 @@ def plan_windows(n: int, max_frames: int, overlap: int = 0, *,
 @dataclass
 class AnnotationUnit:
     """One labeler work quantum: an owned span [lo, hi) of a segment view's
-    frames plus ``tail_buffer`` trailing context frames. ``actions`` are the
-    derived canonical labels for all of the segment's view frames (used for
+    frames plus ``tail_buffer`` trailing context frames. ``keyboard`` is what
+    the demonstrator typed in every one of the segment's view frames (used for
     keystroke-burst snapping and window planning; method-internal only)."""
 
     unit_id: str
@@ -184,7 +189,7 @@ class AnnotationUnit:
     lo: int  # owned view-index range [lo, hi)
     hi: int
     tail_buffer: int  # context frames past hi actually sent
-    actions: list[str]
+    keyboard: list[WindowKeyboard]
 
     @property
     def segment_id(self) -> str:
@@ -204,16 +209,13 @@ class AnnotationUnit:
         window's)."""
         return self.hi - 1
 
-    def sent_actions(self) -> list[str]:
-        return [self.actions[f.view_idx] for f in self.sent_frames]
-
     def image_refs(self) -> list[str]:
         return [str(f.image) for f in self.sent_frames]
 
 
 def build_units(
     view: SegmentView,
-    actions: list[str],
+    keyboard: list[WindowKeyboard],
     *,
     context_limit: int,
     completion_reserve: int,
@@ -235,7 +237,7 @@ def build_units(
         budget = max(1, context_limit - completion_reserve - safety_margin)
         max_fpw = max(1, int(budget / (per_frame * 1.05)))
     times = [f.t_s for f in view.frames]
-    windows = plan_windows(n, max_fpw, 0, actions=actions, times=times, slack=snap_slack)
+    windows = plan_windows(n, max_fpw, 0, keyboard=keyboard, times=times, slack=snap_slack)
     nw = len(windows)
     units: list[AnnotationUnit] = []
     for wi, (lo, hi) in enumerate(windows):
@@ -248,6 +250,6 @@ def build_units(
             lo=lo,
             hi=hi,
             tail_buffer=tail,
-            actions=actions,
+            keyboard=keyboard,
         ))
     return units

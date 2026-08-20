@@ -76,7 +76,7 @@ from pipeline.annotation.lib.registry import (  # noqa: E402
 )
 from pipeline.annotation.lib.units import build_units  # noqa: E402
 from pipeline.lib import config  # noqa: E402
-from pipeline.lib.action_format import get_formatter  # noqa: E402
+from pipeline.lib.action_format import WindowKeyboard, get_formatter  # noqa: E402
 from pipeline.lib.common import (  # noqa: E402
     ensure_dir,
     normalize_dashed_argv,
@@ -98,14 +98,14 @@ from pipeline.lib.views import FPS_MODES, FilterArtifact  # noqa: E402
 EST_TOKENS_PER_FRAME = 1500
 
 
-def _segment_actions(view, keylog_path: str | None) -> list[str]:
-    """Derived canonical action labels per view frame (method-internal: window
-    planning + keystroke-burst snapping; never persisted)."""
+def _segment_keyboard(view, keylog_path: str | None) -> list[WindowKeyboard]:
+    """What the demonstrator typed in each view frame's window (method-internal:
+    window planning + keystroke-burst snapping; never persisted)."""
     events, _ = load_events(Path(keylog_path)) if keylog_path else ([], None)
     result = get_formatter("canonical").format_segment(
         events, view.windows(), view.dead_zones, master_fps=view.master_fps
     )
-    return result.labels
+    return result.keyboard
 
 
 def _goal_rows_from_unit(unit, result: dict[str, Any], *, method: Method,
@@ -437,9 +437,9 @@ def _frames_mode(args, art: FilterArtifact, method: Method, rows, units_dir: Pat
         view = art.segment_view(seg, args.fps, args.fps_mode)
         if not view.frames:
             return {"skipped": "empty_view", "n_units": 0, "n_goals": 0, "actual_tokens": 0}
-        actions = _segment_actions(view, view.keylog_path)
+        keyboard = _segment_keyboard(view, view.keylog_path)
         units = build_units(
-            view, actions,
+            view, keyboard,
             context_limit=args.context_limit,
             completion_reserve=int(os.environ.get("LABELER_MAX_TOKENS") or 32000),
             safety_margin=args.window_safety_margin,
