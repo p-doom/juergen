@@ -495,6 +495,10 @@ class ConvertStats:
     #: TERMINATE); a format comparison is only meaningful if it matches, exactly
     #: like ``n_turns_with_prose``.
     n_turns_dropped_by_codec: int = 0
+    #: Rollouts carrying a non-null ``task_reward``, counted only under
+    #: ``--min_task_success``. Zero means the flag filtered on a score no rollout in
+    #: the collection has.
+    n_scored: int = 0
 
 
 def convert_rollout(
@@ -518,18 +522,19 @@ def convert_rollout(
     # evaluator scored >= threshold. The key is `task_reward` — what
     # `evals/harness.py` publishes from `evaluate_on_finish`; no producer has ever
     # written `task_success`, so reading that dropped every rollout on every
-    # collection. A collection that carries no score at all cannot be filtered by
-    # one, and silently keeping nothing is how that went unnoticed.
+    # collection.
+    #
+    # `task_reward` is present-but-null on every rollout our harness did not score
+    # (it is written unconditionally, `evals/harness.py:953`), so a key-presence
+    # check cannot tell "scored 0.0" from "never scored" and a null cannot be
+    # distinguished from a genuine miss here, one rollout at a time. Dropping a null
+    # is right — an unscored rollout cannot be filtered by a score — but dropping
+    # EVERY rollout means the flag cannot filter this collection at all, which
+    # `main` refuses via `n_scored`.
     if min_task_success is not None:
-        if "task_reward" not in result:
-            raise SystemExit(
-                f"--min_task_success needs an OSWorld score per rollout, and "
-                f"{result_path} carries no `task_reward` field. Only our own harness "
-                "writes one, and only under `evaluate_on_finish`; the external "
-                "teacher collections carry no score at all, so this flag cannot "
-                "filter them."
-            )
-        reward = result["task_reward"]
+        reward = result.get("task_reward")
+        if reward is not None and stats is not None:
+            stats.n_scored += 1
         if reward is None or float(reward) < min_task_success:
             return None
 
@@ -1014,6 +1019,21 @@ def main(argv: list[str] | None = None) -> int:
         records.append(rec)
         stats.n_kept += 1
 
+    # Before the prose guard: an all-dropped filter also trips that one, and its
+    # message blames the rollout layout, which sends the reader after the wrong bug.
+    # The slug counts are quoted because they are the other way to reach zero
+    # scored: rollouts the slug filters removed never reached the score filter.
+    if args.min_task_success is not None and not stats.n_scored:
+        raise SystemExit(
+            f"--min_task_success {args.min_task_success} filtered on a score not one "
+            f"of the {stats.n_seen} discovered rollout dir(s) carries "
+            f"({stats.n_dropped_by_filter} never reached it, dropped by --keep_slugs; "
+            f"{stats.n_dropped_leak} by --exclude_slugs): no `task_reward`, or a null "
+            "one. Our harness writes that field only under `evaluate_on_finish` "
+            "(`evals/harness.py`) and the external teacher collections carry no "
+            "per-rollout score at all, so this flag cannot filter such a collection — "
+            "dropping all of it is not the filter working."
+        )
     _assert_prose_coverage(stats, args.keep_prose)
 
     train, val = split_by_recording(records, train_ratio=args.train_ratio, seed=args.split_seed)
@@ -1046,6 +1066,7 @@ def main(argv: list[str] | None = None) -> int:
         "n_dropped_by_filter": stats.n_dropped_by_filter,
         "n_dropped_leak": stats.n_dropped_leak,
         "n_unusable": stats.n_unusable,
+        "n_scored": stats.n_scored,
         "n_train": len(train),
         "n_val": len(val),
         # Prose coverage has to match across arms for a format comparison to mean

@@ -27,8 +27,12 @@ convert = load_convert()
 SCREEN = [1920, 1080]
 
 
-def _rollout(root: Path, slug: str, n_steps: int = 4) -> None:
-    """One rollout dir in the shape ``discover_run_dirs`` looks for."""
+def _rollout(root: Path, slug: str, n_steps: int = 4, **result_extra) -> None:
+    """One rollout dir in the shape ``discover_run_dirs`` looks for.
+
+    An external-teacher collection: no ``codec``, so ``source_reader`` picks
+    ``teacher_step`` and the steps below carry ``computer_use`` arguments.
+    """
     run = root / slug
     (run / "steps").mkdir(parents=True)
     (run / "result.json").write_text(
@@ -38,7 +42,7 @@ def _rollout(root: Path, slug: str, n_steps: int = 4) -> None:
                 "instruction": "open the terminal",
                 "screen_size": SCREEN,
                 "stop_reason": "terminate",
-                "task_success": 1.0,
+                **result_extra,
             }
         )
     )
@@ -61,6 +65,60 @@ def _rollout(root: Path, slug: str, n_steps: int = 4) -> None:
                     },
                     "cursor_before": [10, 10],
                     "intended_target": [100 + step, 200],
+                },
+            }
+        )
+    (run / "trajectory.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in rows)
+    )
+
+
+def _harness_rollout(root: Path, slug: str, n_steps: int = 4, **result_extra) -> None:
+    """One of OUR OWN rollouts, in the shape ``evals/harness.py`` writes.
+
+    It declares a ``codec`` and spells the end of the episode ``outcome``, and its
+    steps carry the dispatched Operation stream rather than ``computer_use``
+    arguments — the two halves of the source vocabulary ``source_reader`` and
+    ``source_stop_reason`` key on. Verified field-for-field against an artifact
+    produced by running the real harness.
+    """
+    run = root / slug
+    (run / "steps").mkdir(parents=True)
+    (run / "result.json").write_text(
+        json.dumps(
+            {
+                "slug": slug,
+                "codec": "deltatype_v2",
+                "instruction": "open the terminal",
+                "screen_size": SCREEN,
+                "outcome": "max_steps",
+                **result_extra,
+            }
+        )
+    )
+    rows = []
+    for step in range(1, n_steps + 1):
+        (run / "steps" / f"step_{step - 1:03d}.png").write_bytes(b"")
+        rows.append(
+            {
+                "step_num": step,
+                "action": f"<think>step {step}</think>\n0 0 0 ;",
+                "info": {
+                    "operations": [{"kind": "move_to", "args": [100 + step, 200]}],
+                    # `rollout_step` reads `operations`, but the loop still requires
+                    # a truthy `parsed` before it gets there, so a real rollout's
+                    # source-grammar `to_dict()` has to be here too.
+                    "parsed": {
+                        "dx": 90 + step,
+                        "dy": 190,
+                        "scroll": 0,
+                        "elements": [],
+                        "no_op": False,
+                        "terminate": False,
+                        "fail": False,
+                    },
+                    "parse_error": None,
+                    "cursor_before": [10, 10],
                 },
             }
         )
@@ -122,3 +180,90 @@ def test_the_two_prose_modes_are_not_the_same_prompt(tmp_path):
     # which is exactly why it cannot stand in for the prompt digest.
     assert with_prose["codec_digest"] == without["codec_digest"]
     assert without["system_prompt_sha256"] == without["codec_digest"]
+
+
+def _convert(rollouts: Path, out: Path, *extra: str) -> int:
+    return convert.main(
+        [
+            "--rollouts_dir", str(rollouts),
+            "--out_dir", str(out),
+            "--codec", "deltatype_v2",
+            "--prose_divergence", "off",
+            *extra,
+        ]
+    )
+
+
+def _records(out: Path) -> list[dict]:
+    return [
+        json.loads(line)
+        for split in ("train", "val")
+        for line in (out / "_normalized" / split / "chat.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+
+
+@pytest.mark.parametrize(
+    "reward",
+    [
+        pytest.param({}, id="no_task_reward_at_all"),
+        pytest.param({"task_reward": None}, id="task_reward_present_but_null"),
+    ],
+)
+def test_min_task_success_refuses_a_collection_it_cannot_score(tmp_path, reward):
+    """The flag may not empty the dataset and exit as though it filtered.
+
+    Both spellings of "unscored" are here because they are what the two producers
+    actually write. The external teacher collections carry no ``task_reward`` key,
+    while our own harness writes it unconditionally and leaves it null unless
+    ``evaluate_on_finish`` was set — so a key-presence check passes on every one of
+    our rollouts and drops them all. The refusal must name the flag: this trips the
+    generic empty-dataset guard too, and that one blames the rollout layout.
+    """
+    rollouts = tmp_path / "rollouts"
+    rollouts.mkdir(parents=True)
+    for slug in ("task_a", "task_b"):
+        _harness_rollout(rollouts, slug, **reward)
+    with pytest.raises(SystemExit, match="--min_task_success"):
+        _convert(rollouts, tmp_path / "out", "--min_task_success", "1.0")
+
+
+def test_min_task_success_filters_on_the_score_the_harness_publishes(tmp_path):
+    """`task_reward` is the field, and the threshold is a real comparison.
+
+    A rollout the scorer never reached is dropped rather than fatal — one unscored
+    rollout in a scored collection cannot be filtered by a score, but it is not a
+    reason to abandon the build.
+    """
+    rollouts = tmp_path / "rollouts"
+    rollouts.mkdir(parents=True)
+    _harness_rollout(rollouts, "keep_me", task_reward=1.0)
+    _harness_rollout(rollouts, "below_bar", task_reward=0.0)
+    _harness_rollout(rollouts, "never_scored", task_reward=None)
+    out = tmp_path / "out"
+    assert _convert(rollouts, out, "--min_task_success", "1.0") == 0
+    manifest = json.loads((out / "convert_manifest.json").read_text())
+    assert manifest["n_kept"] == 1
+    # Two of the three carried a score; only one cleared the bar.
+    assert manifest["n_scored"] == 2
+    assert [r["recording_id"] for r in _records(out)] == ["keep_me"]
+
+
+def test_the_stop_reason_is_read_in_the_producers_own_spelling(tmp_path):
+    """Our harness writes `outcome`, the teacher collections write `stop_reason`.
+
+    Reading only one left the field null for every rollout of the other producer.
+    """
+    ours = tmp_path / "ours"
+    ours.mkdir(parents=True)
+    _harness_rollout(ours, "mine")
+    out_ours = tmp_path / "out_ours"
+    assert _convert(ours, out_ours) == 0
+    assert [r["source_stop_reason"] for r in _records(out_ours)] == ["max_steps"]
+
+    theirs = tmp_path / "theirs"
+    theirs.mkdir(parents=True)
+    _rollout(theirs, "yours")
+    out_theirs = tmp_path / "out_theirs"
+    assert _convert(theirs, out_theirs) == 0
+    assert [r["source_stop_reason"] for r in _records(out_theirs)] == ["terminate"]
