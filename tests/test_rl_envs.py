@@ -29,7 +29,7 @@ import pytest
 
 from evals.tasks import REGIMES, cursor_start, distance_to_box, in_bbox
 from rl.desktop import VirtualDesktop, VirtualDesktopPool, canvas_pool
-from rl.geometry import BOX_EDGE_INCLUSIVE, box_center, draw_box, png_bytes, render_cursor
+from rl.geometry import box_center, draw_box, png_bytes, render_cursor
 from rl.movebox.dataset import CURRICULUM_BANDS, band_sequence, sample_scene
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -156,13 +156,12 @@ def test_execute_atomic_accepts_dict_operations_too() -> None:
     assert desktop.cursor == (7, 8)
 
 
-def test_execute_pyautogui_honours_only_move_to() -> None:
-    """Kept so the shared preparers work unchanged against a canvas."""
+def test_execute_pyautogui_honours_move_to_and_refuses_the_rest() -> None:
     desktop = _desktop(screen=(200, 150))
     desktop.execute_pyautogui("pyautogui.moveTo(33, 44)")
     assert desktop.cursor == (33, 44)
-    desktop.execute_pyautogui("pyautogui.click()")
-    assert desktop.cursor == (33, 44)
+    with pytest.raises(ValueError, match="only honour moveTo"):
+        desktop.execute_pyautogui("pyautogui.click()")
     desktop.execute_pyautogui("pyautogui.moveTo(-5, 9999)")
     assert desktop.cursor == (0, 149), "clamped like every other move"
 
@@ -210,7 +209,6 @@ def test_a_codec_compiled_action_drives_the_virtual_desktop_end_to_end() -> None
 def test_in_bbox_is_half_open_and_the_two_definitions_agree() -> None:
     from rl.geometry import in_bbox as rl_in_bbox
 
-    assert BOX_EDGE_INCLUSIVE is False
     box = (10, 10, 20, 20)
     for point in [(10, 10), (19, 19), (15, 15)]:
         assert in_bbox(point, box) and rl_in_bbox(point, box), point

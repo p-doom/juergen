@@ -83,12 +83,14 @@ def sample_scene(
     pure function of the key — a `random` module call seeded once at import would
     give two workers different task 7.
     """
+    from rl.geometry import box_center
+
     rng = random.Random(f"movebox:v1:{seed}:{idx}:{band}")
     background = backgrounds[rng.randrange(len(backgrounds))]
     x1 = rng.randint(margin, max(margin, screen_w - margin - box_w))
     y1 = rng.randint(margin, max(margin, screen_h - margin - box_h))
     box = (x1, y1, x1 + box_w - 1, y1 + box_h - 1)
-    cx, cy = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
+    cx, cy = box_center(box)
     min_dist = max(int(math.hypot(box_w, box_h) / 2) + 20, 60)
     limit = CURRICULUM_BANDS[band]
     cursor = _sample_cursor(

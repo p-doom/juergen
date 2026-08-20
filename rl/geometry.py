@@ -1,8 +1,11 @@
 """Geometry and rendering shared by every box-target env.
 
 The inclusivity convention changes what counts as a hit: boxes are built
-`(x1, y1, x1+w-1, y1+h-1)`, so a 150 px box spans 150 px of pixels, and
-`in_bbox` is half-open on the max edge — see `BOX_EDGE_INCLUSIVE`.
+`(x1, y1, x1+w-1, y1+h-1)`, so a 150 px box spans 150 px of pixels, and `in_bbox`
+is half-open on the max edge. That is the convention every published
+grounding/movebox reach number was computed under; making it inclusive widens a
+150 px box's hit region by one pixel row and column, so do not "fix" an
+off-by-one here without re-baselining.
 """
 
 from __future__ import annotations
@@ -11,7 +14,6 @@ import io
 import math
 
 __all__ = [
-    "BOX_EDGE_INCLUSIVE",
     "CURSOR_COLOR",
     "BOX_COLOR",
     "box_center",
@@ -20,14 +22,7 @@ __all__ = [
     "in_bbox",
     "png_bytes",
     "render_cursor",
-    "render_step",
 ]
-
-BOX_EDGE_INCLUSIVE = False
-"""Whether the max edge counts as inside. False = half-open, the convention every
-published grounding/movebox reach number was computed under. Flipping it widens a
-150 px box's hit region by one pixel row and column: do not flip it to "fix" an
-off-by-one without re-baselining."""
 
 CURSOR_COLOR = (255, 0, 0)
 BOX_COLOR = (0, 255, 0)
@@ -37,8 +32,6 @@ CURSOR_WIDTH = 3
 
 
 def in_bbox(pos: tuple[int, int], bbox: tuple[int, int, int, int]) -> bool:
-    if BOX_EDGE_INCLUSIVE:
-        return bbox[0] <= pos[0] <= bbox[2] and bbox[1] <= pos[1] <= bbox[3]
     return bbox[0] <= pos[0] < bbox[2] and bbox[1] <= pos[1] < bbox[3]
 
 
@@ -87,8 +80,3 @@ def render_cursor(base: object, cursor: tuple[int, int]):
     draw.line([(x, y - r), (x, y + r)], fill=CURSOR_COLOR, width=CURSOR_WIDTH)
     draw.ellipse([x - 4, y - 4, x + 4, y + 4], outline=CURSOR_COLOR, width=CURSOR_WIDTH)
     return image
-
-
-def render_step(base_with_box: object, cursor: tuple[int, int]) -> bytes:
-    """Composite the cursor marker on a (background + box) image -> PNG bytes."""
-    return png_bytes(render_cursor(base_with_box, cursor))

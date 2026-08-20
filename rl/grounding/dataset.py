@@ -17,7 +17,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["REGIMES", "GroundingTarget", "cursor_start", "load_canvas", "load_targets"]
+__all__ = ["REGIMES", "GroundingTarget", "cursor_start", "load_targets"]
 
 REGIMES: tuple[str, ...] = ("near", "medium", "far")
 
@@ -75,10 +75,3 @@ def cursor_start(
     from evals.tasks import cursor_start as shared
 
     return shared(target.bbox, screen_w, screen_h, regime, target.task_id)
-
-
-def load_canvas(target: GroundingTarget):
-    from PIL import Image
-
-    with Image.open(target.image_path) as handle:
-        return handle.convert("RGB")

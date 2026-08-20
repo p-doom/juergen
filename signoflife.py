@@ -33,8 +33,9 @@ requires exactly one `Taskset` subclass and, for the harness, at most one
 `DevelopmentSuite`, the preparers, `ARMS` — is harmless; re-exporting a second
 `Taskset` or `Harness` breaks resolution with a `TypeError` at dispatch.
 
-`rl.movebox`, `rl.grounding` and `rl.target_box` have the identical defect and no
-alias yet; they are unreachable through the plugin loader until they get one.
+`rl.movebox`, `rl.grounding` and `rl.target_box` have the identical defect and the
+same remedy: `rl_movebox.py`, `rl_grounding.py` and `rl_target_box.py`.
+`tests/test_rl_plugin_ids.py` resolves all three by id.
 """
 
 from evals.harness import DesktopHarness

@@ -10,22 +10,7 @@ Rendering and geometry are general; the coordinate convention is the codec's. No
 env implements `round(delta/1000 * screen_dim)` — `codec.compile(text, geometry,
 cursor)` returns `Operation`s already in absolute screen pixels, and an env only
 applies pixel operations.
+
+Geometry is imported from `rl.geometry`, never re-exported here: one import path
+per name, so two call sites cannot end up naming the same helper differently.
 """
-
-from rl.geometry import (
-    distance_to_box,
-    draw_box,
-    in_bbox,
-    png_bytes,
-    render_cursor,
-    render_step,
-)
-
-__all__ = [
-    "distance_to_box",
-    "draw_box",
-    "in_bbox",
-    "png_bytes",
-    "render_cursor",
-    "render_step",
-]

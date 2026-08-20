@@ -93,16 +93,17 @@ class VirtualDesktop:
         }
 
     def execute_pyautogui(self, code: str) -> None:
-        """Only `moveTo` is meaningful on a canvas; anything else is a no-op.
+        """Place the cursor. `moveTo` is the only expression a canvas can honour.
 
-        Kept so the shared preparers (which place a cursor with a pyautogui
-        expression) work unchanged against a virtual desktop.
+        Anything else raises rather than returning quietly: a canvas that silently
+        swallowed a `click()` would report a successful step that changed nothing.
         """
         import re
 
         match = re.search(r"moveTo\(\s*(-?\d+)\s*,\s*(-?\d+)", code)
-        if match:
-            self._move_to(int(match.group(1)), int(match.group(2)))
+        if not match:
+            raise ValueError(f"a canvas can only honour moveTo, not {code!r}")
+        self._move_to(int(match.group(1)), int(match.group(2)))
 
     def release(self, *, failed: bool = False, error: str | None = None) -> None:
         del failed, error

@@ -22,7 +22,7 @@ import pytest
 
 from juergen_doubles import make_task_data, make_trace, png
 from rl.geometry import in_bbox
-from rl.grounding.dataset import GroundingTarget, cursor_start, load_canvas, load_targets
+from rl.grounding.dataset import GroundingTarget, cursor_start, load_targets
 from rl.grounding.taskset import (
     NO_MOVE_PENALTY,
     SHAPING_SCALE,
@@ -227,12 +227,6 @@ def test_the_container_free_grounding_start_delegates_to_the_shared_rule(tmp_pat
         assert cursor_start(target, 320, 200, regime) == shared(
             target.bbox, 320, 200, regime, target.task_id
         )
-
-
-def test_load_canvas_returns_the_labelled_screenshot(tmp_path) -> None:
-    target = load_targets(_labels(tmp_path, 1))[0]
-    canvas = load_canvas(target)
-    assert canvas.size == (320, 200) and canvas.mode == "RGB"
 
 
 def test_the_grounding_taskset_is_the_target_by_regime_cross_product(tmp_path) -> None:
