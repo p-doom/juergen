@@ -246,6 +246,55 @@ def test_a_parse_error_is_counted_and_the_episode_continues(tmp_path, preparer) 
     assert result["steps_detail"][0]["parse_ok"] is False
 
 
+_REJECTED = "Your previous action was rejected and did not run."
+
+
+def _wire_messages(ctx, turn: int) -> list[dict]:
+    """The messages the given model turn actually sent, 1-based."""
+    return ctx.client.calls[turn - 1]["body"]["messages"]
+
+
+def test_by_default_a_rejected_action_is_indistinguishable_from_an_inert_one(
+    tmp_path, preparer
+) -> None:
+    """What every recorded arm did: the turn after a parse error carries the frame and
+    nothing else, so the model cannot tell a refused action from one that ran and
+    changed nothing."""
+    _, result, ctx = _run(
+        _config(tmp_path), _task(max_steps=2), replies=["not an action", "0 0 0 ;"]
+    )
+    assert result["parse_errors"] == 1
+    assert [part["type"] for part in _wire_messages(ctx, 2)[-1]["content"]] == ["image_url"]
+    assert "parse_error_notice" not in result
+
+
+def test_a_configured_notice_reaches_the_turn_after_the_rejected_one(
+    tmp_path, preparer
+) -> None:
+    """The arm the default exists to be compared against: same episode, one text part
+    added to the observation that followed the refusal, and to no other turn."""
+    _, result, ctx = _run(
+        _config(tmp_path, parse_error_notice=_REJECTED),
+        _task(max_steps=3),
+        replies=["not an action", "0 0 0 ;", "0 0 0 ;"],
+    )
+    assert result["parse_errors"] == 1
+    assert _wire_messages(ctx, 2)[-1]["content"][-1] == {"type": "text", "text": _REJECTED}
+    assert [part["type"] for part in _wire_messages(ctx, 1)[-1]["content"]] == [
+        "text",
+        "image_url",
+    ], "nothing precedes the first turn"
+    assert [part["type"] for part in _wire_messages(ctx, 3)[-1]["content"]] == [
+        "image_url"
+    ], "the turn after a parseable action gets no notice"
+    assert not [
+        message
+        for message in _wire_messages(ctx, 3)
+        if message["role"] == "assistant" and _REJECTED in (message["content"] or "")
+    ], "a notice in the assistant channel would be trained on as the model's own words"
+    assert result["parse_error_notice"] == _REJECTED
+
+
 def test_a_token_capped_turn_is_a_truncation_not_a_parse_error(tmp_path, preparer) -> None:
     """`max_tokens` is a harness knob, so a turn cut off at the cap is a measurement
     that did not happen. Scored as a parse error it becomes model behaviour, and a

@@ -462,6 +462,18 @@ class Agent:
             step=step,
             budget=self.budget,
         )
+        if history.note is not None:
+            # Here, not in a policy: every policy ends on the user turn carrying the
+            # newest frame (the newest window turn has no output, so no assistant
+            # message follows it), so one append covers all four instead of four
+            # implementations of one thing. The user channel, never the assistant one:
+            # `datasets/convert.py` builds training targets out of the recorded model
+            # output, and a note in there would be trained on as the model's own words.
+            last = messages[-1]
+            assert isinstance(last, vf.UserMessage) and isinstance(last.content, list)
+            messages[-1] = vf.UserMessage(
+                content=[*last.content, vf.TextContentPart(text=history.note)]
+            )
         body: dict[str, Any] = {"messages": messages}
         defaults = {
             "max_tokens": self.max_tokens,

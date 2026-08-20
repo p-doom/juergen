@@ -231,6 +231,17 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     """Fallback only. `ctx.sampling.temperature` wins at the wire; see
     `agent.agent.resolve_sampling`."""
     top_p: float | None = None
+    parse_error_notice: str = ""
+    """What to tell the model after a turn it could not have executed, or `""` to
+    tell it nothing.
+
+    Empty is the default and is what every recorded arm ran: an unparseable turn is
+    counted, the screen is re-observed, and the model sees only its own output
+    followed by an unchanged frame — indistinguishable from an action that
+    dispatched and did nothing. That indistinguishability is a live hypothesis for
+    the 1-pixel-move collapse and the reflexive Return, so it has to be an arm.
+    The notice rides the user turn carrying the next frame; it never enters the
+    assistant channel, which is what training targets are built from."""
     stop_on_click: bool = False
     """End the episode at the first left-button press, turning a free rollout into
     a single-decision probe."""
@@ -673,6 +684,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         budget = _Budget(self.config.budget)
         max_steps = self.config.max_steps or task.max_steps
         artifacts = self._artifact_dir(task)
+        notice = self.config.parse_error_notice or None
 
         agent = Agent(
             codec=codec,
@@ -814,7 +826,9 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 frames.append(frame)
                 if self.config.artifacts.save_frames:
                     (artifacts / "steps" / f"step_{step:03d}.png").write_bytes(frame)
-                history.append(decision.text, frame)
+                history.append(
+                    decision.text, frame, notice if decision.parse_error else None
+                )
                 cursor_after = tuple(await _to_thread(session.cursor_position))
                 probe = await _to_thread(preparer.probe, session, task)
                 steps_detail.append(
@@ -964,6 +978,12 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
             "labctl_run_id": os.environ.get("LABCTL_RUN_ID"),
         }
+        if self.config.parse_error_notice:
+            # Only when configured, like `control_conformant`: an arm whose prompts
+            # carry a notice is not comparable to one whose prompts do not, and a key
+            # written unconditionally would change the bytes of every result that has
+            # already been published without one.
+            trace.info[RESULT_KEY]["parse_error_notice"] = self.config.parse_error_notice
         self._persist(artifacts, trace, frames)
         trace.stop(outcome)
 

@@ -122,17 +122,23 @@ class History:
     turns: list[Turn] = field(default_factory=list)
     evicted: list[str] = field(default_factory=list)
     """Outputs that have fallen out of the window, oldest first, in order."""
+    note: str | None = None
+    """Text the driver attached to the newest observation, and only to it: it
+    describes the transition into that frame, so the next `append` clears it. Rendered
+    by `Agent.build_body` rather than by a policy — see there for why."""
 
     def start(self, frame: bytes) -> None:
         self.turns = [Turn(frame)]
         self.evicted = []
+        self.note = None
 
-    def append(self, output: str, frame: bytes) -> None:
+    def append(self, output: str, frame: bytes, note: str | None = None) -> None:
         """Record the action taken from the current frame, then the resulting frame."""
         if not self.turns:
             raise RuntimeError("History.append before History.start")
         self.turns[-1].output = output
         self.turns.append(Turn(frame))
+        self.note = note
         if len(self.turns) > self.n_history_frames:
             keep = max(1, self.n_history_frames // 2)
             self.evicted.extend(
