@@ -28,6 +28,26 @@ def history_has_exact(history: object, command: str) -> bool:
     )
 
 
+def _panel(state: dict[str, Any]) -> dict[str, Any]:
+    """The Tk panel's own published state, or raise.
+
+    Absent state is unreadable evidence, not a failed cell: the panel writes it
+    once at startup and the setup refuses to hand over a cell whose panel never
+    published, so a missing file at probe time is a broken fixture.
+    """
+    panel = state.get("panel_state")
+    if not isinstance(panel, dict) or panel.get("schema_version") != 1:
+        raise ValueError("panel state was not observed")
+    return panel
+
+
+def _panel_clicks(state: dict[str, Any]) -> list[str]:
+    clicked = _panel(state).get("clicked")
+    if not isinstance(clicked, list):
+        raise ValueError("panel click log was not observed")
+    return [str(label) for label in clicked]
+
+
 def evaluate_postcondition(
     task_id: str, kind: str, expected: dict[str, Any], state: dict[str, Any]
 ) -> OracleOutcome:
@@ -94,6 +114,57 @@ def evaluate_postcondition(
                     "proof_file_exists",
                     "proof_file_exact",
                 )
+            )
+        elif kind == "submit_only":
+            keys = state.get("keystroke_state")
+            if not isinstance(keys, dict):
+                raise ValueError("keystroke evidence was not observed")
+            prefix = keys.get("prefix")
+            evidence = {
+                "submit_observed": keys.get("completed") is True,
+                "no_characters_before_submit": prefix == str(expected["keystroke_prefix"]),
+                "observed_prefix": prefix,
+            }
+            # A literal `\n` inside type() lands here as a two-character prefix and
+            # a reader that never completed, which is the whole point of the cell:
+            # only a real key transition satisfies both clauses.
+            success = bool(
+                evidence["submit_observed"] and evidence["no_characters_before_submit"]
+            )
+        elif kind == "staged_confirm":
+            report_id = str(expected["report_id"])
+            evidence = {
+                "stage_one_recorded": state.get("stage_one_text") is not None,
+                "stage_one_exact": state.get("stage_one_text") == report_id,
+                "commit_observed": state.get("commit_text") is not None,
+                "commit_exact": state.get("commit_text") == report_id,
+                "expected_report_id": report_id,
+            }
+            success = bool(evidence["stage_one_exact"] and evidence["commit_exact"])
+        elif kind == "tk_target_click":
+            clicked = _panel_clicks(state)
+            target = str(expected["target_label"])
+            decoys = {str(label) for label in expected["decoy_labels"]}
+            evidence = {
+                "target_clicked": target in clicked,
+                "decoys_clicked": sorted(decoys.intersection(clicked)),
+                "clicked": list(clicked),
+                "expected_target": target,
+            }
+            success = bool(evidence["target_clicked"] and not evidence["decoys_clicked"])
+        elif kind == "tk_no_submit_entry":
+            panel = _panel(state)
+            wanted = str(expected["text"])
+            evidence = {
+                "entry_text_exact": panel.get("entry_text") == wanted,
+                "draft_clicked": str(expected["draft_label"]) in _panel_clicks(state),
+                "form_not_submitted": panel.get("submitted") is False,
+                "observed_entry_text": panel.get("entry_text"),
+                "expected_text": wanted,
+            }
+            success = all(
+                evidence[key]
+                for key in ("entry_text_exact", "draft_clicked", "form_not_submitted")
             )
         else:  # pragma: no cover - the loader fixes the set
             raise ValueError(f"unsupported task kind: {kind}")

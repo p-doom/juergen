@@ -26,7 +26,11 @@ import juergen_fake_desktop
 from evals.signoflife.__main__ import main
 from evals.signoflife.suite import load_suite
 
-CELL_IDS = [task.id for task in load_suite().tasks]
+# The scored tier: what an unqualified run of this dispatcher is. The candidate
+# cells are reachable only through `--tier candidate`, and their control arms need a
+# real VM (a Tk panel that never mapped publishes no measurement), so the no-VM path
+# stays on the four calibrated cells.
+CELL_IDS = [task.id for task in load_suite().for_tier("scored")]
 
 
 @pytest.fixture(autouse=True)
@@ -108,7 +112,7 @@ def test_the_dispatcher_runs_all_four_cells_and_writes_the_readers_shape(
     assert result["arm_kind"] == "scripted_negative"
 
     aggregate = result["aggregate"]
-    assert sorted(aggregate["per_cell"]) == sorted(CELL_IDS), "the gate is all four cells"
+    assert sorted(aggregate["per_cell"]) == sorted(CELL_IDS), "the gate is the whole scored tier"
     for cell, row in aggregate["per_cell"].items():
         assert row["trials"] == 1, cell
         assert row["valid_trials"] == 1, f"{cell}: {result['infrastructure_errors']}"
@@ -181,7 +185,7 @@ def test_a_single_cell_can_be_reproduced_by_id_and_by_index(tmp_path) -> None:
     assert code == 0
     assert result["selection"] == {
         "task_ids": [CELL_IDS[0]],
-        "full_suite_task_count": 4,
+        "full_tier_task_count": 4,
     }
     assert list(result["aggregate"]["per_cell"]) == [CELL_IDS[0]]
 
@@ -231,7 +235,7 @@ def test_the_ordered_events_v3_arm_runs_the_whole_dispatch(tmp_path) -> None:
     assert result["codec"] == "ordered_events_v3"
     assert result["arm_kind"] == "scripted_negative"
     aggregate = result["aggregate"]
-    assert sorted(aggregate["per_cell"]) == sorted(CELL_IDS), "the gate is all four cells"
+    assert sorted(aggregate["per_cell"]) == sorted(CELL_IDS), "the gate is the whole scored tier"
     for cell, row in aggregate["per_cell"].items():
         assert row["valid_trials"] == 1, f"{cell}: {result['infrastructure_errors']}"
         assert row["pass_rate"] == 0.0, f"{cell} is a negative control"
@@ -451,3 +455,41 @@ def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_se
     assert len(result["model"]["meta_sha256"]) == 64
     assert result["aggregate"]["controls_ok"] is None, "a model arm calibrates nothing"
     assert result["aggregate"]["per_cell"][CELL_IDS[0]]["pass_rate"] is None
+
+
+def test_the_tier_reaches_the_taskset_and_the_record(tmp_path) -> None:
+    """`--tier` is the one knob that decides which cells a number is over."""
+    from evals.signoflife.__main__ import _eval_config
+
+    config = _eval_config(
+        arm="ordered_oracle",
+        tier="candidate",
+        task_ids=["panel_offset_button"],
+        artifacts=tmp_path / "a",
+        traces_dir=tmp_path / "t",
+        pool={},
+        base_url="http://127.0.0.1:1/v1",
+        temperature=0.0,
+        top_p=1.0,
+        max_tokens=256,
+    )
+    assert config.taskset.tier == "candidate"
+    assert config.taskset.task_ids == ["panel_offset_button"]
+
+
+def test_a_cell_from_the_other_tier_is_refused_rather_than_quietly_mixed(tmp_path) -> None:
+    """Averaging a calibrated cell with an unmeasured one is the uncalibrated
+    number the controls exist to prevent, so the runner refuses the mix."""
+    with pytest.raises(SystemExit, match="is not in the 'scored' tier"):
+        main(_argv(tmp_path / "run", tmp_path, "--cell", "panel_offset_button"))
+    with pytest.raises(SystemExit, match="is not in the 'candidate' tier"):
+        main(
+            _argv(
+                tmp_path / "run",
+                tmp_path,
+                "--tier",
+                "candidate",
+                "--cell",
+                "terminal_ls",
+            )
+        )

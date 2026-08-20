@@ -3,8 +3,9 @@
 The seam's contract: `prepare` may drive the guest, `probe` must not. A `probe`
 that dispatched input would break the read-only property the oracle depends on.
 
-Seven preparers are registered: `none`, `terminal`, `osworld`, the four
-sign-of-life kinds, plus the fixture and RL ones that register on import.
+Eleven preparers are registered: `none`, `terminal`, `osworld`, the eight
+sign-of-life kinds (four scored, four candidate), plus the fixture and RL ones
+that register on import.
 """
 
 from __future__ import annotations
@@ -27,10 +28,13 @@ SIGN_OF_LIFE_KINDS = sorted(ALLOWED_KINDS)
 CORE_KINDS = ["none", "osworld", "terminal"]
 
 
-def test_the_seven_preparers_are_registered() -> None:
+def test_a_preparer_is_registered_for_every_sign_of_life_kind() -> None:
+    """Counted off `ALLOWED_KINDS`, so a cell kind added without a preparer fails
+    here rather than after a VM has booted."""
     assert set(CORE_KINDS) <= set(PREPARERS)
     assert set(SIGN_OF_LIFE_KINDS) <= set(PREPARERS)
-    assert len(set(CORE_KINDS) | set(SIGN_OF_LIFE_KINDS)) == 7
+    assert len(SIGN_OF_LIFE_KINDS) == 8
+    assert len(set(CORE_KINDS) | set(SIGN_OF_LIFE_KINDS)) == 11
 
 
 def test_a_freeroll_desktop_setup_with_no_preparer_fails_at_enumeration() -> None:
@@ -146,6 +150,15 @@ def _expected_for(kind: str) -> dict:
             "file": "/tmp/p",
             "content": "x",
         },
+        "submit_only": {"keystroke_prefix": ""},
+        "staged_confirm": {"report_id": "SOLV2-4718", "confirmation": "CONFIRM"},
+        "tk_target_click": {
+            "target_label": "Commit B3",
+            "decoy_labels": ["Commit B1"],
+            "cursor_start": [650, 407],
+            "single_move_support": [0, 1, 10, 100],
+        },
+        "tk_no_submit_entry": {"text": "Ada", "draft_label": "Save draft"},
     }[kind]
 
 

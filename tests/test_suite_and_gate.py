@@ -8,13 +8,19 @@ only on a newline; the oracle requires the capture file that only a completed `r
 writes, so not submitting cannot pass and submitting is the only way to pass; and
 the oracle control arm the calibration defines as 4/4 presses Return.
 
-`terminal_exact_text` was the only entry, so `NO_SUBMIT_CELLS` is now empty and
-indicator D never had a valid cell to fire on in this suite. D is a `@vf.metric` and
-`no_submit` is read in exactly one place, so no published pass count — including the
-Phase-B-compact 2/4 — was ever a function of it.
+`terminal_exact_text` was the only entry, so indicator D never had a valid cell to
+fire on in the scored tier; the first genuine no-submit cell is the candidate
+`panel_no_submit_entry`. D is a `@vf.metric` and the flag is read in exactly one
+place, so no published pass count — including the Phase-B-compact 2/4 — was ever a
+function of it.
 
 `load_suite` refuses a cell that is both listed as no-submit and phrased as a
 submission, and refuses a `NO_SUBMIT_CELLS` entry naming no real cell.
+
+The candidate tier's own tests are at the bottom of this file. They are the
+non-VM half of rule 1 — the oracle accepts the gold realized state and rejects
+the negative's, per cell — and they are not a substitute for measuring the oracle
+arm on a real VM, which is what promotion to the scored tier requires.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -51,7 +58,8 @@ from evals.signoflife.suite import (
 from evals.signoflife.taskset import SignOfLifeTask, SignOfLifeTaskset, SignOfLifeTasksetConfig
 from juergen_doubles import make_trace
 
-MANIFEST_SHA256 = "1bf13a84808fd144cf6565c61a303d97e37716d7129f22f9ae46a4dcc3bfbaac"
+MANIFEST_SHA256 = "014d334e3dc4dd93f4af9b3b2ba762423f5e1be0fba78b87a41b81f18b6b18c4"
+SCORED_SHA256 = "f95e03c263c1c9befdd508f6a9b34a00f601137572b0345005cb0f2a382d0aa9"
 EXACT_TEXT_CELL = "terminal_exact_text"
 
 
@@ -73,7 +81,7 @@ def test_14a_the_cell_is_no_longer_classified_no_submit() -> None:
     assert EXACT_TEXT_CELL not in NO_SUBMIT_CELLS
     rows = list(SignOfLifeTaskset(SignOfLifeTasksetConfig()).load())
     assert [t.data.name for t in rows if t.data.no_submit] == [], (
-        "no cell in this suite is a no-submit cell"
+        "no cell in the scored tier is a no-submit cell"
     )
 
 
@@ -191,12 +199,16 @@ def test_14g_the_misclassification_cannot_move_a_pass_count() -> None:
     count of `postcondition` rewards, which never read this flag.
     """
     repo = Path(__file__).resolve().parents[1]
+    # The flag, not the substring: `tk_no_submit_entry` and `panel_no_submit_entry`
+    # are a cell kind and a cell id that merely contain the word, and counting them
+    # as readers of the flag would make this test claim a coupling that is not there.
+    flag = re.compile(r"(?<!\w)no_submit")
     readers = []
     for path in sorted(repo.glob("**/*.py")):
         if ".venv" in path.parts or "tests" in path.parts:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
-        if "no_submit" in text:
+        if flag.search(text):
             readers.append(path.relative_to(repo).as_posix())
     assert sorted(readers) == [
         "evals/indicators.py",  # the only *consumer*: indicator D
@@ -206,22 +218,26 @@ def test_14g_the_misclassification_cannot_move_a_pass_count() -> None:
     ], readers
     # And the modules that decide `success` never mention it at all.
     for module in ("evals/oracles.py", "evals/harness.py", "evals/signoflife/oracle.py"):
-        assert "no_submit" not in (repo / module).read_text(), module
+        assert not flag.search((repo / module).read_text()), module
     oracle_source = inspect.getsource(evaluate_postcondition)
-    assert "no_submit" not in oracle_source, "the oracle must not read the flag"
+    assert not flag.search(oracle_source), "the oracle must not read the flag"
 
 
-def test_14i_indicator_D_has_no_valid_cell_to_fire_on_in_this_suite() -> None:
+def test_14i_indicator_D_has_no_valid_cell_to_fire_on_in_the_scored_tier() -> None:
     """`terminal_exact_text` was the only entry.
 
-    So every non-zero D reading ever published against the sign-of-life gate came
-    from the misclassified cell. D is structurally zero on this suite now, and stays
-    that way until a genuine no-submit cell is added.
+    So every non-zero D reading ever published against the scored gate came from
+    the misclassified cell, and it stays structurally zero there: the first genuine
+    no-submit cell is `panel_no_submit_entry`, which is a candidate.
     """
-    assert NO_SUBMIT_CELLS == frozenset()
+    suite = load_suite()
+    assert NO_SUBMIT_CELLS == frozenset({"panel_no_submit_entry"})
+    assert {task.tier for task in suite.tasks if task.id in NO_SUBMIT_CELLS} == {
+        "candidate"
+    }, "a no-submit cell in the scored tier would change what the scored gate means"
     submit_everywhere = [
         task.id
-        for task in load_suite().tasks
+        for task in suite.for_tier("scored")
         if any(verb in task.instruction.casefold() for verb in SUBMIT_VERBS)
     ]
     assert sorted(submit_everywhere) == [
@@ -415,6 +431,33 @@ def test_the_manifest_sha256_still_holds() -> None:
     assert hashlib.sha256(canonical_json(raw)).hexdigest() == MANIFEST_SHA256
 
 
+def test_the_scored_digest_does_not_move_when_a_candidate_is_added() -> None:
+    """Otherwise every candidate cell silently re-identifies the calibrated gate.
+
+    `result.json` records both. A reader comparing two scored runs has to be able
+    to tell "the scored cells changed" from "someone added a candidate", and the
+    whole-manifest hash cannot say that.
+    """
+    suite = load_suite()
+    assert suite.scored_sha256 == SCORED_SHA256
+    raw = json.loads(SUITE_PATH.read_text(encoding="utf-8"))
+    scored = [task for task in raw["tasks"] if task["tier"] == "scored"]
+    assert hashlib.sha256(canonical_json(scored)).hexdigest() == SCORED_SHA256
+    raw["tasks"].append(
+        {
+            "id": "another_candidate",
+            "kind": "submit_only",
+            "tier": "candidate",
+            "instruction": "x",
+            "expected": {"keystroke_prefix": ""},
+            "max_steps": 3,
+        }
+    )
+    grown = [task for task in raw["tasks"] if task["tier"] == "scored"]
+    assert hashlib.sha256(canonical_json(grown)).hexdigest() == SCORED_SHA256
+    assert hashlib.sha256(canonical_json(raw)).hexdigest() != MANIFEST_SHA256
+
+
 def test_the_suite_json_copy_is_byte_identical_to_its_source() -> None:
     """The in-package copy is the source; any second copy in the tree must match it."""
     repo = Path(__file__).resolve().parents[1]
@@ -446,7 +489,7 @@ def test_the_loader_refuses_drift() -> None:
             path.unlink(missing_ok=True)
 
     cases = {
-        "schema": lambda v: v.update(schema_version=2),
+        "schema": lambda v: v.update(schema_version=1),  # the pre-tier manifest
         "role": lambda v: v.update(role="benchmark"),
         "final_benchmark": lambda v: v.update(final_benchmark=True),
         "three_cells": lambda v: v["tasks"].pop(),
@@ -461,8 +504,8 @@ def test_the_loader_refuses_drift() -> None:
     for name, mutate in cases.items():
         with pytest.raises(ValueError):
             load_mutated(mutate)
-    # A duplicated kind is coverage drift even with four unique ids.
-    with pytest.raises(ValueError, match="coverage drift"):
+    # A duplicated kind is coverage drift even with unique ids.
+    with pytest.raises(ValueError, match="one per kind"):
         load_mutated(lambda v: v["tasks"][1].update(kind=v["tasks"][0]["kind"]))
 
 
@@ -570,3 +613,261 @@ def test_every_shipped_arm_passes_its_own_prompt_digest_check(tmp_path) -> None:
     report = DesktopHarness(_dispatched(phaseb, tmp_path))._prompt_report(load_codec(phaseb.codec))
     assert report["matches_expected"] is False
     assert "sealed" in report["expect_prompt_mismatch"]
+
+
+# --- the candidate tier -------------------------------------------------------
+#
+# Rule 1 has two halves. This file holds the half that needs no VM: for each
+# candidate cell, the oracle accepts the realized state its gold plan produces and
+# rejects the state its negative plan produces. The other half — the oracle arm
+# actually reading full marks on hardware — is what promotion to the scored tier
+# waits for, and nothing here stands in for it.
+
+CANDIDATE_STATES = {
+    "terminal_submit_only": (
+        {"keystroke_state": {"prefix": "", "prefix_len": 0, "completed": True}},
+        # `type("\n")`: two literal characters, and the reader never completed.
+        {"keystroke_state": {"prefix": "\\n", "prefix_len": 2, "completed": False}},
+    ),
+    "terminal_staged_confirm": (
+        {"stage_one_text": "SOLV2-4718", "commit_text": "SOLV2-4718"},
+        # Stage one answered, then stopped: exactly the premature-terminate shape.
+        {"stage_one_text": "SOLV2-4718", "commit_text": None},
+    ),
+    "panel_offset_button": (
+        {"panel_state": {"schema_version": 1, "clicked": ["Commit B3"]}},
+        {"panel_state": {"schema_version": 1, "clicked": ["Commit B1"]}},
+    ),
+    "panel_no_submit_entry": (
+        {
+            "panel_state": {
+                "schema_version": 1,
+                "clicked": ["Save draft"],
+                "entry_text": "Ada Lovelace",
+                "submitted": False,
+            }
+        },
+        # The reflexive Return: the text is right and the cell is still failed.
+        {
+            "panel_state": {
+                "schema_version": 1,
+                "clicked": [],
+                "entry_text": "Ada Lovelace",
+                "submitted": True,
+            }
+        },
+    ),
+}
+
+
+@pytest.mark.parametrize("cell_id", sorted(CANDIDATE_STATES))
+def test_a_candidate_oracle_accepts_its_gold_state_and_rejects_its_negative(
+    cell_id: str,
+) -> None:
+    cell = load_suite().by_id(cell_id)
+    assert cell.tier == "candidate"
+    gold, bad = CANDIDATE_STATES[cell_id]
+    identity = {"schema_version": 1, "task_id": cell.id}
+    passed = evaluate_postcondition(
+        cell.id, cell.kind, dict(cell.expected), {**identity, **gold}
+    )
+    failed = evaluate_postcondition(
+        cell.id, cell.kind, dict(cell.expected), {**identity, **bad}
+    )
+    assert passed.status == "ok" and passed.success is True, passed.evidence
+    assert failed.status == "ok" and failed.success is False, failed.evidence
+
+
+@pytest.mark.parametrize("cell_id", sorted(CANDIDATE_STATES))
+def test_a_candidate_cell_starts_unsolved(cell_id: str) -> None:
+    """`require_unsolved_start` refuses an episode that begins already passing.
+
+    The initial probe of each candidate is the fixture's own startup state: no
+    keystrokes, no stage-one file, no clicks, an empty entry.
+    """
+    cell = load_suite().by_id(cell_id)
+    initial = {
+        "terminal_submit_only": {
+            "keystroke_state": {"prefix": "", "prefix_len": 0, "completed": False}
+        },
+        "terminal_staged_confirm": {"stage_one_text": None, "commit_text": None},
+        "panel_offset_button": {"panel_state": {"schema_version": 1, "clicked": []}},
+        "panel_no_submit_entry": {
+            "panel_state": {
+                "schema_version": 1,
+                "clicked": [],
+                "entry_text": "",
+                "submitted": False,
+            }
+        },
+    }[cell_id]
+    outcome = evaluate_postcondition(
+        cell.id,
+        cell.kind,
+        dict(cell.expected),
+        {"schema_version": 1, "task_id": cell.id, **initial},
+    )
+    assert outcome.status == "ok" and outcome.success is False, outcome.evidence
+
+
+@pytest.mark.parametrize("cell_id", sorted(CANDIDATE_STATES))
+def test_an_unreadable_candidate_fixture_is_an_error_not_a_failure(cell_id: str) -> None:
+    """A panel that never published must not read as a model that never clicked."""
+    cell = load_suite().by_id(cell_id)
+    outcome = evaluate_postcondition(
+        cell.id, cell.kind, dict(cell.expected), {"schema_version": 1, "task_id": cell.id}
+    )
+    if cell.kind == "staged_confirm":
+        # This one is decided from file contents, and their absence IS the failure.
+        assert outcome.status == "ok" and outcome.success is False
+    else:
+        assert outcome.status == "error", outcome.reason
+
+
+def test_the_candidate_tier_is_not_in_the_scored_run() -> None:
+    """The dilution guard: one run is one tier, and `scored` is the default."""
+    suite = load_suite()
+    scored = {task.id for task in suite.for_tier("scored")}
+    candidates = {task.id for task in suite.for_tier("candidate")}
+    assert scored.isdisjoint(candidates)
+    assert candidates == set(CANDIDATE_STATES)
+    default = {t.data.name for t in SignOfLifeTaskset(SignOfLifeTasksetConfig()).load()}
+    assert default == scored
+    asked = {
+        t.data.name
+        for t in SignOfLifeTaskset(SignOfLifeTasksetConfig(tier="candidate")).load()
+    }
+    assert asked == candidates
+    for row in SignOfLifeTaskset(SignOfLifeTasksetConfig(tier="candidate")).load():
+        assert row.data.setup["suite_tier"] == "candidate", (
+            "every episode records its own tier, or a result.json cannot say which "
+            "cells the number is over"
+        )
+
+
+def test_an_unknown_tier_is_refused_rather_than_silently_empty() -> None:
+    with pytest.raises(ValueError, match="unknown suite tier"):
+        load_suite().for_tier("candidates")
+    with pytest.raises(ValueError, match="unknown suite tier"):
+        list(SignOfLifeTaskset(SignOfLifeTasksetConfig(tier="")).load())
+
+
+def test_the_loader_refuses_a_cell_with_no_tier_or_a_bad_one() -> None:
+    import tempfile
+
+    def load_mutated(mutate) -> None:
+        value = json.loads(SUITE_PATH.read_text())
+        mutate(value)
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            json.dump(value, handle)
+            path = Path(handle.name)
+        try:
+            load_suite(path)
+        finally:
+            path.unlink(missing_ok=True)
+
+    for name, mutate in {
+        "missing_tier": lambda v: v["tasks"][0].pop("tier"),
+        "unknown_tier": lambda v: v["tasks"][0].update(tier="provisional"),
+        "candidate_promoted_without_review": lambda v: v["tasks"][4].update(
+            tier="scored"
+        ),
+        "scored_demoted": lambda v: v["tasks"][0].update(tier="candidate"),
+        "candidate_kind_dropped": lambda v: v["tasks"].pop(),
+        "duplicate_candidate_kind": lambda v: v["tasks"][5].update(
+            kind=v["tasks"][4]["kind"]
+        ),
+    }.items():
+        with pytest.raises(ValueError):
+            load_mutated(mutate)
+            raise AssertionError(name)
+
+
+def test_every_candidate_cell_has_both_control_plans_and_they_differ() -> None:
+    from evals.tasks import DesktopTaskData
+
+    for cell in load_suite().for_tier("candidate"):
+        data = DesktopTaskData(
+            idx=0,
+            name=cell.id,
+            prompt=cell.instruction,
+            instruction=cell.instruction,
+            kind=cell.kind,
+            max_steps=cell.max_steps,
+            expected=dict(cell.expected),
+        )
+        gold = guest.script_plan(data, negative=False)
+        bad = guest.script_plan(data, negative=True)
+        assert gold and bad and gold != bad, cell.id
+        assert len(gold) <= cell.max_steps, (
+            f"{cell.id}: the gold plan does not fit in max_steps, so the oracle arm "
+            "would run out of turns before the postcondition"
+        )
+        assert len(bad) <= cell.max_steps, cell.id
+
+
+def test_the_submit_only_negative_is_the_literal_newline_defect() -> None:
+    """The measured defect, verbatim: `0 0 0 ; type("ls\\n")` typed a backslash and
+    an `n` in all three Phase-B draws instead of pressing Return.
+
+    So the negative control for this cell types exactly that and nothing else, and
+    it must survive the grammar round trip as two literal characters — if the
+    payload were a real newline, `lower_typing` would refuse it and the negative
+    would be a parse error rather than a dispatched wrong action.
+    """
+    from agent.agent import _action_record, load_codec
+
+    from evals.indicators import typed_texts
+
+    cell = load_suite().by_id("terminal_submit_only")
+    data = _candidate_data(cell)
+    plan = guest.script_plan(data, negative=True)
+    assert [intent.kind for intent in plan] == ["type"]
+    for codec_name in (COMPACT_CODEC, NATIVE_CODEC, ORDERED_CODEC):
+        codec = load_codec(codec_name)
+        text = guest.render_step(None, data, codec=codec, intent=plan[0])
+        typed = typed_texts(_action_record(codec.parse(text)))
+        assert typed == ["\\n"], (codec_name, text, typed)
+        assert "\n" not in typed[0], "a real newline would be refused, not dispatched"
+
+
+def _candidate_data(cell):
+    from evals.tasks import DesktopTaskData
+
+    return DesktopTaskData(
+        idx=0,
+        name=cell.id,
+        prompt=cell.instruction,
+        instruction=cell.instruction,
+        kind=cell.kind,
+        max_steps=cell.max_steps,
+        expected=dict(cell.expected),
+        no_submit=cell.id in NO_SUBMIT_CELLS,
+    )
+
+
+def test_indicator_D_fires_on_the_no_submit_cells_negative_and_not_on_its_gold() -> None:
+    """The first cell that gives indicator D something real to measure.
+
+    D has been structurally zero on this gate since its only entry was removed as a
+    misclassification. `panel_no_submit_entry` is a cell whose success genuinely
+    requires not submitting, so D must read 1.0 for the reflexive-Return negative
+    and 0.0 for the gold plan.
+    """
+    cell = load_suite().by_id("panel_no_submit_entry")
+    data = _candidate_data(cell)
+    assert data.no_submit is True
+    readings = {}
+    for negative in (False, True):
+        steps = []
+        for intent in guest.script_plan(data, negative=negative):
+            if intent.kind == "click":
+                continue  # the click needs the guest's measured geometry
+            text = guest._render_relative(intent, session=None, task=data)
+            steps.append(
+                {"raw_model_output": text, "parsed_action": _parse(COMPACT_CODEC, text)}
+            )
+        trace = make_trace(data, episode={"success": not negative, "steps_detail": steps})
+        asyncio.run(SignOfLifeTask(data).score(trace))
+        readings[negative] = trace.metrics["D_submitted_in_no_submit_cell"]
+    assert readings == {False: 0.0, True: 1.0}, readings
