@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import sys
+from itertools import takewhile
 from pathlib import Path
 
 GATE = Path(__file__).resolve().parents[1] / "tooling" / "estate_gate.sh"
@@ -203,10 +204,16 @@ def test_the_reading_says_how_much_cpu_the_run_actually_got(tmp_path: Path) -> N
 
 
 def test_help_prints_the_whole_header_and_stops_at_the_code() -> None:
-    """A line-numbered range silently truncates this header as it grows."""
+    """A line-numbered range silently truncates this header as it grows.
+
+    Counted rather than quoted: an assertion on the last line's wording has to be
+    edited whenever the prose is, which is how a truncation guard stops guarding.
+    """
+    lines = GATE.read_text(encoding="utf-8").splitlines()
+    header = list(takewhile(lambda line: line.startswith("#"), lines[1:]))
     done = subprocess.run(
         ("bash", str(GATE), "--help"), capture_output=True, text=True, check=True
     )
-    assert "would fail on a CPU node." in done.stdout, "the last header line is missing"
+    assert len(done.stdout.splitlines()) == len(header), "the header is not printed whole"
     assert "DIRTY TREE" in done.stdout, "the dirty-tree contract belongs in --help"
     assert "set -uo pipefail" not in done.stdout, "the header stops at the code"

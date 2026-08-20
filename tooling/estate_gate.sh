@@ -78,9 +78,10 @@
 # `--only <name>` runs one suite (juergen | data_pipeline | desktop |
 # desktop_fleet | omegalax_rearch).
 #
-# omegalax-rearch: only the test files the rearchitecture touches are run (56
-# tests). The rest of that repo's tests want real GPUs and real checkpoints and
-# would fail on a CPU node.
+# omegalax-rearch: only the test files the rearchitecture touches are run. The
+# rest of that repo's tests want real GPUs and real checkpoints and would fail on
+# a CPU node. The count is not stated here: it read 44, then 56, then 57 within
+# one day, and a number that rots that fast belongs in a reading, not a comment.
 
 set -uo pipefail
 
