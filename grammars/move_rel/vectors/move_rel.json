@@ -1,6 +1,6 @@
 {
   "grammar": "move_rel",
-  "prompt_sha256": "816950fe9f806dcee36c5da41e1b000b02604c1285dac62762ed514309a2c3f0",
+  "prompt_sha256": "b312c3d8df1d79f722a021f26d350618efd0a6d399b1455bf92e6bfb970905e1",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080
@@ -302,68 +302,6 @@
           ]
         ]
       ]
-    },
-    {
-      "name": "terminate",
-      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>",
-      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>",
-      "action": {
-        "calls": [
-          {
-            "action": "terminate",
-            "status": "success"
-          }
-        ]
-      },
-      "operations": []
-    },
-    {
-      "name": "calls_after_a_terminate_are_not_lowered",
-      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [12, -8]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"right_click\"}}\n</tool_call>",
-      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"move_rel\", \"coordinate\": [12, -8]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"right_click\"}}\n</tool_call>",
-      "action": {
-        "calls": [
-          {
-            "action": "move_rel",
-            "coordinate": [
-              12,
-              -8
-            ]
-          },
-          {
-            "action": "left_click"
-          },
-          {
-            "action": "terminate",
-            "status": "success"
-          },
-          {
-            "action": "right_click"
-          }
-        ]
-      },
-      "operations": [
-        [
-          "move_to",
-          [
-            983,
-            531
-          ]
-        ],
-        [
-          "mouse_down",
-          [
-            "left"
-          ]
-        ],
-        [
-          "mouse_up",
-          [
-            "left"
-          ]
-        ]
-      ],
-      "documents": "The turn parses and renders whole -- the right_click really is in the text -- but compile stops at the terminate, because nothing dispatches once the episode has ended. agent.Decision.ignored_after_terminate is what publishes that there were 1."
     },
     {
       "name": "bare_json_without_tags_is_accepted",
@@ -735,50 +673,6 @@
           [
             0,
             -3
-          ]
-        ]
-      ]
-    },
-    {
-      "name": "terminate_is_a_call_not_a_flag",
-      "operations": [
-        [
-          "mouse_down",
-          [
-            "left"
-          ]
-        ],
-        [
-          "mouse_up",
-          [
-            "left"
-          ]
-        ]
-      ],
-      "terminate": "success",
-      "action": {
-        "calls": [
-          {
-            "action": "left_click"
-          },
-          {
-            "action": "terminate",
-            "status": "success"
-          }
-        ]
-      },
-      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>",
-      "recompiled": [
-        [
-          "mouse_down",
-          [
-            "left"
-          ]
-        ],
-        [
-          "mouse_up",
-          [
-            "left"
           ]
         ]
       ]

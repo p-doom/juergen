@@ -152,7 +152,9 @@ def render_spec(codec: Any) -> str:
 
     Preamble = the codec class docstring. Body = one block per ``@production``.
     Epilogue = the ``notes`` docstring. All three are mandatory; a missing one
-    raises rather than being omitted from the prompt.
+    raises rather than being omitted from the prompt. ``CONTROL_SPEC`` closes it:
+    the episode-control channel is not a production of any grammar, so it is
+    appended here rather than declared seven times.
     """
     body: list[str] = []
     for item in productions(codec):
@@ -162,6 +164,7 @@ def render_spec(codec: Any) -> str:
         inspect.cleandoc(type(codec).__doc__),
         "\n".join(body),
         inspect.cleandoc(codec.notes.__doc__),
+        CONTROL_SPEC,
     ]
     return "\n\n".join(blocks) + "\n"
 
@@ -174,7 +177,9 @@ def render_tool_prompt(codec: Any, *, properties: dict[str, Any]) -> str:
     off-the-shelf model recognises it), but every word inside it comes from a
     docstring: the class docstring is the preamble, ``tool_description`` is the
     function description, each ``@production`` is one action's description and
-    one entry of the action enum, and ``notes`` is the epilogue.
+    one entry of the action enum, and ``notes`` is the epilogue. Termination is
+    NOT one of the actions in the schema — it is ``CONTROL_SPEC``, appended after
+    the epilogue exactly as in ``render_spec``.
     """
     actions = productions(codec)
     described = inspect.cleandoc(codec.tool_description.__doc__)
@@ -216,6 +221,8 @@ def render_tool_prompt(codec: Any, *, properties: dict[str, Any]) -> str:
                 "</tools>",
                 "",
                 epilogue,
+                "",
+                CONTROL_SPEC,
             ]
         )
         + "\n"
@@ -469,8 +476,10 @@ def lower_transitions(
 #
 # ``compile_action`` read backwards. The lift lives on the codec so a converter
 # holding absolute Operations — a recorded trajectory, a scripted oracle, a
-# teacher rollout — need not know what a coordinate means or how a grammar
-# spells termination; everything reusable lives here.
+# teacher rollout — need not know what a coordinate means; everything reusable
+# lives here. Its ``terminate`` argument is carried straight to the Action's
+# ``terminate`` field and rendered by ``with_control``, so the lift resolves a
+# coordinate convention and nothing else.
 #
 # Where a grammar cannot express what the Operations say, the lift raises. A
 # ``glide_to`` inside a held button is a drag, and the converters this replaces
@@ -786,13 +795,12 @@ def click_action_name(button: str, repeats: int) -> str | None:
 def terminate_status(
     value: object, *, error: type[Exception] = ValueError
 ) -> str | None:
-    """Validate the lift's ``terminate`` argument. ``None``, success or failure.
+    """Validate a ``terminate`` status. ``None``, success or failure.
 
-    Each grammar then spells it its own way — a flag, a distinct FAIL token, a
-    ``terminate`` call, or not at all. Three states, three spellings, no case
-    folding. The bool forms this used to accept (``False`` meaning None, ``True``
-    meaning success) were removed: ``True`` meaning success is how a terminate
-    whose status was lost lands as a claimed success.
+    Three states, one spelling — see ``CONTROL_SPEC`` — and no case folding. The
+    bool forms this used to accept (``False`` meaning None, ``True`` meaning
+    success) were removed: ``True`` meaning success is how a terminate whose
+    status was lost lands as a claimed success.
     """
     if value is None:
         return None
@@ -804,6 +812,23 @@ def terminate_status(
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 _FENCE_OPEN_RE = re.compile(r"^```(?:json)?\s*", re.IGNORECASE)
 _FENCE_CLOSE_RE = re.compile(r"\s*```$")
+
+
+def _arguments_of(payload: Any) -> dict[str, Any] | None:
+    """One ``computer_use`` call payload -> its arguments dict, or ``None``."""
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("name") not in (None, "computer_use"):
+        return None
+    arguments = payload.get("arguments")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(arguments, dict) and isinstance(arguments.get("action"), str):
+        return arguments
+    return None
 
 
 def iter_tool_calls(text: str) -> Iterator[dict[str, Any]]:
@@ -834,17 +859,8 @@ def iter_tool_calls(text: str) -> Iterator[dict[str, Any]]:
         elif isinstance(loaded, list):
             payloads.extend(item for item in loaded if isinstance(item, dict))
     for payload in payloads:
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("name") not in (None, "computer_use"):
-            continue
-        arguments = payload.get("arguments")
-        if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments)
-            except json.JSONDecodeError:
-                continue
-        if isinstance(arguments, dict) and isinstance(arguments.get("action"), str):
+        arguments = _arguments_of(payload)
+        if arguments is not None:
             yield arguments
 
 
@@ -856,6 +872,143 @@ def render_tool_calls(calls: Sequence[dict[str, Any]]) -> str:
         + "\n</tool_call>"
         for call in calls
     )
+
+
+# The episode-control channel.
+#
+# Ending an episode dispatches nothing: it is a message to the episode driver, not
+# something the computer does. A grammar's ``compile`` emits ``Operation``s, so a
+# control token inside one lowers to zero operations — a category error, and every
+# grammar reinvented it (a whole action line, a call in an ordered list, a
+# TERMINATE with no FAIL, or nothing at all). One spelling lives here instead,
+# rendered into every prompt by the two renderers above and read back once by the
+# driver before any codec sees the text.
+
+CONTROL_TOKEN = "TERMINATE"
+
+_CONTROL_LINE_RE = re.compile(rf"^{CONTROL_TOKEN}:\s*(success|failure)$")
+
+#: Appended to every grammar's prompt. It names no coordinate, no key and no
+#: action, which is what makes it grammar-independent rather than a shared token
+#: seven grammars happen to agree on.
+CONTROL_SPEC = f"""Ending the episode
+  {CONTROL_TOKEN}: success
+      The goal has been achieved. Stop.
+  {CONTROL_TOKEN}: failure
+      The goal cannot be achieved. Stop.
+  Either is a line of its own and must be the LAST line of your reply. An action
+  on the lines before it is performed first, and the episode then ends. These two
+  lines are the only way to stop, and they have no other spelling."""
+
+
+@dataclass(frozen=True)
+class Control:
+    """The episode-control decision read off one completion.
+
+    ``body`` is the completion with the control removed, and is the only text a
+    codec is given — so nothing on the far side of a termination can be parsed or
+    dispatched. ``ignored`` counts the actions the turn placed after its own
+    termination; the line spelling has to be last, so only the vendor tool-call
+    spelling can have any.
+    """
+
+    status: str | None
+    body: str
+    ignored: int = 0
+
+
+def render_control(status: str, *, error: type[Exception] = ValueError) -> str:
+    """The one control line. The status is validated, so it cannot be lost."""
+    return f"{CONTROL_TOKEN}: {terminate_status(status, error=error)}"
+
+
+def with_control(
+    body: str, status: str | None, *, error: type[Exception] = ValueError
+) -> str:
+    """An action's text plus its control line, which always comes last.
+
+    An empty ``body`` yields the control line alone: the two tool-call grammars
+    render no text for an empty call list, so a bare termination is the control
+    line and nothing else. The five with an idle action render that action first.
+    """
+    if status is None:
+        return body
+    line = render_control(status, error=error)
+    return f"{body}\n{line}" if body else line
+
+
+def split_control(text: str) -> Control:
+    """One completion -> its control decision and the text a codec may read.
+
+    Two spellings are accepted and one is written. ``CONTROL_SPEC``'s line is
+    ours. The other is the vendor's ``computer_use`` ``terminate`` call, which we
+    read but never emit: an off-the-shelf Qwen3-VL emits its own termination
+    whatever our prompt says, and that model in ``native_absolute`` is the only
+    calibrated reference this program has (33.9% OSWorld-Verified). Refusing it
+    would turn every off-the-shelf termination into a parse error.
+
+    Anything close but not exact — a mistyped token, an unknown status — is NOT a
+    control. It stays in ``body``, where the codec rejects it as the action it
+    is not, so a malformed termination is a scored parse error rather than a
+    silent success or a crashed episode.
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"expected str, got {type(text)!r}")
+    lines = text.splitlines()
+    for index in range(len(lines) - 1, -1, -1):
+        if not lines[index].strip():
+            continue
+        match = _CONTROL_LINE_RE.fullmatch(lines[index].strip())
+        if match is None:
+            break
+        return Control(match[1], "\n".join(lines[:index]))
+    return _vendor_control(text)
+
+
+def _vendor_terminate_status(payload: Any) -> str | None:
+    """The status of a vendor ``terminate`` call, or ``None`` if it is not one.
+
+    A ``terminate`` with no ``status`` reads as success. That default is not
+    invented here — it is the one the 33.9% reference was measured under — so
+    changing it would move the only calibrated number we have. A status that is
+    present and unrecognised is refused instead of guessed.
+    """
+    arguments = _arguments_of(payload)
+    if arguments is None or arguments.get("action") != "terminate":
+        return None
+    status = str(arguments.get("status", "success")).strip()
+    return status if status in ("success", "failure") else None
+
+
+def _vendor_control(text: str) -> Control:
+    """The vendor spelling: a ``computer_use`` ``terminate`` among the turn's calls.
+
+    Tagged blocks are cut at the terminate's own ``<tool_call>``, so ``body`` is
+    the source text of the calls that preceded it. An untagged payload — how the
+    RL rollout path sees vLLM-parsed output — is re-emitted in canonical tagged
+    form, because there is no substring to cut.
+    """
+    tagged = list(_TOOL_CALL_RE.finditer(text))
+    if tagged:
+        for index, match in enumerate(tagged):
+            try:
+                payload = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                continue
+            status = _vendor_terminate_status(payload)
+            if status is not None:
+                return Control(
+                    status, text[: match.start()].rstrip(), len(tagged) - index - 1
+                )
+        return Control(None, text)
+    calls = list(iter_tool_calls(text))
+    for index, arguments in enumerate(calls):
+        status = _vendor_terminate_status({"arguments": arguments})
+        if status is not None:
+            return Control(
+                status, render_tool_calls(calls[:index]), len(calls) - index - 1
+            )
+    return Control(None, text)
 
 
 # pyautogui-style key words -> rdev names, so ``key_down``/``key_up`` args are

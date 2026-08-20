@@ -19,6 +19,11 @@ are members of the same object, and the conformance vectors assert the round
 trip between them. ``compile`` is the only place a coordinate convention is
 resolved, and it always emits absolute screen pixels, so nothing downstream
 carries a coordinate space.
+
+No grammar spells termination. Ending an episode dispatches nothing, so it is
+not something a grammar can say; it is ``_support.CONTROL_SPEC``, one line read
+by ``split_control`` before any codec sees the text and re-exported here for the
+episode driver and the dataset builder.
 """
 
 from __future__ import annotations
@@ -30,6 +35,19 @@ from pathlib import Path
 from typing import Any
 
 ENTRY_POINT_GROUP = "juergen.grammars"
+
+#: Re-exported from ``_support`` on first access, never at import. ``_support``
+#: needs ``desktop``, and ``import grammars`` must not: ``available()`` lists all
+#: seven from entry-point metadata before anything is imported, which is what lets
+#: ``_explain_desktop`` report a wrong install as one instead of as a bare
+#: ``No module named 'desktop.geometry'``.
+_CONTROL_CHANNEL = ("CONTROL_SPEC", "CONTROL_TOKEN", "Control", "split_control")
+
+
+def __getattr__(name: str) -> Any:
+    if name in _CONTROL_CHANNEL:
+        return getattr(import_module(f"{__name__}._support"), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 _CACHE: dict[str, Any] = {}
 
@@ -164,11 +182,15 @@ def system_prompt(codec: Any, *, thinking: bool) -> str:
 
 
 __all__ = [
+    "CONTROL_SPEC",
+    "CONTROL_TOKEN",
     "ENTRY_POINT_GROUP",
     "THINKING_PREAMBLE",
+    "Control",
     "available",
     "codecs",
     "describe",
     "load",
+    "split_control",
     "system_prompt",
 ]

@@ -40,22 +40,20 @@ class DeltatypeV2Error(ValueError):
 
 @dataclass(frozen=True)
 class DeltatypeV2Action:
-    """dx / dy / scroll plus ordered elements, or one control token."""
+    """dx / dy / scroll plus ordered elements, or NO_OP."""
 
     dx: int = 0
     dy: int = 0
     scroll: int = 0
     elements: tuple[_support.Element, ...] = ()
     no_op: bool = False
-    terminate: bool = False
-    fail: bool = False
+    #: The episode-control status this turn declares, from ``_support.CONTROL_SPEC``.
+    #: Never set by ``parse`` — the driver strips the control line before the codec
+    #: sees the text — only by the lift, and rendered by ``with_control``.
+    terminate: str | None = None
     #: sha256 of the prompt the parse ran under. Reported, never enforced, and
     #: excluded from equality so a round-trip still compares equal.
     prompt_digest: str = field(default="", compare=False)
-
-    @property
-    def control(self) -> bool:
-        return self.no_op or self.terminate or self.fail
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -65,7 +63,6 @@ class DeltatypeV2Action:
             "elements": [element.to_dict() for element in self.elements],
             "no_op": self.no_op,
             "terminate": self.terminate,
-            "fail": self.fail,
         }
 
 
@@ -78,8 +75,9 @@ def action_from_dict(value: dict[str, Any]) -> DeltatypeV2Action:
             _support.element_from_dict(item) for item in value.get("elements", ())
         ),
         no_op=bool(value.get("no_op", False)),
-        terminate=bool(value.get("terminate", False)),
-        fail=bool(value.get("fail", False)),
+        terminate=_support.terminate_status(
+            value.get("terminate"), error=DeltatypeV2Error
+        ),
     )
 
 
@@ -139,14 +137,6 @@ class DeltatypeV2Codec:
     def _no_op(self) -> None:
         """Do nothing this turn; wait for the screen to settle."""
 
-    @_support.production("TERMINATE")
-    def _terminate(self) -> None:
-        """The goal is complete. Stop."""
-
-    @_support.production("FAIL")
-    def _fail(self) -> None:
-        """The goal is impossible. Stop."""
-
     def notes(self) -> None:
         """Emit exactly one action line per turn."""
 
@@ -166,10 +156,6 @@ class DeltatypeV2Codec:
         digest = self.digest
         if line == "NO_OP":
             return DeltatypeV2Action(no_op=True, prompt_digest=digest)
-        if line == "TERMINATE":
-            return DeltatypeV2Action(terminate=True, prompt_digest=digest)
-        if line == "FAIL":
-            return DeltatypeV2Action(fail=True, prompt_digest=digest)
         mouse, _, tail = line.partition(";")
         dx, dy, scroll = _support.parse_mouse_triple(mouse, error=DeltatypeV2Error)
         elements = _support.scan_elements(
@@ -179,14 +165,13 @@ class DeltatypeV2Codec:
         return self._validate_drag(action)
 
     def format(self, action: DeltatypeV2Action) -> str:
-        if action.no_op:
-            return "NO_OP"
-        if action.terminate:
-            return "TERMINATE"
-        if action.fail:
-            return "FAIL"
-        head = f"{action.dx} {action.dy} {action.scroll}"
-        return head + _support.render_elements(action.elements)
+        body = (
+            "NO_OP"
+            if action.no_op
+            else f"{action.dx} {action.dy} {action.scroll}"
+            + _support.render_elements(action.elements)
+        )
+        return _support.with_control(body, action.terminate, error=DeltatypeV2Error)
 
     def compile(
         self,
@@ -203,7 +188,7 @@ class DeltatypeV2Codec:
         cursor: tuple[int, int],
     ) -> tuple[Operation, ...]:
         """Resolve raw relative deltas against ``cursor`` into absolute pixels."""
-        if action.control:
+        if action.no_op:
             return ()
         operations: list[Operation] = []
         here = _support.clamp(cursor, geometry)
@@ -236,26 +221,15 @@ class DeltatypeV2Codec:
     ) -> DeltatypeV2Action:
         """Absolute Operations -> an action. The inverse of ``compile_action``.
 
-        This grammar spells termination three ways, so ``terminate`` resolves to
-        TERMINATE for success and FAIL for failure. A ``glide_to`` inside a held
-        left button becomes the MOVE drag form; the stroke's own duration is
-        dropped, because the grammar fixes it at ``DRAG_SECONDS``.
+        ``terminate`` rides through to the control line, so a terminating turn
+        keeps whatever work it did. A ``glide_to`` inside a held left button
+        becomes the MOVE drag form; the stroke's own duration is dropped, because
+        the grammar fixes it at ``DRAG_SECONDS``.
         """
         status = _support.terminate_status(terminate, error=DeltatypeV2Error)
         groups = _support.group_operations(
             operations, geometry=geometry, cursor=cursor, error=DeltatypeV2Error
         )
-        if status is not None:
-            if groups:
-                raise DeltatypeV2Error(
-                    "a terminating turn carries no operations in this grammar: "
-                    "TERMINATE and FAIL are whole action lines"
-                )
-            return DeltatypeV2Action(
-                terminate=status == "success",
-                fail=status == "failure",
-                prompt_digest=self.digest,
-            )
         here = _support.clamp(cursor, geometry)
         plan = _support.bare_token_plan(
             groups,
@@ -265,7 +239,9 @@ class DeltatypeV2Codec:
             error=DeltatypeV2Error,
         )
         if plan.idle:
-            return DeltatypeV2Action(no_op=True, prompt_digest=self.digest)
+            return DeltatypeV2Action(
+                no_op=True, terminate=status, prompt_digest=self.digest
+            )
         dx, dy = (
             (0, 0)
             if plan.target is None
@@ -273,7 +249,12 @@ class DeltatypeV2Codec:
         )
         return self._validate_drag(
             DeltatypeV2Action(
-                dx, dy, plan.scroll, plan.elements, prompt_digest=self.digest
+                dx,
+                dy,
+                plan.scroll,
+                plan.elements,
+                terminate=status,
+                prompt_digest=self.digest,
             )
         )
 

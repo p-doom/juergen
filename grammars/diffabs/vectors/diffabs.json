@@ -1,6 +1,6 @@
 {
   "grammar": "diffabs",
-  "prompt_sha256": "bc83a89a84c3e82a4334c336e287c1c7bfb30078ae23d549de0bb2b4c13e5a31",
+  "prompt_sha256": "814054703e12fe8bd71fb914ca3dffa8ca98fcc0729170e90257bae041dc1f00",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080
@@ -31,8 +31,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -65,8 +64,7 @@
         "dy": -1,
         "scroll": 0,
         "elements": [],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -87,8 +85,7 @@
         "dy": 0,
         "scroll": 5,
         "elements": [],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -130,8 +127,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -181,8 +177,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -216,8 +211,7 @@
         "dy": 2,
         "scroll": 0,
         "elements": [],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -244,8 +238,7 @@
             "pressed": true
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -272,8 +265,7 @@
         "dy": -100,
         "scroll": 0,
         "elements": [],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -295,25 +287,9 @@
         "dy": 0,
         "scroll": 0,
         "elements": [],
-        "no_op": true,
-        "terminate": false
+        "no_op": true
       },
       "operations": []
-    },
-    {
-      "name": "terminate",
-      "text": "TERMINATE",
-      "canonical": "TERMINATE",
-      "action": {
-        "dx": 0,
-        "dy": 0,
-        "scroll": 0,
-        "elements": [],
-        "no_op": false,
-        "terminate": true
-      },
-      "operations": [],
-      "documents": "psai_v1 documents only NO_OP; yll_v1 adds TERMINATE and the checkpoints emit it, so it parses."
     },
     {
       "name": "trailing_newline_is_tolerated",
@@ -335,8 +311,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -373,8 +348,7 @@
         "dy": -200,
         "scroll": 0,
         "elements": [],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -395,8 +369,7 @@
         "dy": -200,
         "scroll": 0,
         "elements": [],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "canonical": "400 -200 0"
     },
@@ -407,8 +380,7 @@
         "dy": 9,
         "scroll": 9,
         "elements": [],
-        "no_op": true,
-        "terminate": false
+        "no_op": true
       },
       "canonical": "NO_OP"
     }
@@ -462,11 +434,6 @@
     }
   ],
   "invalid_parse": [
-    {
-      "name": "fail_is_not_in_this_grammar",
-      "text": "FAIL",
-      "error": "three mouse integers"
-    },
     {
       "name": "type_element_is_not_in_this_grammar",
       "text": "0 0 0 ; type(\"hi\")",
@@ -539,8 +506,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "canonical": "12 -8 0 ; +LMB -LMB",
       "recompiled": [
@@ -619,8 +585,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "canonical": "0 0 0 ; +ShiftLeft +KeyA -KeyA -ShiftLeft",
       "recompiled": [
@@ -658,25 +623,9 @@
         "dy": 0,
         "scroll": 0,
         "elements": [],
-        "no_op": true,
-        "terminate": false
+        "no_op": true
       },
       "canonical": "NO_OP",
-      "recompiled": []
-    },
-    {
-      "name": "terminate_success",
-      "operations": [],
-      "terminate": "success",
-      "action": {
-        "dx": 0,
-        "dy": 0,
-        "scroll": 0,
-        "elements": [],
-        "no_op": false,
-        "terminate": true
-      },
-      "canonical": "TERMINATE",
       "recompiled": []
     }
   ],
@@ -693,12 +642,6 @@
       ],
       "error": "coalesced type() cannot be expressed",
       "documents": "this grammar spells literal text as key transitions; expanding text into keystrokes here would be a different, lossy concern."
-    },
-    {
-      "name": "terminate_failure_has_no_FAIL",
-      "operations": [],
-      "terminate": "failure",
-      "error": "TERMINATE and no FAIL"
     },
     {
       "name": "drag_stroke_is_a_visible_limit",

@@ -5,8 +5,13 @@ section and the case.
 
 Run it with ``pytest grammars/`` (``pip install -e '.[dev]'`` for pytest).
 
-Four invariants that are not expressible as vectors are asserted here as code:
+Five invariants that are not expressible as vectors are asserted here as code:
 
+* The control channel's round trip, in every grammar. A vector case hands
+  ``codec.parse`` its whole ``text``, and the codec is never given the control
+  line, so a terminating turn cannot be a vector at all — it is
+  lift -> ``format`` -> ``split_control`` -> ``parse`` -> ``compile``, which is
+  what the episode driver does.
 * ``isinstance(codec, Codec)`` for all seven. The protocol is
   ``@runtime_checkable``, so a caller may write that gate; it returned False for
   every grammar while ``Codec`` demanded a ``handlers`` table no codec had and a
@@ -25,8 +30,10 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import pathlib
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -361,6 +368,148 @@ def test_report_never_raises(name):
     )
 
 
+#: A click where the cursor already is: the one operation stream all seven
+#: grammars express exactly, so a terminating turn's work can be asserted
+#: byte-for-byte in every grammar from one stream.
+TERMINATING_WORK = (ir.mouse_down("left"), ir.mouse_up("left"))
+
+
+@pytest.mark.parametrize("status", ["success", "failure"])
+@pytest.mark.parametrize("carries_work", [True, False])
+@pytest.mark.parametrize("name", NAMES)
+def test_a_terminating_turn_round_trips_through_the_control_channel(
+    name, carries_work, status
+):
+    """The label direction, the channel and the dispatch direction, in one pass.
+
+    Both statuses in all seven grammars: ``diffabs`` and ``ordered_events_v3`` had
+    TERMINATE and no FAIL, and ``compact_raw`` and ``native_absolute_control``
+    could not terminate at all, so four of the seven could not have passed this.
+    """
+    codec = _codec(name)
+    payload = _vectors(name)
+    geometry = _geometry(payload["geometry"])
+    cursor = tuple(payload["default_cursor"])
+    operations = TERMINATING_WORK if carries_work else ()
+
+    action = codec.action_from_operations(
+        operations, geometry=geometry, cursor=cursor, terminate=status
+    )
+    assert action.terminate == status
+    # `to_dict` is the published `parsed_action`, so the status has to survive it.
+    assert _action_from_dict(name, action.to_dict()) == action
+
+    text = codec.format(action)
+    assert text.splitlines()[-1] == f"{_support.CONTROL_TOKEN}: {status}"
+    control = _support.split_control(text)
+    assert control.status == status and control.ignored == 0
+    assert _support.CONTROL_TOKEN not in control.body
+
+    if not control.body:
+        assert not operations, "work was dropped rather than spelled"
+        return
+    # Exactly the operations preceding the termination, and a parse that carries no
+    # control of its own -- the channel is the only source.
+    assert _rows(codec.compile(control.body, geometry, cursor)) == _rows(operations)
+    assert codec.parse(control.body).terminate is None
+
+
+@pytest.mark.parametrize("legacy", ["TERMINATE", "FAIL", "NO_OP\nTERMINATE"])
+@pytest.mark.parametrize("name", NAMES)
+def test_the_retired_control_tokens_are_loud_in_every_grammar(name, legacy):
+    """What a checkpoint trained before the channel emits, and why it must be loud.
+
+    A bare ``TERMINATE`` is neither the channel's line nor an action, so such a
+    turn is a scored parse error. The alternative — keeping the old token as a
+    second accepted spelling — is what made termination a per-grammar surface.
+    """
+    assert _support.split_control(legacy).status is None
+    with pytest.raises(ValueError):
+        _codec(name).parse(legacy)
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_every_prompt_carries_the_channel_and_no_grammar_of_its_own(name):
+    described = _codec(name).describe()
+    assert _support.CONTROL_SPEC in described
+    # Twice: the two lines of CONTROL_SPEC and nowhere else.
+    assert described.count(_support.CONTROL_TOKEN) == 2
+    assert "FAIL" not in described
+
+
+def _terminate_call(**arguments) -> str:
+    return _support.render_tool_calls([{"action": "terminate", **arguments}])
+
+
+def test_the_vendor_terminate_is_read_and_the_calls_after_it_are_counted():
+    """``native_absolute`` conforms to a schema we do not own.
+
+    An off-the-shelf Qwen3-VL emits the vendor's ``terminate`` call whatever the
+    prompt says, and that model in that grammar is the only calibrated reference
+    this program has, so the channel reads it. The codec does not: ``terminate``
+    is not one of its actions, and the channel has already cut it out.
+    """
+    click = _support.render_tool_calls([{"action": "left_click"}])
+    control = _support.split_control(
+        "\n".join([click, _terminate_call(status="success"), click, click])
+    )
+    assert control.status == "success" and control.ignored == 2
+    assert control.body == click
+    assert "terminate" not in control.body
+
+    codec = _codec("native_absolute")
+    with pytest.raises(ValueError, match="terminate"):
+        codec.parse(_terminate_call(status="success"))
+
+    # Untagged, which is how the RL rollout path sees vLLM-parsed output.
+    untagged = json.dumps(
+        [
+            {"name": "computer_use", "arguments": {"action": "left_click"}},
+            {"name": "computer_use", "arguments": {"action": "terminate", "status": "failure"}},
+        ]
+    )
+    control = _support.split_control(untagged)
+    assert control.status == "failure" and control.ignored == 0
+    assert codec.parse(control.body).calls[0].action == "left_click"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        ({"status": "success"}, "success"),
+        ({"status": "failure"}, "failure"),
+        # The vendor's own default, and the one the 33.9% reference was measured
+        # under. Not invented here, so it is not ours to change.
+        ({}, "success"),
+        # Present and unrecognised is refused rather than guessed: a status that
+        # decays to success is how a lost failure becomes a claimed success.
+        ({"status": "done"}, None),
+        ({"status": "SUCCESS"}, None),
+    ],
+)
+def test_the_vendor_status_is_adopted_but_never_guessed(arguments, expected):
+    assert _support.split_control(_terminate_call(**arguments)).status == expected
+
+
+def test_the_control_line_must_be_last_and_exact():
+    """Strict by design: near-misses are parse errors, not terminations.
+
+    A permissive channel is a regex over free text, which is what this whole
+    overhaul removed. The status rides inside the token, so it cannot be lost.
+    """
+    assert _support.split_control("0 0 0\nTERMINATE: success").status == "success"
+    assert _support.split_control("0 0 0\nTERMINATE: success\n\n").status == "success"
+    for near_miss in (
+        "TERMINATE: success\n0 0 0",
+        "terminate: success",
+        "TERMINATE: succes",
+        "TERMINATE",
+        "I will TERMINATE: success",
+    ):
+        control = _support.split_control(near_miss)
+        assert control.status is None and control.body == near_miss
+
+
 MATCHED_ARMS = ("compact_raw", "native_absolute_control")
 
 
@@ -595,6 +744,34 @@ def test_move_rel_sub_grid_guard_is_per_axis():
                 geometry=geometry,
                 cursor=(100, 100),
             )
+
+
+def test_importing_grammars_imports_neither_a_codec_nor_desktop():
+    """``available()`` reads metadata and imports nothing — including ``desktop``.
+
+    That is what lets ``_explain_desktop`` report a wrong or missing install as
+    one, after listing all seven names. Re-exporting the control channel eagerly
+    from ``_support`` (which needs ``desktop``) turns ``import grammars`` itself
+    into a bare ``No module named 'desktop.geometry'``, so the re-export is lazy
+    and this asserts it in a fresh interpreter.
+    """
+    root = Path(grammars.__file__).parent.parent
+    probe = (
+        "import sys, grammars\n"
+        "names = grammars.available()\n"
+        "assert 'desktop' not in sys.modules, sorted(sys.modules)\n"
+        "print(len(names))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=root,
+        env={"PYTHONPATH": str(root), "PATH": os.environ.get("PATH", "")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(len(NAMES))
 
 
 def test_entry_points_alone_discover_every_grammar():

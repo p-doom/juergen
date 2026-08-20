@@ -25,8 +25,8 @@ Semantics, chosen so the arm is never weaker than its relative twin:
 * ``0 0 0`` is the top-left corner, not "do not move" — the semantic difference
   from ``compact_raw``.
 * Like ``compact_raw``: the action is the last non-empty line, there is no
-  line-count cap, the canonical separator is ``" ; "``, and there are no control
-  tokens.
+  line-count cap, the canonical separator is ``" ; "``, and there is no NO_OP.
+  Termination is the harness's control channel, as in every grammar.
 """
 
 from __future__ import annotations
@@ -66,6 +66,9 @@ class NativeAbsoluteControlAction:
     y: int = 0
     scroll: int = 0
     elements: tuple[_support.Element, ...] = ()
+    #: The episode-control status this turn declares, from ``_support.CONTROL_SPEC``.
+    #: Set by the lift only; ``parse`` never sees a control line.
+    terminate: str | None = None
     prompt_digest: str = field(default="", compare=False)
 
     def to_dict(self) -> dict[str, Any]:
@@ -74,6 +77,7 @@ class NativeAbsoluteControlAction:
             "y": self.y,
             "scroll": self.scroll,
             "elements": [element.to_dict() for element in self.elements],
+            "terminate": self.terminate,
         }
 
 
@@ -84,6 +88,9 @@ def action_from_dict(value: dict[str, Any]) -> NativeAbsoluteControlAction:
         scroll=int(value.get("scroll", 0)),
         elements=tuple(
             _support.element_from_dict(item) for item in value.get("elements", ())
+        ),
+        terminate=_support.terminate_status(
+            value.get("terminate"), error=NativeAbsoluteControlError
         ),
     )
 
@@ -155,8 +162,12 @@ class NativeAbsoluteControlCodec:
         )
 
     def format(self, action: NativeAbsoluteControlAction) -> str:
-        head = f"{action.x} {action.y} {action.scroll}"
-        return head + _support.render_elements(action.elements)
+        body = f"{action.x} {action.y} {action.scroll}" + _support.render_elements(
+            action.elements
+        )
+        return _support.with_control(
+            body, action.terminate, error=NativeAbsoluteControlError
+        )
 
     def compile(
         self,
@@ -204,15 +215,9 @@ class NativeAbsoluteControlCodec:
         already is. Same stream, two lifts; that is why the lift belongs on the
         codec and not in a converter.
         """
-        if (
-            _support.terminate_status(terminate, error=NativeAbsoluteControlError)
-            is not None
-        ):
-            raise NativeAbsoluteControlError(
-                "this grammar has no control tokens, so termination cannot be "
-                "expressed; its paired_eval arm ends episodes by semantic-step "
-                "accounting"
-            )
+        status = _support.terminate_status(
+            terminate, error=NativeAbsoluteControlError
+        )
         groups = _support.group_operations(
             operations,
             geometry=geometry,
@@ -233,6 +238,7 @@ class NativeAbsoluteControlCodec:
             target[1],
             plan.scroll,
             plan.elements,
+            terminate=status,
             prompt_digest=self.digest,
         )
 

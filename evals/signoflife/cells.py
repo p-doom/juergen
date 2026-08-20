@@ -24,8 +24,8 @@ model arm here is read against 33.9%. Every episode records this on
 
 The matched pair is machine-asserted. `compact_raw` and `native_absolute_control`
 declare each other via `PAIRED_WITH`, contribute byte-identical handler sets, and
-share the line-extraction rule, the `" ; "` separator, the element vocabulary and
-the no-control-tokens decision; a `matched_pair` vector pins one intent in two
+share the line-extraction rule, the `" ; "` separator and the element vocabulary; a
+`matched_pair` vector pins one intent in two
 encodings to one operation sequence, so any difference the gate measures between
 those two arms is the encoding, not the executor. Two consequences:
 `0 0 0 ; +LMB -LMB` is a click at the top-left corner in the absolute arm and
@@ -67,8 +67,8 @@ __all__ = [
 
 NATIVE_CODEC = "native_absolute"
 COMPACT_CODEC = "deltatype_v2"
-"""The Phase-B compact grammar. `compact_raw` is its control-token-free sibling and
-is the arm paired with `native_absolute_control`; `deltatype_v2` is the one the s900
+"""The Phase-B compact grammar. `compact_raw` is its NO_OP-free sibling and is the
+arm paired with `native_absolute_control`; `deltatype_v2` is the one the s900
 checkpoint was trained on, so it is the one the model arm uses."""
 
 PHASEB_SYSTEM_PROMPT_SHA256 = (
@@ -214,9 +214,13 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
         system_prompt_sha256=PHASEB_SYSTEM_PROMPT_SHA256,
         expect_prompt_mismatch=(
             "the s900 checkpoint's prompt was sealed before describe() existed and "
-            "cannot be recomputed from the codec; describe() renders a superset of "
-            "it (the sealed prompt omits type(), which its parser accepts anyway), "
-            "so the two digests differ by construction"
+            "cannot be recomputed from the codec, so the two digests differ by "
+            "construction. Two known differences: describe() documents type(), "
+            "which the sealed prompt omits and its parser accepts anyway, and the "
+            "sealed prompt declares bare TERMINATE / FAIL action lines, which are "
+            "now the harness control channel and no longer parse as actions -- so "
+            "this checkpoint's terminations arrive as parse errors and this cell's "
+            "2/4 reading has to be re-measured, not assumed"
         ),
         settle=_settle(),
         max_tokens=256,

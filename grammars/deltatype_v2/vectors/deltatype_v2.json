@@ -1,6 +1,6 @@
 {
   "grammar": "deltatype_v2",
-  "prompt_sha256": "a65d9b9cde56f72647b0d80962288cf56a2cd7ed242567ebc4e81ef08a6b81ed",
+  "prompt_sha256": "c48e68eb92354d0a98110241aef88c397ef954e8ff469f0d6de4af84293294c1",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080
@@ -31,9 +31,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "operations": [
         [
@@ -66,9 +64,7 @@
         "dy": 0,
         "scroll": 3,
         "elements": [],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "operations": [
         [
@@ -94,9 +90,7 @@
             "text": "hello world"
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "operations": [
         [
@@ -131,9 +125,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "operations": [
         [
@@ -170,9 +162,7 @@
             "text": "a\\nb"
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "operations": [
         [
@@ -214,9 +204,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "operations": [
         [
@@ -272,9 +260,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "operations": [
         [
@@ -333,9 +319,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "operations": [
         [
@@ -380,9 +364,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "operations": [
         [
@@ -419,9 +401,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "operations": [
         [
@@ -459,9 +439,7 @@
             "text": "a;b \"c\""
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "operations": [
         [
@@ -485,9 +463,7 @@
         "dy": -100,
         "scroll": 0,
         "elements": [],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "operations": [
         [
@@ -512,9 +488,7 @@
         "dy": 100,
         "scroll": 0,
         "elements": [],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "operations": [
         [
@@ -535,39 +509,7 @@
         "dy": 0,
         "scroll": 0,
         "elements": [],
-        "no_op": true,
-        "terminate": false,
-        "fail": false
-      },
-      "operations": []
-    },
-    {
-      "name": "terminate",
-      "text": "The task is done.\nTERMINATE",
-      "canonical": "TERMINATE",
-      "action": {
-        "dx": 0,
-        "dy": 0,
-        "scroll": 0,
-        "elements": [],
-        "no_op": false,
-        "terminate": true,
-        "fail": false
-      },
-      "operations": []
-    },
-    {
-      "name": "fail",
-      "text": "FAIL",
-      "canonical": "FAIL",
-      "action": {
-        "dx": 0,
-        "dy": 0,
-        "scroll": 0,
-        "elements": [],
-        "no_op": false,
-        "terminate": false,
-        "fail": true
+        "no_op": true
       },
       "operations": []
     }
@@ -580,9 +522,7 @@
         "dy": 7,
         "scroll": -2,
         "elements": [],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "canonical": "-3 7 -2"
     },
@@ -598,24 +538,9 @@
             "text": "ok"
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "canonical": "0 0 0 ; type(\"ok\")"
-    },
-    {
-      "name": "control_token_wins_over_mouse_fields",
-      "action": {
-        "dx": 4,
-        "dy": 4,
-        "scroll": 0,
-        "elements": [],
-        "no_op": false,
-        "terminate": true,
-        "fail": false
-      },
-      "canonical": "TERMINATE"
     }
   ],
   "invalid_parse": [
@@ -718,9 +643,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "canonical": "100 -50 0 ; +LMB -LMB",
       "recompiled": [
@@ -799,9 +722,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "canonical": "10 20 0 ; +LMB MOVE(30,-40) -LMB",
       "recompiled": [
@@ -889,9 +810,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "canonical": "0 0 0 ; +LMB -LMB +LMB -LMB",
       "recompiled": [
@@ -975,9 +894,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "canonical": "0 0 0 ; +ControlLeft +KeyC -KeyC -ControlLeft",
       "recompiled": [
@@ -1049,9 +966,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "canonical": "0 0 0 ; type(\"hi\") +Return -Return",
       "recompiled": [
@@ -1091,9 +1006,7 @@
         "dy": 0,
         "scroll": 3,
         "elements": [],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "canonical": "0 0 3",
       "recompiled": [
@@ -1114,9 +1027,7 @@
         "dy": 0,
         "scroll": 0,
         "elements": [],
-        "no_op": true,
-        "terminate": false,
-        "fail": false
+        "no_op": true
       },
       "canonical": "NO_OP",
       "recompiled": []
@@ -1136,46 +1047,11 @@
         "dy": 0,
         "scroll": 0,
         "elements": [],
-        "no_op": true,
-        "terminate": false,
-        "fail": false
+        "no_op": true
       },
       "canonical": "NO_OP",
       "recompiled": [],
       "documents": "lossy on purpose, and lossier than 'the duration is dropped': NO_OP is the only idle this grammar has and it compiles to NO OPERATION AT ALL, so the whole wait disappears rather than just its length. The ceiling is the grammar's, and it is visible here rather than inferred."
-    },
-    {
-      "name": "terminate_success",
-      "operations": [],
-      "terminate": "success",
-      "action": {
-        "dx": 0,
-        "dy": 0,
-        "scroll": 0,
-        "elements": [],
-        "no_op": false,
-        "terminate": true,
-        "fail": false
-      },
-      "canonical": "TERMINATE",
-      "recompiled": []
-    },
-    {
-      "name": "terminate_failure_is_FAIL",
-      "operations": [],
-      "terminate": "failure",
-      "action": {
-        "dx": 0,
-        "dy": 0,
-        "scroll": 0,
-        "elements": [],
-        "no_op": false,
-        "terminate": false,
-        "fail": true
-      },
-      "canonical": "FAIL",
-      "recompiled": [],
-      "documents": "this is the only one of the seven with a distinct FAIL token, which is why terminate has to be interpreted per grammar."
     },
     {
       "name": "drag_operation_reaches_the_MOVE_form",
@@ -1213,9 +1089,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "canonical": "140 100 0 ; +LMB MOVE(140,60) -LMB",
       "recompiled": [
@@ -1285,9 +1159,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "canonical": "-60 -40 0 ; +LMB MOVE(0,0) -LMB",
       "recompiled": [
@@ -1341,9 +1213,7 @@
             "text": "ls -la"
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "canonical": "0 0 0 ; type(\"ls -la\")",
       "recompiled": [
@@ -1398,9 +1268,7 @@
             "pressed": false
           }
         ],
-        "no_op": false,
-        "terminate": false,
-        "fail": false
+        "no_op": false
       },
       "canonical": "0 0 0 ; +LMB -LMB +LMB -LMB",
       "recompiled": [
@@ -1516,25 +1384,6 @@
         ]
       ],
       "error": "MOVE is reserved"
-    },
-    {
-      "name": "terminate_with_operations",
-      "operations": [
-        [
-          "mouse_down",
-          [
-            "left"
-          ]
-        ],
-        [
-          "mouse_up",
-          [
-            "left"
-          ]
-        ]
-      ],
-      "terminate": "success",
-      "error": "carries no operations"
     },
     {
       "name": "wait_with_other_operations",

@@ -1,6 +1,6 @@
 {
   "grammar": "ordered_events_v3",
-  "prompt_sha256": "d88fded4beb1927de805ec508bb7941cce08cfbb56fccad99b368395a973662b",
+  "prompt_sha256": "7d609b24e959b49305eff4e6a8c6ef594fc226081fcb8b6929cbb7e2cfad8244",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080
@@ -31,8 +31,7 @@
             "name": "LMB"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -81,8 +80,7 @@
             "name": "LMB"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -134,8 +132,7 @@
             "name": "LMB"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -171,8 +168,7 @@
             "dy": -3
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -196,8 +192,7 @@
             "dy": 0
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -220,8 +215,7 @@
             "text": "Hi"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -243,8 +237,7 @@
             "text": "say \"hi\" C:\\tmp"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -274,8 +267,7 @@
             "name": "Return"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -321,8 +313,7 @@
             "name": "ControlLeft"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -366,8 +357,7 @@
             "name": "Alt"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -405,8 +395,7 @@
             "name": "LMB"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -446,8 +435,7 @@
             "name": "LMB"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -481,8 +469,7 @@
             "dy": -50
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": [
         [
@@ -510,8 +497,7 @@
             "dy": -10
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "operations": []
     },
@@ -521,19 +507,7 @@
       "canonical": "NO_OP",
       "action": {
         "primitives": [],
-        "no_op": true,
-        "terminate": false
-      },
-      "operations": []
-    },
-    {
-      "name": "terminate",
-      "text": "TERMINATE",
-      "canonical": "TERMINATE",
-      "action": {
-        "primitives": [],
-        "no_op": false,
-        "terminate": true
+        "no_op": true
       },
       "operations": []
     }
@@ -549,8 +523,7 @@
             "dy": 2
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "canonical": "move(1,2)"
     },
@@ -558,25 +531,9 @@
       "name": "empty_program_renders_no_op",
       "action": {
         "primitives": [],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "canonical": "NO_OP"
-    },
-    {
-      "name": "control_token_wins",
-      "action": {
-        "primitives": [
-          {
-            "kind": "move",
-            "dx": 1,
-            "dy": 2
-          }
-        ],
-        "no_op": false,
-        "terminate": true
-      },
-      "canonical": "TERMINATE"
     }
   ],
   "invalid_parse": [
@@ -696,8 +653,7 @@
             "name": "LMB"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "canonical": "move(12,-4); down(LMB); move(3,0); up(LMB)",
       "recompiled": [
@@ -770,8 +726,7 @@
             "name": "LMB"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "canonical": "down(LMB); move(30,0); up(LMB)",
       "recompiled": [
@@ -816,8 +771,7 @@
             "dy": -3
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "canonical": "scroll(5,-3)",
       "recompiled": [
@@ -868,8 +822,7 @@
             "name": "Return"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "canonical": "type(\"hi\"); down(Return); up(Return)",
       "recompiled": [
@@ -898,22 +851,9 @@
       "operations": [],
       "action": {
         "primitives": [],
-        "no_op": true,
-        "terminate": false
+        "no_op": true
       },
       "canonical": "NO_OP",
-      "recompiled": []
-    },
-    {
-      "name": "terminate_success",
-      "operations": [],
-      "terminate": "success",
-      "action": {
-        "primitives": [],
-        "no_op": false,
-        "terminate": true
-      },
-      "canonical": "TERMINATE",
       "recompiled": []
     },
     {
@@ -950,8 +890,7 @@
             "name": "LMB"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "canonical": "move(140,100); down(LMB); move(140,60); up(LMB)",
       "recompiled": [
@@ -1001,8 +940,7 @@
             "text": "ls -la"
           }
         ],
-        "no_op": false,
-        "terminate": false
+        "no_op": false
       },
       "canonical": "type(\"ls -la\")",
       "recompiled": [
@@ -1028,12 +966,6 @@
         ]
       ],
       "error": "control character cannot be expressed"
-    },
-    {
-      "name": "terminate_failure_has_no_FAIL",
-      "operations": [],
-      "terminate": "failure",
-      "error": "TERMINATE and no FAIL"
     },
     {
       "name": "wait_with_other_operations",

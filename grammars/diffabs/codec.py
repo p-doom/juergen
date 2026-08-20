@@ -26,9 +26,10 @@ Semantics chosen where the sources disagreed:
   last non-empty line; every prompt in this family puts reasoning before the
   action. ``parse_action`` cut the text at the first newline while
   ``parse_action_tolerant`` fell back to the last line.
-* ``TERMINATE`` is accepted. ``psai_v1`` documents only ``NO_OP``; ``yll_v1``
-  adds ``TERMINATE`` and the trained checkpoints emit it. There is no ``FAIL``
-  in this family — use ``deltatype_v2``.
+* Termination is not in this grammar at all — it is the harness's control
+  channel (``_support.CONTROL_SPEC``). ``psai_v1`` documents only ``NO_OP``;
+  ``yll_v1`` added a bare ``TERMINATE`` action line and no ``FAIL``, and the
+  checkpoints trained on it emit that line, which no longer parses here.
 * There is no ``type()`` element. Literal text is spelled as key transitions
   here; the coalesced ``type()`` element is what ``deltatype_v2`` adds.
 """
@@ -66,12 +67,10 @@ class DiffabsAction:
     scroll: int = 0
     elements: tuple[_support.Element, ...] = ()
     no_op: bool = False
-    terminate: bool = False
+    #: The episode-control status this turn declares, from ``_support.CONTROL_SPEC``.
+    #: Set by the lift only; ``parse`` never sees a control line.
+    terminate: str | None = None
     prompt_digest: str = field(default="", compare=False)
-
-    @property
-    def control(self) -> bool:
-        return self.no_op or self.terminate
 
     @property
     def has_left_click_press(self) -> bool:
@@ -107,7 +106,7 @@ def action_from_dict(value: dict[str, Any]) -> DiffabsAction:
             _support.element_from_dict(item) for item in value.get("elements", ())
         ),
         no_op=bool(value.get("no_op", False)),
-        terminate=bool(value.get("terminate", False)),
+        terminate=_support.terminate_status(value.get("terminate"), error=DiffabsError),
     )
 
 
@@ -158,10 +157,6 @@ class DiffabsCodec:
     def _no_op(self) -> None:
         """No action this turn; wait for the screen to settle."""
 
-    @_support.production("TERMINATE")
-    def _terminate(self) -> None:
-        """The goal has been achieved. Stop."""
-
     def notes(self) -> None:
         """Emit one action per turn."""
 
@@ -180,8 +175,6 @@ class DiffabsCodec:
         digest = self.digest
         if line == "NO_OP":
             return DiffabsAction(no_op=True, prompt_digest=digest)
-        if line == "TERMINATE":
-            return DiffabsAction(terminate=True, prompt_digest=digest)
         mouse, _, tail = line.partition(";")
         dx, dy, scroll = _support.parse_mouse_triple(mouse, error=DiffabsError)
         elements = _support.scan_elements(
@@ -190,12 +183,13 @@ class DiffabsCodec:
         return DiffabsAction(dx, dy, scroll, elements, prompt_digest=digest)
 
     def format(self, action: DiffabsAction) -> str:
-        if action.no_op:
-            return "NO_OP"
-        if action.terminate:
-            return "TERMINATE"
-        head = f"{action.dx} {action.dy} {action.scroll}"
-        return head + _support.render_elements(action.elements)
+        body = (
+            "NO_OP"
+            if action.no_op
+            else f"{action.dx} {action.dy} {action.scroll}"
+            + _support.render_elements(action.elements)
+        )
+        return _support.with_control(body, action.terminate, error=DiffabsError)
 
     def compile(
         self,
@@ -212,7 +206,7 @@ class DiffabsCodec:
         cursor: tuple[int, int],
     ) -> tuple[Operation, ...]:
         """Add the delta back onto ``cursor``, recovering the absolute target."""
-        if action.control:
+        if action.no_op:
             return ()
         operations: list[Operation] = []
         here = _support.clamp(cursor, geometry)
@@ -236,27 +230,14 @@ class DiffabsCodec:
     ) -> DiffabsAction:
         """Absolute Operations -> an action. The inverse of ``compile_action``.
 
-        Two visible ceilings: a ``coalesced_type`` raises because this grammar
-        spells literal text as key transitions, and ``terminate="failure"``
-        raises because it has TERMINATE and no FAIL. Both are real limits of the
+        One visible ceiling: a ``coalesced_type`` raises, because this grammar
+        spells literal text as key transitions. That is a real limit of the
         grammar, not of the lift.
         """
         status = _support.terminate_status(terminate, error=DiffabsError)
         groups = _support.group_operations(
             operations, geometry=geometry, cursor=cursor, error=DiffabsError
         )
-        if status is not None:
-            if status == "failure":
-                raise DiffabsError(
-                    "this grammar has TERMINATE and no FAIL, so a failed "
-                    "termination cannot be expressed; deltatype_v2 has FAIL"
-                )
-            if groups:
-                raise DiffabsError(
-                    "a terminating turn carries no operations in this grammar: "
-                    "TERMINATE is a whole action line"
-                )
-            return DiffabsAction(terminate=True, prompt_digest=self.digest)
         here = _support.clamp(cursor, geometry)
         plan = _support.bare_token_plan(
             groups,
@@ -266,14 +247,21 @@ class DiffabsCodec:
             error=DiffabsError,
         )
         if plan.idle:
-            return DiffabsAction(no_op=True, prompt_digest=self.digest)
+            return DiffabsAction(
+                no_op=True, terminate=status, prompt_digest=self.digest
+            )
         dx, dy = (
             (0, 0)
             if plan.target is None
             else (plan.target[0] - here[0], plan.target[1] - here[1])
         )
         return DiffabsAction(
-            dx, dy, plan.scroll, plan.elements, prompt_digest=self.digest
+            dx,
+            dy,
+            plan.scroll,
+            plan.elements,
+            terminate=status,
+            prompt_digest=self.digest,
         )
 
     def from_absolute(

@@ -50,7 +50,6 @@ _PAIR_RE = re.compile(r"\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)")
 _ARG_RE = re.compile(r"\(\s*([^\s(),;]+)\s*\)")
 
 NO_OP = "NO_OP"
-TERMINATE = "TERMINATE"
 
 
 class OrderedEventsV3Error(ValueError):
@@ -139,16 +138,14 @@ def primitive_from_dict(value: dict[str, Any]) -> Primitive:
 
 @dataclass(frozen=True)
 class OrderedEventsV3Action:
-    """An ordered primitive program, or one control token."""
+    """An ordered primitive program, or NO_OP."""
 
     primitives: tuple[Primitive, ...] = ()
     no_op: bool = False
-    terminate: bool = False
+    #: The episode-control status this turn declares, from ``_support.CONTROL_SPEC``.
+    #: Set by the lift only; ``parse`` never sees a control line.
+    terminate: str | None = None
     prompt_digest: str = field(default="", compare=False)
-
-    @property
-    def control(self) -> bool:
-        return self.no_op or self.terminate
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -164,7 +161,9 @@ def action_from_dict(value: dict[str, Any]) -> OrderedEventsV3Action:
             primitive_from_dict(item) for item in value.get("primitives", ())
         ),
         no_op=bool(value.get("no_op", False)),
-        terminate=bool(value.get("terminate", False)),
+        terminate=_support.terminate_status(
+            value.get("terminate"), error=OrderedEventsV3Error
+        ),
     )
 
 
@@ -226,10 +225,6 @@ class OrderedEventsV3Codec:
     def _no_op(self) -> None:
         """Do nothing / wait for the screen to settle."""
 
-    @_support.production("TERMINATE")
-    def _terminate(self) -> None:
-        """The goal is complete; stop."""
-
     def notes(self) -> None:
         """Recipes (the classic desktop actions in this format)
           move onto a target:  move(dx,dy)
@@ -260,20 +255,19 @@ class OrderedEventsV3Codec:
         digest = self.digest
         if line == NO_OP:
             return OrderedEventsV3Action(no_op=True, prompt_digest=digest)
-        if line == TERMINATE:
-            return OrderedEventsV3Action(terminate=True, prompt_digest=digest)
         return OrderedEventsV3Action(
             primitives=self._scan(line), prompt_digest=digest
         )
 
     def format(self, action: OrderedEventsV3Action) -> str:
-        if action.no_op:
-            return NO_OP
-        if action.terminate:
-            return TERMINATE
-        if not action.primitives:
-            return NO_OP
-        return "; ".join(item.render() for item in action.primitives)
+        body = (
+            NO_OP
+            if action.no_op or not action.primitives
+            else "; ".join(item.render() for item in action.primitives)
+        )
+        return _support.with_control(
+            body, action.terminate, error=OrderedEventsV3Error
+        )
 
     def compile(
         self,
@@ -290,7 +284,7 @@ class OrderedEventsV3Codec:
         cursor: tuple[int, int],
     ) -> tuple[Operation, ...]:
         """Fold the relative moves onto ``cursor``, emitting absolute pixels."""
-        if action.control:
+        if action.no_op:
             return ()
         operations: list[Operation] = []
         here = _support.clamp(cursor, geometry)
@@ -341,24 +335,11 @@ class OrderedEventsV3Codec:
         relative `move(dx,dy)`. A ``glide_to`` becomes a plain `move`, which
         PRESERVES the drag — the button is held across it — and drops only the
         stroke's duration, since the grammar has no timing primitive.
-        ``terminate="failure"`` raises: there is TERMINATE and no FAIL.
         """
         status = _support.terminate_status(terminate, error=OrderedEventsV3Error)
         groups = _support.group_operations(
             operations, geometry=geometry, cursor=cursor, error=OrderedEventsV3Error
         )
-        if status is not None:
-            if status == "failure":
-                raise OrderedEventsV3Error(
-                    "this grammar has TERMINATE and no FAIL, so a failed "
-                    "termination cannot be expressed"
-                )
-            if groups:
-                raise OrderedEventsV3Error(
-                    "a terminating turn carries no operations in this grammar: "
-                    "TERMINATE is a whole action line"
-                )
-            return OrderedEventsV3Action(terminate=True, prompt_digest=self.digest)
         primitives: list[Primitive] = []
         here = _support.clamp(cursor, geometry)
         for group in groups:
@@ -408,13 +389,17 @@ class OrderedEventsV3Codec:
                         "a timed wait alongside other operations cannot be "
                         "expressed; this grammar only has NO_OP"
                     )
-                return OrderedEventsV3Action(no_op=True, prompt_digest=self.digest)
+                return OrderedEventsV3Action(
+                    no_op=True, terminate=status, prompt_digest=self.digest
+                )
             else:  # pragma: no cover - group_operations fixes the set
                 raise OrderedEventsV3Error(f"cannot lift group kind: {kind!r}")
         if not primitives:
-            return OrderedEventsV3Action(no_op=True, prompt_digest=self.digest)
+            return OrderedEventsV3Action(
+                no_op=True, terminate=status, prompt_digest=self.digest
+            )
         return OrderedEventsV3Action(
-            primitives=tuple(primitives), prompt_digest=self.digest
+            primitives=tuple(primitives), terminate=status, prompt_digest=self.digest
         )
 
     def _button_token(self, button: str) -> str:

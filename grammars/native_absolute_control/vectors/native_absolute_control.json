@@ -1,6 +1,6 @@
 {
   "grammar": "native_absolute_control",
-  "prompt_sha256": "d5e34243b113ef1667733dbb2c947defa5fe1c949d937589c614ea498ea3f782",
+  "prompt_sha256": "a40e85d372626af2e1aca6b49d761be3167a255e41a814dbb20d6014b4bc5eec",
   "paired_with": "compact_raw",
   "geometry": {
     "desktop_width": 1920,
@@ -663,11 +663,6 @@
       "error": "three mouse integers"
     },
     {
-      "name": "terminate_is_not_in_this_grammar",
-      "text": "TERMINATE",
-      "error": "three mouse integers"
-    },
-    {
       "name": "move_element_is_not_in_this_grammar",
       "text": "0 0 0 ; MOVE(5,5)",
       "error": "malformed element"
@@ -879,12 +874,6 @@
       ],
       "error": "drag stroke cannot be expressed",
       "documents": "the limit is identical in both arms of the pair, so neither is advantaged by it."
-    },
-    {
-      "name": "termination",
-      "operations": [],
-      "terminate": "success",
-      "error": "no control tokens"
     },
     {
       "name": "drag_operation_is_a_visible_limit",

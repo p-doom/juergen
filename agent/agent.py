@@ -29,6 +29,8 @@ import verifiers.v1 as vf
 from verifiers.v1.dialects import ChatDialect, Dialect
 from verifiers.v1.dialects.chat import message_to_wire
 
+import grammars
+
 from agent.history import History, HistoryPolicy, ImageBudget
 
 _LOGGER = logging.getLogger(__name__)
@@ -77,6 +79,14 @@ class Codec(Protocol):
         geometry: Any,
         cursor: tuple[int, int],
     ) -> Sequence[Any]: ...
+    def action_from_operations(
+        self,
+        operations: Sequence[Any],
+        *,
+        geometry: Any,
+        cursor: tuple[int, int],
+        terminate: object = None,
+    ) -> Any: ...
     def describe(self) -> str: ...
 
 
@@ -101,8 +111,6 @@ def load_codec(name: str) -> Codec:
     # cannot: desktop is grammar-free and exposes neither `CODECS` nor `load_codec`,
     # so without this branch an uninstalled checkout raised LookupError for every
     # grammar.
-    import grammars  # type: ignore[import-not-found]
-
     try:
         return grammars.load(name)
     except KeyError:
@@ -301,10 +309,11 @@ class ContextTransport:
 class Decision:
     """One model turn, all the way through to executable operations.
 
-    `control` names a non-dispatching outcome the grammar defines
-    (`terminate` / `fail` / `no_op`), so `operations` can be empty without a parse
-    error. `prose` is the reasoning that preceded the action line; the Phase-B
-    history policy needs it.
+    `control` names a non-dispatching outcome, so `operations` can be empty without
+    a parse error: `terminate` / `fail` come from the grammar-independent control
+    channel (`grammars.split_control`), `no_op` is derived from an action that
+    compiled to nothing. `prose` is the reasoning that preceded the action line;
+    the Phase-B history policy needs it.
     """
 
     step: int
@@ -319,8 +328,10 @@ class Decision:
     """The turn hit `max_tokens`. Neither a parse failure nor a model decision:
     `max_tokens` is ours, so the action was never finished being emitted."""
     ignored_after_terminate: int = 0
-    """Calls the turn placed after its own terminate. Published because the
-    operation stream cannot show them: see `_calls_after_terminate`."""
+    """Actions the turn placed after its own termination, and which were therefore
+    neither parsed nor dispatched. Only the vendor tool-call spelling can have any
+    — the control line has to be last — so a non-zero value means an off-the-shelf
+    model kept acting after declaring it was done."""
 
     @property
     def terminated(self) -> bool:
@@ -341,58 +352,10 @@ class Decision:
         }
 
 
-_CONTROL_FLAGS = ("terminate", "fail", "no_op")
-
-
-def _control_of(action: Any) -> str | None:
-    """Read a grammar's control outcome without knowing its action type.
-
-    Four different concepts on four names, not four spellings of one — measured
-    across the seven in-tree grammars:
-
-        terminate  deltatype_v2, diffabs, ordered_events_v3, native_absolute, move_rel
-        status     native_absolute, move_rel  (tool-call families only)
-        fail       deltatype_v2
-        no_op      deltatype_v2, diffabs, ordered_events_v3
-        (none)     compact_raw, native_absolute_control
-
-    `compact_raw` and `native_absolute_control` declare no control tokens at all, so
-    every lookup misses and their idling (`0 0 0`) surfaces as the empty-operations
-    `no_op` the caller derives. A tool-call `terminate(status="failure")` is the same
-    outcome as a bare-token `FAIL`, so it is normalised to `fail` — otherwise the
-    premature-terminate indicator would count a self-declared failure as a claimed
-    success.
-
-    Reads attributes only: `codec.parse` returns an action object in every
-    grammar.
-    """
-    if action is None:
-        return None
-    if getattr(action, "terminate", False):
-        status = str(getattr(action, "status", "") or "").strip().lower()
-        return "fail" if status == "failure" else "terminate"
-    for flag in ("fail", "no_op"):
-        if getattr(action, flag, False):
-            return flag
-    return None
-
-
-def _calls_after_terminate(action: Any) -> int:
-    """Calls the turn placed AFTER its own terminate.
-
-    `compile` now stops at the terminate in the two grammars that order their
-    calls, so nothing after it is lowered. The count is still published because
-    the flat operation stream cannot say which side of the terminate an
-    operation came from, so a non-zero value is the only signal that a model
-    placed calls there at all.
-
-    Attribute probe, like `_control_of`: the bare-token grammars spell a control
-    outcome as a whole action line, have no call list, and answer 0.
-    """
-    names = [str(getattr(call, "action", "")) for call in getattr(action, "calls", ())]
-    if "terminate" not in names:
-        return 0
-    return len(names) - names.index("terminate") - 1
+#: The control channel's status -> the name published as `control`. Two
+#: vocabularies exist by contract: `datasets/convert.py::_TERMINAL_CONTROL` maps
+#: this name back to the status when it builds a training target from a rollout.
+_TERMINAL = {"success": "terminate", "failure": "fail"}
 
 
 def _action_record(action: Any) -> Any:
@@ -530,10 +493,37 @@ class Agent:
         Separated from `step` so the same code path scores a cached rollout, a
         scripted oracle cell, and a live episode. A parse failure is a result of
         the system under test, not an exception.
+
+        The control channel is read FIRST and exactly once, and the codec is given
+        only `control.body` — the text before the termination. So a turn like
+        `[move_rel, left_click, TERMINATE: success]` still dispatches its work,
+        while nothing on the far side of the termination can be parsed at all.
         """
-        prose = _first_prose(text)
+        control = grammars.split_control(text)
+        terminal = _TERMINAL[control.status] if control.status else None
+        prose = _first_prose(control.body)
+        if terminal is not None and not control.body.strip():
+            # A turn that only ends the episode has no action text to parse, and
+            # that is not a parse error. The action it amounts to is the grammar's
+            # own empty one, and the codec is asked for it rather than left null:
+            # `parsed_action` is a published field, and `datasets/convert.py:567`
+            # drops every turn whose value is falsy — which would delete exactly
+            # the terminal turns from any dataset built off these rollouts.
+            return Decision(
+                step=step,
+                text=text,
+                prose=prose,
+                action=self.codec.action_from_operations(
+                    (), geometry=geometry, cursor=cursor, terminate=control.status
+                ),
+                operations=(),
+                control=terminal,
+                parse_error=None,
+                sampling=sampling,
+                ignored_after_terminate=control.ignored,
+            )
         try:
-            action = self.codec.parse(text)
+            action = self.codec.parse(control.body)
         except (TypeError, ValueError) as exc:
             return Decision(
                 step=step,
@@ -541,18 +531,13 @@ class Agent:
                 prose=prose,
                 action=None,
                 operations=(),
-                control=None,
+                control=terminal,
                 parse_error={"type": type(exc).__name__, "message": str(exc)},
                 sampling=sampling,
+                ignored_after_terminate=control.ignored,
             )
-        control = _control_of(action)
-        # Compiled whichever way the control went. A multi-call turn like
-        # `[move_rel, left_click, terminate]` carries real work, every grammar's
-        # compile already drops the terminate itself, and skipping compile scored
-        # that turn as a bare terminate with nothing dispatched — which is what the
-        # premature-terminate audit was measuring.
         try:
-            operations = tuple(self.codec.compile(text, geometry, cursor))
+            operations = tuple(self.codec.compile(control.body, geometry, cursor))
         except (TypeError, ValueError) as exc:
             return Decision(
                 step=step,
@@ -560,22 +545,23 @@ class Agent:
                 prose=prose,
                 action=action,
                 operations=(),
-                control=None,
+                control=terminal,
                 parse_error={"type": type(exc).__name__, "message": str(exc)},
                 sampling=sampling,
+                ignored_after_terminate=control.ignored,
             )
-        if control is None and not operations:
-            control = "no_op"
+        if terminal is None and not operations:
+            terminal = "no_op"
         return Decision(
             step=step,
             text=text,
             prose=prose,
             action=action,
             operations=operations,
-            control=control,
+            control=terminal,
             parse_error=None,
             sampling=sampling,
-            ignored_after_terminate=_calls_after_terminate(action),
+            ignored_after_terminate=control.ignored,
         )
 
     async def close(self) -> None:

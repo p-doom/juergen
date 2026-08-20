@@ -1,7 +1,11 @@
-"""`_control_of` across all four grammars, and sampling authority.
+"""The control channel through `Agent.decide`, and sampling authority.
 
-`terminate(status="failure")` in a tool-call grammar is the same outcome as a
-bare-token `FAIL`, and must normalise to `fail`.
+`decide` is the one place a turn's termination is read, and it reads it from
+`grammars.split_control` — never from the parsed action. The channel's own
+spellings, statuses and strictness are pinned in `grammars/test_vectors.py`; what
+is asserted here is the driver's contract: which name is published, that the work
+a terminating turn carries is still dispatched, and that nothing after the
+termination is.
 
 `ctx.sampling` is authoritative at the wire (`ChatDialect.apply_overrides` is
 `{**body, "model": ..., **sampling.model_dump(exclude_none=True)}`), so
@@ -25,7 +29,6 @@ from agent.agent import (
     EndpointTransport,
     ModelCallError,
     _action_record,
-    _control_of,
     _first_prose,
     build_transport,
     dump_prompt,
@@ -73,73 +76,6 @@ def _tool_call(arguments: dict) -> str:
     )
 
 
-def test_control_of_reads_nothing_from_a_missing_action() -> None:
-    assert _control_of(None) is None
-
-
-@pytest.mark.parametrize("codec_name", BARE_TOKEN_GRAMMARS)
-@pytest.mark.parametrize(
-    "line,expected",
-    [("TERMINATE", "terminate"), ("FAIL", "fail"), ("NO_OP", "no_op")],
-)
-def test_control_of_reads_bare_token_flags(codec_name: str, line: str, expected: str) -> None:
-    action = load_codec(codec_name).parse(line)
-    assert _control_of(action) == expected
-
-
-@pytest.mark.parametrize("codec_name", TOOL_CALL_GRAMMARS)
-def test_control_of_normalises_a_tool_call_failure_to_fail(codec_name: str) -> None:
-    """`terminate(status="failure")` normalises to a bare-token `FAIL`."""
-    codec = load_codec(codec_name)
-    success = codec.parse(_tool_call({"action": "terminate", "status": "success"}))
-    failure = codec.parse(_tool_call({"action": "terminate", "status": "failure"}))
-    assert _control_of(success) == "terminate"
-    assert _control_of(failure) == "fail", (
-        "without this, indicator C reads a self-declared failure as a claimed success"
-    )
-
-
-@pytest.mark.parametrize("codec_name", TOOL_CALL_GRAMMARS)
-def test_a_tool_call_terminate_with_no_status_is_a_success_termination(codec_name: str) -> None:
-    action = load_codec(codec_name).parse(_tool_call({"action": "terminate"}))
-    assert _control_of(action) == "terminate"
-
-
-@pytest.mark.parametrize("status", ["FAILURE", " failure ", "Failure"])
-@pytest.mark.parametrize("codec_name", TOOL_CALL_GRAMMARS)
-def test_the_failure_status_match_is_case_and_whitespace_insensitive(
-    codec_name: str, status: str
-) -> None:
-    action = load_codec(codec_name).parse(
-        _tool_call({"action": "terminate", "status": status})
-    )
-    assert _control_of(action) == "fail"
-
-
-@pytest.mark.parametrize("codec_name", TOOL_CALL_GRAMMARS)
-def test_an_unknown_status_is_not_silently_a_failure(codec_name: str) -> None:
-    action = load_codec(codec_name).parse(
-        _tool_call({"action": "terminate", "status": "partial"})
-    )
-    assert _control_of(action) == "terminate"
-
-
-def test_control_of_reads_attributes_and_never_a_dict() -> None:
-    """`codec.parse` returns an action object in all seven grammars, so `_control_of`
-    needs no dict branch."""
-    assert _control_of({"no_op": True}) is None
-    assert _control_of({"terminate": True, "status": "failure"}) is None
-
-
-def test_compact_raw_and_native_absolute_control_declare_no_control_tokens() -> None:
-    """The paired arms are deliberately control-token free, so `_control_of` is None."""
-    for name in ("compact_raw", "native_absolute_control"):
-        action = load_codec(name).parse("0 0 0 ;")
-        assert _control_of(action) is None
-        for flag in ("terminate", "fail", "no_op"):
-            assert not hasattr(action, flag), (name, flag)
-
-
 @pytest.mark.parametrize("codec_name", ALL_FOUR)
 def test_terminated_is_true_for_both_terminate_and_fail(codec_name: str) -> None:
     sampling = EffectiveSampling("m", None, None, None, (), "harness_default", ())
@@ -160,6 +96,72 @@ def _agent(codec_name: str, **kwargs) -> Agent:
 
 def _sampling() -> EffectiveSampling:
     return EffectiveSampling("m", None, None, None, (), "harness_default", ())
+
+
+@pytest.mark.parametrize("status,expected", [("success", "terminate"), ("failure", "fail")])
+@pytest.mark.parametrize("codec_name", sorted(_SMOKE_TEXT))
+def test_the_control_channel_terminates_every_grammar(
+    codec_name: str, status: str, expected: str
+) -> None:
+    """All seven grammars, both statuses, and the action still dispatched.
+
+    Two of the seven — `compact_raw` and `native_absolute_control` — could not
+    terminate at all before the channel, and two more had TERMINATE and no FAIL,
+    so this is the first assertion that reads the same in every grammar. `fail` is
+    published for a failure because indicator C would otherwise read a
+    self-declared failure as a claimed success.
+    """
+    action = _SMOKE_TEXT[codec_name]
+    plain = _agent(codec_name).decide(
+        action, step=1, geometry=_geometry(), cursor=(5, 5), sampling=_sampling()
+    )
+    decision = _agent(codec_name).decide(
+        f"{action}\nTERMINATE: {status}",
+        step=1,
+        geometry=_geometry(),
+        cursor=(5, 5),
+        sampling=_sampling(),
+    )
+    assert decision.control == expected and decision.terminated
+    assert decision.parse_error is None
+    assert decision.operations == plain.operations
+    assert decision.ignored_after_terminate == 0
+
+
+@pytest.mark.parametrize("codec_name", ALL_FOUR)
+def test_a_bare_control_line_is_a_termination_and_not_a_parse_error(
+    codec_name: str,
+) -> None:
+    """A turn that only ends the episode has no action to parse, in any grammar."""
+    decision = _agent(codec_name).decide(
+        "TERMINATE: success",
+        step=1,
+        geometry=_geometry(),
+        cursor=(5, 5),
+        sampling=_sampling(),
+    )
+    assert decision.control == "terminate" and decision.operations == ()
+    assert decision.parse_error is None
+    # Not falsy: `datasets/convert.py:567` drops a turn whose `parsed_action` is,
+    # which would delete every terminal turn from a dataset built off a rollout.
+    assert decision.as_record()["parsed_action"]
+    assert decision.action.terminate == "success"
+
+
+@pytest.mark.parametrize("legacy", ["TERMINATE", "FAIL"])
+@pytest.mark.parametrize("codec_name", BARE_TOKEN_GRAMMARS)
+def test_a_retired_control_token_is_a_scored_parse_error(
+    codec_name: str, legacy: str
+) -> None:
+    """What a checkpoint trained before the channel emits.
+
+    Loud rather than silent, and it does not end the episode: accepting the old
+    token as a second spelling is the per-grammar surface being removed.
+    """
+    decision = _agent(codec_name).decide(
+        legacy, step=1, geometry=_geometry(), cursor=(5, 5), sampling=_sampling()
+    )
+    assert decision.control is None and decision.parse_error is not None
 
 
 @pytest.mark.parametrize("codec_name", ALL_FOUR)
@@ -184,26 +186,11 @@ def test_an_empty_compile_becomes_no_op_not_a_parse_error() -> None:
     assert decision.control == "no_op", "an idle line dispatches nothing but parsed fine"
 
 
-@pytest.mark.parametrize("codec_name", ALL_FOUR)
-def test_a_control_action_compiles_to_no_operations(codec_name: str) -> None:
-    text = (
-        "TERMINATE"
-        if codec_name == "deltatype_v2"
-        else _tool_call({"action": "terminate", "status": "success"})
-    )
-    if codec_name == "compact_raw":
-        pytest.skip("compact_raw has no control tokens by design")
-    decision = _agent(codec_name).decide(
-        text, step=1, geometry=_geometry(), cursor=(5, 5), sampling=_sampling()
-    )
-    assert decision.control == "terminate" and decision.operations == ()
-
-
 @pytest.mark.parametrize("codec_name", TOOL_CALL_GRAMMARS)
 def test_the_work_a_terminating_turn_carries_still_compiles(codec_name: str) -> None:
-    """Skipping `compile` once a control outcome was found dispatched ZERO operations
-    for `[move, click, terminate]` and scored it as a bare terminate, which is what
-    the premature-terminate audit was reading.
+    """`[move, click]` + a termination dispatched ZERO operations once, and scored
+    that turn as a bare premature terminate, which is what the TERMINATE audit was
+    reading.
     """
     move = (
         {"action": "move_rel", "coordinate": [50, 50]}
@@ -215,7 +202,7 @@ def test_the_work_a_terminating_turn_carries_still_compiles(codec_name: str) -> 
             _tool_call(move),
             _tool_call({"action": "left_click"} if codec_name == "move_rel" else
                        {"action": "left_click", "coordinate": [600, 600]}),
-            _tool_call({"action": "terminate", "status": "success"}),
+            "TERMINATE: success",
         ]
     )
     decision = _agent(codec_name).decide(
@@ -228,25 +215,26 @@ def test_the_work_a_terminating_turn_carries_still_compiles(codec_name: str) -> 
     assert decision.as_record()["ignored_after_terminate"] == 0
 
 
-def test_calls_placed_after_a_terminate_are_counted() -> None:
-    """`grammars/move_rel/codec.py:359` skips the terminate and keeps iterating, so
-    the flat operation stream cannot say which side of it an operation came from."""
-    from agent.agent import _calls_after_terminate
+def test_calls_placed_after_a_vendor_terminate_are_counted_and_never_parsed() -> None:
+    """The only spelling that can have anything after its own termination.
 
+    The control line has to be last, so `ignored_after_terminate` is now reachable
+    only through the vendor tool-call form an off-the-shelf model emits — and the
+    calls after it are cut out of the body, so they are not parsed either.
+    """
     text = "\n".join(
         [
             _tool_call({"action": "terminate", "status": "success"}),
-            _tool_call({"action": "left_click"}),
+            _tool_call({"action": "left_click", "coordinate": [1, 1]}),
         ]
     )
-    decision = _agent("move_rel").decide(
+    decision = _agent("native_absolute").decide(
         text, step=1, geometry=_geometry(), cursor=(100, 100), sampling=_sampling()
     )
+    assert decision.control == "terminate" and decision.operations == ()
+    assert decision.parse_error is None and decision.action.calls == ()
     assert decision.ignored_after_terminate == 1
-    assert _calls_after_terminate(load_codec("deltatype_v2").parse("TERMINATE")) == 0, (
-        "a bare-token grammar has no call list"
-    )
-    assert _calls_after_terminate(None) == 0
+    assert decision.as_record()["ignored_after_terminate"] == 1
 
 
 def test_a_real_click_compiles_to_absolute_pixel_operations() -> None:
@@ -303,8 +291,12 @@ def test_untagged_tool_call_shapes_reach_the_same_control_outcome(
     codec_name: str, text: str
 ) -> None:
     """`_support.iter_tool_calls` accepts bare JSON, a ``` fence and a JSON array,
-    because that is how the RL rollout path sees vLLM-parsed output."""
-    assert _control_of(load_codec(codec_name).parse(text)) == "fail"
+    because that is how the RL rollout path sees vLLM-parsed output. The control
+    channel reads the vendor termination out of all three."""
+    decision = _agent(codec_name).decide(
+        text, step=1, geometry=_geometry(), cursor=(5, 5), sampling=_sampling()
+    )
+    assert decision.control == "fail" and decision.parse_error is None
 
 
 def test_as_record_is_json_serialisable_for_every_grammar() -> None:

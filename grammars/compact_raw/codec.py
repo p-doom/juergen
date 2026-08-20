@@ -22,9 +22,10 @@ Semantics chosen where the sources disagreed:
   any completion with more than two.
 * The canonical separator is ``" ; "``. ``compile_compact`` emitted ``"; "``;
   both parse, one is written.
-* There are no control tokens. This arm spells idling as ``0 0 0`` and ends
-  episodes by semantic-step accounting, not TERMINATE. Use ``deltatype_v2`` if
-  the grammar needs NO_OP / TERMINATE / FAIL.
+* There is no NO_OP: this arm spells idling as ``0 0 0``. It ends episodes
+  through the harness's control channel (``_support.CONTROL_SPEC``) like every
+  other grammar; the paired_eval runtime this replaces had no way to say so and
+  ended episodes by semantic-step accounting instead.
 """
 
 from __future__ import annotations
@@ -58,6 +59,9 @@ class CompactRawAction:
     dy: int = 0
     scroll: int = 0
     elements: tuple[_support.Element, ...] = ()
+    #: The episode-control status this turn declares, from ``_support.CONTROL_SPEC``.
+    #: Set by the lift only; ``parse`` never sees a control line.
+    terminate: str | None = None
     prompt_digest: str = field(default="", compare=False)
 
     def to_dict(self) -> dict[str, Any]:
@@ -66,6 +70,7 @@ class CompactRawAction:
             "dy": self.dy,
             "scroll": self.scroll,
             "elements": [element.to_dict() for element in self.elements],
+            "terminate": self.terminate,
         }
 
 
@@ -76,6 +81,9 @@ def action_from_dict(value: dict[str, Any]) -> CompactRawAction:
         scroll=int(value.get("scroll", 0)),
         elements=tuple(
             _support.element_from_dict(item) for item in value.get("elements", ())
+        ),
+        terminate=_support.terminate_status(
+            value.get("terminate"), error=CompactRawError
         ),
     )
 
@@ -141,8 +149,10 @@ class CompactRawCodec:
         return CompactRawAction(dx, dy, scroll, elements, prompt_digest=self.digest)
 
     def format(self, action: CompactRawAction) -> str:
-        head = f"{action.dx} {action.dy} {action.scroll}"
-        return head + _support.render_elements(action.elements)
+        body = f"{action.dx} {action.dy} {action.scroll}" + _support.render_elements(
+            action.elements
+        )
+        return _support.with_control(body, action.terminate, error=CompactRawError)
 
     def compile(
         self,
@@ -185,11 +195,7 @@ class CompactRawCodec:
         raises: the grammar has no stroke primitive, and the converters this
         replaces degraded exactly that into a stationary ``+LMB -LMB``.
         """
-        if _support.terminate_status(terminate, error=CompactRawError) is not None:
-            raise CompactRawError(
-                "this grammar has no control tokens, so termination cannot be "
-                "expressed; deltatype_v2 has TERMINATE and FAIL"
-            )
+        status = _support.terminate_status(terminate, error=CompactRawError)
         groups = _support.group_operations(
             operations, geometry=geometry, cursor=cursor, error=CompactRawError
         )
@@ -207,7 +213,12 @@ class CompactRawCodec:
             else (plan.target[0] - here[0], plan.target[1] - here[1])
         )
         return CompactRawAction(
-            dx, dy, plan.scroll, plan.elements, prompt_digest=self.digest
+            dx,
+            dy,
+            plan.scroll,
+            plan.elements,
+            terminate=status,
+            prompt_digest=self.digest,
         )
 
     def from_target(

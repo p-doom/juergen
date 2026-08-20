@@ -1,6 +1,6 @@
 {
   "grammar": "compact_raw",
-  "prompt_sha256": "080bcd24f802ba519362bd2aa6ea29b517f59d0422acffb5a40d6afd785bb3c0",
+  "prompt_sha256": "5c40ef1b338606f2a4025f720d664b0be09ce35436d1e84340c179e3eb0d0cbc",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080
@@ -429,11 +429,6 @@
       "error": "three mouse integers"
     },
     {
-      "name": "terminate_is_not_in_this_grammar",
-      "text": "TERMINATE",
-      "error": "three mouse integers"
-    },
-    {
       "name": "move_element_is_not_in_this_grammar",
       "text": "0 0 0 ; MOVE(5,5)",
       "error": "malformed element"
@@ -659,12 +654,6 @@
       ],
       "error": "drag stroke cannot be expressed",
       "documents": "THE finding: the converters this replaces degraded exactly this into a stationary `+LMB -LMB` and discarded the stroke. It is now a visible expressiveness limit."
-    },
-    {
-      "name": "termination",
-      "operations": [],
-      "terminate": "success",
-      "error": "no control tokens"
     },
     {
       "name": "two_separate_moves",

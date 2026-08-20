@@ -155,7 +155,9 @@ def test_the_episode_stops_the_moment_the_postcondition_is_reached(tmp_path, pre
 
 
 def test_a_model_terminate_without_the_postcondition_is_recorded_as_such(tmp_path, preparer) -> None:
-    _, result, _ = _run(_config(tmp_path), _task(max_steps=4), replies=["TERMINATE"])
+    _, result, _ = _run(
+        _config(tmp_path), _task(max_steps=4), replies=["TERMINATE: success"]
+    )
     assert result["outcome"] == "model_terminate_without_postcondition"
     assert result["control_terminate"] == "terminate" and result["terminate_step"] == 1
     assert result["success"] is False
@@ -170,13 +172,17 @@ def test_a_terminating_turn_dispatches_its_work_before_the_episode_stops(
     calls = [
         {"action": "move_rel", "coordinate": [50, 50]},
         {"action": "left_click"},
-        {"action": "terminate", "status": "success"},
     ]
     reply = "\n".join(
-        "<tool_call>\n"
-        + json.dumps({"name": "computer_use", "arguments": call})
-        + "\n</tool_call>"
-        for call in calls
+        [
+            *(
+                "<tool_call>\n"
+                + json.dumps({"name": "computer_use", "arguments": call})
+                + "\n</tool_call>"
+                for call in calls
+            ),
+            "TERMINATE: success",
+        ]
     )
     session = FakeSession()
     _, result, _ = _run(
@@ -193,12 +199,12 @@ def test_a_terminating_turn_dispatches_its_work_before_the_episode_stops(
     assert result["ignored_after_terminate"] == 0
 
 
-def test_calls_after_a_terminate_are_counted_and_never_dispatched(
+def test_calls_after_a_vendor_terminate_are_counted_and_never_dispatched(
     tmp_path, preparer
 ) -> None:
     """The count alone would pass whether or not the clicks reached the guest, and
-    dispatch is unconditional, so the guest is asserted on too: `compile_action`
-    stops at the terminate.
+    dispatch is unconditional, so the guest is asserted on too: the control channel
+    cuts the body at the terminate, so nothing after it is even parsed.
     """
     reply = "\n".join(
         "<tool_call>\n"
@@ -212,7 +218,7 @@ def test_calls_after_a_terminate_are_counted_and_never_dispatched(
     )
     session = FakeSession()
     _, result, _ = _run(
-        _config(tmp_path, codec="move_rel"),
+        _config(tmp_path, codec="native_absolute"),
         _task(max_steps=4),
         replies=[reply],
         session=session,
@@ -224,7 +230,9 @@ def test_calls_after_a_terminate_are_counted_and_never_dispatched(
 
 
 def test_a_self_declared_fail_is_recorded_as_fail_not_terminate(tmp_path, preparer) -> None:
-    _, result, _ = _run(_config(tmp_path), _task(max_steps=4), replies=["FAIL"])
+    _, result, _ = _run(
+        _config(tmp_path), _task(max_steps=4), replies=["TERMINATE: failure"]
+    )
     assert result["control_terminate"] == "fail"
     assert result["outcome"] == "model_fail_without_postcondition"
 
@@ -811,23 +819,22 @@ def test_the_rollout_artifact_is_the_layout_labctl_and_convert_both_read(
 def test_our_own_terminate_survives_the_trip_into_another_grammar(
     tmp_path, preparer
 ) -> None:
-    """A control token is a whole action line in the source grammar and a tool call
-    in the target one, so the converter carries the harness's own `control` verdict
-    rather than re-reading either spelling. Getting this wrong writes a dataset that
-    claims a success the rollout never claimed.
+    """The converter carries the harness's own `control` verdict, not a spelling.
+
+    It now has only one spelling to write, which is the point: every target grammar
+    renders the same control line, so a rollout in one grammar re-emits as a
+    training target in any other without termination being re-derived from an
+    Action dataclass.
     """
     convert = load_convert()
     _run(
         _config(tmp_path),
         _task(max_steps=2, name="cell_term", instruction="stop"),
-        replies=["10 10 0 ;", "TERMINATE"],
+        replies=["10 10 0 ;", "TERMINATE: success"],
     )
     run_dir = tmp_path / "cell_term"
 
-    for name, expected in (
-        ("deltatype_v2", "TERMINATE"),
-        ("move_rel", '"action": "terminate", "status": "success"'),
-    ):
+    for name in ("deltatype_v2", "move_rel", "compact_raw", "ordered_events_v3"):
         record = convert.convert_rollout(
             run_dir, load_codec(name), min_valid_actions=0, max_parse_error_frac=1.0
         )
@@ -837,7 +844,7 @@ def test_our_own_terminate_survives_the_trip_into_another_grammar(
             if message["role"] == "assistant"
         ]
         assert record["source_parse_errors"] == 0, name
-        assert expected in written[-1], (name, written)
+        assert written[-1].splitlines()[-1] == "TERMINATE: success", (name, written)
 
 
 def test_the_artifact_root_index_is_what_labctl_reads(tmp_path, preparer) -> None:
@@ -1414,7 +1421,7 @@ def test_the_declared_terminal_control_reaches_the_scorer(tmp_path, preparer) ->
     session = FakeSession()
     session.evaluate_value = 1.0
     config = _config(tmp_path, evaluate_on_finish=True)
-    _run(config, _task(max_steps=2), replies=["FAIL"], session=session)
+    _run(config, _task(max_steps=2), replies=["TERMINATE: failure"], session=session)
     assert session.declared_terminal == ["fail"]
 
 

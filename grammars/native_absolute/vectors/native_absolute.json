@@ -1,6 +1,6 @@
 {
   "grammar": "native_absolute",
-  "prompt_sha256": "3aa8d36758e5d8c9723ffe839270e875d1e49d023c3aced623cc5158ce38daf5",
+  "prompt_sha256": "883a4350aa220a7942a4081047e5916e139e7072f0cc4e93feb69f4d691b807c",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080
@@ -493,68 +493,6 @@
           ]
         ]
       ]
-    },
-    {
-      "name": "terminate",
-      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>",
-      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>",
-      "action": {
-        "calls": [
-          {
-            "action": "terminate",
-            "status": "success"
-          }
-        ]
-      },
-      "operations": []
-    },
-    {
-      "name": "calls_after_a_terminate_are_not_lowered",
-      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [700, 400]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"right_click\"}}\n</tool_call>",
-      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [700, 400]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"right_click\"}}\n</tool_call>",
-      "action": {
-        "calls": [
-          {
-            "action": "mouse_move",
-            "coordinate": [
-              700,
-              400
-            ]
-          },
-          {
-            "action": "left_click"
-          },
-          {
-            "action": "terminate",
-            "status": "success"
-          },
-          {
-            "action": "right_click"
-          }
-        ]
-      },
-      "operations": [
-        [
-          "move_to",
-          [
-            700,
-            400
-          ]
-        ],
-        [
-          "mouse_down",
-          [
-            "left"
-          ]
-        ],
-        [
-          "mouse_up",
-          [
-            "left"
-          ]
-        ]
-      ],
-      "documents": "The turn parses and renders whole -- the right_click really is in the text -- but compile stops at the terminate, because nothing dispatches once the episode has ended. agent.Decision.ignored_after_terminate is what publishes that there were 1."
     },
     {
       "name": "drag_to_is_accepted_as_an_alias",
@@ -1207,51 +1145,6 @@
         ]
       ],
       "documents": "the only grammars of the seven that can say a timed wait; the bare-token ones collapse it to their idle action."
-    },
-    {
-      "name": "terminate_is_a_call_not_a_flag",
-      "operations": [
-        [
-          "mouse_down",
-          [
-            "left"
-          ]
-        ],
-        [
-          "mouse_up",
-          [
-            "left"
-          ]
-        ]
-      ],
-      "terminate": "success",
-      "action": {
-        "calls": [
-          {
-            "action": "left_click"
-          },
-          {
-            "action": "terminate",
-            "status": "success"
-          }
-        ]
-      },
-      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}\n</tool_call>",
-      "recompiled": [
-        [
-          "mouse_down",
-          [
-            "left"
-          ]
-        ],
-        [
-          "mouse_up",
-          [
-            "left"
-          ]
-        ]
-      ],
-      "documents": "here termination rides inside the turn alongside real operations, which the flag-based grammars reject."
     },
     {
       "name": "drag_operation_collapses_to_left_click_drag",

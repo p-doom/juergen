@@ -30,6 +30,14 @@ Semantics chosen where the sources disagreed:
   since it's the closest action".
 * A zero scroll emits no operation instead of raising. The sign-of-life codec
   raised "zero scroll is not an action".
+* ``terminate`` is NOT an action of this schema. Ending an episode dispatches
+  nothing, so it is the harness's control channel (``_support.CONTROL_SPEC``)
+  here as everywhere. The vendor's own ``terminate`` call is still READ — an
+  off-the-shelf Qwen3-VL emits it whatever the prompt says, and that model in
+  this grammar is the only calibrated reference this program has — but it is read
+  by ``_support.split_control``, before any text reaches this codec, and it is
+  re-emitted as the control line. So the vendor spelling is accepted on input and
+  never advertised or written, exactly like ``ACTION_ALIASES``.
 """
 
 from __future__ import annotations
@@ -92,7 +100,6 @@ class NativeCall:
     text: str = ""
     scroll: int = 0
     seconds: float = 0.0
-    status: str = ""
 
     def arguments(self) -> dict[str, Any]:
         value: dict[str, Any] = {"action": self.action}
@@ -108,8 +115,6 @@ class NativeCall:
             value["pixels"] = self.scroll
         if self.action == "wait":
             value["time"] = self.seconds
-        if self.action == "terminate":
-            value["status"] = self.status
         return value
 
     def to_dict(self) -> dict[str, Any]:
@@ -121,21 +126,17 @@ class NativeAbsoluteAction:
     """Every call the turn emitted, in order."""
 
     calls: tuple[NativeCall, ...] = ()
+    #: The episode-control status this turn declares, from ``_support.CONTROL_SPEC``.
+    #: Set by the lift only; the vendor's ``terminate`` call is resolved by
+    #: ``split_control`` before ``parse`` is given the text.
+    terminate: str | None = None
     prompt_digest: str = field(default="", compare=False)
 
-    @property
-    def terminate(self) -> bool:
-        return any(call.action == "terminate" for call in self.calls)
-
-    @property
-    def status(self) -> str:
-        for call in self.calls:
-            if call.action == "terminate":
-                return call.status
-        return ""
-
     def to_dict(self) -> dict[str, Any]:
-        return {"calls": [call.to_dict() for call in self.calls]}
+        return {
+            "calls": [call.to_dict() for call in self.calls],
+            "terminate": self.terminate,
+        }
 
 
 class NativeAbsoluteCodec:
@@ -220,10 +221,6 @@ class NativeAbsoluteCodec:
     def _wait(self) -> None:
         """Wait `time` seconds for the change to happen."""
 
-    @_support.production("terminate")
-    def _terminate(self) -> None:
-        """Terminate the current task and report its completion status (`status` = 'success' or 'failure')."""
-
     @_support.production("answer")
     def _answer(self) -> None:
         """Answer a question, with the answer in `text`."""
@@ -259,11 +256,6 @@ class NativeAbsoluteCodec:
                     "description": "The seconds to wait. Required only by `action=wait`.",
                     "type": "number",
                 },
-                "status": {
-                    "description": "The status of the task. Required only by `action=terminate`.",
-                    "type": "string",
-                    "enum": ["success", "failure"],
-                },
             },
         )
 
@@ -283,7 +275,11 @@ class NativeAbsoluteCodec:
         return NativeAbsoluteAction(calls=calls, prompt_digest=self.digest)
 
     def format(self, action: NativeAbsoluteAction) -> str:
-        return _support.render_tool_calls([call.arguments() for call in action.calls])
+        return _support.with_control(
+            _support.render_tool_calls([call.arguments() for call in action.calls]),
+            action.terminate,
+            error=NativeAbsoluteError,
+        )
 
     def compile(
         self,
@@ -357,14 +353,9 @@ class NativeAbsoluteCodec:
                     operations.append(_support.scroll(call.scroll, 0))
             elif name == "wait":
                 operations.append(_support.wait(call.seconds))
-            elif name == "terminate":
-                # The episode ends here, so calls the turn placed after it are not
-                # lowered. `agent.Decision.ignored_after_terminate` counts them,
-                # because the flat operation stream cannot show they were there.
-                break
             elif name == "answer":
-                # Reports a string. It dispatches nothing, and unlike `terminate` it
-                # is not a control outcome, so the calls after it still run.
+                # Reports a string, and dispatches nothing. It does not end the
+                # episode, so the calls after it still run.
                 continue
             else:  # pragma: no cover - validate_call fixes the set
                 raise NativeAbsoluteError(f"unsupported action: {name!r}")
@@ -385,7 +376,6 @@ class NativeAbsoluteCodec:
         coordinate, a held left button around a stroke collapses into one
         ``left_click_drag``, and a palindromic key run collapses into one
         ``key``. Every collapse is exactly invertible by ``compile_action``.
-        Termination is a ``terminate`` call inside the turn, not a flag.
         """
         status = _support.terminate_status(terminate, error=NativeAbsoluteError)
         groups = _support.group_operations(
@@ -454,14 +444,14 @@ class NativeAbsoluteCodec:
                 index += 1
             else:  # pragma: no cover - group_operations fixes the set
                 raise NativeAbsoluteError(f"cannot lift group kind: {kind!r}")
-        if status is not None:
-            calls.append(NativeCall("terminate", status=status))
-        if not calls:
+        if not calls and status is None:
             raise NativeAbsoluteError(
                 "an empty operation stream has no representation: this grammar "
                 "has no idle action, only an explicit wait"
             )
-        return NativeAbsoluteAction(calls=tuple(calls), prompt_digest=self.digest)
+        return NativeAbsoluteAction(
+            calls=tuple(calls), terminate=status, prompt_digest=self.digest
+        )
 
     def _absorb_move(
         self,
@@ -567,9 +557,6 @@ class NativeAbsoluteCodec:
             except (TypeError, ValueError) as exc:
                 raise NativeAbsoluteError("wait time must be numeric") from exc
             return NativeCall(name, seconds=max(0.0, min(MAX_WAIT_SECONDS, seconds)))
-        if name == "terminate":
-            status = str(arguments.get("status", "success"))
-            return NativeCall(name, status=status)
         if name in ("mouse_down", "mouse_up"):
             button = str(arguments.get("button", "left"))
             if button not in BUTTON_NAMES:
@@ -614,7 +601,10 @@ class NativeAbsoluteCodec:
 
 def action_from_dict(value: dict[str, Any]) -> NativeAbsoluteAction:
     return NativeAbsoluteAction(
-        calls=tuple(CODEC.validate_call(call) for call in value.get("calls", ()))
+        calls=tuple(CODEC.validate_call(call) for call in value.get("calls", ())),
+        terminate=_support.terminate_status(
+            value.get("terminate"), error=NativeAbsoluteError
+        ),
     )
 
 

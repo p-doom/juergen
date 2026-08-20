@@ -92,7 +92,6 @@ class MoveRelCall:
     text: str = ""
     scroll: int = 0
     seconds: float = 0.0
-    status: str = ""
 
     def arguments(self) -> dict[str, Any]:
         value: dict[str, Any] = {"action": self.action}
@@ -108,8 +107,6 @@ class MoveRelCall:
             value["pixels"] = self.scroll
         if self.action == "wait":
             value["time"] = self.seconds
-        if self.action == "terminate":
-            value["status"] = self.status
         return value
 
     def to_dict(self) -> dict[str, Any]:
@@ -121,21 +118,16 @@ class MoveRelAction:
     """Every call the turn emitted, in order."""
 
     calls: tuple[MoveRelCall, ...] = ()
+    #: The episode-control status this turn declares, from ``_support.CONTROL_SPEC``.
+    #: Set by the lift only; ``parse`` never sees a control line.
+    terminate: str | None = None
     prompt_digest: str = field(default="", compare=False)
 
-    @property
-    def terminate(self) -> bool:
-        return any(call.action == "terminate" for call in self.calls)
-
-    @property
-    def status(self) -> str:
-        for call in self.calls:
-            if call.action == "terminate":
-                return call.status
-        return ""
-
     def to_dict(self) -> dict[str, Any]:
-        return {"calls": [call.to_dict() for call in self.calls]}
+        return {
+            "calls": [call.to_dict() for call in self.calls],
+            "terminate": self.terminate,
+        }
 
 
 class MoveRelCodec:
@@ -226,10 +218,6 @@ class MoveRelCodec:
     def _wait(self) -> None:
         """Do nothing this step, for `time` seconds."""
 
-    @_support.production("terminate")
-    def _terminate(self) -> None:
-        """The goal is complete (`status` = 'success' or 'failure')."""
-
     def notes(self) -> None:
         """For each action, return a JSON object within <tool_call></tool_call> tags. To move the cursor 12 right / 8 up (normalized) and left-click there:
         <tool_call>
@@ -268,11 +256,6 @@ class MoveRelCodec:
                     "description": "The seconds to wait. Required only by `action=wait`.",
                     "type": "number",
                 },
-                "status": {
-                    "description": "The status of the task. Required only by `action=terminate`.",
-                    "type": "string",
-                    "enum": ["success", "failure"],
-                },
             },
         )
 
@@ -293,7 +276,11 @@ class MoveRelCodec:
         return MoveRelAction(calls=calls, prompt_digest=self.digest)
 
     def format(self, action: MoveRelAction) -> str:
-        return _support.render_tool_calls([call.arguments() for call in action.calls])
+        return _support.with_control(
+            _support.render_tool_calls([call.arguments() for call in action.calls]),
+            action.terminate,
+            error=MoveRelError,
+        )
 
     def compile(
         self,
@@ -356,11 +343,6 @@ class MoveRelCodec:
                     operations.append(_support.scroll(0, call.scroll))
             elif name == "wait":
                 operations.append(_support.wait(call.seconds))
-            elif name == "terminate":
-                # The episode ends here, so calls the turn placed after it are not
-                # lowered. `agent.Decision.ignored_after_terminate` counts them,
-                # because the flat operation stream cannot show they were there.
-                break
             else:  # pragma: no cover - validate_call fixes the set
                 raise MoveRelError(f"unsupported action: {name!r}")
         return tuple(operations)
@@ -406,8 +388,6 @@ class MoveRelCodec:
             except (TypeError, ValueError) as exc:
                 raise MoveRelError("wait time must be numeric") from exc
             return MoveRelCall(name, seconds=max(0.0, min(MAX_WAIT_SECONDS, seconds)))
-        if name == "terminate":
-            return MoveRelCall(name, status=str(arguments.get("status", "success")))
         if name in ("mouse_down", "mouse_up"):
             button = str(arguments.get("button", "left"))
             if button not in BUTTON_NAMES:
@@ -454,7 +434,7 @@ class MoveRelCodec:
         A ``glide_to`` becomes a plain ``move_rel``, which PRESERVES the drag
         (the button is held across it) and drops only the stroke's duration; this
         schema expresses a drag as move, mouse_down, move, mouse_up and has no
-        single drag action. Termination is a ``terminate`` call, not a flag.
+        single drag action.
         """
         status = _support.terminate_status(terminate, error=MoveRelError)
         groups = _support.group_operations(
@@ -536,14 +516,14 @@ class MoveRelCodec:
                 )
             else:  # pragma: no cover - group_operations fixes the set
                 raise MoveRelError(f"cannot lift group kind: {kind!r}")
-        if status is not None:
-            calls.append(MoveRelCall("terminate", status=status))
-        if not calls:
+        if not calls and status is None:
             raise MoveRelError(
                 "an empty operation stream has no representation: this grammar "
                 "has no idle action, only an explicit wait"
             )
-        return MoveRelAction(calls=tuple(calls), prompt_digest=self.digest)
+        return MoveRelAction(
+            calls=tuple(calls), terminate=status, prompt_digest=self.digest
+        )
 
     def from_pixel_delta(
         self,
@@ -573,7 +553,8 @@ class MoveRelCodec:
 
 def action_from_dict(value: dict[str, Any]) -> MoveRelAction:
     return MoveRelAction(
-        calls=tuple(CODEC.validate_call(call) for call in value.get("calls", ()))
+        calls=tuple(CODEC.validate_call(call) for call in value.get("calls", ())),
+        terminate=_support.terminate_status(value.get("terminate"), error=MoveRelError),
     )
 
 
