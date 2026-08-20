@@ -190,8 +190,15 @@ for entry in "${SUITES[@]}"; do
   status=${PIPESTATUS[0]}
   elapsed=$((SECONDS - suite_started))
   count="$(grep -Eo '[0-9]+ (passed|failed|error)' "$log" | tr '\n' ' ' | sed 's/ $//')"
-  if [ "$status" -eq 0 ]; then
-    results+=("PASS|$name|${count:-?}|${elapsed}s")
+  # pytest exits 0 when every test SKIPPED (rc=5 only covers zero collected), so
+  # a suite whose interpreter cannot import its deps reads as a pass having
+  # executed nothing. A green verdict requires a test to have actually passed.
+  n_passed="$(grep -Eo '[0-9]+ passed' "$log" | head -1 | cut -d' ' -f1)"
+  if [ "$status" -eq 0 ] && [ -n "$n_passed" ]; then
+    results+=("PASS|$name|$count|${elapsed}s")
+  elif [ "$status" -eq 0 ]; then
+    results+=("FAIL|$name|${count:-no test executed}|${elapsed}s")
+    failed=1
   else
     results+=("FAIL|$name|${count:-rc=$status}|${elapsed}s")
     failed=1
