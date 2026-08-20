@@ -33,6 +33,23 @@ def _op(operation: Any) -> tuple[str, tuple[Any, ...]]:
     return str(kind), tuple(args or ())
 
 
+@dataclass(frozen=True)
+class CanvasReceipt:
+    """`evals.harness.Receipt` for the canvas: the four members it can honour.
+
+    A canvas applies every operation it accepts and raises on the rest, so `ok` is
+    unconditionally true and `failure_kind` is always None — there is no guest to
+    disagree with. `operations` is the canvas's own extra: the kinds it applied, in
+    order, which is what the RL tests read.
+    """
+
+    cursor_before: tuple[int, int]
+    cursor_after: tuple[int, int]
+    operations: tuple[str, ...]
+    ok: bool = True
+    failure_kind: str | None = None
+
+
 @dataclass
 class VirtualDesktop:
     """A canvas with a cursor. Applies pixel operations, renders on demand.
@@ -78,7 +95,7 @@ class VirtualDesktop:
     def screenshot(self) -> bytes:
         return png_bytes(render_cursor(self.canvas, self.cursor))
 
-    def execute_atomic(self, operations: Sequence[Any]) -> dict[str, Any]:
+    def execute_atomic(self, operations: Sequence[Any]) -> CanvasReceipt:
         before = self.cursor
         applied: list[str] = []
         for operation in operations:
@@ -86,11 +103,11 @@ class VirtualDesktop:
             applied.append(kind)
             self._apply(kind, args)
         self.dispatched += len(applied)
-        return {
-            "cursor_before": list(before),
-            "cursor_after": list(self.cursor),
-            "operations": applied,
-        }
+        return CanvasReceipt(
+            cursor_before=before,
+            cursor_after=self.cursor,
+            operations=tuple(applied),
+        )
 
     def execute_pyautogui(self, code: str) -> None:
         """Place the cursor. `moveTo` is the only expression a canvas can honour.

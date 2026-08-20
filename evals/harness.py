@@ -68,7 +68,24 @@ class Desktop(Protocol):
     def screen_size(self) -> tuple[int, int]: ...
     def cursor_position(self) -> tuple[int, int]: ...
     def screenshot(self) -> bytes: ...
-    def execute_atomic(self, operations: Any) -> Any: ...
+    def execute_atomic(self, operations: Any) -> "Receipt": ...
+
+
+class Receipt(Protocol):
+    """The guest's own account of one dispatched action.
+
+    `desktop.execute.guest_program.AtomicExecutionResult` is the real one, reached
+    through `evals/vm.py`'s adapter; the in-process canvas (`rl/desktop.py`)
+    implements the same four members. Written down rather than left implied because
+    the return value used to be assigned and dropped, so any shape satisfied it —
+    and a session that reports nothing publishes a turn in which a failed action
+    looks exactly like a successful one.
+    """
+
+    ok: bool
+    failure_kind: str | None
+    cursor_before: tuple[int, int]
+    cursor_after: tuple[int, int]
 
 
 class HistoryConfig(vf.BaseConfig):
@@ -438,6 +455,39 @@ _TRAJECTORY = "trajectory.jsonl"
 _FRAME = "step_{index:03d}.png"
 _RESET = "<reset>"
 _PROMOTED_STEP_KEYS = frozenset({"step", "raw_model_output", "sampling"})
+
+
+def _receipt_record(receipt: Any) -> dict[str, Any] | None:
+    """The guest's own account of one action. `None` = nothing was dispatched.
+
+    A subset of `AtomicExecutionResult`, not its `as_dict()`: the full receipt
+    carries per-primitive X injection evidence and timestamp tables, and this lands
+    in every row of every trajectory. These four are the ones nothing else can
+    supply. `ok` and `failure_kind` are the guest's verdict on whether the action
+    happened — the record otherwise shows a plausible cursor pair for a click the
+    guest reported as failed — and the cursor pair is observed inside the VM around
+    the action, where the published `cursor_before`/`cursor_after` are two separate
+    host round-trips taken before and well after it.
+
+    Both pairs are published rather than one being preferred, because they are
+    measured differently and a disagreement between them is itself a finding.
+    """
+    if receipt is None:
+        return None
+    if not hasattr(receipt, "ok"):
+        raise TypeError(
+            f"{type(receipt).__name__} is not an execution receipt: "
+            "`session.execute_atomic` must return desktop's `AtomicExecutionResult` "
+            "(`ok`, `failure_kind`, `cursor_before`, `cursor_after`). Publishing the "
+            "guest's verdict is not optional — without it a failed action is "
+            "indistinguishable from a successful one in the trajectory."
+        )
+    return {
+        "ok": bool(receipt.ok),
+        "failure_kind": receipt.failure_kind,
+        "cursor_before": list(receipt.cursor_before),
+        "cursor_after": list(receipt.cursor_after),
+    }
 
 
 def _trajectory_rows(
@@ -842,7 +892,14 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 probe = await _to_thread(preparer.probe, session, task)
                 steps_detail.append(
                     self._record(
-                        decision, step, cursor, cursor_after, frame, probe, action_error
+                        decision,
+                        step,
+                        cursor,
+                        cursor_after,
+                        frame,
+                        probe,
+                        action_error,
+                        receipt,
                     )
                 )
                 state.steps = step
@@ -1061,6 +1118,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         frame: bytes | None,
         probe: dict[str, Any] | None,
         action_error: dict[str, Any] | None,
+        receipt: Any = None,
     ) -> dict[str, Any]:
         return {
             **decision.as_record(),
@@ -1071,6 +1129,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             "probe": probe,
             "parse_ok": decision.parse_error is None,
             "action_error": action_error,
+            "guest_receipt": _receipt_record(receipt),
         }
 
     async def _observe(

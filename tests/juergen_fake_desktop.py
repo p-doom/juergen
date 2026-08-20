@@ -21,6 +21,8 @@ import json
 import re
 from typing import Any
 
+from juergen_doubles import FakeGuestReceipt
+
 __all__ = ["FakeCheckout", "FakeDesktopPool", "FakeGuestSession", "build_desktop_pool"]
 
 _TASK_ID = re.compile(r"'task_id':\s*(?P<value>'[^']*'|\"[^\"]*\")")
@@ -79,10 +81,12 @@ class FakeGuestTransport:
     def cursor_position(self) -> tuple[int, int]:
         return self.cursor
 
-    def execute_atomic(self, operations: Any) -> dict[str, Any]:
+    def execute_atomic(self, operations: Any) -> FakeGuestReceipt:
         ops = tuple(operations)
         self.operations.append(ops)
-        return {"dispatched": len(ops)}
+        return FakeGuestReceipt(
+            ok=True, cursor_before=self.cursor, cursor_after=self.cursor
+        )
 
     def execute_pyautogui(self, code: str) -> None:
         self.pyautogui.append(code)

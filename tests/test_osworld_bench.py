@@ -18,6 +18,7 @@ import pytest
 
 from evals.osworld import OSWorldBridge, OSWorldNotAvailable, osworld_root
 from evals.vm import DesktopFacade
+from juergen_doubles import FakeGuestReceipt
 
 
 class _Getters:
@@ -384,8 +385,8 @@ class _Transport:
     def cursor_position(self) -> tuple[int, int]:
         return (5, 6)
 
-    def execute_atomic(self, operations: Any) -> dict[str, Any]:
-        return {"dispatched": len(tuple(operations))}
+    def execute_atomic(self, operations: Any) -> FakeGuestReceipt:
+        return FakeGuestReceipt(ok=True, cursor_before=(5, 6), cursor_after=(5, 6))
 
     def execute_argv(self, argv: list[str], *, check: bool = True) -> dict[str, Any]:
         self.argv.append(list(argv))
@@ -512,7 +513,10 @@ def test_the_facade_delegates_the_rest_of_the_surface(tmp_path) -> None:
     assert facade.cursor_position() == (5, 6)
     assert facade.screenshot() == b"png"
     assert facade.screenshot_settled(min_delay_s=0.5) == b"settled"
-    assert facade.execute_atomic([1, 2, 3]) == {"dispatched": 3}
+    # The guest's own account, forwarded verbatim: `evals/harness.py` publishes it.
+    assert facade.execute_atomic([1, 2, 3]) == FakeGuestReceipt(
+        ok=True, cursor_before=(5, 6), cursor_after=(5, 6)
+    )
     # check=False on purpose: `pgrep chrome` returning 1 is an answer, not an error.
     assert facade.execute_argv(["pgrep", "chrome"])["check"] is False
     facade.execute_pyautogui("pyautogui.moveTo(1, 2)")

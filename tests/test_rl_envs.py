@@ -137,18 +137,19 @@ def test_an_unknown_operation_is_skipped_not_raised() -> None:
     """A grammar may legitimately emit something a *canvas* cannot honour."""
     desktop = _desktop()
     result = desktop.execute_atomic([_op("set_window_geometry", 1, 2, 3, 4)])
-    assert result["operations"] == ["set_window_geometry"]
+    assert result.operations == ("set_window_geometry",)
     assert desktop.dispatched == 1
 
 
 def test_execute_atomic_reports_the_cursor_before_and_after() -> None:
     desktop = _desktop(screen=(200, 150))
     receipt = desktop.execute_atomic([_op("move_to", 99, 88)])
-    assert receipt == {
-        "cursor_before": [10, 10],
-        "cursor_after": [99, 88],
-        "operations": ["move_to"],
-    }
+    # `evals.harness.Receipt`: the harness publishes `ok`, `failure_kind` and the
+    # cursor pair beside its own round-trip read. A canvas applies what it accepts
+    # and raises on the rest, so it never reports a failure.
+    assert (receipt.cursor_before, receipt.cursor_after) == ((10, 10), (99, 88))
+    assert receipt.operations == ("move_to",)
+    assert receipt.ok is True and receipt.failure_kind is None
 
 
 def test_execute_atomic_accepts_dict_operations_too() -> None:

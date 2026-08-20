@@ -13,6 +13,7 @@ import importlib.util
 import io
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -49,6 +50,22 @@ def png(width: int = 8, height: int = 6, colour: tuple[int, int, int] = (10, 20,
     buffer = io.BytesIO()
     Image.new("RGB", (width, height), colour).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+@dataclass(frozen=True)
+class FakeGuestReceipt:
+    """What `execute_atomic` returns: desktop's `AtomicExecutionResult` surface.
+
+    Only the four fields the harness publishes. Returning a bare
+    `{"dispatched": n}` here would let a receipt-shaped contract pass on a shape
+    the real transport never produces, which is how the guest's verdict came to be
+    dropped in the first place.
+    """
+
+    ok: bool
+    cursor_before: tuple[int, int]
+    cursor_after: tuple[int, int]
+    failure_kind: str | None = None
 
 
 class FakeSession:
@@ -93,10 +110,12 @@ class FakeSession:
             return self.frames[min(self.screenshots - 1, len(self.frames) - 1)]
         return png(colour=(self.screenshots % 250, 0, 0))
 
-    def execute_atomic(self, operations: Any) -> dict[str, Any]:
+    def execute_atomic(self, operations: Any) -> FakeGuestReceipt:
         ops = list(operations)
         self.operations_log.append(ops)
-        return {"dispatched": len(ops)}
+        return FakeGuestReceipt(
+            ok=True, cursor_before=self.cursor, cursor_after=self.cursor
+        )
 
     def execute_pyautogui(self, code: str) -> None:
         self.pyautogui_log.append(code)

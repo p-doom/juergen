@@ -313,6 +313,62 @@ def test_a_token_capped_turn_is_a_truncation_not_a_parse_error(tmp_path, prepare
     assert session.operations_log == [], "a truncated action must not be dispatched"
 
 
+def test_the_guest_receipt_is_published_beside_the_round_trip_cursor(
+    tmp_path, preparer
+) -> None:
+    """`execute_atomic`'s return was bound and dropped on every dispatching turn.
+
+    It is the guest's own account of the action — whether it believes it happened,
+    and the cursor observed inside the VM around it. The published
+    `cursor_before`/`cursor_after` are two separate host round-trips instead, taken
+    before the turn and after the settle, so a click the guest reports as FAILED
+    still gets a plausible-looking cursor pair. Both are published: they are
+    measured differently, `datasets/convert.py` and `rl/grounding/taskset.py` both
+    read the round-trip pair, and a disagreement is a finding rather than an error.
+    """
+    session = FakeSession(cursor=(140, 90))
+    _, result, _ = _run(
+        _config(tmp_path), _task(max_steps=1), replies=["0 0 0 ; +LMB -LMB"], session=session
+    )
+    step = result["steps_detail"][-1]
+    receipt = step["guest_receipt"]
+    assert receipt is not None, "a dispatching turn must carry the guest's verdict"
+    assert receipt["ok"] is True and receipt["failure_kind"] is None
+    assert receipt["cursor_before"] == step["cursor_before"], (
+        "the guest and the host round-trip disagree about where the cursor was"
+    )
+    assert receipt["cursor_after"] == step["cursor_after"]
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "cell" / _TRAJECTORY).read_text().splitlines()
+    ]
+    assert rows[-1]["info"]["guest_receipt"] == receipt, "it reaches the trajectory too"
+
+
+def test_a_turn_that_dispatches_nothing_has_no_guest_receipt(tmp_path, preparer) -> None:
+    """`NO_OP` compiles to zero operations, so `execute_atomic` is never called.
+
+    `None` here means "nothing was dispatched", which is what makes a `False` `ok`
+    on a dispatching turn readable as a real guest failure.
+    """
+    _, result, _ = _run(_config(tmp_path), _task(max_steps=1), replies=["NO_OP"])
+    assert result["steps_detail"][-1]["guest_receipt"] is None
+
+
+def test_a_receipt_that_carries_no_verdict_is_refused() -> None:
+    """The transport contract, not a shape to tolerate.
+
+    A session returning something without `ok` publishes a turn in which a failed
+    action is indistinguishable from a successful one, which is the state this
+    field exists to end.
+    """
+    from evals.harness import _receipt_record
+
+    with pytest.raises(TypeError, match="not an execution receipt"):
+        _receipt_record({"dispatched": 2})
+
+
 def test_a_truncated_turn_is_never_written_to_the_trajectory(tmp_path, preparer) -> None:
     """It has no post-action frame, so it has no row — and `datasets/convert.py`
     relies on that rather than filtering it.
@@ -1374,7 +1430,7 @@ def test_a_cancelled_episode_finishes_the_lease_only_after_the_guest_call_return
             dispatching.set()
             time.sleep(0.2)
             order.append("dispatched")
-            return {"dispatched": len(list(operations))}
+            return super().execute_atomic(operations)
 
     original = dsk.DesktopLease.finish
 
@@ -1470,7 +1526,7 @@ def test_the_holds_are_lifted_before_the_scorer_reads_the_guest(tmp_path, prepar
         def execute_atomic(self, operations):
             ops = list(operations)
             order.append("+".join(op.kind for op in ops))
-            return {"dispatched": len(ops)}
+            return super().execute_atomic(operations)
 
         def evaluate(self) -> float:
             order.append("evaluate")
@@ -1491,7 +1547,7 @@ def test_a_guest_that_cannot_be_unwedged_retires_its_vm(tmp_path, preparer, monk
             ops = list(operations)
             if [op.kind for op in ops] == ["mouse_up"]:
                 raise ConnectionError("transport died during teardown")
-            return {"dispatched": len(ops)}
+            return super().execute_atomic(operations)
 
     captured = _captured_lease(monkeypatch)
     _, result, _ = _run(
