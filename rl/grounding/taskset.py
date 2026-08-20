@@ -38,7 +38,7 @@ class GroundingTask(MouseIndicators, SamplingProvenance, DesktopTask):
     @vf.reward
     async def reach(self, trace: vf.Trace) -> float:
         result = valid_result(trace, "grounding")
-        return 1.0 if int(result.get("reach_frame", -1)) >= 0 else 0.0
+        return 1.0 if int(result["reach_frame"]) >= 0 else 0.0
 
     @vf.reward
     async def shaped_progress(self, trace: vf.Trace) -> float:

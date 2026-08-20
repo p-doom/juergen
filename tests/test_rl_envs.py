@@ -663,6 +663,43 @@ def test_an_infra_invalid_movebox_rollout_raises_instead_of_scoring_a_zero() -> 
     assert trace.rewards == {}, "one throwing reward must drop the whole group"
 
 
+@pytest.mark.parametrize(
+    "family,module,cls,key",
+    [
+        ("movebox", "rl.movebox.taskset", "MoveBoxTask", "reach_frame"),
+        ("grounding", "rl.grounding.taskset", "GroundingTask", "reach_frame"),
+        ("target_box", "rl.target_box.taskset", "TargetBoxTask", "best_distance"),
+    ],
+)
+def test_a_reward_raises_when_the_episode_omits_the_key_it_scores(
+    family, module, cls, key
+) -> None:
+    """`_publish` writes both keys in one dict literal, so a rename is the only way
+    to lose them -- and the sentinel default made that rename score every rollout in
+    every group 0.0 instead of saying anything."""
+    import asyncio
+    import importlib
+
+    from juergen_doubles import make_task_data, make_trace
+
+    task_cls = getattr(importlib.import_module(module), cls)
+    data = make_task_data(kind=family, bbox=(10, 10, 50, 50))
+    episode = {
+        "validity": "valid",
+        "outcome": "max_steps",
+        "reach_frame": -1,
+        "best_distance": 12.0,
+        "steps_detail": [],
+        "setup": {},
+    }
+    del episode[key]
+    trace = make_trace(data, episode=episode)
+
+    with pytest.raises(Exception, match=f"KeyError: '{key}'"):
+        asyncio.run(task_cls(data).score(trace))
+    assert trace.rewards == {}, "one throwing reward must drop the whole group"
+
+
 def test_the_movebox_reward_is_sparse_task_success_only() -> None:
     """No STEP_PENALTY / REPEAT_PENALTY / dense shaping: one named knob."""
     import asyncio

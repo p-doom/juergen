@@ -37,7 +37,7 @@ class MoveBoxTask(MouseIndicators, SamplingProvenance, DesktopTask):
     async def reach(self, trace: vf.Trace) -> float:
         """1.0 iff the cursor entered the box at any step."""
         result = valid_result(trace, "movebox")
-        return REACH_REWARD if int(result.get("reach_frame", -1)) >= 0 else 0.0
+        return REACH_REWARD if int(result["reach_frame"]) >= 0 else 0.0
 
     @vf.metric
     async def movebox(self, trace: vf.Trace) -> dict[str, float]:

@@ -47,7 +47,7 @@ class TargetBoxTask(MouseIndicators, SamplingProvenance, DesktopTask):
         result = valid_result(trace, "target_box")
         if result.get("outcome") == "postcondition_reached":
             return 0.0
-        best = float(result.get("best_distance", -1.0))
+        best = float(result["best_distance"])
         if best < 0:
             return -NO_SIGNAL_PENALTY
         return SHAPING_WEIGHT * math.exp(-best / max(SHAPING_SCALE, 1.0))
