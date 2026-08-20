@@ -103,8 +103,25 @@ def _cases(section: str):
     return collected
 
 
+#: One codec's source file, as it was when this process imported it.
+#:
+#: A codec's rendered prompt comes from docstrings, which are fixed when the
+#: module is imported; its pin is read from disk when the assertion runs. Editing
+#: a grammar during a ten-minute suite therefore reported ``rendered`` from the
+#: old text against a pin from the new one -- a mismatch describing two different
+#: trees rather than a bad pin. That inversion was read as a real regression
+#: twice. Comparing this against the file at assert time separates the two.
+_SOURCE_WHEN_IMPORTED: dict[str, bytes] = {}
+
+
+def _codec_source(name: str) -> Path:
+    return Path(importlib.import_module(f"grammars.{name}.codec").__file__)
+
+
 def _codec(name: str):
-    return grammars.load(name)
+    codec = grammars.load(name)
+    _SOURCE_WHEN_IMPORTED.setdefault(name, _codec_source(name).read_bytes())
+    return codec
 
 
 def _message(case: dict) -> str:
@@ -349,8 +366,22 @@ def test_prompt_digest_matches_its_pin(name):
     whose docstrings it measures — so editing any docstring that reaches the
     prompt turns this red. Rewrite the pin in the same commit as the edit, and
     the digest change is then reviewable as a line of the diff.
+
+    The two sides are sampled at different instants — the rendering at import,
+    the pin here — so a grammar edited while this suite runs used to be reported
+    as a digest regression. A moving tree is refused instead, because a check
+    that fails wrongly costs more than one that does not run.
     """
-    assert _codec(name).digest == _vectors(name)["prompt_sha256"]
+    codec = _codec(name)
+    rendered = codec.digest
+    source = _codec_source(name)
+    assert source.read_bytes() == _SOURCE_WHEN_IMPORTED[name], (
+        f"{source} was edited after this process imported it, so `rendered` "
+        "measures the text as it was and the pin measures the text as it is. "
+        "Neither side is wrong and this is not a digest regression: the "
+        "comparison is void. Re-run against a tree nobody is editing."
+    )
+    assert rendered == _vectors(name)["prompt_sha256"]
 
 
 @pytest.mark.parametrize("name", NAMES)
