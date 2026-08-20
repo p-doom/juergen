@@ -61,15 +61,22 @@ override-dependencies = [
 # here depends on torch again.
 
 [tool.uv.sources]
-# desktop is a sibling checkout with no remote and no index presence, so a path
-# is the only way to resolve it. It is not a workspace member: it is its own
+# desktop has no index presence. It is not a workspace member: it is its own
 # repository, with one runtime dependency (Pillow). That repository also holds
 # `desktop-fleet`, a second distribution nothing here depends on.
 #
-# The path is the pin for now. Once desktop has a remote, replace this with
-# `{ git = ..., rev = ... }` or a version specifier: a path source resolves to
-# whatever is on disk, so two checkouts of juergen at the same commit can install
-# different desktop code and nothing records which.
+# Pinned by rev against a bare repo on cluster storage, which is what this entry
+# asked for while it was still a path. A path source resolves to whatever is on
+# disk, so two checkouts of juergen at the same commit could install different
+# desktop code and nothing recorded which -- and it could not resolve at all
+# inside a dispatched run's staged snapshot, because labctl stages one repository
+# by copying its tracked files and `../desktop` is simply absent there. A rev
+# resolves in a snapshot and is written into `uv.lock`, so a run's own record
+# names the desktop commit it used.
+#
+# The obligation: a desktop commit is not visible here until this rev is bumped
+# and `uv lock` re-run. That is the point. The divergence was always there; now
+# it is stated instead of silently followed.
 #
 # The import name is the constraint that fixed the name. `evals/osworld.py`
 # imports OSWorld's `desktop_env.controllers.setup` and `desktop_env.evaluators`
@@ -84,7 +91,7 @@ override-dependencies = [
 # Not editable: an editable path source makes this package's installed behaviour
 # change when a sibling directory is edited. Developers working on both do
 # `uv pip install -e ../desktop` explicitly, which overrides this.
-desktop = { path = "../desktop" }
+desktop = { git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git", rev = "5ed77a58b821be6dc02522f9fc1c998d230f5f59" }
 
 [build-system]
 requires = ["setuptools>=68"]

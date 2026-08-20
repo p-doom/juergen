@@ -101,7 +101,7 @@ def _explain_desktop(exc: ImportError) -> ImportError:
     """Turn a wrong-package import failure into a sentence that says so.
 
     Ours has no index presence, so the dependency is resolved by a
-    ``[tool.uv.sources]`` path entry that only ``uv`` reads: ``pip install .``
+    ``[tool.uv.sources]`` git entry that only ``uv`` reads: ``pip install .``
     reads the index instead and gets PyPI's ``desktop``, a different package
     owning the same import name, and a stale wheel or a shadowing directory on
     ``sys.path`` does the same thing. All of them produce the same bare submodule
@@ -119,7 +119,7 @@ def _explain_desktop(exc: ImportError) -> ImportError:
         "grammars needs this workspace's desktop, but the importable "
         f"`desktop` ({getattr(installed, '__file__', 'not importable')}) "
         f"has no {exc.name!r}. Ours has no PyPI presence and is resolved "
-        "only by the [tool.uv.sources] path entry, which uv reads and pip does "
+        "only by the [tool.uv.sources] git entry, which uv reads and pip does "
         "not: install with uv, or install ours directly with "
         "`uv pip install -e ../desktop`. (PyPI's `desktop` 0.4.2 is a different "
         "package with the same import name, and pip installs that one. "

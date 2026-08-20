@@ -133,3 +133,30 @@ def test_the_sign_of_life_cell_table_ships_beside_its_module(resolved) -> None:
     # It was left out: only `vectors/*.json` was declared.
     _, files = resolved
     assert (files["evals.signoflife.suite"].parent / "suite.json").is_file()
+
+
+def test_the_pinned_desktop_source_resolves_where_a_path_could_not() -> None:
+    """A dispatched run resolves `desktop` from a rev, not from a sibling directory.
+
+    labctl stages one repository by copying its tracked files, so `../desktop` is
+    absent inside the snapshot and a path source could not resolve there at all --
+    which is why every eval recipe runs from the live checkout instead. The rev is
+    also the only thing that records *which* desktop a run used: a path source
+    resolved to whatever happened to be on disk.
+
+    Checked against the remote rather than trusted: a rev that is not in it fails
+    a job at dispatch, in a snapshot, minutes into a queue.
+    """
+    import tomllib
+
+    source = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    pin = source["tool"]["uv"]["sources"]["desktop"]
+    url, rev = pin["git"], pin["rev"]
+    assert url.startswith("file:///"), "the pin is a bare repo on cluster storage"
+    assert len(rev) == 40 and not set(rev) - set("0123456789abcdef"), rev
+    found = subprocess.run(
+        ("git", "--git-dir", url.removeprefix("file://"), "cat-file", "-e", f"{rev}^{{commit}}"),
+        capture_output=True,
+        text=True,
+    )
+    assert found.returncode == 0, f"{rev} is not a commit in {url}: {found.stderr}"
