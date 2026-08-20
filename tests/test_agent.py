@@ -38,7 +38,13 @@ from agent.agent import (
     program_sampling,
     resolve_sampling,
 )
-from agent.history import History, ImageBudget, StatelessSingleTurn, history_policy
+from agent.history import (
+    History,
+    ImageBudget,
+    POLICIES,
+    StatelessSingleTurn,
+    history_policy,
+)
 from juergen_doubles import FakeClient, make_ctx, png
 
 BARE_TOKEN_GRAMMARS = ("deltatype_v2",)
@@ -520,6 +526,35 @@ def test_build_body_drops_unset_knobs_and_keeps_codec_stop_sequences() -> None:
     if stops:
         agent2 = _agent("deltatype_v2")
         assert agent2.build_body(history=_one_frame_history(), instruction="G", step=1)["stop"] == stops
+
+
+@pytest.mark.parametrize("policy", sorted(POLICIES))
+def test_an_observation_note_rides_the_last_user_turn_under_every_policy(
+    policy: str,
+) -> None:
+    """The claim that lets `build_body` own this instead of all four policies.
+
+    Every shape ends on the user turn carrying the newest frame, because that turn
+    has no output yet and so no assistant message follows it. If one did not, the
+    notice would land on an assistant turn and be trained on as the model's own
+    words — so the invariant is asserted here rather than assumed at each policy.
+    """
+    history = History(n_history_frames=8)
+    history.start(png())
+    history.append("0 0 0 ;", png())
+    history.append("0 0 0 ;", png(), "REJECTED")
+    agent = Agent(
+        codec=load_codec("deltatype_v2"),
+        policy=history_policy(policy),
+        budget=ImageBudget(max_images=4),
+        transport=ContextTransport(),
+    )
+    messages = agent.build_body(history=history, instruction="G", step=3)["messages"]
+    assert isinstance(messages[-1], vf.UserMessage)
+    assert messages[-1].content[-1] == vf.TextContentPart(text="REJECTED")
+    assert not [
+        m for m in messages if m.role == "assistant" and "REJECTED" in (m.content or "")
+    ]
 
 
 def test_the_system_prompt_is_the_codecs_own_description_unless_overridden() -> None:
