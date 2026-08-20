@@ -96,20 +96,17 @@ def load_codec(name: str) -> Codec:
             if entry.name == name:
                 loaded = entry.load()
                 return loaded() if isinstance(loaded, type) else loaded
-    try:  # in-tree fallback while the grammar package is being installed
-        import grammars  # type: ignore[import-not-found]
-    except ImportError:  # pragma: no cover - environment-dependent
+    # `grammars.load` is the tree's registry and already falls back to scanning peer
+    # directories, so an uninstalled checkout resolves here. The desktop probe below
+    # cannot: desktop is grammar-free and exposes neither `CODECS` nor `load_codec`,
+    # so without this branch an uninstalled checkout raised LookupError for every
+    # grammar.
+    import grammars  # type: ignore[import-not-found]
+
+    try:
+        return grammars.load(name)
+    except KeyError:
         pass
-    else:
-        # `grammars.load` is the tree's registry and already falls back to scanning
-        # peer directories, so an uninstalled checkout resolves here. The desktop
-        # probe below cannot: desktop is grammar-free and exposes neither
-        # `CODECS` nor `load_codec`, so without this branch an uninstalled checkout
-        # raised LookupError for every grammar.
-        try:
-            return grammars.load(name)
-        except KeyError:
-            pass
     try:
         from desktop import codec_protocol  # type: ignore[import-not-found]
     except ImportError as exc:  # pragma: no cover - environment-dependent
