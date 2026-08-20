@@ -28,7 +28,25 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STAGES = sorted((REPO_ROOT / "pipeline").glob("stage_0*.py"))
 
-_PROBE = "import runpy, sys; runpy.run_path(sys.argv[1], run_name='_dep_probe')"
+# Running the module top level is not enough on its own: the array-record writers
+# are imported inside the worker functions that use them (PLC0415), so a venv
+# without array_record executes every stage cleanly and then dies mid-decode on
+# an allocated node. Every module named by any import statement in the file --
+# nested ones included -- has to resolve too.
+_PROBE = """
+import ast, importlib, runpy, sys
+path = sys.argv[1]
+runpy.run_path(path, run_name="_dep_probe")
+for node in ast.walk(ast.parse(open(path).read())):
+    if isinstance(node, ast.Import):
+        names = [a.name for a in node.names]
+    elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+        names = [node.module]
+    else:
+        continue
+    for name in names:
+        importlib.import_module(name)
+"""
 
 
 def test_the_probe_found_stages():
@@ -46,5 +64,6 @@ def test_stage_imports_under_this_interpreter(stage: Path, tmp_path: Path):
         check=False,
     )
     assert proc.returncode == 0, (
-        f"{stage.name} does not import under {sys.executable}:\n{proc.stderr}"
+        f"{stage.name} names a module that does not resolve under {sys.executable}:"
+        f"\n{proc.stderr}"
     )
