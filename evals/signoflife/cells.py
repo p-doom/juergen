@@ -230,9 +230,10 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
             "construction. Two known differences: describe() documents type(), "
             "which the sealed prompt omits and its parser accepts anyway, and the "
             "sealed prompt declares bare TERMINATE / FAIL action lines, which are "
-            "now the harness control channel and no longer parse as actions -- so "
-            "this checkpoint's terminations arrive as parse errors and this cell's "
-            "2/4 reading has to be re-measured, not assumed"
+            "now the harness control channel. Only the digest differs: the arm "
+            "renders the CURRENT describe(), the only prompt this checkpoint is "
+            "ever shown, and it complies -- it emits the channel's TERMINATE: "
+            "success and the episode stops on that line"
         ),
         settle=_settle(),
         max_tokens=256,
