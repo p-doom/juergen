@@ -24,7 +24,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from pipeline.lib.action_format import WindowKeyboard
+from pipeline.lib.action_format import TEXT_KEYS, WindowKeyboard
 from pipeline.lib.image_store import read_jpeg_bytes
 from pipeline.lib.views import SegmentView, ViewFrame
 
@@ -84,13 +84,15 @@ def est_frame_tokens(ref: str) -> int:
     return math.ceil(h / 28) * math.ceil(w / 28)
 
 
-#: Substrings of a key name that mark a text-producing key. Frozen deliberately:
-#: every goal boundary in every dataset built so far was cut by exactly this set,
-#: and it is coarser than the ``type()`` collapse in lib/action_format, so
-#: ``.``/``;``/``'``/``=`` read as non-typing here while that grammar folds them
-#: into a typing burst. Widening it to agree moves ~2% of snapped goal starts.
-_TYPING_KEY_MARKERS = ("Key", "Return", "Backspace", "Space", "Enter",
-                       "Digit", "Num", "Minus", "Slash", "Period", "Comma")
+#: A keyboard burst is the text keys plus the two that edit or commit one without
+#: producing a character. The text keys come from ``lib/action_format.TEXT_KEYS``,
+#: the same set ``ordered_events_v3`` folds into ``type()``, so the planner and the
+#: label emitter cannot disagree about a key: the substring marker list this
+#: replaces called ``.``/``;``/``'``/``=``/``[``/``]`` non-typing while the grammar
+#: folded them into a burst. Exact names now, because three of those markers
+#: (``Digit``, ``Period``, ``Enter``) matched none of the 86 names real keylogs
+#: spell.
+_BURST_KEYS = TEXT_KEYS | {"Return", "Backspace"}
 
 
 def is_typing(keyboard: WindowKeyboard) -> bool:
@@ -99,11 +101,7 @@ def is_typing(keyboard: WindowKeyboard) -> bool:
     A lone idle frame is not a reliable boundary — people pause a beat
     mid-typing — so cutting keys on submissions and real time-gaps, and this
     only keeps a cut from landing between two typing frames."""
-    return bool(keyboard.texts) or any(
-        marker in name
-        for name in keyboard.names
-        for marker in _TYPING_KEY_MARKERS
-    )
+    return bool(keyboard.texts) or any(name in _BURST_KEYS for name in keyboard.names)
 
 
 def _is_submission(keyboard: WindowKeyboard) -> bool:

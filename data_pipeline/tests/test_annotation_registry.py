@@ -135,22 +135,6 @@ _OBSERVED_KEY_NAMES = (
 )
 
 
-def _surface_is_typing(label: str) -> bool:
-    """The classifier this file's subject replaced: substring-match the rendered
-    ``deltatype_v2`` label. Kept as the regression reference — every goal
-    boundary in every dataset built so far was cut by exactly this."""
-    if not label or label == "NO_OP":
-        return False
-    tail = label.split(";", 1)[1] if ";" in label else label
-    return any(tok in tail for tok in ("Key", "Return", "Backspace", "Space", "Enter",
-                                       "Digit", "Num", "Minus", "Slash", "Period",
-                                       "Comma"))
-
-
-def _surface_is_submission(label: str) -> bool:
-    return bool(label) and ("Return" in label or "Enter" in label)
-
-
 def _one_key(action_format: str, name: str) -> tuple[str, WindowKeyboard]:
     """One window holding a single balanced press/release of ``name``."""
     events = [RawEvent(0, 0.01, "press", name=name),
@@ -177,51 +161,37 @@ class PrintableNameTest(unittest.TestCase):
 
 
 class WindowActivityTest(unittest.TestCase):
-    """The planner's two predicates, now read off the formatter's structured
-    keyboard projection rather than off a rendered label."""
-
-    def test_deltatype_v2_verdicts_match_the_surface_parse_they_replace(self) -> None:
-        """The licence to land: annotation hardcodes the ``canonical`` formatter,
-        so ``deltatype_v2`` is the only format that has ever reached this
-        planner. Every verdict on it must be what it was, or a live dataset's
-        goal boundaries move."""
-        for name in _OBSERVED_KEY_NAMES:
-            label, keyboard = _one_key("canonical", name)
-            self.assertEqual(is_typing(keyboard), _surface_is_typing(label), name)
-            self.assertEqual(_is_submission(keyboard), _surface_is_submission(label), name)
+    """The planner's two predicates, read off the formatter's structured keyboard
+    projection rather than off a rendered label."""
 
     def test_the_two_grammars_render_the_same_activity_differently(self) -> None:
-        """Guards the test below from passing because both formatters happened to
-        emit the same text."""
+        """Guards the parity test below from passing because both formatters
+        happened to emit the same text."""
         self.assertEqual(_one_key("canonical", "KeyH")[0], "0 0 0 ; +KeyH -KeyH")
         self.assertEqual(_one_key("ordered_events_v3", "KeyH")[0], 'type("h")')
 
-    def test_the_two_grammars_agree_except_where_typing_has_two_definitions(self) -> None:
-        """NOT a parity guarantee — a pinned inventory of the gap.
-
-        ``lib/action_format._US_PRINTABLE`` decides what ``ordered_events_v3``
-        folds into ``type()``; ``units._TYPING_KEY_MARKERS`` decides what the
-        planner calls typing. Where the two sets disagree, one grammar reports a
-        typing burst and the other a bare key. Reconciling them is the open
-        decision (it moves ~2% of snapped goal starts, measured), and this
-        assertion goes red the moment either set moves — including when the
-        reconciliation lands and this exception list should be deleted.
-
-        ``LeftBracket``/``RightBracket`` joined the list when ``_US_PRINTABLE``
-        stopped spelling them backwards: they now fold into ``type()`` while the
-        marker set still calls them bare keys."""
-        diverging = set()
+    def test_the_two_grammars_agree_on_every_name_a_keylog_spells(self) -> None:
+        """One definition of a text key, so the same keystroke reads the same
+        whichever grammar spelled it. This replaces a pinned inventory of the gap
+        between two definitions; the gap is closed, so there is nothing to except."""
         for name in _OBSERVED_KEY_NAMES:
             _, deltatype = _one_key("canonical", name)
             _, ordered = _one_key("ordered_events_v3", name)
-            if is_typing(deltatype) != is_typing(ordered):
-                diverging.add(name)
+            self.assertEqual(is_typing(deltatype), is_typing(ordered), name)
             self.assertEqual(_is_submission(deltatype), _is_submission(ordered), name)
-        self.assertEqual(
-            diverging,
-            {"BackQuote", "Dot", "Equal", "LeftBracket", "Quote", "RightBracket",
-             "SemiColon"},
-        )
+
+    def test_a_burst_is_the_text_keys_plus_the_two_that_edit_or_commit_one(self) -> None:
+        """Parity alone would hold with both grammars always reading False, so the
+        verdict itself is pinned. The seven punctuation names are the ones the
+        reconciliation moved: the substring marker list called them non-typing."""
+        for name in ("KeyA", "Num1", "Space", "Minus", "Slash", "BackSlash", "Comma",
+                     "Return", "Backspace",
+                     "BackQuote", "Dot", "Equal", "Quote", "SemiColon",
+                     "LeftBracket", "RightBracket"):
+            self.assertTrue(is_typing(_one_key("canonical", name)[1]), name)
+        for name in ("Escape", "Tab", "Delete", "LMB", "ShiftLeft", "ControlLeft",
+                     "UpArrow", "VolumeMute", "KC_160", "ISO_Section"):
+            self.assertFalse(is_typing(_one_key("canonical", name)[1]), name)
 
 
 class ViewLocalConversionTest(unittest.TestCase):

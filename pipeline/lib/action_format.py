@@ -243,6 +243,14 @@ _US_PRINTABLE: dict[str, tuple[str, str]] = {
     "Slash": ("/", "?"),
 }
 
+#: The pipeline's one definition of a text key: every name that puts a character
+#: on the screen. Read here to fold a typing run into ``type()``, and by the
+#: annotation window planner to decide what counts as typing. One set, because two
+#: had drifted — the planner's own frozen marker list called ``.``/``;``/``'``/
+#: ``=``/``[``/``]`` non-typing while this map folded them into a burst, so the
+#: same keystroke was a typing burst or a bare key depending on the grammar.
+TEXT_KEYS: frozenset[str] = frozenset(_US_PRINTABLE)
+
 _SHIFT_KEYS = frozenset({"ShiftLeft", "ShiftRight"})
 # A held non-Shift modifier vetoes typing pairs (Ctrl+C is a chord, not typing).
 _NON_SHIFT_MODIFIERS = frozenset({
