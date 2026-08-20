@@ -63,6 +63,7 @@ from pipeline.lib.common import (  # noqa: E402
     format_action,
     normalize_dashed_argv,
     read_jsonl,
+    str2bool,
     write_json,
     write_jsonl,
 )
@@ -79,28 +80,18 @@ REASON_IDLE = 2
 _REASON_NAMES = {REASON_BLACK: "black", REASON_IDLE: "idle_interior"}
 
 
-def _master_frame_manifest(master_row: dict[str, Any], frames_dir: Path, seg: str) -> Path:
-    """Locate a segment's master ``frame_manifest.jsonl``: prefer the shard path
-    the index recorded; fall back to the canonical ``frames/<seg>/`` layout."""
-    shard = master_row.get("shard_path")
-    if shard:
-        return Path(shard).parent / "frame_manifest.jsonl"
-    return frames_dir / seg / "frame_manifest.jsonl"
+def _master_frame_manifest(master_row: dict[str, Any]) -> Path:
+    """A segment's master ``frame_manifest.jsonl``, beside the shard the stage-01
+    index recorded for it."""
+    return Path(master_row["shard_path"]).parent / "frame_manifest.jsonl"
 
 
 def _is_black(mrec: dict[str, Any], luma_max: float, dark_frac_min: float) -> bool:
     """True if this master record's frame is (near-)black per the stage-01 luma
-    metrics. Records without metrics (older masters, decode failures) are never
-    dropped."""
+    metrics. A record whose frame stage 01 could not decode has no metrics and is
+    never dropped as black."""
     ml, fd = mrec.get("mean_luma"), mrec.get("frac_dark")
     return (ml is not None and ml <= luma_max) or (fd is not None and fd >= dark_frac_min)
-
-
-def _str2bool(s: str | bool) -> bool:
-    """Parse a boolean CLI value (labctl renders every arg as ``--key=value``)."""
-    if isinstance(s, bool):
-        return s
-    return str(s).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _activity_mask(keylog_path: Path | None, n_records: int, master_fps: float) -> list[bool]:
@@ -355,7 +346,7 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
             return {**base, "status": "no_master_frames"}
         if master_row.get("status") not in USABLE_MASTER_STATUSES:
             return {**base, "status": f"master_{master_row.get('status')}"}
-        master_fps = float(master_row.get("master_fps") or task["master_fps"])
+        master_fps = float(master_row["master_fps"])
 
         # Resume: reuse only if a prior run judged with the same params.
         if not task["force"] and out_path.exists():
@@ -373,9 +364,7 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
                     **{k: prev.get(k) for k in ("n_kept", "n_black", "n_idle_interior")},
                 }
 
-        master_manifest = read_jsonl(
-            _master_frame_manifest(master_row, Path(task["frames_dir"]), seg)
-        )
+        master_manifest = read_jsonl(_master_frame_manifest(master_row))
         n_records = len(master_manifest)
         if n_records == 0:
             return {**base, "status": "empty_master"}
@@ -444,18 +433,19 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
         return {**base, "status": "failed", "error": f"{exc}", "traceback": traceback.format_exc()}
 
 
-def _load_master_fps(master_dir: Path, index_rows: list[dict[str, Any]]) -> float:
-    """The store's master fps == the tick rate of the axis being masked."""
+def _load_master_fps(master_dir: Path) -> float:
+    """The store's master fps == the tick rate of the axis being masked.
+
+    Read from the one place stage 01 writes it, and nowhere else: picking a
+    number out of the index rows when they disagree would mask the axis at a
+    rate no segment was decoded at."""
     summary_path = master_dir / "frames_master_summary.json"
-    if summary_path.is_file():
-        try:
-            return float(json.loads(summary_path.read_text())["master_fps"])
-        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-            pass
-    seen = {float(r["master_fps"]) for r in index_rows if r.get("master_fps") is not None}
-    if not seen:
-        raise RuntimeError(f"cannot determine master_fps of {master_dir}")
-    return max(seen)
+    if not summary_path.is_file():
+        raise SystemExit(
+            f"no frames_master_summary.json under {master_dir}: cannot determine the "
+            "master fps (stage 01 writes it beside manifest.json)"
+        )
+    return float(json.loads(summary_path.read_text())["master_fps"])
 
 
 def parse_args() -> argparse.Namespace:
@@ -467,7 +457,7 @@ def parse_args() -> argparse.Namespace:
                    help="Realigned clips_manifest.jsonl (stage 00/02): dataset definition + "
                         "corrected keylog_path + alignment_status, joined by segment_id.")
     p.add_argument("--output-dir", type=Path, required=True)
-    p.add_argument("--drop-black-frames", nargs="?", const=True, type=_str2bool,
+    p.add_argument("--drop-black-frames", nargs="?", const=True, type=str2bool,
                    default=config.DEFAULT_DROP_BLACK_FRAMES, metavar="BOOL",
                    help="Mask (near-)black master ticks (luma metrics from stage 01).")
     p.add_argument("--black-luma-max", type=float, default=config.DEFAULT_BLACK_LUMA_MAX,
@@ -519,7 +509,7 @@ def main() -> None:
     if not index_rows:
         raise RuntimeError(f"Empty segment index: {index_path}")
     master_by_seg = {str(r["segment_id"]): r for r in index_rows}
-    master_fps = _load_master_fps(master_dir, index_rows)
+    master_fps = _load_master_fps(master_dir)
 
     if args.qc_view_fps is not None:
         resolve_stride(master_fps, args.qc_view_fps)  # fail fast on bad ratios
@@ -539,8 +529,6 @@ def main() -> None:
             "manifest_row": row,
             "master_row": master_by_seg.get(str(row["segment_id"])),
             "filter_dir": str(filter_dir),
-            "frames_dir": str(master_dir / "frames"),
-            "master_fps": master_fps,
             "drop_black_frames": args.drop_black_frames,
             "black_luma_max": args.black_luma_max,
             "black_dark_frac_min": args.black_dark_frac_min,

@@ -578,7 +578,11 @@ def _goals_mode(args, art: FilterArtifact, method: Method, units_dir: Path,
     assert_same_artifact(str(in_manifest.get("master_store_id")), art.master_store_id,
                          what="master_store_id")
     assert_same_artifact(str(in_manifest.get("filter_id")), art.filter_id, what="filter_id")
-    in_fps = float(in_manifest.get("fps") or args.fps)
+    # The input artifact's own rate, never this run's --fps: its goals are
+    # master intervals produced against THAT frame grid, and re-projecting them
+    # onto a different one silently moves every goal boundary.
+    in_fps = float(in_manifest["fps"])
+    in_fps_mode = str(in_manifest["fps_mode"])
     input_goals_id = make_artifact_id(in_dir)
 
     by_unit: dict[str, list[dict[str, Any]]] = {}
@@ -593,7 +597,7 @@ def _goals_mode(args, art: FilterArtifact, method: Method, units_dir: Path,
         uid = item["id"]
         goals = [dict(g) for g in item["goals"]]  # never mutate the input rows
         seg = str(goals[0]["segment_id"])
-        view = art.segment_view(seg, in_fps, str(in_manifest.get("fps_mode") or "exact"))
+        view = art.segment_view(seg, in_fps, in_fps_mode)
         narration_path = in_dir / "describe" / f"{uid}.txt"
         narration = narration_path.read_text() if narration_path.exists() else ""
         result = method.run_unit(

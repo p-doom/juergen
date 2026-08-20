@@ -30,7 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from pipeline.lib.manifest import write_manifest  # noqa: E402
+from pipeline.lib.manifest import make_artifact_id, write_manifest  # noqa: E402
 
 FLAGS = flags.FLAGS
 
@@ -97,6 +97,9 @@ def main(_) -> None:
             f"no chat.jsonl under {source_path} (stage 04 writes a single "
             f"<source>/chat.jsonl)"
         )
+    # Identity, not just a path: stage 06 reuses this cache and must be able to
+    # refuse one measured from a different chat.jsonl.
+    source_id = make_artifact_id(source_path)
     per_unit = [_run_measure(src_chat, output_dir)]
 
     write_manifest(
@@ -108,7 +111,7 @@ def main(_) -> None:
             "num_workers": FLAGS.num_workers,
             "omegalax_repo": FLAGS.omegalax_repo,
         },
-        inputs={"source": str(source_path)},
+        inputs={"source": str(source_path), "source_id": source_id},
         stats={"per_split": per_unit},
     )
     print(f"Wrote {output_dir / 'manifest.json'}")

@@ -19,6 +19,7 @@ different max_length / overflow_mode / val_fraction never re-tokenizes.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import time
@@ -32,7 +33,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from pipeline.lib.manifest import write_manifest  # noqa: E402
+from pipeline.lib.goals import assert_same_artifact  # noqa: E402
+from pipeline.lib.manifest import make_artifact_id, write_manifest  # noqa: E402
 
 FLAGS = flags.FLAGS
 
@@ -84,7 +86,8 @@ flags.DEFINE_string(
     f"<root>/{MESSAGE_LENGTHS_FILENAME}. Forwarded to build_sft_records_from_chat.py "
     "so the tokenizer pass is skipped (per-message lengths are independent of "
     "max_length / overflow_mode / split, so one cache serves every sequence length "
-    "and every split). Optional: omit to tokenize in-line.",
+    "and every split). Its manifest must record the same --source_path artifact "
+    "this run reads, or the join is refused. Optional: omit to tokenize in-line.",
 )
 flags.DEFINE_float(
     "val_fraction",
@@ -144,7 +147,15 @@ def main(_) -> None:
             f"no chat.jsonl under {source_path} (stage 04 writes a single "
             f"<source>/chat.jsonl)"
         )
-    cache_path = (lengths_root / MESSAGE_LENGTHS_FILENAME) if lengths_root else None
+    source_id = make_artifact_id(source_path)
+    cache_path = None
+    if lengths_root is not None:
+        # Per-message lengths are independent of max_length / overflow_mode /
+        # split, but NOT of the chat that produced them: a cache measured from
+        # another dataset would silently pack this one at the wrong lengths.
+        measured_id = json.loads((lengths_root / "manifest.json").read_text())["inputs"]["source_id"]
+        assert_same_artifact(measured_id, source_id, what="message-length cache source")
+        cache_path = lengths_root / MESSAGE_LENGTHS_FILENAME
     splits = ("train", "val") if FLAGS.val_fraction > 0.0 else ("train",)
     per_split = [_run_split(s, src_chat, output_dir / s, cache_path) for s in splits]
 
@@ -162,7 +173,7 @@ def main(_) -> None:
             "message_lengths_path": FLAGS.message_lengths_path,
             "val_fraction": FLAGS.val_fraction,
         },
-        inputs={"source": str(source_path)},
+        inputs={"source": str(source_path), "source_id": source_id},
         stats={"per_split": per_split},
     )
     print(f"Wrote {output_dir / 'manifest.json'}")

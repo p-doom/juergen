@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import json
 from bisect import bisect_right
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -96,7 +95,7 @@ class ViewFrame:
     t_s: float  # master_idx / master_fps, for humans
     win_start: int  # label window [win_start, win_end) in master ticks
     win_end: int
-    image: str | None  # ar:// URI into the master store
+    image: str  # ar:// URI into the master store
 
 
 @dataclass
@@ -140,7 +139,10 @@ def build_segment_view(
     stride = resolve_stride(master_fps, fps, fps_mode)
     n_records = int(filter_seg["n_master_records"])
     kept = _KeptRanges(filter_seg["kept_ranges"])
-    shard_path = filter_seg.get("shard_path")
+    # Every frame's image is an ar:// URI into this shard. Without it a view
+    # frame has no observation, and `str(None)` would silently reach a training
+    # conversation as the image reference "None".
+    shard_path = filter_seg["shard_path"]
 
     # Slot j's tick: j*stride exactly, or the nearest tick to the ideal time
     # (half-up, deterministic). stride >= 1 keeps ticks strictly increasing.
@@ -167,7 +169,7 @@ def build_segment_view(
                 t_s=tick / master_fps,
                 win_start=tick,
                 win_end=next_tick,
-                image=make_arrayrecord_image_uri(shard_path, tick) if shard_path else None,
+                image=make_arrayrecord_image_uri(shard_path, tick),
             )
         )
 
@@ -242,13 +244,3 @@ class FilterArtifact:
 
     def segment_view(self, segment_id: str, fps: float, fps_mode: str = "exact") -> SegmentView:
         return build_segment_view(self.load_segment(segment_id), fps=fps, fps_mode=fps_mode)
-
-    def iter_views(
-        self, fps: float, *, fps_mode: str = "exact", limit: int | None = None
-    ) -> Iterator[SegmentView]:
-        self.stride_for(fps, fps_mode)  # validate once up front
-        rows = self.usable_rows()
-        if limit is not None:
-            rows = rows[:limit]
-        for row in rows:
-            yield self.segment_view(str(row["segment_id"]), fps, fps_mode)

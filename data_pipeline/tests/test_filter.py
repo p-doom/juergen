@@ -256,8 +256,6 @@ class FilterSegmentTest(unittest.TestCase):
                 "shard_path": str(shard),
             },
             "filter_dir": str(root / "filter"),
-            "frames_dir": str(root / "frames"),
-            "master_fps": 1.0,
             "drop_black_frames": True,
             "black_luma_max": 6.0,
             "black_dark_frac_min": 0.999,
