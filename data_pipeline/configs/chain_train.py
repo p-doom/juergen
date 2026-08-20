@@ -63,6 +63,23 @@ def _entrypoint(rel_path: str) -> str:
     return rel_path
 
 
+def _source(path: str) -> str:
+    """Return ``path`` after asserting it exists.
+
+    Covers the inputs this chain does not itself produce. The 03->04->05->06
+    handoffs are deliberately not checked: the parent stage creates those
+    directories after this config has been read, so statting them here would
+    refuse every legitimate dispatch.
+    """
+    if not Path(path).exists():
+        raise RuntimeError(
+            f"input path does not exist: {path}. GOALS_DIR must name a finished "
+            "chain_annotate artifact (or be None for the goal-free path); a "
+            "missing one is scheduled and then dies on the node."
+        )
+    return path
+
+
 def _omegalax_repo(path: str) -> str:
     """Return ``path`` after asserting it is an omegalax checkout on disk.
 
@@ -103,9 +120,17 @@ def _as_child(child_cfg, trigger: str = "on_complete") -> dict:
 def stage_03_filter():
     # Shared with chain_annotate; imported lazily so each config stays
     # standalone-launchable.
-    from configs.chain_annotate import stage_03_filter as shared  # noqa: PLC0415
+    from configs import chain_annotate  # noqa: PLC0415
 
-    return shared()
+    # Two independent constants that have to name the same tree: the filter
+    # writes under chain_annotate's root and stage 04 reads it under this one.
+    if chain_annotate.DATASETS_ROOT != DATASETS_ROOT:
+        raise RuntimeError(
+            f"DATASETS_ROOT disagrees with chain_annotate's "
+            f"({DATASETS_ROOT} vs {chain_annotate.DATASETS_ROOT}), so stage 04 "
+            f"would read a filter_dir the shared stage 03 never writes."
+        )
+    return chain_annotate.stage_03_filter()
 
 
 def stage_04_conversations():
@@ -122,7 +147,7 @@ def stage_04_conversations():
     cfg.entrypoint.args.action_format = "canonical"
     cfg.entrypoint.args.num_workers = 32
     if GOALS_DIR:
-        cfg.entrypoint.args.goals_dir = GOALS_DIR
+        cfg.entrypoint.args.goals_dir = _source(GOALS_DIR)
         cfg.entrypoint.args.use_plans = True
         cfg.entrypoint.args.include_variants = True
         cfg.entrypoint.args.terminal_token = "<terminate>"
