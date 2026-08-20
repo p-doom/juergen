@@ -188,8 +188,16 @@ class DesktopPoolConfig(vf.BaseConfig):
 
 
 class DesktopHarnessConfig(vf.HarnessConfig):
-    codec: str = "deltatype_v2"
-    """Grammar entry-point name. The one field a grammar A/B changes."""
+    codec: str
+    """Grammar entry-point name. The one field a grammar A/B changes.
+
+    Required, with no default. A codec decides how the model's output is parsed and
+    how it compiles to operations, so the wrong one does not error — it scores the
+    checkpoint under a grammar it was never trained on, and presents as a
+    parse-failure collapse rather than as the config mistake it is. A digest
+    mismatch against `system_prompt_sha256` catches most of that, but an
+    off-the-shelf model has no recorded digest, so the backstop is missing exactly
+    where a default would be doing the guessing."""
     system_prompt_override: str | None = None
     system_prompt_sha256: str | None = None
     """A checkpoint's training-prompt digest. ENFORCED unless a mismatch is

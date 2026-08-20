@@ -18,6 +18,7 @@ the guard meant to catch it). The id is `osworld_bench`.
         --taskset.id osworld_bench --harness.id osworld_bench \\
         --taskset.osworld_root "$OSWORLD_ROOT" \\
         --taskset.split_path "$OSWORLD_ROOT/evaluation_examples/test_all.json" \\
+        --harness.codec native_absolute \\
         --harness.pool.pool_target evals.vm:kvm_desktop_pool \\
         --harness.pool.session_kwargs '{"image": "...qcow2", "root_dir": "..."}'
 

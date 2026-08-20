@@ -1580,6 +1580,21 @@ def test_the_task_max_steps_is_used_when_the_config_leaves_it_zero(tmp_path, pre
     assert result["steps"] == 2
 
 
+def test_a_config_without_a_codec_is_refused() -> None:
+    """No default, so an arm that never names a grammar cannot run at all.
+
+    A wrong codec parses and compiles the model's output under a grammar it was
+    never trained on: it scores, and the score reads as a parse-failure collapse
+    rather than as a config mistake. `verifiers` builds this config by
+    `model_validate` on the harness payload (`loaders.narrow_plugin_field`), so the
+    refusal lands at config parse, before a VM is booted.
+    """
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="codec"):
+        DesktopHarnessConfig(id="test_harness")
+
+
 @pytest.mark.parametrize(
     "field,bad",
     [
@@ -1590,8 +1605,10 @@ def test_the_task_max_steps_is_used_when_the_config_leaves_it_zero(tmp_path, pre
 def test_the_config_validates_its_bounds(field, bad) -> None:
     from pydantic import ValidationError
 
-    with pytest.raises(ValidationError):
-        DesktopHarnessConfig(**{field: bad})
+    # Named in `match`, and `codec` supplied: `codec` is required, so omitting it
+    # raises on its own and the assertion would be satisfied by any input at all.
+    with pytest.raises(ValidationError, match=field):
+        DesktopHarnessConfig(**{"codec": "deltatype_v2", field: bad})
 
 
 def test_the_image_budget_config_validates_quality_and_pixels() -> None:
