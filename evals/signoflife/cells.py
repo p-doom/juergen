@@ -1,18 +1,23 @@
 """The gate's arms, as `DesktopHarnessConfig`s over one taskset.
 
-The calibration semantics:
+The calibration semantics, per tier — an arm runs one tier at a time
+(`--tier`), and a reading is only calibrated by controls from the same tier:
 
-  * the oracle arm must read 4/4 — the suite is solvable, the executor dispatches,
-    and the guest probe can observe success;
-  * the negative arm must read 0/4 — a plausibly-wrong action through the same
-    parse/compile/executor path is scored as a failure, so a pass is not an
+  * the oracle arm must pass every cell of the tier — it is solvable, the executor
+    dispatches, and the guest probe can observe success;
+  * the negative arm must fail every cell — a plausibly-wrong action through the
+    same parse/compile/executor path is scored as a failure, so a pass is not an
     artefact of the harness;
   * both exist per grammar, since a control that certified only one grammar would
     leave the other's parse/compile path unmeasured;
-  * the model arms are what the controls calibrate. Their published readings are
-    off-the-shelf-4B-native 4/4 and Phase-B-compact 2/4; the ordered arm has none
-    yet. A model number is uncalibrated without its two controls in the same
-    configuration.
+  * the model arms are what the controls calibrate. On the scored tier the
+    measured readings are off-the-shelf-4B-native 3/4 (run
+    019fd5be788b7793a8a777da2a0f7531, 3 trials: `focus_terminal_and_type` 0/3, all
+    three draws `model_terminate_without_postcondition`) and Phase-B-compact 2/4
+    (run 01a01e7c171e7dc1b681725c7066d0bd, 3 trials). The 4/4 previously recorded
+    here for the off-the-shelf arm is not what its result.json says. No arm has a
+    candidate-tier reading yet. A model number is uncalibrated without its two
+    controls in the same configuration and the same tier.
 
 Baseline incomparability — read this before quoting a number. The only calibrated
 external reference we have is off-the-shelf Qwen3-VL-8B = 33.9% OSWorld-Verified,
@@ -196,9 +201,8 @@ CONTROL_ARMS: dict[str, DesktopHarnessConfig] = {
 }
 """The six control arms: {oracle, negative} x {native, compact, ordered}.
 
-Not the four suite cells — those are `terminal_ls`, `terminal_exact_text`,
-`desktop_open_chrome` and `focus_terminal_and_type`, and they live in `suite.json`
-behind `suite.load_suite()`. Every arm here runs all four of them.
+Not the suite cells — those live in `suite.json` behind `suite.load_suite()`, and
+every arm here runs a whole tier of them.
 
 A model arm never ships without its pair: the pair is what says a reading is the
 model's and not the harness's. `ordered_events_v3` had a model arm's worth of
@@ -249,8 +253,13 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
         artifacts=ArtifactConfig(save_prompts=True, write_gif=True),
     ),
 }
-"""The arms the controls calibrate. Reference readings: off-the-shelf Qwen3-VL-4B
-native = 4/4, Phase-B step-900 compact = 2/4.
+"""The arms the controls calibrate. Scored-tier reference readings: off-the-shelf
+Qwen3-VL-4B native = 3/4, Phase-B step-900 compact = 2/4, both over 3 trials.
+
+Both fail the same way, which is what the candidate tier was built to isolate:
+every failing draw of either arm ends `model_terminate_without_postcondition`, and
+the Phase-B arm reaches it after emitting `0 0 0 ; type("ls\\\\n")` — a literal
+backslash and `n` typed instead of a Return, 3 draws out of 3.
 
 `ordered` has no reference reading and no `system_prompt_sha256`, because no
 checkpoint is pinned to it yet: whichever model the runner serves is scored under

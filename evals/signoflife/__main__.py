@@ -24,6 +24,11 @@ rollouts of one task overwrite each other's frames, prompts, GIF and
 `artifacts.output_dir` keeps all N. The sglang server and the desktop pool are
 process-global and survive across passes, so the extra passes cost nothing.
 
+`--tier` picks the cell set, and one run is one tier: `scored` is the calibrated
+cells, `candidate` is the ones whose own oracle has not been measured on hardware
+yet. Averaging the two would publish exactly the uncalibrated number the controls
+exist to prevent, so the flag is a choice and never a union.
+
 `controls_ok` is emitted for control arms only, and is `null` for a model arm:
 nothing derived from a model arm can calibrate that arm, so cite the scripted
 oracle/negative runs instead.
@@ -60,7 +65,7 @@ from verifiers.v1.cli.eval.runner import run_eval  # noqa: E402
 from verifiers.v1.configs.eval import EvalConfig  # noqa: E402
 
 from evals.signoflife.cells import ARMS, verify_phaseb_provenance  # noqa: E402
-from evals.signoflife.suite import load_suite  # noqa: E402
+from evals.signoflife.suite import TIERS, load_suite  # noqa: E402
 from evals.tasks import RESULT_KEY  # noqa: E402
 from signoflife import PLUGIN_ID  # noqa: E402
 
@@ -222,6 +227,7 @@ def _harness_payload(arm: str, *, artifacts: Path, pool: dict[str, Any]) -> dict
 def _eval_config(
     *,
     arm: str,
+    tier: str,
     task_ids: list[str],
     artifacts: Path,
     traces_dir: Path,
@@ -232,7 +238,7 @@ def _eval_config(
     max_tokens: int,
 ) -> EvalConfig:
     return EvalConfig(
-        taskset={"id": PLUGIN_ID, "task_ids": task_ids},
+        taskset={"id": PLUGIN_ID, "tier": tier, "task_ids": task_ids},
         harness=_harness_payload(arm, artifacts=artifacts, pool=pool),
         model=SERVED_MODEL,
         client={"base_url": base_url, "api_key_var": API_KEY_VAR},
@@ -359,13 +365,21 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="python -m evals.signoflife")
     parser.add_argument("--arm", required=True, choices=sorted(ARMS))
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--tier",
+        default="scored",
+        choices=list(TIERS),
+        help="which tier to run; one run is one tier. `scored` is the calibrated "
+        "set, `candidate` is the cells whose own oracle is not measured yet — a "
+        "mean over both would be the uncalibrated number this gate prevents.",
+    )
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument(
         "--task-index",
         type=int,
         action="append",
         default=None,
-        help="zero-based suite cell; repeatable. Omitted = all four (the gate).",
+        help="zero-based cell within the tier; repeatable. Omitted = the whole tier.",
     )
     selection.add_argument("--cell", action="append", default=None, help="cell id; repeatable")
     parser.add_argument(
@@ -419,11 +433,17 @@ def main(argv: list[str] | None = None) -> int:
     negative = arm.scripted.negative
     suite = load_suite()
 
-    selected = list(suite.tasks)
+    tier_cells = suite.for_tier(args.tier)
+    selected = list(tier_cells)
     if args.task_index:
-        selected = [suite.tasks[index] for index in args.task_index]
+        selected = [tier_cells[index] for index in args.task_index]
     if args.cell:
         selected = [suite.by_id(cell) for cell in args.cell]
+    off_tier = [task.id for task in selected if task.tier != args.tier]
+    if off_tier:
+        raise SystemExit(
+            f"--cell {off_tier} is not in the {args.tier!r} tier; a run is one tier"
+        )
     cell_ids = [task.id for task in selected]
 
     if not scripted and args.trials < 3:
@@ -486,6 +506,7 @@ def main(argv: list[str] | None = None) -> int:
         for trial in range(1, args.trials + 1):
             config = _eval_config(
                 arm=args.arm,
+                tier=args.tier,
                 task_ids=cell_ids,
                 artifacts=output / f"trial_{trial:02d}",
                 traces_dir=output / f"trial_{trial:02d}" / "traces",
@@ -538,7 +559,9 @@ def main(argv: list[str] | None = None) -> int:
         "suite_role": suite.role,
         "final_benchmark": suite.final_benchmark,
         "suite_manifest_sha256": suite.manifest_sha256,
-        "selection": {"task_ids": cell_ids, "full_suite_task_count": len(suite.tasks)},
+        "suite_scored_sha256": suite.scored_sha256,
+        "tier": args.tier,
+        "selection": {"task_ids": cell_ids, "full_tier_task_count": len(tier_cells)},
         "status": "complete" if not infrastructure_errors else "infrastructure_failure",
         "aggregate": aggregate,
         "model": _model_provenance(args.model_path),
@@ -574,7 +597,17 @@ def main(argv: list[str] | None = None) -> int:
         "episodes": rows,
     }
     _atomic_json(output / "result.json", result)
-    print(json.dumps({"arm": args.arm, **{k: v["pass_rate"] for k, v in aggregate["per_cell"].items()}}, sort_keys=True), flush=True)
+    print(
+        json.dumps(
+            {
+                "arm": args.arm,
+                "tier": args.tier,
+                **{k: v["pass_rate"] for k, v in aggregate["per_cell"].items()},
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
 
     if infrastructure_errors:
         return 3

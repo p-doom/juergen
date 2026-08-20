@@ -1,7 +1,8 @@
 """The one sign-of-life taskset.
 
-Four fixed cells, one row each. The six arms are six `DesktopHarnessConfig`s over
-this one taskset (see `cells.py`), so an arm cannot redefine the suite.
+One row per cell of the selected tier. The six control arms are six
+`DesktopHarnessConfig`s over this one taskset (see `cells.py`), so an arm cannot
+redefine the suite — it can only choose a grammar and a tier.
 
 Reset isolation comes from the pool: verifiers shards a taskset across `spawn`-ed
 workers and each worker checks out its own desktop, so the isolation property
@@ -52,16 +53,23 @@ class SignOfLifeTask(
 
 
 class SignOfLifeTasksetConfig(vf.TasksetConfig):
+    tier: str = "scored"
+    """Which tier to enumerate — one run is one tier.
+
+    A run that mixed the calibrated cells with cells whose oracle has never been
+    measured would publish one mean over both, which is the uncalibrated number
+    this gate exists to prevent. `scored` by default, so a caller has to ask for
+    the candidates by name."""
     task_ids: list[str] = []
-    """Restrict to named cells. Present for reproducing a single-cell rerun; the
-    gate is only a gate when all four run."""
+    """Restrict to named cells within the tier. Present for reproducing a
+    single-cell rerun; the tier is only a gate when all of it runs."""
 
 
 class SignOfLifeTaskset(vf.Taskset[SignOfLifeTask, SignOfLifeTasksetConfig]):
     def load(self) -> Iterable[SignOfLifeTask]:
         suite = load_suite()
         keep = set(self.config.task_ids)
-        for idx, cell in enumerate(suite.tasks):
+        for idx, cell in enumerate(suite.for_tier(self.config.tier)):
             if keep and cell.id not in keep:
                 continue
             yield SignOfLifeTask(
@@ -77,6 +85,8 @@ class SignOfLifeTaskset(vf.Taskset[SignOfLifeTask, SignOfLifeTasksetConfig]):
                     setup={
                         "suite_id": suite.suite_id,
                         "suite_manifest_sha256": suite.manifest_sha256,
+                        "suite_scored_sha256": suite.scored_sha256,
+                        "suite_tier": cell.tier,
                         "suite_role": suite.role,
                         "final_benchmark": suite.final_benchmark,
                     },
