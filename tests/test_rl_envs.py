@@ -581,6 +581,7 @@ def test_the_band_metric_reads_the_band_the_preparer_published() -> None:
         trace = make_trace(
             data,
             episode={
+                "validity": "valid",
                 "reach_frame": 1,
                 "best_distance": 0.0,
                 "steps_detail": [],
@@ -601,7 +602,13 @@ def test_an_unknown_or_absent_band_still_reads_as_the_unset_sentinel() -> None:
     for setup in ({}, {"band": "nonsense"}):
         data = make_task_data(kind="movebox", bbox=(10, 10, 50, 50))
         trace = make_trace(
-            data, episode={"reach_frame": -1, "steps_detail": [], "setup": setup}
+            data,
+            episode={
+                "validity": "valid",
+                "reach_frame": -1,
+                "steps_detail": [],
+                "setup": setup,
+            },
         )
         asyncio.run(MoveBoxTask(data).score(trace))
         assert trace.metrics["band"] == -1.0
@@ -631,6 +638,30 @@ def test_the_movebox_reward_raises_on_a_missing_result() -> None:
         asyncio.run(MoveBoxTask(data).score(make_trace(data)))
 
 
+def test_an_infra_invalid_movebox_rollout_raises_instead_of_scoring_a_zero() -> None:
+    """`reach_frame` stays -1 when the VM never booted, so scoring it would train an
+    infrastructure failure as a genuine miss."""
+    import asyncio
+
+    from rl.movebox.taskset import MoveBoxTask
+    from juergen_doubles import make_task_data, make_trace
+
+    data = make_task_data(kind="movebox", bbox=(10, 10, 50, 50))
+    trace = make_trace(
+        data,
+        episode={
+            "validity": "infra_invalid",
+            "infra_error": {"stage": "prepare"},
+            "reach_frame": -1,
+            "steps_detail": [],
+            "setup": {},
+        },
+    )
+    with pytest.raises(Exception, match="infrastructure-invalid"):
+        asyncio.run(MoveBoxTask(data).score(trace))
+    assert trace.rewards == {}, "one throwing reward must drop the whole group"
+
+
 def test_the_movebox_reward_is_sparse_task_success_only() -> None:
     """No STEP_PENALTY / REPEAT_PENALTY / dense shaping: one named knob."""
     import asyncio
@@ -640,6 +671,9 @@ def test_the_movebox_reward_is_sparse_task_success_only() -> None:
 
     assert REACH_REWARD == 1.0
     data = make_task_data(kind="movebox", bbox=(10, 10, 50, 50))
-    trace = make_trace(data, episode={"reach_frame": -1, "steps_detail": [], "setup": {}})
+    trace = make_trace(
+        data,
+        episode={"validity": "valid", "reach_frame": -1, "steps_detail": [], "setup": {}},
+    )
     asyncio.run(MoveBoxTask(data).score(trace))
     assert trace.rewards == {"reach": 0.0}, trace.rewards

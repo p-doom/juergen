@@ -91,7 +91,7 @@ def test_never_moved_is_distinct_from_an_unparseable_reply() -> None:
 
 def _ground(**result):
     data = make_task_data(kind="grounding_canvas", bbox=(10, 10, 50, 50))
-    trace = make_trace(data, episode=result)
+    trace = make_trace(data, episode={"validity": "valid", **result})
     asyncio.run(GroundingTask(data).score(trace, _Runtime()))
     return trace
 
@@ -158,6 +158,26 @@ def test_the_grounding_reward_raises_on_a_missing_result() -> None:
     data = make_task_data(kind="grounding_canvas", bbox=(10, 10, 50, 50))
     with pytest.raises(Exception, match="published no result"):
         asyncio.run(GroundingTask(data).score(make_trace(data), _Runtime()))
+
+
+def test_an_infra_invalid_grounding_rollout_raises_instead_of_scoring_a_no_move() -> None:
+    """A booted-VM failure publishes `reach_frame` -1 and no `steps_detail`, which
+    reads as the no-move attractor: the minimum of the whole reward range. Without
+    the raise the infrastructure failure trains as the worst possible policy."""
+    data = make_task_data(kind="grounding_canvas", bbox=(10, 10, 50, 50))
+    trace = make_trace(
+        data,
+        episode={
+            "validity": "infra_invalid",
+            "infra_error": {"stage": "prepare"},
+            "reach_frame": -1,
+            "best_distance": -1.0,
+            "steps_detail": [],
+        },
+    )
+    with pytest.raises(Exception, match="infrastructure-invalid"):
+        asyncio.run(GroundingTask(data).score(trace, _Runtime()))
+    assert trace.rewards == {}, "one throwing reward must drop the whole group"
 
 
 def test_the_grounding_rewards_are_all_trace_only_so_replay_scores_them() -> None:

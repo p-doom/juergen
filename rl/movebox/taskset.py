@@ -37,12 +37,16 @@ class MoveBoxTask(MouseIndicators, SamplingProvenance, DesktopTask):
     async def reach(self, trace: vf.Trace) -> float:
         """1.0 iff the cursor entered the box at any step.
 
-        Raises when the harness published no result: an absent rollout is
-        infrastructure-invalid and must not be trained as a zero.
+        Raises when the harness published no result, or published an
+        infrastructure-invalid one: neither must be trained as a zero.
         """
         result = trace.info.get(RESULT_KEY)
         if not isinstance(result, dict):
             raise RuntimeError("movebox rollout published no result")
+        if result.get("validity") != "valid":
+            raise RuntimeError(
+                f"movebox rollout is infrastructure-invalid: {result.get('infra_error')}"
+            )
         return REACH_REWARD if int(result.get("reach_frame", -1)) >= 0 else 0.0
 
     @vf.metric

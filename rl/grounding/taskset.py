@@ -40,6 +40,10 @@ class GroundingTask(MouseIndicators, SamplingProvenance, DesktopTask):
         result = trace.info.get(RESULT_KEY)
         if not isinstance(result, dict):
             raise RuntimeError("grounding rollout published no result")
+        if result.get("validity") != "valid":
+            raise RuntimeError(
+                f"grounding rollout is infrastructure-invalid: {result.get('infra_error')}"
+            )
         return 1.0 if int(result.get("reach_frame", -1)) >= 0 else 0.0
 
     @vf.reward
