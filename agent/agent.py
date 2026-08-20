@@ -193,6 +193,19 @@ def resolve_sampling(
     """
     dialect = dialect or ChatDialect()
     wire = dialect.apply_overrides(dict(body), ctx.model, ctx.sampling)
+    offered = [key for key in ("tools", "tool_choice") if key in wire]
+    if offered:
+        # `vf.Sampling` is `extra="allow"` and `apply_overrides` puts every extra key
+        # on the wire (`dialects/chat.py:352`), so `--sampling.tools=...` reaches the
+        # server without touching this repo. Probed on the sign-of-life serving path
+        # (sglang 0.5.10.post1): `tool_choice="required"` rewrote the turn into a bare
+        # JSON array that no codec parses, while `tool_calls` stayed null -- an arm
+        # that reads as a model collapse and is a config change.
+        raise ValueError(
+            f"sampling put {offered} on the wire; this driver offers no tool schema and "
+            "parses the action out of `content`, so a served tool protocol silently "
+            "changes what every grammar has to parse"
+        )
     stop = wire.get("stop") or ()
     if isinstance(stop, str):
         stop = (stop,)
@@ -221,6 +234,33 @@ class Transport(Protocol):
     ) -> tuple[str, str | None]: ...
 
     async def close(self) -> None: ...
+
+
+def _content(message: Any) -> str:
+    """The assistant text. A native tool call is infrastructure, not a turn.
+
+    Every grammar spells its action inside `content`, including the `<tool_call>`
+    blocks the native grammars emit — those are text the codec parses. Probed
+    against the serving path the evals use (sglang 0.5.10.post1 launched by
+    `evals/signoflife/__main__.py`, no `--tool-call-parser`): `content` carried the
+    block and `tool_calls` was null on both an off-the-shelf 4B and a LoRA-merged
+    checkpoint, even when the request offered a tool schema. A server that does
+    populate `tool_calls` — one with a tool-call parser, or a provider injecting its
+    own server-side tools — leaves `content` null, which would read as `""` here and
+    fail to parse every turn: a 0% arm indistinguishable from a model collapse.
+    """
+    tool_calls = getattr(message, "tool_calls", None)
+    if tool_calls:
+        raise ModelCallError(
+            f"the server returned {len(tool_calls)} native tool call(s); this driver "
+            "parses the action out of `content`, which such a turn leaves empty"
+        )
+    content = getattr(message, "content", None)
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "") for part in content if isinstance(part, dict)
+        )
+    return content or ""
 
 
 @dataclass
@@ -256,7 +296,7 @@ class EndpointTransport:
         except Exception as exc:  # noqa: BLE001 - surfaced as infrastructure
             raise ModelCallError(f"{type(exc).__name__}: {exc}") from exc
         choice = completion.choices[0]
-        return choice.message.content or "", choice.finish_reason
+        return _content(choice.message), choice.finish_reason
 
     async def close(self) -> None:
         if self._client is not None:
@@ -293,13 +333,7 @@ class ContextTransport:
         except Exception as exc:  # noqa: BLE001 - surfaced as infrastructure
             raise ModelCallError(f"{type(exc).__name__}: {exc}") from exc
         finish_reason = getattr(response, "finish_reason", None)
-        message = getattr(response, "message", None)
-        content = getattr(message, "content", None)
-        if isinstance(content, list):
-            return "".join(
-                part.get("text", "") for part in content if isinstance(part, dict)
-            ), finish_reason
-        return content or "", finish_reason
+        return _content(getattr(response, "message", None)), finish_reason
 
     async def close(self) -> None:
         return None

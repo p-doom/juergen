@@ -555,6 +555,57 @@ def test_context_transport_flattens_list_content() -> None:
     ) == ("ab", "stop")
 
 
+def test_a_native_tool_call_is_infrastructure_not_an_empty_turn() -> None:
+    """The invariant the recorded native-parse numbers rest on.
+
+    Probed on the serving path the evals use (sglang 0.5.10.post1, no
+    `--tool-call-parser`): `tool_calls` was null and the `<tool_call>` block came
+    back inside `content`, on both an off-the-shelf 4B and a LoRA-merged
+    checkpoint, with and without a tool schema in the request. A server that does
+    populate `tool_calls` sends `content: null` with it, which read as `""` here
+    and made every turn a parse error — 0% that looks like a model collapse.
+    `vf.AssistantMessage.tool_calls` is a typed field verifiers fills from the wire
+    (`dialects/chat.py:177-180`), so the shape is reachable, not hypothetical.
+    """
+
+    class NativeToolCalls(FakeClient):
+        async def get_response(self, dialect, body, model, sampling, **kwargs):
+            return type(
+                "R",
+                (),
+                {
+                    "message": vf.AssistantMessage(
+                        content=None,
+                        tool_calls=[
+                            vf.ToolCall(
+                                id="call_0",
+                                name="computer_use",
+                                arguments='{"action": "left_click"}',
+                            )
+                        ],
+                    ),
+                    "finish_reason": "tool_calls",
+                },
+            )()
+
+    ctx = vf.ModelContext(model="m", client=NativeToolCalls(), sampling=vf.Sampling())
+    with pytest.raises(ModelCallError, match="1 native tool call"):
+        asyncio.run(ContextTransport().complete(ctx, {"messages": []}, session_id=None))
+
+
+@pytest.mark.parametrize("key", ["tools", "tool_choice"])
+def test_a_tool_protocol_on_the_wire_is_refused_before_the_call(key: str) -> None:
+    """`vf.Sampling` is `extra="allow"`, so this needs no code change to happen.
+
+    Probed with `tool_choice="required"`: the same server rewrote the turn into a
+    bare JSON array that no codec parses, and left `tool_calls` null — so the
+    response-side check above cannot see it and the arm reads as a collapse.
+    """
+    ctx = make_ctx(**{key: "auto" if key == "tool_choice" else []})
+    with pytest.raises(ValueError, match=f"\\['{key}'\\]"):
+        resolve_sampling(ctx, {"messages": []})
+
+
 def test_a_transport_failure_becomes_a_model_call_error() -> None:
     class Angry(FakeClient):
         async def get_response(self, *args, **kwargs):
