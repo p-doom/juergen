@@ -148,8 +148,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -196,6 +198,10 @@ if str(EVAL_DIR) not in sys.path:
     sys.path.append(str(EVAL_DIR))
 
 from osworld_system_prompts import SYSTEM_PROMPTS  # noqa: E402
+
+# --workers 0 resolves to the process's CPU affinity, clamped here so an
+# interactive run on a big login node stays neighbourly.
+AUTO_WORKER_CAP = 32
 
 # Stage-03 statuses that carry a usable frame_records.jsonl.
 USABLE_STATUSES = {"ok", "cached"}
@@ -1004,7 +1010,264 @@ def parse_args() -> argparse.Namespace:
                         "this many frames.")
     p.add_argument("--limit", type=int, default=None,
                    help="Process only the first N segments (or goals, in --goal-index mode).")
+    p.add_argument("--workers", type=int, default=0,
+                   help="Segments processed in parallel (0 = the CPUs this process is "
+                        f"allowed on, capped at {AUTO_WORKER_CAP}; 1 = in-process, no pool). "
+                        "Segments are independent and results are folded in input order, "
+                        "so the conversations are identical at any worker count.")
     return p.parse_args()
+
+
+# --------------------------------------------------------------------------- #
+# Per-segment work, hoisted out of main() so a process pool can run it.
+#
+# Every segment is independent: it reads its own frame records, its own realigned
+# keylog and its own master frame_manifest (~3 MB at master_fps=15 -- the run's
+# dominant cost, and I/O-latency bound rather than CPU bound, so several readers
+# in flight is worth much more than the CPU they use). The only cross-segment
+# state is accounting, which each task returns as its own delta for the parent to
+# fold in arrival order -- and arrival order IS input order (``map`` preserves
+# it), so the emitted conversations.jsonl is identical at any worker count.
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class WorkerCfg:
+    """Everything a worker needs, picklable by construction: the formatter is
+    rebuilt from its parameters in each process rather than pickled."""
+
+    action_format: str
+    continuous_action_hz: float
+    jitter_deadband_px: int
+    dead_zone_flag_frac: float
+    coalesce_typing: bool
+    max_coalesce_frames: int
+    min_frames: int
+    system_prompt: str | None
+    terminate_token: str | None
+    instruction: str | None
+    instruction_field: str | None
+    app_filter: AppFilter
+    sample_cfg: dict[str, Any] | None
+
+
+def _is_sampled_idle(action: str) -> bool:
+    """``--action-format sampled`` idle predicate (a module-level function so the
+    worker state holds nothing unpicklable)."""
+    return action == "NO_OP"
+
+
+class _Worker:
+    """One process's resolved config: the cfg plus the objects rebuilt from it."""
+
+    def __init__(self, cfg: WorkerCfg) -> None:
+        self.cfg = cfg
+        self.formatter: ActionFormatter | None = (
+            None
+            if cfg.action_format == SAMPLED_FORMAT
+            else get_formatter(
+                cfg.action_format,
+                continuous_action_hz=cfg.continuous_action_hz,
+                jitter_deadband_px=cfg.jitter_deadband_px,
+            )
+        )
+        self.idle_fn: Callable[[str], bool] = (
+            self.formatter.is_idle_label if self.formatter is not None else _is_sampled_idle
+        )
+
+
+_WORKER: _Worker | None = None
+
+
+def _init_worker(cfg: WorkerCfg) -> None:
+    global _WORKER
+    _WORKER = _Worker(cfg)
+
+
+def _new_counters() -> dict[str, Any]:
+    return {
+        "n_skipped": 0,
+        "n_failed": 0,
+        "n_skipped_app": 0,
+        "n_app_unlabeled": 0,
+        "n_seam_turns_dropped": 0,
+        "n_dz_flagged": 0,
+        "n_coalesced_turns": 0,
+        "n_coalesced_dropped": 0,
+        "n_forced_idle_turns": 0,
+        "dz_totals": Counter(),
+        "prim_totals": Counter(),
+    }
+
+
+def _reformat(
+    worker: _Worker,
+    frames: list[dict[str, Any]],
+    row: dict[str, Any],
+    counters: dict[str, Any],
+    goal_spans: list[tuple[int, int]] | None = None,
+) -> dict[str, Any] | None:
+    """Re-derive one segment's labels (formatter modes) and fold its accounting
+    into ``counters``; returns the per-row provenance fields. With
+    --coalesce-typing this also DROPS coalesced frames from ``frames`` in place,
+    so the caller's list is the post-coalesce conversation."""
+    cfg = worker.cfg
+    if worker.formatter is None or not frames:
+        return None
+    info = reformat_segment_actions(
+        frames, row, formatter=worker.formatter, sample_cfg=cfg.sample_cfg,
+        dead_zone_flag_frac=cfg.dead_zone_flag_frac,
+        coalesce_typing=cfg.coalesce_typing,
+        max_coalesce_frames=cfg.max_coalesce_frames,
+        goal_spans=goal_spans,
+    )
+    for k, v in info["dead_zone_counters"].items():
+        if k != "max_simultaneous_keys":
+            counters["dz_totals"][k] += int(v)
+    for k, v in (info.pop("primitive_counts", None) or {}).items():
+        counters["prim_totals"][k] += int(v)
+    if info["dead_zone_flagged"]:
+        counters["n_dz_flagged"] += 1
+    counters["n_coalesced_turns"] += int(info.get("coalesced_turns") or 0)
+    counters["n_coalesced_dropped"] += int(info.get("coalesced_frames_dropped") or 0)
+    counters["n_forced_idle_turns"] += int(info.get("coalesce_forced_idle_turns") or 0)
+    return info
+
+
+def _process_segment(row: dict[str, Any]) -> dict[str, Any]:
+    """SEGMENT MODE task: one stage-03 index row -> its conversations."""
+    worker = _WORKER
+    assert worker is not None, "_init_worker was never called in this process"
+    cfg = worker.cfg
+    counters = _new_counters()
+    records: list[dict[str, Any]] = []
+    try:
+        frames = _load_segment_frames(row)
+        if frames is None or len(frames) < cfg.min_frames:
+            counters["n_skipped"] += 1
+            return {"records": records, "counters": counters, "fail": None}
+        # Labels are re-derived (and typing coalesced) over the WHOLE segment
+        # first, so every kept turn's action is byte-identical to the unsplit
+        # dataset; the app filter then only decides which turns survive.
+        fmt_fields = _reformat(worker, frames, row, counters)
+        if cfg.app_filter.active and not _ensure_app_labels(frames, row, cfg.sample_cfg):
+            counters["n_app_unlabeled"] += 1
+        spans = (
+            plan_app_spans(frames, cfg.app_filter, min_frames=cfg.min_frames)
+            if cfg.app_filter.active
+            else [AppSpan(None, 0, len(frames))]
+        )
+        if not spans:
+            counters["n_skipped"] += 1
+            counters["n_skipped_app"] += 1
+            return {"records": records, "counters": counters, "fail": None}
+        for run_idx, span in enumerate(spans):
+            span_frames = frames[span.lo:span.hi]
+            info = app_stats(span_frames) if cfg.app_filter.active else {}
+            if cfg.app_filter.split:
+                if span.seam_trimmed:
+                    counters["n_seam_turns_dropped"] += 1
+                info = {
+                    **info,
+                    "app_run_idx": run_idx,
+                    "n_app_runs": len(spans),
+                    "app_seam_turn_dropped": span.seam_trimmed,
+                }
+            records.append(build_conversation(
+                row,
+                span_frames,
+                instruction=cfg.instruction,
+                instruction_field=cfg.instruction_field,
+                system_prompt=cfg.system_prompt,
+                idle_fn=worker.idle_fn,
+                fmt_fields=fmt_fields,
+                app_fields=info or None,
+                # one segment can now yield several conversations
+                id_suffix=f"_app{run_idx:02d}" if cfg.app_filter.split else "",
+            ))
+    except Exception as exc:  # noqa: BLE001 - one bad segment must not abort the run
+        counters["n_failed"] += 1
+        return {"records": [], "counters": counters,
+                "fail": f"{row.get('segment_id')}: {exc}"}
+    return {"records": records, "counters": counters, "fail": None}
+
+
+def _process_goal_segment(task: tuple[dict[str, Any], list[dict[str, Any]]]) -> dict[str, Any]:
+    """GOAL MODE task: one segment's frame records + all goals inside it -> one
+    conversation per goal. Grouped this way so the segment is read once."""
+    row, seg_goals = task
+    worker = _WORKER
+    assert worker is not None, "_init_worker was never called in this process"
+    cfg = worker.cfg
+    counters = _new_counters()
+    records: list[dict[str, Any]] = []
+    try:
+        seg_frames = _load_segment_frames(row) or []
+        # --min-frames gates on the ORIGINAL frame count, so capture the
+        # source-frame indices before coalescing drops any.
+        pre_src = [int(f["source_frame_idx"]) for f in seg_frames
+                   if f.get("source_frame_idx") is not None]
+        # Goal boundaries clamp the coalesce runs (a run must not straddle a goal
+        # window); computed once per segment, shared by its goals.
+        spans = [(int(g["coll_source_frame_idx_lo"]), int(g["coll_source_frame_idx_hi"]))
+                 for g in seg_goals
+                 if g.get("coll_source_frame_idx_lo") is not None
+                 and g.get("coll_source_frame_idx_hi") is not None]
+        fmt_fields = _reformat(worker, seg_frames, row, counters, goal_spans=spans)
+        if cfg.app_filter.active and not _ensure_app_labels(seg_frames, row, cfg.sample_cfg):
+            counters["n_app_unlabeled"] += 1
+    except Exception as exc:  # noqa: BLE001 - one bad segment must not abort the run
+        counters["n_failed"] += len(seg_goals)
+        return {"records": [], "counters": counters,
+                "fail": f"{row.get('segment_id')}: {exc}"}
+    for g in seg_goals:
+        conv = build_goal_conversation(
+            g, seg_frames, row, system_prompt=cfg.system_prompt,
+            min_frames=cfg.min_frames, idle_fn=worker.idle_fn,
+            terminate_token=cfg.terminate_token, fmt_fields=fmt_fields,
+            precoalesce_source_idx=pre_src if cfg.coalesce_typing else None,
+            app_filter=cfg.app_filter if cfg.app_filter.active else None,
+        )
+        if conv is None:
+            counters["n_skipped"] += 1
+            continue
+        records.append(conv)
+    return {"records": records, "counters": counters, "fail": None}
+
+
+def resolve_workers(requested: int) -> int:
+    """``--workers 0`` (the default) means "the CPUs this process may run on" --
+    under Slurm that is exactly ``cpus``. Capped so an interactive run on a
+    64-core login node does not fork 64 readers."""
+    if requested > 0:
+        return requested
+    try:
+        available = len(os.sched_getaffinity(0))
+    except AttributeError:  # pragma: no cover - non-Linux
+        available = os.cpu_count() or 1
+    return max(1, min(available, AUTO_WORKER_CAP))
+
+
+def _imap(
+    fn: Callable[[Any], dict[str, Any]],
+    items: list[Any],
+    *,
+    workers: int,
+    cfg: WorkerCfg,
+) -> Any:
+    """``fn`` over ``items``, IN INPUT ORDER, in this process (workers<=1) or in a
+    pool. The pool builds its config once per process via the initializer, so the
+    formatter is never pickled and the per-task payload stays one index row."""
+    if workers <= 1:
+        return (fn(it) for it in items)
+    chunksize = max(1, min(16, len(items) // (workers * 8) or 1))
+    pool = ProcessPoolExecutor(workers, initializer=_init_worker, initargs=(cfg,))
+
+    def _drain() -> Any:
+        with pool:
+            yield from pool.map(fn, items, chunksize=chunksize)
+
+    return _drain()
 
 
 def main() -> None:
@@ -1041,9 +1304,6 @@ def main() -> None:
             "the other formats spell typing as bare key transitions, indistinguishable "
             "from a chord."
         )
-    idle_fn: Callable[[str], bool] = (
-        formatter.is_idle_label if formatter is not None else (lambda a: a == "NO_OP")
-    )
 
     # Application filter. Selectors are resolved once (friendly name -> canonical
     # id) so an unknown spelling fails here rather than silently matching nothing.
@@ -1114,51 +1374,46 @@ def main() -> None:
 
     out_dir = ensure_dir(args.output_dir)
     records: list[dict[str, Any]] = []
-    n_skipped = 0
-    n_failed = 0
     n_frames_total = 0
     n_turns_total = 0
-    dz_totals: Counter = Counter()
-    prim_totals: Counter = Counter()
-    n_dz_flagged = 0
-    n_coalesced_turns = 0
-    n_coalesced_dropped = 0
-    n_forced_idle_turns = 0
-    n_skipped_app = 0
-    n_app_unlabeled = 0
-    n_seam_turns_dropped = 0
     app_conv_counts: Counter = Counter()
+    totals = _new_counters()
 
-    def _reformat(
-        frames: list[dict[str, Any]],
-        row: dict[str, Any],
-        goal_spans: list[tuple[int, int]] | None = None,
-    ) -> dict[str, Any] | None:
-        """Re-derive one segment's labels (formatter modes) and fold its
-        accounting into the run totals; returns the per-row provenance fields.
-        With --coalesce-typing this also DROPS coalesced frames from ``frames``
-        in place, so the caller's list is the post-coalesce conversation."""
-        nonlocal n_dz_flagged, n_coalesced_turns, n_coalesced_dropped, n_forced_idle_turns
-        if formatter is None or not frames:
-            return None
-        info = reformat_segment_actions(
-            frames, row, formatter=formatter, sample_cfg=sample_cfg,
-            dead_zone_flag_frac=args.dead_zone_flag_frac,
-            coalesce_typing=args.coalesce_typing,
-            max_coalesce_frames=args.max_coalesce_frames,
-            goal_spans=goal_spans,
-        )
-        for k, v in info["dead_zone_counters"].items():
-            if k != "max_simultaneous_keys":
-                dz_totals[k] += int(v)
-        for k, v in (info.pop("primitive_counts", None) or {}).items():
-            prim_totals[k] += int(v)
-        if info["dead_zone_flagged"]:
-            n_dz_flagged += 1
-        n_coalesced_turns += int(info.get("coalesced_turns") or 0)
-        n_coalesced_dropped += int(info.get("coalesced_frames_dropped") or 0)
-        n_forced_idle_turns += int(info.get("coalesce_forced_idle_turns") or 0)
-        return info
+    cfg = WorkerCfg(
+        action_format=args.action_format,
+        continuous_action_hz=args.continuous_action_hz,
+        jitter_deadband_px=args.jitter_deadband_px,
+        dead_zone_flag_frac=args.dead_zone_flag_frac,
+        coalesce_typing=bool(args.coalesce_typing),
+        max_coalesce_frames=args.max_coalesce_frames,
+        min_frames=args.min_frames,
+        system_prompt=system_prompt,
+        terminate_token=terminate_token,
+        instruction=args.instruction,
+        instruction_field=args.instruction_field,
+        app_filter=app_filter,
+        sample_cfg=sample_cfg,
+    )
+    workers = resolve_workers(args.workers)
+    _init_worker(cfg)  # the in-process path (workers == 1) uses the same state
+
+    def _fold(res: dict[str, Any]) -> None:
+        """One task's accounting + conversations into the run totals. Called in
+        input order, so ``records`` is worker-count independent."""
+        nonlocal n_frames_total, n_turns_total
+        for k, v in res["counters"].items():
+            if k in ("dz_totals", "prim_totals"):
+                totals[k].update(v)
+            else:
+                totals[k] += v
+        if res["fail"]:
+            print(f"  FAIL {res['fail']}", flush=True)
+        for conv in res["records"]:
+            records.append(conv)
+            n_frames_total += conv["n_frames"]
+            n_turns_total += conv["n_turns"]
+            if conv.get("app"):
+                app_conv_counts[str(conv["app"])] += 1
 
     if args.goal_index:
         # GOAL-CONDITIONED: one conversation per goal, OUR sampled frames windowed to
@@ -1174,108 +1429,40 @@ def main() -> None:
         for g in goals:
             goals_by_seg[str(g["segment_id"])].append(g)
         print(f"[conversations] goal-conditioned: {len(goals)} goals across "
-              f"{len(goals_by_seg)} segments", flush=True)
-        for j, (segment_id, seg_goals) in enumerate(goals_by_seg.items(), 1):
+              f"{len(goals_by_seg)} segments | workers={workers}", flush=True)
+        tasks: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+        for segment_id, seg_goals in goals_by_seg.items():
             row = index_by_seg.get(segment_id)
             if row is None or row.get("status") not in USABLE_STATUSES:
-                n_skipped += len(seg_goals)  # segment not in --sample-dir (or unusable)
+                totals["n_skipped"] += len(seg_goals)  # not in --sample-dir (or unusable)
                 continue
-            try:
-                seg_frames = _load_segment_frames(row) or []
-                # --min-frames gates on the ORIGINAL frame count, so capture the
-                # source-frame indices before coalescing drops any.
-                pre_src = [int(f["source_frame_idx"]) for f in seg_frames
-                           if f.get("source_frame_idx") is not None]
-                # Goal boundaries clamp the coalesce runs (a run must not straddle
-                # a goal window); computed once per segment, shared by its goals.
-                spans = [(int(g["coll_source_frame_idx_lo"]), int(g["coll_source_frame_idx_hi"]))
-                         for g in seg_goals
-                         if g.get("coll_source_frame_idx_lo") is not None
-                         and g.get("coll_source_frame_idx_hi") is not None]
-                fmt_fields = _reformat(seg_frames, row, goal_spans=spans)
-                if app_filter.active and not _ensure_app_labels(seg_frames, row, sample_cfg):
-                    n_app_unlabeled += 1
-            except Exception as exc:  # noqa: BLE001 - one bad segment must not abort the run
-                n_failed += len(seg_goals)
-                print(f"  FAIL {segment_id}: {exc}", flush=True)
-                continue
-            for g in seg_goals:
-                conv = build_goal_conversation(
-                    g, seg_frames, row, system_prompt=system_prompt,
-                    min_frames=args.min_frames, idle_fn=idle_fn,
-                    terminate_token=terminate_token, fmt_fields=fmt_fields,
-                    precoalesce_source_idx=pre_src if args.coalesce_typing else None,
-                    app_filter=app_filter if app_filter.active else None,
-                )
-                if conv is None:
-                    n_skipped += 1
-                    continue
-                records.append(conv)
-                n_frames_total += conv["n_frames"]
-                n_turns_total += conv["n_turns"]
-                if conv.get("app"):
-                    app_conv_counts[str(conv["app"])] += 1
+            tasks.append((row, seg_goals))
+        for j, res in enumerate(_imap(_process_goal_segment, tasks,
+                                     workers=workers, cfg=cfg), 1):
+            _fold(res)
             if j % 500 == 0:
-                print(f"  {j}/{len(goals_by_seg)} segments | {len(records)} goal conversations", flush=True)
+                print(f"  {j}/{len(tasks)} segments | {len(records)} goal conversations",
+                      flush=True)
     else:
-        for i, row in enumerate(usable, 1):
-            try:
-                frames = _load_segment_frames(row)
-                if frames is None or len(frames) < args.min_frames:
-                    n_skipped += 1
-                    continue
-                # Labels are re-derived (and typing coalesced) over the WHOLE segment
-                # first, so every kept turn's action is byte-identical to the unsplit
-                # dataset; the app filter then only decides which turns survive.
-                fmt_fields = _reformat(frames, row)
-                if app_filter.active and not _ensure_app_labels(frames, row, sample_cfg):
-                    n_app_unlabeled += 1
-                spans = (
-                    plan_app_spans(frames, app_filter, min_frames=args.min_frames)
-                    if app_filter.active
-                    else [AppSpan(None, 0, len(frames))]
-                )
-                if not spans:
-                    n_skipped += 1
-                    n_skipped_app += 1
-                    continue
-                convs = []
-                for run_idx, span in enumerate(spans):
-                    span_frames = frames[span.lo:span.hi]
-                    info = app_stats(span_frames) if app_filter.active else {}
-                    if app_filter.split:
-                        if span.seam_trimmed:
-                            n_seam_turns_dropped += 1
-                        info = {
-                            **info,
-                            "app_run_idx": run_idx,
-                            "n_app_runs": len(spans),
-                            "app_seam_turn_dropped": span.seam_trimmed,
-                        }
-                    convs.append(build_conversation(
-                        row,
-                        span_frames,
-                        instruction=args.instruction,
-                        instruction_field=args.instruction_field,
-                        system_prompt=system_prompt,
-                        idle_fn=idle_fn,
-                        fmt_fields=fmt_fields,
-                        app_fields=info or None,
-                        # one segment can now yield several conversations
-                        id_suffix=f"_app{run_idx:02d}" if app_filter.split else "",
-                    ))
-            except Exception as exc:  # noqa: BLE001 - one bad segment must not abort the run
-                n_failed += 1
-                print(f"  FAIL {row.get('segment_id')}: {exc}", flush=True)
-                continue
-            for conv in convs:
-                records.append(conv)
-                n_frames_total += conv["n_frames"]
-                n_turns_total += conv["n_turns"]
-                if conv.get("app"):
-                    app_conv_counts[str(conv["app"])] += 1
+        print(f"[conversations] {len(usable)} segments | workers={workers}", flush=True)
+        for i, res in enumerate(_imap(_process_segment, usable,
+                                     workers=workers, cfg=cfg), 1):
+            _fold(res)
             if i % 1000 == 0:
-                print(f"  {i}/{len(usable)} segments | {len(records)} conversations", flush=True)
+                print(f"  {i}/{len(usable)} segments | {len(records)} conversations",
+                      flush=True)
+
+    n_skipped = totals["n_skipped"]
+    n_failed = totals["n_failed"]
+    n_skipped_app = totals["n_skipped_app"]
+    n_app_unlabeled = totals["n_app_unlabeled"]
+    n_seam_turns_dropped = totals["n_seam_turns_dropped"]
+    n_dz_flagged = totals["n_dz_flagged"]
+    n_coalesced_turns = totals["n_coalesced_turns"]
+    n_coalesced_dropped = totals["n_coalesced_dropped"]
+    n_forced_idle_turns = totals["n_forced_idle_turns"]
+    dz_totals = totals["dz_totals"]
+    prim_totals = totals["prim_totals"]
 
     if not records:
         raise SystemExit(
@@ -1327,6 +1514,7 @@ def main() -> None:
         "has_system_prompt": system_prompt is not None,
         "system_prompt_id": system_prompt_id,
         "sample_dir": str(args.sample_dir),
+        "n_workers": workers,
     }
     write_json(out_dir / "conversations_summary.json", summary)
     write_json(out_dir / "manifest.json", {
