@@ -35,6 +35,8 @@ import pathlib
 import re
 import subprocess
 import sys
+import tomllib
+from importlib import metadata
 from pathlib import Path
 
 import pytest
@@ -899,8 +901,39 @@ def test_importing_grammars_imports_neither_a_codec_nor_desktop():
     assert result.stdout.strip() == str(len(NAMES))
 
 
+def test_the_declared_entry_points_are_exactly_the_grammar_directories():
+    """Registration is a line in ``pyproject.toml``, and this is what checks it.
+
+    Hermetic on purpose: it reads the tracked declaration and the directories, and
+    nothing installed. The paired test below can only run where the distribution's
+    metadata exists, which in a plain checkout is an untracked ``juergen.egg-info``
+    — so on its own it passed in place, failed in every fresh worktree and
+    snapshot, and told two agents in one day that a clean clone was red. This half
+    holds the invariant that actually regresses: a new grammar directory that
+    nobody registered is invisible once installed.
+    """
+    declared = tomllib.loads(
+        (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
+    )["project"]["entry-points"]["juergen.grammars"]
+    assert declared == grammars._from_directories()
+
+
 def test_entry_points_alone_discover_every_grammar():
-    """Discovery must not depend on the source tree sitting next to the caller."""
+    """Discovery must not depend on the source tree sitting next to the caller.
+
+    Needs the distribution's metadata, so it is skipped — loudly, naming the
+    reason — where there is none to read. The declaration itself is checked
+    hermetically above, so the skip cannot hide a missing registration.
+    """
+    try:
+        metadata.distribution("juergen")
+    except metadata.PackageNotFoundError:  # pragma: no cover - install-dependent
+        pytest.skip(
+            "the juergen distribution is not installed, so there is no entry-point "
+            "metadata to discover grammars from; `uv pip install -e .` to run this. "
+            "The declaration is asserted by "
+            "test_the_declared_entry_points_are_exactly_the_grammar_directories"
+        )
     assert set(grammars._from_entry_points()) == set(NAMES)
     original = grammars._from_directories
     cached = dict(grammars._CACHE)
