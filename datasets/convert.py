@@ -571,11 +571,13 @@ def convert_rollout(
         # requiring a truthy `parsed` discarded one of our own rollouts as a parse
         # error while its dispatched Operation stream sat right there.
         #
-        # `truncated` is read, and has to be: a turn `max_tokens` cut off records
-        # an EMPTY operation stream, which lifts to a legitimate idle action, so
-        # it enters the dataset as an unterminated `<think>` block labelled NO_OP.
-        # The truthy-`parsed` check used to reject it as a side effect.
-        if info.get("parse_error") or info.get("truncated"):
+        # Nor is `truncated`: a turn `max_tokens` cut off has no post-action frame,
+        # so the harness writes no row for it at all
+        # (`evals/harness.py::_trajectory_rows` emits `steps_detail[: n_frames - 1]`,
+        # which is exactly the entry it excludes; asserted by
+        # `test_a_truncated_turn_is_never_written_to_the_trajectory`). Filtering it
+        # here would be a condition nothing can trigger.
+        if info.get("parse_error"):
             n_parse_err += 1
             continue
 

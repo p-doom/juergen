@@ -313,6 +313,34 @@ def test_a_token_capped_turn_is_a_truncation_not_a_parse_error(tmp_path, prepare
     assert session.operations_log == [], "a truncated action must not be dispatched"
 
 
+def test_a_truncated_turn_is_never_written_to_the_trajectory(tmp_path, preparer) -> None:
+    """It has no post-action frame, so it has no row — and `datasets/convert.py`
+    relies on that rather than filtering it.
+
+    The episode loop records the turn in `steps_detail` and breaks WITHOUT
+    appending a frame, and `_trajectory_rows` emits `steps_detail[: n_frames - 1]`,
+    which is exactly the entry it excludes. Were a row ever written, the reader
+    would have to reject it: the turn compiled to an EMPTY operation stream, which
+    every grammar lifts to a legitimate idle action, so it would enter a dataset as
+    an unterminated `<think>` block labelled NO_OP.
+    """
+    _, result, _ = _run(
+        _config(tmp_path),
+        _task(max_steps=4),
+        replies=[("thinking about it\n10 10 0 ; +LM", "length")],
+    )
+    assert result["steps_detail"][-1]["truncated"] is True, "the turn was recorded"
+
+    run_dir = tmp_path / "cell"
+    rows = [
+        json.loads(line) for line in (run_dir / _TRAJECTORY).read_text().splitlines()
+    ]
+    assert [row["step_num"] for row in rows] == [0], "only the reset survives"
+    assert not [row for row in rows if row["info"].get("truncated")]
+    frames = sorted(p.name for p in (run_dir / "steps").glob("*.png"))
+    assert frames == ["step_000.png"], "the truncated turn produced no frame"
+
+
 def test_a_whole_turn_is_not_flagged_as_truncated(tmp_path, preparer) -> None:
     _, result, _ = _run(_config(tmp_path), _task(max_steps=2), replies=["0 0 0 ;"] * 2)
     assert result["outcome"] == "max_steps"
