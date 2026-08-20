@@ -263,17 +263,30 @@ def drift_report(codec: Any, *, producer: dict[str, str]) -> dict[str, Any]:
 _ACTION_MARKER_RE = re.compile(r"(?im)^\s*action\s*:\s*(.+?)\s*$")
 
 
-def final_line(text: str, *, error: type[Exception] = ValueError) -> str:
+class NoAction(ValueError):
+    """The text holds no action of this grammar, as opposed to a broken one.
+
+    A codec raises this where it found nothing of its own to read, and its own
+    error where it recognised an attempt and rejected it. ``Agent.decide`` reads
+    the difference and nothing else does: prose plus a control line is a
+    well-formed terminate-only turn, a malformed action line plus a control line
+    is still a scored parse error. Every site that raises it is a case ``parse``
+    already failed on, so widening what raises it can only hide a real parse
+    failure.
+    """
+
+
+def final_line(text: str) -> str:
     """The last non-empty line. Reasoning before the action line is legal."""
     if not isinstance(text, str):
         raise TypeError(f"expected str, got {type(text)!r}")
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
-        raise error("empty action text")
+        raise NoAction("empty action text")
     return lines[-1]
 
 
-def action_line(text: str, *, error: type[Exception] = ValueError) -> str:
+def action_line(text: str) -> str:
     """The last ``Action: <body>`` marker if present, else the last non-empty line."""
     if not isinstance(text, str):
         raise TypeError(f"expected str, got {type(text)!r}")
@@ -282,7 +295,7 @@ def action_line(text: str, *, error: type[Exception] = ValueError) -> str:
         body = markers[-1].group(1).strip()
         if body:
             return body
-    return final_line(text, error=error)
+    return final_line(text)
 
 
 # the bare-token family:  dx dy scroll [ ; elements ]
@@ -297,6 +310,10 @@ EVENT_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 _EVENT_RE = re.compile(rf"^([+-])({EVENT_NAME_RE.pattern})$")
 _MOVE_RE = re.compile(r"MOVE\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)")
+
+#: A head token this family would try to read as a coordinate. ``1.5`` is a
+#: rejected coordinate, ``Done.`` is not a coordinate at all -- see ``NoAction``.
+_MOUSE_HEAD_RE = re.compile(r"[-+.]?\d")
 
 
 @dataclass(frozen=True)
@@ -360,8 +377,11 @@ def parse_mouse_triple(
 ) -> tuple[int, int, int]:
     """``"<a> <b> <scroll>"`` -> three ints. The codec names the first two."""
     tokens = segment.strip().split()
+    complaint = f"expected exactly three mouse integers, got {tokens!r}"
+    if tokens and _MOUSE_HEAD_RE.match(tokens[0]) is None:
+        raise NoAction(complaint)
     if len(tokens) != 3:
-        raise error(f"expected exactly three mouse integers, got {tokens!r}")
+        raise error(complaint)
     try:
         first, second, third = (int(token) for token in tokens)
     except ValueError as exc:
@@ -862,6 +882,23 @@ def iter_tool_calls(text: str) -> Iterator[dict[str, Any]]:
         arguments = _arguments_of(payload)
         if arguments is not None:
             yield arguments
+
+
+def has_tool_call(text: str) -> bool:
+    """Whether ``text`` holds anything shaped like a tool call.
+
+    ``iter_tool_calls`` yields only the calls it could read, so on its own it
+    cannot tell a turn that emitted no call from one whose call was unreadable —
+    a ``<tool_call>`` block of broken JSON yields nothing either. The two
+    tool-call grammars need that difference to pick between ``NoAction`` and
+    their own error.
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"expected str, got {type(text)!r}")
+    if _TOOL_CALL_RE.search(text):
+        return True
+    stripped = _FENCE_CLOSE_RE.sub("", _FENCE_OPEN_RE.sub("", text.strip()))
+    return stripped.startswith(("{", "["))
 
 
 def render_tool_calls(calls: Sequence[dict[str, Any]]) -> str:

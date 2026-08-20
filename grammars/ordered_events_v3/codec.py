@@ -251,7 +251,7 @@ class OrderedEventsV3Codec:
         return _support.drift_report(self, producer={})
 
     def parse(self, text: str) -> OrderedEventsV3Action:
-        line = _support.final_line(text, error=OrderedEventsV3Error)
+        line = _support.final_line(text)
         digest = self.digest
         if line == NO_OP:
             return OrderedEventsV3Action(no_op=True, prompt_digest=digest)
@@ -418,7 +418,10 @@ class OrderedEventsV3Codec:
                 break
             call = _CALL_RE.match(line, index)
             if call is None:
-                raise OrderedEventsV3Error(
+                # Nothing recognised yet means the line is not an action line of
+                # this grammar at all, which a terminating turn is allowed.
+                error = OrderedEventsV3Error if primitives else _support.NoAction
+                raise error(
                     f"expected a primitive call, got {line[index:index + 24]!r}"
                 )
             kind = call[1]

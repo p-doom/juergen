@@ -272,7 +272,10 @@ class MoveRelCodec:
             for arguments in _support.iter_tool_calls(text)
         )
         if not calls:
-            raise MoveRelError("no valid computer_use tool call found")
+            # No call at all is a turn with no action of this grammar in it; a
+            # call that could not be read is a malformed one.
+            error = MoveRelError if _support.has_tool_call(text) else _support.NoAction
+            raise error("no valid computer_use tool call found")
         return MoveRelAction(calls=calls, prompt_digest=self.digest)
 
     def format(self, action: MoveRelAction) -> str:

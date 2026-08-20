@@ -271,7 +271,14 @@ class NativeAbsoluteCodec:
             self.validate_call(arguments) for arguments in _support.iter_tool_calls(text)
         )
         if not calls:
-            raise NativeAbsoluteError("no valid computer_use tool call found")
+            # No call at all is a turn with no action of this grammar in it; a
+            # call that could not be read is a malformed one.
+            error = (
+                NativeAbsoluteError
+                if _support.has_tool_call(text)
+                else _support.NoAction
+            )
+            raise error("no valid computer_use tool call found")
         return NativeAbsoluteAction(calls=calls, prompt_digest=self.digest)
 
     def format(self, action: NativeAbsoluteAction) -> str:

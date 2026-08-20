@@ -149,7 +149,7 @@ class NativeAbsoluteControlCodec:
         return report
 
     def parse(self, text: str) -> NativeAbsoluteControlAction:
-        line = _support.final_line(text, error=NativeAbsoluteControlError)
+        line = _support.final_line(text)
         mouse, _, tail = line.partition(";")
         x, y, scroll = _support.parse_mouse_triple(
             mouse, error=NativeAbsoluteControlError

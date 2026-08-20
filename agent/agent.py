@@ -502,29 +502,32 @@ class Agent:
         control = grammars.split_control(text)
         terminal = _TERMINAL[control.status] if control.status else None
         prose = _first_prose(control.body)
-        if terminal is not None and not control.body.strip():
-            # A turn that only ends the episode has no action text to parse, and
-            # that is not a parse error. The action it amounts to is the grammar's
-            # own empty one, and the codec is asked for it rather than left null:
-            # `parsed_action` is a published field, and `datasets/convert.py:567`
-            # drops every turn whose value is falsy — which would delete exactly
-            # the terminal turns from any dataset built off these rollouts.
-            return Decision(
-                step=step,
-                text=text,
-                prose=prose,
-                action=self.codec.action_from_operations(
-                    (), geometry=geometry, cursor=cursor, terminate=control.status
-                ),
-                operations=(),
-                control=terminal,
-                parse_error=None,
-                sampling=sampling,
-                ignored_after_terminate=control.ignored,
-            )
         try:
             action = self.codec.parse(control.body)
         except (TypeError, ValueError) as exc:
+            if terminal is not None and isinstance(exc, grammars.NoAction):
+                # A turn that only ends the episode has no action of the grammar
+                # to parse — prose and a control line, or the control line alone —
+                # and that is not a parse error. Only `NoAction`: a MALFORMED
+                # action line alongside a termination is still one. The action the
+                # turn amounts to is the grammar's own empty one, and the codec is
+                # asked for it rather than left null: `parsed_action` is a
+                # published field, and `datasets/convert.py:567` drops every turn
+                # whose value is falsy — which would delete exactly the terminal
+                # turns from any dataset built off these rollouts.
+                return Decision(
+                    step=step,
+                    text=text,
+                    prose=prose,
+                    action=self.codec.action_from_operations(
+                        (), geometry=geometry, cursor=cursor, terminate=control.status
+                    ),
+                    operations=(),
+                    control=terminal,
+                    parse_error=None,
+                    sampling=sampling,
+                    ignored_after_terminate=control.ignored,
+                )
             return Decision(
                 step=step,
                 text=text,

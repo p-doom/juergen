@@ -41,11 +41,17 @@ ENTRY_POINT_GROUP = "juergen.grammars"
 #: seven from entry-point metadata before anything is imported, which is what lets
 #: ``_explain_desktop`` report a wrong install as one instead of as a bare
 #: ``No module named 'desktop.geometry'``.
-_CONTROL_CHANNEL = ("CONTROL_SPEC", "CONTROL_TOKEN", "Control", "split_control")
+_FROM_SUPPORT = (
+    "CONTROL_SPEC",
+    "CONTROL_TOKEN",
+    "Control",
+    "NoAction",
+    "split_control",
+)
 
 
 def __getattr__(name: str) -> Any:
-    if name in _CONTROL_CHANNEL:
+    if name in _FROM_SUPPORT:
         return getattr(import_module(f"{__name__}._support"), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -187,6 +193,7 @@ __all__ = [
     "ENTRY_POINT_GROUP",
     "THINKING_PREAMBLE",
     "Control",
+    "NoAction",
     "available",
     "codecs",
     "describe",

@@ -21,6 +21,8 @@ import json
 import pytest
 import verifiers.v1 as vf
 
+import grammars
+
 from agent.agent import (
     Agent,
     ContextTransport,
@@ -128,11 +130,31 @@ def test_the_control_channel_terminates_every_grammar(
     assert decision.ignored_after_terminate == 0
 
 
-@pytest.mark.parametrize("codec_name", ALL_FOUR)
+#: One MALFORMED action line per grammar: an attempt the grammar recognises and
+#: rejects, as opposed to prose it never claimed was an action. A new grammar
+#: declares itself here rather than silently skipping the half of the contract
+#: that keeps real parse failures counted.
+_MALFORMED_ACTION = {
+    "compact_raw": "0 0",
+    "deltatype_v2": "0 0",
+    "diffabs": "0 0",
+    "native_absolute_control": "300 200",
+    "ordered_events_v3": "move(1)",
+    "native_absolute": _tool_call({"action": "teleport"}),
+    "move_rel": _tool_call({"action": "mouse_move", "coordinate": [12, -8]}),
+}
+
+
+@pytest.mark.parametrize("codec_name", sorted(grammars.available()))
 def test_a_bare_control_line_is_a_termination_and_not_a_parse_error(
     codec_name: str,
 ) -> None:
-    """A turn that only ends the episode has no action to parse, in any grammar."""
+    """A turn that only ends the episode has no action to parse, in any grammar.
+
+    An empty body is grammar-dependent, which is why this asks the codec rather
+    than testing the string: the two tool-call grammars render the control line
+    alone for an empty call list, the other five render an idle action first.
+    """
     decision = _agent(codec_name).decide(
         "TERMINATE: success",
         step=1,
@@ -146,6 +168,80 @@ def test_a_bare_control_line_is_a_termination_and_not_a_parse_error(
     # which would delete every terminal turn from a dataset built off a rollout.
     assert decision.as_record()["parsed_action"]
     assert decision.action.terminate == "success"
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        # Verbatim from job 141143, where a turn of this shape was scored a parse
+        # error in 8 of 12 episodes -- including two that passed their cell.
+        "Action: The task is completed successfully.",
+        "The file is saved and the window is closed.",
+        "Done",
+    ],
+)
+@pytest.mark.parametrize("codec_name", sorted(grammars.available()))
+def test_prose_plus_a_termination_is_not_a_parse_error_in_any_grammar(
+    codec_name: str, prose: str
+) -> None:
+    """A turn that reasons and then stops, in every grammar.
+
+    Prose in an assistant turn is deliberate — the loss mask supervises all of it
+    — so a body carrying prose and no action line is a well-formed terminate-only
+    turn. Driven through `decide` because the defect was in that seam: each codec
+    rejected the residual body on its own terms, correctly, and `decide` counted
+    every rejection as a parse error.
+    """
+    decision = _agent(codec_name).decide(
+        f"{prose}\nTERMINATE: success",
+        step=1,
+        geometry=_geometry(),
+        cursor=(5, 5),
+        sampling=_sampling(),
+    )
+    assert decision.parse_error is None
+    assert decision.control == "terminate" and decision.terminated
+    assert decision.operations == ()
+    assert decision.as_record()["parsed_action"]
+
+
+@pytest.mark.parametrize("codec_name", sorted(_MALFORMED_ACTION))
+def test_a_malformed_action_line_still_scores_when_the_turn_terminates(
+    codec_name: str,
+) -> None:
+    """The other half of the distinction: only `NoAction` may be swallowed.
+
+    The prose line carries no `Action:` marker on purpose — in `diffabs` that
+    marker is where the action goes, so a marked line would be the text parsed
+    and the malformed line below it would never be read.
+    """
+    decision = _agent(codec_name).decide(
+        f"I am going to stop here.\n{_MALFORMED_ACTION[codec_name]}\nTERMINATE: success",
+        step=1,
+        geometry=_geometry(),
+        cursor=(5, 5),
+        sampling=_sampling(),
+    )
+    assert decision.parse_error is not None
+    assert decision.control == "terminate", "the control is read either way"
+
+
+@pytest.mark.parametrize("codec_name", TOOL_CALL_GRAMMARS)
+def test_an_unreadable_tool_call_still_scores_when_the_turn_terminates(
+    codec_name: str,
+) -> None:
+    """`iter_tool_calls` skips a block it cannot decode, so yielding nothing does
+    not by itself mean the turn called nothing."""
+    decision = _agent(codec_name).decide(
+        '<tool_call>\n{"name": "computer_use", "arguments": {action: left_click}}\n'
+        "</tool_call>\nTERMINATE: success",
+        step=1,
+        geometry=_geometry(),
+        cursor=(5, 5),
+        sampling=_sampling(),
+    )
+    assert decision.parse_error is not None
+    assert decision.control == "terminate"
 
 
 @pytest.mark.parametrize("legacy", ["TERMINATE", "FAIL"])

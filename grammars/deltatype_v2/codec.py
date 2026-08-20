@@ -152,7 +152,7 @@ class DeltatypeV2Codec:
         return _support.drift_report(self, producer=PRODUCER)
 
     def parse(self, text: str) -> DeltatypeV2Action:
-        line = _support.final_line(text, error=DeltatypeV2Error)
+        line = _support.final_line(text)
         digest = self.digest
         if line == "NO_OP":
             return DeltatypeV2Action(no_op=True, prompt_digest=digest)

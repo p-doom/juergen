@@ -140,7 +140,7 @@ class CompactRawCodec:
         return report
 
     def parse(self, text: str) -> CompactRawAction:
-        line = _support.final_line(text, error=CompactRawError)
+        line = _support.final_line(text)
         mouse, _, tail = line.partition(";")
         dx, dy, scroll = _support.parse_mouse_triple(mouse, error=CompactRawError)
         elements = _support.scan_elements(

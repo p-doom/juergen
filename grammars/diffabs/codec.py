@@ -171,7 +171,7 @@ class DiffabsCodec:
         return _support.drift_report(self, producer=PRODUCER)
 
     def parse(self, text: str) -> DiffabsAction:
-        line = _support.action_line(text, error=DiffabsError)
+        line = _support.action_line(text)
         digest = self.digest
         if line == "NO_OP":
             return DiffabsAction(no_op=True, prompt_digest=digest)
