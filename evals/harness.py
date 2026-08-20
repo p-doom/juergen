@@ -547,6 +547,15 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
 
     def __init__(self, config: DesktopHarnessConfig) -> None:
         super().__init__(config)
+        if not config.artifacts.output_dir:
+            raise ValueError(
+                "artifacts.output_dir is unset. It used to fall back to the system temp "
+                "dir, which publishes the `<root>/result.json` a recipe registers as its "
+                "`eval_result` into a directory that gets reaped -- /tmp on this cluster "
+                "was wiped by an environment restart -- and makes two concurrent runs "
+                "overwrite each other's index, since the root is shared. Arms declare "
+                "the rest of the artifact contract; the dispatcher supplies this."
+            )
         self._runs: dict[str, dict[str, Any]] = {}
         """Every episode this process published, keyed by artifact subdir.
 
@@ -1241,7 +1250,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
 
     @property
     def _artifact_root(self) -> Path:
-        return Path(self.config.artifacts.output_dir or tempfile.gettempdir())
+        return Path(self.config.artifacts.output_dir)
 
     def _artifact_dir(self, task: DesktopTaskData) -> Path:
         directory = self._artifact_root / (task.name or f"task_{task.idx:04d}")

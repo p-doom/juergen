@@ -807,6 +807,26 @@ def test_nothing_shells_out_to_register_external(tmp_path) -> None:
             ArtifactConfig(**{field: True})
 
 
+def test_the_harness_refuses_to_run_without_an_artifact_root(tmp_path) -> None:
+    """`output_dir` used to fall back to the system temp dir, so a dispatch that
+    forgot it published `<root>/result.json` -- the file the recipe registers as its
+    `eval_result` -- into a reaped directory, and every concurrent run wrote the
+    same shared index. Arms are templates that carry no root, so the check belongs
+    where a config becomes a run.
+    """
+    from evals.harness import DesktopHarness
+
+    config = _config(tmp_path)
+    assert config.artifacts.output_dir == str(tmp_path)
+    assert DesktopHarness(config)._artifact_root == tmp_path
+
+    rootless = config.model_copy(
+        update={"artifacts": config.artifacts.model_copy(update={"output_dir": ""})}
+    )
+    with pytest.raises(ValueError, match="artifacts.output_dir is unset"):
+        DesktopHarness(rootless)
+
+
 def test_the_artifact_refuses_to_publish_frameless_rows(tmp_path) -> None:
     """Every trajectory row is fetched by frame filename, so a trajectory without
     frames is an artifact whose every frame is a 404."""

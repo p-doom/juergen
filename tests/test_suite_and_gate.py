@@ -59,6 +59,16 @@ def _cell(cell_id: str = EXACT_TEXT_CELL):
     return load_suite().by_id(cell_id)
 
 
+def _dispatched(arm, tmp_path: Path):
+    """An arm as the dispatcher hands it over: `artifacts.output_dir` filled in.
+
+    The arms in `cells.py` are templates -- `signoflife/__main__.py` injects the
+    run's artifact root -- and `DesktopHarness` refuses to run without it.
+    """
+    artifacts = arm.artifacts.model_copy(update={"output_dir": str(tmp_path)})
+    return arm.model_copy(update={"artifacts": artifacts})
+
+
 def test_14a_the_cell_is_no_longer_classified_no_submit() -> None:
     assert EXACT_TEXT_CELL not in NO_SUBMIT_CELLS
     rows = list(SignOfLifeTaskset(SignOfLifeTasksetConfig()).load())
@@ -307,13 +317,13 @@ def test_control_arms_are_scripted_and_model_arms_are_not() -> None:
 
 
 @pytest.mark.parametrize("name", sorted(CONTROL_ARMS))
-def test_control_ok_encodes_oracle_4_of_4_and_negative_0_of_4(name: str) -> None:
+def test_control_ok_encodes_oracle_4_of_4_and_negative_0_of_4(name: str, tmp_path) -> None:
     """`_control_ok` is the calibration assertion; this pins its truth table."""
     from evals.harness import DesktopHarness
     from evals.tasks import DesktopState
 
     config = CONTROL_ARMS[name]
-    harness = DesktopHarness(config)
+    harness = DesktopHarness(_dispatched(config, tmp_path))
     negative = config.scripted.negative
     for success in (True, False):
         state = DesktopState(
@@ -332,14 +342,14 @@ def test_control_ok_encodes_oracle_4_of_4_and_negative_0_of_4(name: str) -> None
     )
 
 
-def test_a_model_arm_has_no_conformance_verdict_at_all() -> None:
+def test_a_model_arm_has_no_conformance_verdict_at_all(tmp_path) -> None:
     """Not `True`: a model arm has no expected value, so any verdict computed from its
     own rows restates the measurement. `None`, and the field disappears from the
     provenance metric."""
     from evals.harness import DesktopHarness
     from evals.tasks import DesktopState
 
-    harness = DesktopHarness(MODEL_ARMS["phaseb_compact"])
+    harness = DesktopHarness(_dispatched(MODEL_ARMS["phaseb_compact"], tmp_path))
     for success in (True, False, None):
         assert harness._control_ok(DesktopState(scripted=False, success=success)) is None
     trace = make_trace(episode={"control_ok": None, "validity": "valid"})
@@ -548,7 +558,7 @@ def test_every_shipped_arm_passes_its_own_prompt_digest_check(tmp_path) -> None:
     from evals.harness import DesktopHarness
 
     for name, arm in ARMS.items():
-        harness = DesktopHarness(arm.model_copy(update={"artifacts": arm.artifacts}))
+        harness = DesktopHarness(_dispatched(arm, tmp_path))
         report = harness._prompt_report(load_codec(arm.codec))
         assert report["matches_expected"] in (None, True) or arm.expect_prompt_mismatch, (
             f"{name} would refuse to run"
@@ -557,6 +567,6 @@ def test_every_shipped_arm_passes_its_own_prompt_digest_check(tmp_path) -> None:
     phaseb = ARMS["phaseb_compact"]
     assert phaseb.system_prompt_sha256 == PHASEB_SYSTEM_PROMPT_SHA256
     assert phaseb.expect_prompt_mismatch, "the sealed-prompt arm must state why"
-    report = DesktopHarness(phaseb)._prompt_report(load_codec(phaseb.codec))
+    report = DesktopHarness(_dispatched(phaseb, tmp_path))._prompt_report(load_codec(phaseb.codec))
     assert report["matches_expected"] is False
     assert "sealed" in report["expect_prompt_mismatch"]
