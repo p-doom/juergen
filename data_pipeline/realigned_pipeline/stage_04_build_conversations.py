@@ -151,8 +151,8 @@ import json
 import os
 import sys
 from collections import Counter, defaultdict
-from concurrent.futures import ProcessPoolExecutor
 from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -199,8 +199,9 @@ if str(EVAL_DIR) not in sys.path:
 
 from osworld_system_prompts import SYSTEM_PROMPTS  # noqa: E402
 
-# --workers 0 resolves to the process's CPU affinity, clamped here so an
-# interactive run on a big login node stays neighbourly.
+# --workers 0 falls back to the process's CPU affinity when Slurm has not said
+# how many CPUs the run owns; clamped here so an interactive run on a big login
+# node stays neighbourly.
 AUTO_WORKER_CAP = 32
 
 # Stage-03 statuses that carry a usable frame_records.jsonl.
@@ -1011,8 +1012,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--limit", type=int, default=None,
                    help="Process only the first N segments (or goals, in --goal-index mode).")
     p.add_argument("--workers", type=int, default=0,
-                   help="Segments processed in parallel (0 = the CPUs this process is "
-                        f"allowed on, capped at {AUTO_WORKER_CAP}; 1 = in-process, no pool). "
+                   help="Segments processed in parallel (0 = SLURM_CPUS_PER_TASK, else "
+                        f"this process's CPU affinity capped at {AUTO_WORKER_CAP}; "
+                        "1 = in-process, no pool). "
                         "Segments are independent and results are folded in input order, "
                         "so the conversations are identical at any worker count.")
     return p.parse_args()
