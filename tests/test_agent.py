@@ -61,7 +61,7 @@ _SMOKE_TEXT = {
     "compact_raw": _BARE_LINE,
     "deltatype_v2": _BARE_LINE,
     "diffabs": _BARE_LINE,
-    "native_absolute_control": _BARE_LINE,
+    "compact_absolute": _BARE_LINE,
     "ordered_events_v3": "NO_OP",
     "native_absolute": _CLICK_CALL,
     "move_rel": _CLICK_CALL.replace("left_click", "move_rel"),
@@ -113,7 +113,7 @@ def test_the_control_channel_terminates_every_grammar(
 ) -> None:
     """All seven grammars, both statuses, and the action still dispatched.
 
-    Two of the seven — `compact_raw` and `native_absolute_control` — could not
+    Two of the seven — `compact_raw` and `compact_absolute` — could not
     terminate at all before the channel, and two more had TERMINATE and no FAIL,
     so this is the first assertion that reads the same in every grammar. `fail` is
     published for a failure because indicator C would otherwise read a
@@ -144,7 +144,7 @@ _MALFORMED_ACTION = {
     "compact_raw": "0 0",
     "deltatype_v2": "0 0",
     "diffabs": "0 0",
-    "native_absolute_control": "300 200",
+    "compact_absolute": "300 200",
     "ordered_events_v3": "move(1)",
     "native_absolute": _tool_call({"action": "teleport"}),
     "move_rel": _tool_call({"action": "mouse_move", "coordinate": [12, -8]}),

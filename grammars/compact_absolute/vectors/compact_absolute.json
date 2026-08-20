@@ -1,5 +1,5 @@
 {
-  "grammar": "native_absolute_control",
+  "grammar": "compact_absolute",
   "prompt_sha256": "a40e85d372626af2e1aca6b49d761be3167a255e41a814dbb20d6014b4bc5eec",
   "paired_with": "compact_raw",
   "geometry": {

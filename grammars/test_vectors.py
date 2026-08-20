@@ -383,7 +383,7 @@ def test_a_terminating_turn_round_trips_through_the_control_channel(
     """The label direction, the channel and the dispatch direction, in one pass.
 
     Both statuses in all seven grammars: ``diffabs`` and ``ordered_events_v3`` had
-    TERMINATE and no FAIL, and ``compact_raw`` and ``native_absolute_control``
+    TERMINATE and no FAIL, and ``compact_raw`` and ``compact_absolute``
     could not terminate at all, so four of the seven could not have passed this.
     """
     codec = _codec(name)
@@ -510,7 +510,7 @@ def test_the_control_line_must_be_last_and_exact():
         assert control.status is None and control.body == near_miss
 
 
-MATCHED_ARMS = ("compact_raw", "native_absolute_control")
+MATCHED_ARMS = ("compact_raw", "compact_absolute")
 
 
 def test_matched_arms_share_their_prose_byte_for_byte():
@@ -791,7 +791,18 @@ def test_entry_points_alone_discover_every_grammar():
         grammars._CACHE.update(cached)
 
 
-@pytest.mark.parametrize("dropped", ["native_rel_v1", "native_rel_think"])
+@pytest.mark.parametrize(
+    "dropped",
+    [
+        "native_rel_v1",
+        "native_rel_think",
+        # `compact_absolute`'s former id. Both halves of it were wrong: it is not
+        # the native tool-call grammar, and "control" meant control ARM while the
+        # grammar has no control tokens. It must not resolve to `native_absolute`,
+        # whose name it contains.
+        "native_absolute_control",
+    ],
+)
 def test_a_dropped_grammar_fails_loudly(dropped):
     """A retired id must not resolve to a neighbour that happens to be close."""
     assert dropped not in grammars.available()

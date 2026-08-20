@@ -1102,7 +1102,7 @@ def normalize_key(value: object, *, error: type[Exception] = ValueError) -> str:
 
 
 #: The preamble of both bare-line paired-eval arms, ``compact_raw`` and
-#: ``native_absolute_control``, held in one string and assigned to both codec
+#: ``compact_absolute``, held in one string and assigned to both codec
 #: classes' ``__doc__``. A constant rather than two docstrings because the arms
 #: had drifted: the same sentence wrapped at a different column in each, so the
 #: two prompts tokenised differently.
@@ -1142,7 +1142,7 @@ _MATCHED_ARM_PROSE = {
 def apply_matched_arm_prose(codec_class: type) -> type:
     """Install the shared paired-arm prose onto one arm's class.
 
-    Called by ``compact_raw`` and ``native_absolute_control`` and by nothing
+    Called by ``compact_raw`` and ``compact_absolute`` and by nothing
     else, so the shared half of the two prompts has exactly one source.
     """
     codec_class.__doc__ = MATCHED_ARM_PREAMBLE

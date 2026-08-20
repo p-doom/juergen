@@ -1,15 +1,18 @@
-"""The bare-line ABSOLUTE grammar: paired_eval's absolute control arm.
+"""The bare-line ABSOLUTE grammar: ``compact_raw``'s matched absolute twin.
 
 ``x y scroll`` or ``x y scroll ; EVENTS``, where x and y are absolute integer
 screen-pixel coordinates. Everything else — the one-sentence prose preamble, the
 element tail, the ``type("…")`` payload, the button and key names — is identical
 to ``compact_raw``: the two are a matched pair whose only difference is whether
-the two integers name a position or an offset.
+the two integers name a position or an offset. Hence the name: same compact
+bare-line surface, absolute coordinates.
 
-"control" is inherited from its paired-eval arm role
-(``paired_runtime`` ``arm.name == "native_absolute_control"``,
-``prompts/native_absolute_control.txt``); the name is kept so receipts,
-recipes and prompt digests still line up with what is on disk.
+It was called ``native_absolute_control`` for the paired-eval arm it was lifted
+from. Both halves of that name were wrong: it is not the native tool-call
+grammar (``native_absolute`` is), and "control" meant control ARM, while the
+grammar has no control tokens at all — the episode-control channel is
+``_support.CONTROL_SPEC``, shared by all seven. The old id survives only in
+``PRODUCER``, which points at files on disk that are literally named that.
 
 Semantics, chosen so the arm is never weaker than its relative twin:
 
@@ -40,6 +43,8 @@ from desktop.ir import Operation
 
 from .. import _support
 
+#: The paired-eval arm this grammar was lifted from, under its own name on disk.
+#: Not renamed with the grammar: it identifies artifacts, not this codec.
 PRODUCER = {
     "arm": "native_absolute_control",
     "prompt_file": "paired_runtime/prompts/native_absolute_control.txt",
@@ -54,12 +59,12 @@ PRODUCER = {
 PAIRED_WITH = "compact_raw"
 
 
-class NativeAbsoluteControlError(ValueError):
+class CompactAbsoluteError(ValueError):
     """Malformed bare-line absolute action text."""
 
 
 @dataclass(frozen=True)
-class NativeAbsoluteControlAction:
+class CompactAbsoluteAction:
     """An absolute pixel position plus ordered key/button/typing elements."""
 
     x: int = 0
@@ -81,8 +86,8 @@ class NativeAbsoluteControlAction:
         }
 
 
-def action_from_dict(value: dict[str, Any]) -> NativeAbsoluteControlAction:
-    return NativeAbsoluteControlAction(
+def action_from_dict(value: dict[str, Any]) -> CompactAbsoluteAction:
+    return CompactAbsoluteAction(
         x=int(value.get("x", 0)),
         y=int(value.get("y", 0)),
         scroll=int(value.get("scroll", 0)),
@@ -90,17 +95,17 @@ def action_from_dict(value: dict[str, Any]) -> NativeAbsoluteControlAction:
             _support.element_from_dict(item) for item in value.get("elements", ())
         ),
         terminate=_support.terminate_status(
-            value.get("terminate"), error=NativeAbsoluteControlError
+            value.get("terminate"), error=CompactAbsoluteError
         ),
     )
 
 
-class NativeAbsoluteControlCodec:
+class CompactAbsoluteCodec:
     # The class docstring is the prompt preamble. It is assigned below from
     # ``_support.MATCHED_ARM_PREAMBLE`` so that ``compact_raw`` renders
     # byte-identical text.
 
-    name = "native_absolute_control"
+    name = "compact_absolute"
 
     #: Empty by design: the prose sentence precedes the action line, so no token
     #: sequence marks the end of a turn.
@@ -148,25 +153,25 @@ class NativeAbsoluteControlCodec:
         report["paired_with"] = PAIRED_WITH
         return report
 
-    def parse(self, text: str) -> NativeAbsoluteControlAction:
+    def parse(self, text: str) -> CompactAbsoluteAction:
         line = _support.final_line(text)
         mouse, _, tail = line.partition(";")
         x, y, scroll = _support.parse_mouse_triple(
-            mouse, error=NativeAbsoluteControlError
+            mouse, error=CompactAbsoluteError
         )
         elements = _support.scan_elements(
-            tail, allow_type=True, allow_move=False, error=NativeAbsoluteControlError
+            tail, allow_type=True, allow_move=False, error=CompactAbsoluteError
         )
-        return NativeAbsoluteControlAction(
+        return CompactAbsoluteAction(
             x, y, scroll, elements, prompt_digest=self.digest
         )
 
-    def format(self, action: NativeAbsoluteControlAction) -> str:
+    def format(self, action: CompactAbsoluteAction) -> str:
         body = f"{action.x} {action.y} {action.scroll}" + _support.render_elements(
             action.elements
         )
         return _support.with_control(
-            body, action.terminate, error=NativeAbsoluteControlError
+            body, action.terminate, error=CompactAbsoluteError
         )
 
     def compile(
@@ -179,7 +184,7 @@ class NativeAbsoluteControlCodec:
 
     def compile_action(
         self,
-        action: NativeAbsoluteControlAction,
+        action: CompactAbsoluteAction,
         geometry: DisplayGeometry,
         cursor: tuple[int, int],
     ) -> tuple[Operation, ...]:
@@ -194,7 +199,7 @@ class NativeAbsoluteControlCodec:
             operations.append(_support.scroll(0, action.scroll))
         operations.extend(
             _support.lower_transitions(
-                action.elements, error=NativeAbsoluteControlError
+                action.elements, error=CompactAbsoluteError
             )
         )
         return tuple(operations)
@@ -206,7 +211,7 @@ class NativeAbsoluteControlCodec:
         geometry: DisplayGeometry,
         cursor: tuple[int, int],
         terminate: object = None,
-    ) -> NativeAbsoluteControlAction:
+    ) -> CompactAbsoluteAction:
         """Absolute Operations -> an action. The inverse of ``compile_action``.
 
         The one place this differs from its relative twin: an empty stream is
@@ -216,13 +221,13 @@ class NativeAbsoluteControlCodec:
         codec and not in a converter.
         """
         status = _support.terminate_status(
-            terminate, error=NativeAbsoluteControlError
+            terminate, error=CompactAbsoluteError
         )
         groups = _support.group_operations(
             operations,
             geometry=geometry,
             cursor=cursor,
-            error=NativeAbsoluteControlError,
+            error=CompactAbsoluteError,
         )
         here = _support.clamp(cursor, geometry)
         plan = _support.bare_token_plan(
@@ -230,10 +235,10 @@ class NativeAbsoluteControlCodec:
             cursor=here,
             allow_type=True,
             allow_stroke=False,
-            error=NativeAbsoluteControlError,
+            error=CompactAbsoluteError,
         )
         target = plan.target if plan.target is not None else here
-        return NativeAbsoluteControlAction(
+        return CompactAbsoluteAction(
             target[0],
             target[1],
             plan.scroll,
@@ -248,7 +253,7 @@ class NativeAbsoluteControlCodec:
         *,
         scroll: int = 0,
         elements: tuple[_support.Element, ...] = (),
-    ) -> NativeAbsoluteControlAction:
+    ) -> CompactAbsoluteAction:
         """The label for an absolute ``target``. Takes NO cursor read.
 
         This is the asymmetry the paired comparison measures: the absolute arm's
@@ -256,11 +261,11 @@ class NativeAbsoluteControlCodec:
         ``compact_raw.from_target`` additionally needs one fresh cursor position
         and is wrong if that read is stale.
         """
-        return NativeAbsoluteControlAction(
+        return CompactAbsoluteAction(
             x=target[0], y=target[1], scroll=scroll, elements=elements
         )
 
 
-_support.apply_matched_arm_prose(NativeAbsoluteControlCodec)
+_support.apply_matched_arm_prose(CompactAbsoluteCodec)
 
-CODEC = NativeAbsoluteControlCodec()
+CODEC = CompactAbsoluteCodec()

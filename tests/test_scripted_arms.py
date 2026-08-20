@@ -1,12 +1,15 @@
 """Scripted arms as `Intent` + per-step rendering.
 
-The renderer table is exact, not a substring heuristic: `native_absolute` and
-`native_absolute_control` are prefixes of one another, and `move_rel` contains
-neither "compact" nor "absolute" while being relative.
+The renderer table is exact, not a substring heuristic: `compact_raw` and
+`compact_absolute` share a prefix while meaning opposite things, `native_absolute`
+and `compact_absolute` both contain "absolute", and `move_rel` contains neither
+"compact" nor "absolute" while being relative.
 
-One renderer emits `native_absolute_control`'s bare-line absolute form, where
+One renderer emits `compact_absolute`'s bare-line absolute form, where
 `0 0 0 ; +LMB -LMB` is a click at the top-left corner while the same bytes in
-`compact_raw` mean "don't move, click here".
+`compact_raw` mean "don't move, click here". That pair is why the table has to be
+exact: the two surfaces are byte-identical, so picking the wrong one of those two
+clicks somewhere else on the screen instead of failing.
 
 Rendering happens per step, because the relative arms resolve a click against a
 cursor read that must be fresh.
@@ -64,7 +67,7 @@ def test_the_renderer_table_is_exact_and_covers_every_arm_with_a_model_leg() -> 
     """
     assert set(SCRIPT_RENDERERS) == {
         "native_absolute",
-        "native_absolute_control",
+        "compact_absolute",
         "deltatype_v2",
         "compact_raw",
         "ordered_events_v3",
@@ -73,8 +76,15 @@ def test_the_renderer_table_is_exact_and_covers_every_arm_with_a_model_leg() -> 
 
 
 def test_a_prefix_grammar_name_gets_its_own_renderer_not_the_others() -> None:
-    """A substring heuristic would give `native_absolute_control` the tool-call arm."""
-    assert SCRIPT_RENDERERS["native_absolute"] is not SCRIPT_RENDERERS["native_absolute_control"]
+    """A substring heuristic collides on both halves of `compact_absolute`'s name.
+
+    On "compact" it takes `compact_raw`'s relative renderer, which emits the same
+    bytes for a different position and so clicks silently in the wrong place; on
+    "absolute" it takes `native_absolute`'s tool-call renderer, which at least
+    fails loudly.
+    """
+    assert SCRIPT_RENDERERS["compact_raw"] is not SCRIPT_RENDERERS["compact_absolute"]
+    assert SCRIPT_RENDERERS["native_absolute"] is not SCRIPT_RENDERERS["compact_absolute"]
     assert SCRIPT_RENDERERS["deltatype_v2"] is SCRIPT_RENDERERS["compact_raw"], (
         "the two raw-relative grammars share one renderer, which is correct"
     )
@@ -166,8 +176,8 @@ def test_native_absolute_renders_type_and_submit() -> None:
 
 
 def test_the_native_absolute_renderer_emits_bare_line_ABSOLUTE_coordinates() -> None:
-    """`native_absolute_control` reads no cursor at all."""
-    codec = load_codec("native_absolute_control")
+    """`compact_absolute` reads no cursor at all."""
+    codec = load_codec("compact_absolute")
     task = _task("open_chrome")
     for cursor in [(0, 0), (900, 900), (1919, 1079)]:
         text = render_step(
@@ -200,7 +210,7 @@ def test_the_same_bytes_mean_different_actions_in_the_paired_arms() -> None:
     bytes_ = "0 0 0 ; +LMB -LMB"
     geometry = _geo()
     cursor = (640, 480)
-    absolute = load_codec("native_absolute_control").compile(bytes_, geometry, cursor)
+    absolute = load_codec("compact_absolute").compile(bytes_, geometry, cursor)
     relative = load_codec("compact_raw").compile(bytes_, geometry, cursor)
     absolute_moves = [tuple(op.args[:2]) for op in absolute if op.kind in ("move_to", "glide_to")]
     relative_moves = [tuple(op.args[:2]) for op in relative if op.kind in ("move_to", "glide_to")]
@@ -216,13 +226,13 @@ def test_a_stale_cursor_read_is_exactly_the_drift_in_the_relative_arm() -> None:
     stale = render_step(_session((110, 90)), task, codec=codec, intent=Intent("click", target=(300, 400)))
     assert fresh == "200 300 0 ; +LMB -LMB"
     assert stale == "190 310 0 ; +LMB -LMB"
-    absolute = load_codec("native_absolute_control")
+    absolute = load_codec("compact_absolute")
     a = render_step(_session((100, 100)), task, codec=absolute, intent=Intent("click", target=(300, 400)))
     b = render_step(_session((110, 90)), task, codec=absolute, intent=Intent("click", target=(300, 400)))
     assert a == b, "the absolute arm is immune to the same drift"
 
 
-@pytest.mark.parametrize("codec_name", ["deltatype_v2", "compact_raw", "native_absolute_control"])
+@pytest.mark.parametrize("codec_name", ["deltatype_v2", "compact_raw", "compact_absolute"])
 def test_the_bare_line_renderers_json_escape_the_typed_text(codec_name: str) -> None:
     codec = load_codec(codec_name)
     task = _task("terminal_exact_text")
@@ -238,7 +248,7 @@ def test_the_bare_line_renderers_json_escape_the_typed_text(codec_name: str) -> 
     )
 
 
-@pytest.mark.parametrize("codec_name", ["deltatype_v2", "compact_raw", "native_absolute_control"])
+@pytest.mark.parametrize("codec_name", ["deltatype_v2", "compact_raw", "compact_absolute"])
 def test_the_bare_line_renderers_submit_with_a_real_key_transition(codec_name: str) -> None:
     text = render_step(_session(), _task("terminal_command"), codec=load_codec(codec_name), intent=Intent("submit"))
     assert text == "0 0 0 ; +Return -Return"
@@ -252,7 +262,7 @@ def test_an_unknown_intent_kind_is_refused_by_every_renderer() -> None:
 
 
 def test_the_chrome_click_target_comes_from_the_dock_constant() -> None:
-    codec = load_codec("native_absolute_control")
+    codec = load_codec("compact_absolute")
     text = render_step(_session(), _task("open_chrome"), codec=codec, intent=Intent("click"))
     x, y = DOCK_CHROME_COORDINATE
     assert text == f"{x} {y} 0 ; +LMB -LMB"
@@ -260,7 +270,7 @@ def test_the_chrome_click_target_comes_from_the_dock_constant() -> None:
 
 def test_a_terminal_click_target_is_recomputed_from_guest_geometry() -> None:
     """Not cached on `self`: one `Preparer` instance serves every concurrent rollout."""
-    codec = load_codec("native_absolute_control")
+    codec = load_codec("compact_absolute")
     session = _session()
     text = render_step(session, _task("focus_terminal_and_type"), codec=codec, intent=Intent("click"))
     assert text == f"{100 + 800 // 2} {200 + 100} 0 ; +LMB -LMB"

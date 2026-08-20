@@ -29,7 +29,7 @@ the round trip between them per grammar.
 
 ## Matched pairs
 
-`native_absolute_control` and `compact_raw` are a matched pair: identical prose
+`compact_absolute` and `compact_raw` are a matched pair: identical prose
 preamble, element vocabulary, line-extraction rule and canonical separator,
 differing only in whether the two leading integers name a position or an offset.
 Anything changed in one must be changed in the other, or the comparison measures
@@ -44,7 +44,7 @@ different token sequence in the two arms.
 the only differing productions are the two mouse-triple ones.
 
 Each arm declares the other via `PAIRED_WITH` and `report()["paired_with"]`, and
-a `matched_pair` section in `native_absolute_control`'s vectors asserts that one
+a `matched_pair` section in `compact_absolute`'s vectors asserts that one
 intent lowers to one operation sequence through both.
 
 ## What is never enforced

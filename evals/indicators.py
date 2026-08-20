@@ -221,7 +221,7 @@ def deltas(parsed: Any) -> list[tuple[int, int]]:
     Only meaningful for relative grammars: `deltatype_v2` / `compact_raw` /
     `diffabs` in raw pixels on the head, `ordered_events_v3` in raw pixels per
     `move` primitive, `move_rel` in normalized 0-999. `native_absolute` and
-    `native_absolute_control` carry a target rather than a delta and report
+    `compact_absolute` carry a target rather than a delta and report
     nothing; differencing consecutive targets to invent one would fabricate a
     distribution.
     """

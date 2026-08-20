@@ -17,13 +17,13 @@ The calibration semantics:
 Baseline incomparability — read this before quoting a number. The only calibrated
 external reference we have is off-the-shelf Qwen3-VL-8B = 33.9% OSWorld-Verified,
 and it was measured through the sealed prompts. `native_absolute.describe()`,
-`move_rel.describe()` and `native_absolute_control.describe()` are docstring-derived
+`move_rel.describe()` and `compact_absolute.describe()` are docstring-derived
 and are not byte-identical to those prompts, so numbers must not be compared across
 that boundary and the baseline needs re-measuring through the new prompt before any
 model arm here is read against 33.9%. Every episode records this on
 `trace.info["prompt"]` (`comparable_to_sealed_baseline: false`).
 
-The matched pair is machine-asserted. `compact_raw` and `native_absolute_control`
+The matched pair is machine-asserted. `compact_raw` and `compact_absolute`
 declare each other via `PAIRED_WITH`, contribute byte-identical handler sets, and
 share the line-extraction rule, the `" ; "` separator and the element vocabulary; a
 `matched_pair` vector pins one intent in two
@@ -32,7 +32,7 @@ those two arms is the encoding, not the executor. Two consequences:
 `0 0 0 ; +LMB -LMB` is a click at the top-left corner in the absolute arm and
 "don't move, click here" in `compact_raw` — same bytes, different action; and
 `compact_raw.from_target` needs a fresh cursor read and is wrong if that read is
-stale, while `native_absolute_control.from_target` needs only element geometry. The
+stale, while `compact_absolute.from_target` needs only element geometry. The
 scripted arms render one intent per step so that asymmetry is exercised rather than
 papered over.
 
@@ -70,7 +70,7 @@ __all__ = [
 NATIVE_CODEC = "native_absolute"
 COMPACT_CODEC = "deltatype_v2"
 """The Phase-B compact grammar. `compact_raw` is its NO_OP-free sibling and is the
-arm paired with `native_absolute_control`; `deltatype_v2` is the one the s900
+arm paired with `compact_absolute`; `deltatype_v2` is the one the s900
 checkpoint was trained on, so it is the one the model arm uses."""
 ORDERED_CODEC = "ordered_events_v3"
 """The production format. It had no eval leg at all — no model arm and no scripted

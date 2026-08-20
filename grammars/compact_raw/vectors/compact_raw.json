@@ -531,7 +531,7 @@
       },
       "canonical": "0 0 0",
       "recompiled": [],
-      "documents": "contrast native_absolute_control, where the same empty stream lifts to `960 540 0` because 0 0 is the top-left corner there."
+      "documents": "contrast compact_absolute, where the same empty stream lifts to `960 540 0` because 0 0 is the top-left corner there."
     },
     {
       "name": "type_then_return",

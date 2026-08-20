@@ -44,7 +44,7 @@ PRODUCER = {"prompt_file": "paired_runtime/prompts/compact_raw_phaseb.txt"}
 #: Its matched absolute twin. The two differ only in whether the leading
 #: integers name a position or an offset; a change to one must be made to the
 #: other.
-PAIRED_WITH = "native_absolute_control"
+PAIRED_WITH = "compact_absolute"
 
 
 class CompactRawError(ValueError):
@@ -90,7 +90,7 @@ def action_from_dict(value: dict[str, Any]) -> CompactRawAction:
 
 class CompactRawCodec:
     # The class docstring is the prompt preamble. It is assigned below from
-    # ``_support.MATCHED_ARM_PREAMBLE`` so that ``native_absolute_control``
+    # ``_support.MATCHED_ARM_PREAMBLE`` so that ``compact_absolute``
     # renders byte-identical text.
 
     name = "compact_raw"

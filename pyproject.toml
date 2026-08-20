@@ -35,12 +35,12 @@ dev = ["pytest>=8"]
 # grammars/__init__.py falls back to scanning peer directories so an uninstalled
 # checkout still discovers a new one.
 [project.entry-points."juergen.grammars"]
+compact_absolute = "grammars.compact_absolute.codec:CODEC"
 compact_raw = "grammars.compact_raw.codec:CODEC"
 deltatype_v2 = "grammars.deltatype_v2.codec:CODEC"
 diffabs = "grammars.diffabs.codec:CODEC"
 move_rel = "grammars.move_rel.codec:CODEC"
 native_absolute = "grammars.native_absolute.codec:CODEC"
-native_absolute_control = "grammars.native_absolute_control.codec:CODEC"
 ordered_events_v3 = "grammars.ordered_events_v3.codec:CODEC"
 
 [tool.uv.workspace]

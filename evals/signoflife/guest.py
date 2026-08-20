@@ -373,10 +373,10 @@ def _render_native_absolute(
     raise ValueError(intent.kind)
 
 
-def _render_native_absolute_control(
+def _render_compact_absolute(
     intent: Intent, session: Any, task: DesktopTaskData
 ) -> str:
-    """`native_absolute_control` — the bare-line absolute arm: `x y scroll ; EVENTS`.
+    """`compact_absolute` — the bare-line absolute arm: `x y scroll ; EVENTS`.
 
     `from_target` here needs only element geometry: no cursor read, so nothing about
     this rendering can go stale. That is the asymmetry against `compact_raw` below.
@@ -438,18 +438,20 @@ def _render_ordered_events_v3(
 
 SCRIPT_RENDERERS: dict[str, Callable[[Intent, Any, DesktopTaskData], str]] = {
     "native_absolute": _render_native_absolute,
-    "native_absolute_control": _render_native_absolute_control,
+    "compact_absolute": _render_compact_absolute,
     "deltatype_v2": _render_relative,
     "compact_raw": _render_relative,
     "ordered_events_v3": _render_ordered_events_v3,
 }
 """Exact codec name -> renderer.
 
-An exact table, not a substring heuristic: `native_absolute` and
-`native_absolute_control` are different grammars whose names are prefixes of one
-another, and `move_rel` contains neither "compact" nor "absolute" while being
-relative, so a heuristic could pick the wrong encoding and give a control arm that
-fails for the wrong reason. `move_rel` and `diffabs` are absent on purpose: no cell
+An exact table, not a substring heuristic: `compact_raw` and `compact_absolute`
+share a prefix while meaning opposite things, `native_absolute` and
+`compact_absolute` both contain "absolute", and `move_rel` contains neither
+"compact" nor "absolute" while being relative, so a heuristic could pick the wrong
+encoding and give a control arm that fails for the wrong reason — or, for that
+first pair, one that clicks in the wrong place without failing at all.
+`move_rel` and `diffabs` are absent on purpose: no cell
 has a scripted arm in them yet, and a missing renderer must be a loud `LookupError`,
 not a silently substituted grammar."""
 
