@@ -311,3 +311,36 @@ def test_a_teacher_row_with_no_payload_is_a_counted_parse_error_not_a_crash(tmp_
     manifest = json.loads((out / "convert_manifest.json").read_text())
     assert manifest["n_turns"] == 3
     assert manifest["n_turns_teacher_parse_error"] == 1
+
+
+def test_a_truncated_turn_is_dropped_and_not_relabelled_no_op(tmp_path):
+    """`max_tokens` is ours, so a cut-off turn is not a model decision to idle.
+
+    The row is exactly what `agent.Agent.step` records for
+    `finish_reason == "length"`: no parsed action, no operations, no parse error.
+    An empty operation stream lifts to a legitimate idle action, so without a
+    `truncated` gate the turn enters the dataset as an unterminated `<think>`
+    block labelled `NO_OP` — a label for a sentence the model never finished.
+    """
+    rollouts = tmp_path / "rollouts"
+    rollouts.mkdir(parents=True)
+    _harness_rollout(rollouts, "mine")
+    path = rollouts / "mine" / "trajectory.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    rows[1]["action"] = "<think>I am going to click the very long"
+    rows[1]["info"] |= {"operations": [], "parsed": None, "truncated": True}
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    out = tmp_path / "out"
+    assert _convert(rollouts, out) == 0
+    manifest = json.loads((out / "convert_manifest.json").read_text())
+    assert manifest["n_turns"] == 3
+    assert manifest["n_turns_teacher_parse_error"] == 1
+    assistant = [
+        part["text"]
+        for record in _records(out)
+        for message in record["messages"]
+        if message["role"] == "assistant"
+        for part in message["content"]
+    ]
+    assert not any("NO_OP" in text for text in assistant), assistant

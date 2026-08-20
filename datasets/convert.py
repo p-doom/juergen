@@ -298,7 +298,7 @@ def _lift(codec: Any, step: Step) -> Any:
     seven grammars — a flag on the Action
     (``deltatype_v2.fail``, ``diffabs.terminate``, ``ordered_events_v3.terminate``)
     or a ``terminate`` call inside it (``native_absolute``, ``move_rel``) — while
-    ``compact_raw`` and ``native_absolute_control`` cannot express one and raise.
+    ``compact_raw`` and ``compact_absolute`` cannot express one and raise.
     The converter must not reconstruct any of this by introspecting Action
     dataclasses.
 
@@ -494,7 +494,7 @@ class ConvertStats:
     #: Turns this codec could not express, so they are absent from this arm and
     #: this arm only. Kept separate from the teacher errors because it is the
     #: number that differs between arms built from one collection (e.g. diffabs
-    #: cannot spell ``type()`` and compact_raw / native_absolute_control have no
+    #: cannot spell ``type()`` and compact_raw / compact_absolute have no
     #: TERMINATE); a format comparison is only meaningful if it matches, exactly
     #: like ``n_turns_with_prose``.
     n_turns_dropped_by_codec: int = 0
@@ -570,7 +570,12 @@ def convert_rollout(
         # which only `teacher_step` speaks; `rollout_step` reads `operations`, so
         # requiring a truthy `parsed` discarded one of our own rollouts as a parse
         # error while its dispatched Operation stream sat right there.
-        if info.get("parse_error"):
+        #
+        # `truncated` is read, and has to be: a turn `max_tokens` cut off records
+        # an EMPTY operation stream, which lifts to a legitimate idle action, so
+        # it enters the dataset as an unterminated `<think>` block labelled NO_OP.
+        # The truthy-`parsed` check used to reject it as a side effect.
+        if info.get("parse_error") or info.get("truncated"):
             n_parse_err += 1
             continue
 
@@ -730,7 +735,7 @@ def _assert_prose_coverage(stats: ConvertStats, keep_prose: bool) -> None:
 #: over real collections the legitimate spread of that statistic between codecs
 #: is 0.00% (teacher_8b_v1/v2/v3, all seven codecs, prose counts 32/34/4 against
 #: an identical pre-codec denominator 734/1053/2011); the smallest real defect
-#: instance is compact_raw and native_absolute_control on teacher_8b_v1 losing 2
+#: instance is compact_raw and compact_absolute on teacher_8b_v1 losing 2
 #: of 32 prose turns because they have no TERMINATE token (6.25%); the historical
 #: defect this guard exists for was 100%. 0.05 sits above the observed legitimate
 #: spread and below the smallest observed real defect. Its cost: on 32 prose
@@ -1085,7 +1090,7 @@ def main(argv: list[str] | None = None) -> int:
         # Turn accounting split by where the loss came from. The teacher figure is
         # codec-independent; the codec figure is this arm's expressiveness gap,
         # and two arms are only comparable if it matches (diffabs cannot spell
-        # `type()`, compact_raw / native_absolute_control have no TERMINATE).
+        # `type()`, compact_raw / compact_absolute have no TERMINATE).
         "n_turns_teacher_parse_error": stats.n_turns_teacher_parse_error,
         "n_turns_dropped_by_codec": stats.n_turns_dropped_by_codec,
     }
