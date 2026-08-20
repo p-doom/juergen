@@ -228,14 +228,10 @@ class OrderedEventsV3Codec:
     def notes(self) -> None:
         """Recipes (the classic desktop actions in this format)
           move onto a target:  move(dx,dy)
-          left click:          move(dx,dy); down(LMB); up(LMB)
           right click:         move(dx,dy); down(RMB); up(RMB)
           double click:        down(LMB); up(LMB); down(LMB); up(LMB)
           click-and-drag:      down(LMB); move(dx,dy); up(LMB)
           scroll down / up:    scroll(0,-3)   /   scroll(0,3)
-          key chord (Ctrl+C):  down(ControlLeft); down(KeyC); up(KeyC); up(ControlLeft)
-          type "Hi":           type("Hi")
-          press Return:        down(Return); up(Return)
 
         Emit one action line per turn, and nothing else except the control line
         below — no JSON, no tool calls, no other commentary.
