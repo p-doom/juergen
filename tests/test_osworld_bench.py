@@ -440,8 +440,11 @@ class _Checkout:
 
 def _facade(tmp_path: Path, *, runtime: Any | None = None) -> tuple[DesktopFacade, _Checkout]:
     checkout = _Checkout()
+    # A QEMU-backed runtime by default: it is the only backing the production
+    # selector can reach (`evals/signoflife/__main__.py` -> `kvm_desktop_pool` ->
+    # `qemu_session_factory`), and the forwarded guest ports come off it.
     facade = DesktopFacade(
-        checkout, _Session(runtime=runtime), osworld_cache_dir=tmp_path / "cache"
+        checkout, _Session(runtime=runtime or _Runtime()), osworld_cache_dir=tmp_path / "cache"
     )
     facade._osworld_bridge = OSWorldBridge(
         base_url="http://127.0.0.1:5222",
@@ -498,20 +501,6 @@ def test_the_facade_forwards_the_declared_fail(tmp_path) -> None:
 def test_the_facade_reads_the_guest_ports_off_the_runtime(tmp_path) -> None:
     facade, _ = _facade(tmp_path, runtime=_Runtime())
     assert facade._guest_ports() == {"chromium_port": 9444, "vlc_port": 8222}
-
-
-def test_a_runtime_that_will_not_report_ports_falls_back_to_defaults(tmp_path) -> None:
-    """A task whose evaluator never touches Chrome or VLC does not need them, and
-    refusing to score it would invent a dependency."""
-
-    class _Mute:
-        def state(self) -> Any:
-            raise RuntimeError("not started")
-
-    facade, _ = _facade(tmp_path, runtime=_Mute())
-    assert facade._guest_ports() == {}
-    facade, _ = _facade(tmp_path, runtime=object())
-    assert facade._guest_ports() == {}
 
 
 def test_the_facade_delegates_the_rest_of_the_surface(tmp_path) -> None:

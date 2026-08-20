@@ -188,28 +188,21 @@ class DesktopFacade:
         return self._osworld_bridge
 
     def _guest_ports(self) -> dict[str, int]:
-        """`chromium_port` / `vlc_port` from the runtime, when it will say.
+        """`chromium_port` / `vlc_port` from the runtime.
 
         `DesktopSession` does not keep the `RuntimeState` it started with — it
-        forwards the ports into the metadata file and drops them — so they are
-        read back off the runtime. `state()` is on `QemuRuntime` and not on the
-        `Runtime` protocol, so a backing that does not offer it falls through to
-        OSWorld's own defaults rather than failing: a task whose evaluator never
-        touches Chrome or VLC does not need them.
+        forwards the ports into the metadata file and drops them — so they are read
+        back off the runtime. Not optional: the pool hands out per-slot forwarded
+        ports (`pool.py:152,170-177`, `20000 + slot*10 + {1,3}`), while
+        `OSWorldBridge`'s own defaults are the unforwarded 9222 / 8080. Falling
+        through to those does not degrade a Chrome or VLC evaluator, it points it at
+        the wrong guest and scores the task on whatever answers.
         """
-        runtime = getattr(self._session, "runtime", None)
-        state = getattr(runtime, "state", None)
-        if not callable(state):
-            return {}
-        try:
-            ports = state().ports
-        except Exception as exc:  # noqa: BLE001 - defaults are a valid answer
-            _LOGGER.info("runtime will not report guest ports (%r); using defaults", exc)
-            return {}
-        found = {
-            key: int(getattr(ports, key, 0) or 0) for key in ("chromium", "vlc")
+        ports = self._session.runtime.state().ports
+        return {
+            f"{key}_port": int(getattr(ports, key))
+            for key in ("chromium", "vlc")
         }
-        return {f"{key}_port": value for key, value in found.items() if value}
 
     def setup(self, task_config: dict[str, Any]) -> int:
         """Run an OSWorld task JSON's `config` steps, and bind it for scoring.

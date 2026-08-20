@@ -263,6 +263,17 @@ class _GroundingPreparation(_OSWorldPreparation):
                 target,
                 observed,
             )
+        if task.bbox is not None and in_bbox(observed, task.bbox):
+            # `cursor_start`'s containment ladder guarantees the REQUESTED point is
+            # outside; nothing guarantees the guest honoured it, and an explicit
+            # `task.cursor_start` never went through the ladder at all. Either way a
+            # start inside the target is `in_bbox` at step 0, `reach_frame` 1 and
+            # reward 1.0 before the model has acted.
+            raise RuntimeError(
+                f"cursor start {observed} is inside target bbox {task.bbox} "
+                f"(requested {tuple(target)}): the episode would score a reach "
+                "before the model acted"
+            )
         evidence.update(
             {
                 "requested_cursor_start": list(target),

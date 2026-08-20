@@ -1200,12 +1200,10 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             )
         # OSWorld inverts the reward on its `infeasible` tasks: declaring FAIL is
         # the success condition there and forfeits everywhere else. The scorer
-        # cannot see our control tokens, so the verdict is handed over
-        # explicitly. Optional — a session that does not offer it simply never
-        # claims a FAIL, which is what a model that never declared one produces.
-        declare = getattr(session, "declare_terminal", None)
-        if callable(declare):
-            declare(declared)
+        # cannot see our control tokens, so the verdict is handed over explicitly.
+        # Not optional: a session that scores an OSWorld split and cannot take the
+        # declaration silently forfeits every `infeasible` task in it.
+        session.declare_terminal(declared)
         try:
             score = float(await _to_thread(evaluate))
         except Exception as exc:  # noqa: BLE001 - recorded as missing, never as 0.0
