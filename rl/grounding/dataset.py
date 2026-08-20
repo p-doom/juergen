@@ -1,8 +1,8 @@
 """grounding scene loading: a labelled screenshot, a target bbox, a cursor start.
 
 Container-free: the observation is the cached labelled screenshot with a synthetic
-cursor marker composited on it, so the env needs no VM. The VM-backed variant is
-`evals.tasks.GroundingTaskset` + the `grounding` preparer.
+cursor marker composited on it, so the env needs no VM. There is no VM-backed
+variant any more; reviving one means a preparer plus a `kind`, not a second oracle.
 
 `to_norm` / `from_norm` are gone. They implemented the normalized 0-999 round trip
 (`from_norm(to_norm(cursor) + delta)`) that decided whether a move landed in the

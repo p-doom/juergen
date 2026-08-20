@@ -35,14 +35,13 @@ from typing import Any
 import verifiers.v1 as vf
 
 from agent.desktop import lease_for_trace
-from evals.tasks import RESULT_KEY, DesktopTaskData, in_bbox, preparer_for, valid_result
+from evals.tasks import RESULT_KEY, DesktopTaskData, preparer_for, valid_result
 
 _LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "OSWorldEvaluateOracle",
     "OracleOutcome",
-    "ReachOracle",
     "StateOracle",
     "final_probe",
     "probe_now",
@@ -144,60 +143,6 @@ class StateOracle:
             "postcondition_recorded": 1.0 if outcome.success else 0.0,
             "postcondition_oracle_error": 0.0 if outcome.status == "ok" else 1.0,
             "postcondition_probe_live": live,
-        }
-
-
-class ReachOracle:
-    """Grounding: did the cursor enter the labelled bbox at any frame?
-
-    The headline number is reach-at-any-frame, not final-frame containment: a
-    cursor that passes through the target and overshoots has still demonstrated the
-    grounding. `reach_frame` (the first hit, or -1) is the ordering statistic, and
-    the shaped term is a bounded function of the closest approach so a miss still
-    carries gradient.
-    """
-
-    shaping_weight: float = 0.3
-    shaping_scale: float = 400.0
-
-    @vf.reward
-    async def reach(self, trace: vf.Trace, runtime: vf.Runtime) -> float:
-        del runtime
-        task = trace.task.data
-        assert isinstance(task, DesktopTaskData)
-        result = valid_result(trace, "grounding")
-        if int(result.get("reach_frame", -1)) >= 0:
-            return 1.0
-        bbox = task.bbox
-        if bbox is None:
-            raise RuntimeError("grounding task carries no bbox, so reach is undefined")
-        probe, _ = probe_now(trace, task)
-        cursor = tuple((probe or {}).get("cursor") or (-1, -1))
-        if cursor == (-1, -1):
-            raise RuntimeError(
-                "grounding oracle has no cursor evidence (neither live nor recorded) — "
-                "infrastructure-invalid, not a miss"
-            )
-        return 1.0 if in_bbox(cursor, bbox) else 0.0
-
-    @vf.reward
-    async def shaped_progress(self, trace: vf.Trace) -> float:
-        result = trace.info.get(RESULT_KEY) or {}
-        if int(result.get("reach_frame", -1)) >= 0:
-            return 0.0
-        best = float(result.get("best_distance", -1.0))
-        if best < 0:
-            return 0.0
-        return self.shaping_weight * math.exp(-best / max(self.shaping_scale, 1.0))
-
-    @vf.metric
-    async def reach_frame(self, trace: vf.Trace) -> dict[str, float]:
-        result = trace.info.get(RESULT_KEY) or {}
-        frame = int(result.get("reach_frame", -1))
-        return {
-            "reach_frame": float(frame),
-            "reached": 1.0 if frame >= 0 else 0.0,
-            "best_distance_px": float(result.get("best_distance", -1.0)),
         }
 
 

@@ -27,7 +27,8 @@ from pathlib import Path
 
 import pytest
 
-from evals.tasks import REGIMES, cursor_start, distance_to_box, in_bbox
+from evals.tasks import cursor_start, distance_to_box, in_bbox
+from rl.grounding.dataset import REGIMES
 from rl.desktop import VirtualDesktop, VirtualDesktopPool, canvas_pool
 from rl.geometry import box_center, draw_box, png_bytes, render_cursor
 from rl.movebox.dataset import CURRICULUM_BANDS, band_sequence, sample_scene
@@ -490,8 +491,8 @@ def test_a_bbox_with_no_admissible_start_raises_instead_of_scoring_a_free_reach(
     """A full-screen target admits no on-screen start outside itself.
 
     Returning anything at all would be a reward-1.0 episode the model never played,
-    and `_GroundingPreparation.prepare` is the runtime caller, so the raise fails the
-    episode loudly. Same ladder-then-raise contract as
+    and `GroundingTaskset.load` is the caller, so the raise fails enumeration. Same
+    ladder-then-raise contract as
     `rl.target_box.geometry.sample_cursor_start`.
     """
     for regime in REGIMES:

@@ -26,13 +26,12 @@ from evals.oracles import (
     OracleOutcome,
     OSWorldEvaluateOracle,
     PairedArmDivergence,
-    ReachOracle,
     StateOracle,
     final_probe,
     probe_now,
 )
 from evals.signoflife.taskset import SignOfLifeTask
-from evals.tasks import RESULT_KEY, DesktopTask
+from evals.tasks import DesktopTask
 from juergen_doubles import FakeSession, make_task_data, make_trace
 
 
@@ -72,7 +71,6 @@ def test_there_is_no_runtime_kwarg_on_the_reward_decorator() -> None:
     "cls,name",
     [
         (StateOracle, "postcondition"),
-        (ReachOracle, "reach"),
         (OSWorldEvaluateOracle, "task_success"),
     ],
 )
@@ -88,8 +86,6 @@ def test_each_state_reading_reward_declares_runtime_with_no_default(cls, name) -
     "cls,name",
     [
         (StateOracle, "postcondition_recorded"),
-        (ReachOracle, "reach_frame"),
-        (ReachOracle, "shaped_progress"),
         (OSWorldEvaluateOracle, "full_success"),
         (NoOracle, "freeroll"),
     ],
@@ -239,103 +235,6 @@ def test_the_outcome_dataclass_round_trips_and_defaults_to_recorded() -> None:
         "evidence": {},
         "source": "recorded",
     }
-
-
-class Reach(ReachOracle, DesktopTask):
-    pass
-
-
-def _reach(**result):
-    data = make_task_data(kind="grounding", bbox=(10, 10, 50, 50))
-    return data, make_trace(data, episode={"validity": "valid", "steps_detail": [], **result})
-
-
-def test_reach_is_reach_at_any_frame_not_final_frame_containment() -> None:
-    """A cursor that passes through and overshoots has still demonstrated grounding."""
-    data, trace = _reach(reach_frame=3, best_distance=0.0)
-    asyncio.run(Reach(data).score(trace, _Runtime()))
-    assert trace.rewards["reach"] == 1.0
-    assert trace.metrics["reached"] == 1.0 and trace.metrics["reach_frame"] == 3.0
-
-
-def test_a_miss_falls_back_to_the_scoring_time_cursor() -> None:
-    data, trace = _reach(reach_frame=-1, best_distance=80.0, final_probe={"cursor": [20, 20]})
-    asyncio.run(Reach(data).score(trace, _Runtime()))
-    assert trace.rewards["reach"] == 1.0, "a cursor inside the bbox at scoring time counts"
-
-
-def test_a_genuine_miss_scores_zero_with_a_shaped_remainder() -> None:
-    data, trace = _reach(reach_frame=-1, best_distance=80.0, final_probe={"cursor": [900, 900]})
-    asyncio.run(Reach(data).score(trace, _Runtime()))
-    assert trace.rewards["reach"] == 0.0
-    assert 0.0 < trace.rewards["shaped_progress"] < 0.3, "a miss still carries gradient"
-
-
-def test_the_shaped_term_is_zero_once_the_target_is_reached() -> None:
-    data, trace = _reach(reach_frame=1, best_distance=0.0)
-    asyncio.run(Reach(data).score(trace, _Runtime()))
-    assert trace.rewards["shaped_progress"] == 0.0
-
-
-def test_the_shaped_term_is_zero_when_distance_is_the_unset_sentinel() -> None:
-    """A rollout that broke before its first bbox measurement still probed a cursor."""
-    data, trace = _reach(reach_frame=-1, best_distance=-1.0, final_probe={"cursor": [900, 900]})
-    asyncio.run(Reach(data).score(trace, _Runtime()))
-    assert trace.rewards["shaped_progress"] == 0.0, "-1.0 means undefined, not adjacent"
-
-
-def test_the_shaped_term_decreases_with_distance() -> None:
-    scores = []
-    for distance in (10.0, 100.0, 400.0, 2000.0):
-        data, trace = _reach(reach_frame=-1, best_distance=distance, final_probe={"cursor": [999, 999]})
-        asyncio.run(Reach(data).score(trace, _Runtime()))
-        scores.append(trace.rewards["shaped_progress"])
-    assert scores == sorted(scores, reverse=True), scores
-    assert all(0.0 <= s <= 0.3 for s in scores)
-
-
-def test_a_missing_result_raises_rather_than_training_a_zero() -> None:
-    data = make_task_data(kind="grounding", bbox=(10, 10, 50, 50))
-    with pytest.raises(Exception, match="published no result"):
-        asyncio.run(Reach(data).score(make_trace(data), _Runtime()))
-
-
-def test_an_infra_invalid_grounding_rollout_raises_instead_of_scoring_a_miss() -> None:
-    """The cursor here is a genuine miss, so without the guard this scores 0.0."""
-    data, trace = _reach(
-        validity="infra_invalid",
-        infra_error={"stage": "boot"},
-        reach_frame=-1,
-        best_distance=80.0,
-        final_probe={"cursor": [900, 900]},
-    )
-    with pytest.raises(Exception, match="infrastructure-invalid"):
-        asyncio.run(Reach(data).score(trace, _Runtime()))
-    assert "reach" not in trace.rewards, "a booted-VM failure is not a grounding failure"
-
-
-def test_a_grounding_task_with_no_bbox_raises_because_reach_is_undefined() -> None:
-    data = make_task_data(kind="grounding", bbox=None)
-    trace = make_trace(
-        data,
-        episode={
-            "validity": "valid",
-            "steps_detail": [],
-            "reach_frame": -1,
-            "final_probe": {"cursor": [20, 20]},
-        },
-    )
-    with pytest.raises(Exception, match="no bbox"):
-        asyncio.run(Reach(data).score(trace, _Runtime()))
-    assert "reach" not in trace.rewards
-
-
-@pytest.mark.parametrize("probe", [None, {}, {"cursor": [-1, -1]}])
-def test_no_cursor_evidence_raises_instead_of_scoring_a_miss(probe) -> None:
-    data, trace = _reach(reach_frame=-1, best_distance=80.0, final_probe=probe)
-    with pytest.raises(Exception, match="no cursor evidence"):
-        asyncio.run(Reach(data).score(trace, _Runtime()))
-    assert "reach" not in trace.rewards, "the sentinel is absent evidence, not a miss"
 
 
 class OSWorld(OSWorldEvaluateOracle, DesktopTask):

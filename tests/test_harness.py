@@ -1520,56 +1520,6 @@ def test_the_freeroll_desktop_setup_selects_the_preparer() -> None:
         assert rows[0].data.kind == setup
 
 
-def test_the_grounding_taskset_is_the_target_by_regime_cross_product(tmp_path) -> None:
-    from evals.tasks import GroundingTaskset, GroundingTasksetConfig
-
-    steps = tmp_path / "run" / "task_a" / "steps"
-    steps.mkdir(parents=True)
-    (steps / "step_001.png").write_bytes(png())
-    bboxes = tmp_path / "bboxes.jsonl"
-    bboxes.write_text(
-        json.dumps(
-            {
-                "idx": 0,
-                "app": "chrome",
-                "instruction": "click it",
-                "bbox_xyxy": [10, 20, 30, 40],
-                "image_path": str(steps / "step_001.png"),
-            }
-        )
-        + "\n"
-    )
-    rows = list(
-        GroundingTaskset(
-            GroundingTasksetConfig(bboxes_jsonl=str(bboxes), osworld_root=str(tmp_path))
-        ).load()
-    )
-    assert len(rows) == 3, "one task per (target, regime)"
-    assert [r.data.regime for r in rows] == ["near", "medium", "far"]
-    assert all(r.data.bbox == (10, 20, 30, 40) for r in rows)
-    assert rows[0].data.name == "chrome/task_a/near"
-    assert len({r.data.idx for r in rows}) == 3, "indices must be unique"
-
-
-def test_a_malformed_image_path_is_refused(tmp_path) -> None:
-    from evals.tasks import GroundingTaskset, GroundingTasksetConfig
-
-    bboxes = tmp_path / "bboxes.jsonl"
-    bboxes.write_text(
-        json.dumps(
-            {
-                "idx": 0,
-                "app": "chrome",
-                "instruction": "x",
-                "bbox_xyxy": [1, 2, 3, 4],
-                "image_path": "/wrong/shape/step_001.png",
-            }
-        )
-        + "\n"
-    )
-    with pytest.raises(ValueError, match="unexpected image_path shape"):
-        list(GroundingTaskset(GroundingTasksetConfig(bboxes_jsonl=str(bboxes))).load())
-
 
 def test_the_harness_declares_message_prompt_support() -> None:
     assert DesktopHarness.SUPPORTS_MESSAGE_PROMPT is True

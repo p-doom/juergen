@@ -5,8 +5,6 @@ it reads out of it afterwards. Those two things are the `Preparer` seam below;
 everything else is one harness.
 
   * freeroll               -> `none` / `terminal`
-  * grounding              -> `grounding` (OSWorld setup + cached-trajectory
-                              replay + stratified cursor placement)
   * fullbench / one_task   -> `osworld` (OSWorld `SetupController`, scored by
                               `DesktopEnv.evaluate()`)
   * sign-of-life           -> four kinds registered by `evals/signoflife/guest.py`
@@ -36,12 +34,9 @@ __all__ = [
     "DesktopTaskData",
     "FreerollTaskset",
     "FreerollTasksetConfig",
-    "GroundingTaskset",
-    "GroundingTasksetConfig",
     "OSWorldTaskset",
     "OSWorldTasksetConfig",
     "Preparer",
-    "REGIMES",
     "cursor_start",
     "in_bbox",
     "osworld_task_config",
@@ -49,7 +44,6 @@ __all__ = [
     "valid_result",
 ]
 
-REGIMES: tuple[str, ...] = ("near", "medium", "far")
 RESULT_KEY = "episode"
 RESULT_SCHEMA_VERSION = 1
 
@@ -248,72 +242,6 @@ class _OSWorldPreparation:
         return {"cursor": list(session.cursor_position())}
 
 
-class _GroundingPreparation(_OSWorldPreparation):
-    """Grounding targets: OSWorld setup, optional cached-trajectory replay, then a
-    deterministic stratified cursor placement.
-
-    Replay: our labelled bboxes were sampled from `step_001.png` frames sitting
-    next to the originating rollout's `traj.jsonl`, so the desktop must be advanced
-    from post-setup to post-replay before the bbox means anything. Upstream
-    OSWorld's `_replay_setup` is a `NotImplementedError` stub; `_replay` below
-    dispatches each cached `action` as a raw pyautogui expression and skips a row
-    it cannot execute rather than killing the run.
-
-    Stratified starts: `near`/`medium`/`far` make the distance-to-target a
-    controlled variable, and the minimum radius is raised by the bbox half-diagonal
-    so a full-window target cannot collect a degenerate reach-at-step-0.
-    """
-
-    kind = "grounding"
-
-    def prepare(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
-        evidence = super().prepare(session, task)
-        replay = task.setup.get("replay_trajectory")
-        n_steps = int(task.setup.get("replay_n_steps", 1))
-        if replay:
-            evidence["replayed"] = _replay(session, Path(replay), n_steps)
-        width, height = session.screen_size()
-        target = task.cursor_start or cursor_start(
-            task.bbox or (0, 0, 1, 1), width, height, task.regime or "far", task.name or ""
-        )
-        session.execute_pyautogui(f"pyautogui.moveTo({target[0]}, {target[1]})")
-        observed = tuple(session.cursor_position())
-        if observed != tuple(target):
-            _LOGGER.warning(
-                "cursor_start: requested %s, got %s — using actual position",
-                target,
-                observed,
-            )
-        if task.bbox is not None and in_bbox(observed, task.bbox):
-            # `cursor_start`'s containment ladder guarantees the REQUESTED point is
-            # outside; nothing guarantees the guest honoured it, and an explicit
-            # `task.cursor_start` never went through the ladder at all. Either way a
-            # start inside the target is `in_bbox` at step 0, `reach_frame` 1 and
-            # reward 1.0 before the model has acted.
-            raise RuntimeError(
-                f"cursor start {observed} is inside target bbox {task.bbox} "
-                f"(requested {tuple(target)}): the episode would score a reach "
-                "before the model acted"
-            )
-        evidence.update(
-            {
-                "requested_cursor_start": list(target),
-                "observed_cursor_start": list(observed),
-                "regime": task.regime,
-            }
-        )
-        return evidence
-
-    def probe(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
-        cursor = tuple(session.cursor_position())
-        bbox = task.bbox
-        return {
-            "cursor": list(cursor),
-            "in_bbox": bool(bbox and in_bbox(cursor, bbox)),
-            "distance": None if not bbox else distance_to_box(cursor, bbox),
-        }
-
-
 def osworld_task_config(task: DesktopTaskData) -> dict[str, Any]:
     """The whole OSWorld task JSON a row stands for.
 
@@ -338,38 +266,10 @@ def osworld_task_config(task: DesktopTaskData) -> dict[str, Any]:
     }
 
 
-def _replay(session: Any, trajectory: Path, n_steps: int, sleep_s: float = 0.5) -> int:
-    """Dispatch the first `n_steps` non-reset cached actions."""
-    import time
-
-    replayed = 0
-    for raw in trajectory.read_text().splitlines():
-        if not raw.strip() or replayed >= n_steps:
-            if replayed >= n_steps:
-                break
-            continue
-        entry = json.loads(raw)
-        if entry.get("step_num", 0) == 0:
-            continue
-        action = (entry.get("action") or "").strip()
-        if not action or action == "<reset>":
-            continue
-        try:
-            session.execute_pyautogui(action)
-        except Exception as exc:  # noqa: BLE001 - a bad cached row must not kill the run
-            _LOGGER.warning("replay: skipping unexecutable action %r: %s", action[:120], exc)
-            continue
-        replayed += 1
-        time.sleep(sleep_s)
-    _LOGGER.info("replay: dispatched %d action(s) from %s", replayed, trajectory)
-    return replayed
-
-
 for _preparer in (
     _NoPreparation(),
     _TerminalPreparation(),
     _OSWorldPreparation(),
-    _GroundingPreparation(),
 ):
     register_preparer(_preparer)
 
@@ -385,6 +285,9 @@ def distance_to_box(pos: tuple[int, int], bbox: tuple[int, int, int, int]) -> fl
     return math.hypot(dx, dy)
 
 
+# Reached only through `rl.grounding.dataset.cursor_start`, which delegates here so the
+# container-free plugin cannot drift from this rule. There is no direct caller left in
+# `evals/`, so a dead-code sweep will read this as unused: it is not.
 def cursor_start(
     bbox: tuple[int, int, int, int],
     screen_w: int,
@@ -407,8 +310,8 @@ def cursor_start(
 
     Every regime — `far` included — goes through that containment ladder, and a bbox
     that admits no on-screen point outside itself raises rather than returning a
-    start inside the target. The runtime caller is `_GroundingPreparation.prepare`,
-    so the raise fails the episode loudly instead of scoring a degenerate
+    start inside the target. The caller is `rl.grounding.taskset.GroundingTaskset.
+    load`, so the raise fails enumeration instead of scoring a degenerate
     reach-at-step-0: `in_bbox` true at step 0, `reach_frame` 1, reward 1.0 before the
     model has acted. Same ladder-then-raise shape as `rl.target_box.geometry.
     sample_cursor_start`.
@@ -537,74 +440,6 @@ class OSWorldTaskset(vf.Taskset[DesktopTask, OSWorldTasksetConfig]):
             )
 
 
-class GroundingTasksetConfig(vf.TasksetConfig):
-    bboxes_jsonl: str = ""
-    osworld_root: str = ""
-    regimes: list[str] = list(REGIMES)
-    max_steps: int = 100
-    """K — rollout length per (target, regime). 100 = 10 s at 10 fps."""
-    target_idxs: list[int] = []
-    max_targets: int = 0
-    replay_n_steps: int = 1
-
-
-class GroundingTaskset(vf.Taskset[DesktopTask, GroundingTasksetConfig]):
-    """bboxes.jsonl x {near, medium, far}. One task per (target, regime).
-
-    The cross-product is the taskset, so verifiers shards it and the pool supplies
-    VMs.
-    """
-
-    def load(self) -> Iterable[DesktopTask]:
-        root = Path(self.config.osworld_root or os.environ.get("OSWORLD_ROOT", ""))
-        keep = set(self.config.target_idxs)
-        idx = 0
-        seen_targets = 0
-        for line in Path(self.config.bboxes_jsonl).read_text().splitlines():
-            if not line.strip():
-                continue
-            label = json.loads(line)
-            if keep and int(label["idx"]) not in keep:
-                continue
-            if self.config.max_targets and seen_targets >= self.config.max_targets:
-                return
-            seen_targets += 1
-            image_path = Path(label["image_path"])
-            parts = image_path.parts
-            if parts[-2] != "steps":
-                raise ValueError(f"unexpected image_path shape: {label['image_path']!r}")
-            task_id = parts[-3]
-            app = str(label["app"])
-            bbox = tuple(int(v) for v in label["bbox_xyxy"])
-            trajectory = image_path.parent.parent / "traj.jsonl"
-            config_path = root / "evaluation_examples" / "examples" / app / f"{task_id}.json"
-            for regime in self.config.regimes:
-                yield DesktopTask(
-                    DesktopTaskData(
-                        idx=idx,
-                        name=f"{app}/{task_id}/{regime}",
-                        prompt=str(label["instruction"]),
-                        instruction=str(label["instruction"]),
-                        kind="grounding",
-                        max_steps=self.config.max_steps,
-                        app=app,
-                        task_path=str(config_path) if config_path.is_file() else None,
-                        bbox=bbox,
-                        regime=regime,
-                        expected={"bbox": list(bbox)},
-                        setup={
-                            "replay_trajectory": (
-                                str(trajectory) if trajectory.is_file() else None
-                            ),
-                            "replay_n_steps": self.config.replay_n_steps,
-                            "image_path": str(image_path),
-                        },
-                    ),
-                    self.config.task,
-                )
-                idx += 1
-
-
 class FreerollTasksetConfig(vf.TasksetConfig):
     instructions: list[str] = []
     instructions_file: str = ""
@@ -620,6 +455,10 @@ class FreerollTaskset(vf.Taskset[DesktopTask, FreerollTasksetConfig]):
     """
 
     def load(self) -> Iterable[DesktopTask]:
+        # `desktop_setup` is an unvalidated string copied straight onto `kind`, so an
+        # unregistered one (`grounding`, until its preparer was deleted) otherwise
+        # reaches `preparer_for` only after a VM has booted.
+        preparer_for(self.config.desktop_setup)
         raw = list(self.config.instructions)
         if self.config.instructions_file:
             raw.extend(Path(self.config.instructions_file).read_text().splitlines())

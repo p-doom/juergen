@@ -16,7 +16,7 @@ brings its own Chrome and the session never learns Chrome exists.
 
 `signoflife/` is the calibrated four-cell gate: one taskset, six harness configs.
 
-This package is a library, not a verifiers plugin id: its `__all__` names three
+This package is a library, not a verifiers plugin id: its `__all__` names two
 `Taskset` subclasses, and `loaders._plugin_class` requires exactly one. The plugin
 packages are `evals.signoflife`, `rl.movebox`, `rl.grounding` and `rl.target_box`.
 """
@@ -43,7 +43,6 @@ from evals.tasks import (
     DesktopTask,
     DesktopTaskData,
     FreerollTaskset,
-    GroundingTaskset,
     OSWorldTaskset,
     Preparer,
     register_preparer,
@@ -60,7 +59,6 @@ __all__ = [
     "DesktopTaskData",
     "FailureModeIndicators",
     "FreerollTaskset",
-    "GroundingTaskset",
     "MouseIndicators",
     "OSWorldTaskset",
     "OracleOutcome",

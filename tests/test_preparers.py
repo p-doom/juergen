@@ -1,9 +1,9 @@
-"""The `Preparer` seam and its 8 preparers.
+"""The `Preparer` seam and its 7 preparers.
 
 The seam's contract: `prepare` may drive the guest, `probe` must not. A `probe`
 that dispatched input would break the read-only property the oracle depends on.
 
-Eight preparers are registered: `none`, `terminal`, `osworld`, `grounding`, the four
+Seven preparers are registered: `none`, `terminal`, `osworld`, the four
 sign-of-life kinds, plus the fixture and RL ones that register on import.
 """
 
@@ -24,13 +24,23 @@ from evals.tasks import PREPARERS, Preparer, preparer_for, register_preparer
 from juergen_doubles import FakeSession, make_task_data
 
 SIGN_OF_LIFE_KINDS = sorted(ALLOWED_KINDS)
-CORE_KINDS = ["grounding", "none", "osworld", "terminal"]
+CORE_KINDS = ["none", "osworld", "terminal"]
 
 
-def test_the_eight_preparers_are_registered() -> None:
+def test_the_seven_preparers_are_registered() -> None:
     assert set(CORE_KINDS) <= set(PREPARERS)
     assert set(SIGN_OF_LIFE_KINDS) <= set(PREPARERS)
-    assert len(set(CORE_KINDS) | set(SIGN_OF_LIFE_KINDS)) == 8
+    assert len(set(CORE_KINDS) | set(SIGN_OF_LIFE_KINDS)) == 7
+
+
+def test_a_freeroll_desktop_setup_with_no_preparer_fails_at_enumeration() -> None:
+    """`desktop_setup` is copied straight onto `kind`, so an unregistered one must not
+    wait for a booted VM to be noticed. `grounding` is the live example: its preparer
+    is gone, and silently selecting something else would be worse than failing."""
+    from evals.tasks import FreerollTaskset, FreerollTasksetConfig
+
+    with pytest.raises(LookupError, match="no preparer registered"):
+        list(FreerollTaskset(FreerollTasksetConfig(desktop_setup="grounding")).load())
 
 
 def test_the_fixture_and_rl_preparers_register_on_import() -> None:
@@ -230,131 +240,6 @@ def test_an_osworld_task_with_no_config_does_not_call_setup() -> None:
     assert preparer_for("osworld").prepare(session, task) == {"prepared": "osworld", "steps": 0}
     assert session.argv_log == []
     assert session.task_config is None
-
-
-def test_the_grounding_preparer_places_the_stratified_cursor() -> None:
-    session = FakeSession(screen=(1920, 1080))
-    task = make_task_data(
-        kind="grounding", bbox=(900, 500, 1000, 600), regime="near", name="app/task/near"
-    )
-    evidence = preparer_for("grounding").prepare(session, task)
-    assert evidence["regime"] == "near"
-    assert evidence["requested_cursor_start"] == evidence["observed_cursor_start"]
-    assert session.cursor == tuple(evidence["observed_cursor_start"])
-    assert "moveTo" in session.pyautogui_log[-1]
-
-
-def test_an_explicit_cursor_start_wins_over_the_sampler() -> None:
-    session = FakeSession(screen=(1920, 1080))
-    task = make_task_data(
-        kind="grounding", bbox=(10, 10, 50, 50), regime="near", cursor_start=(444, 333)
-    )
-    evidence = preparer_for("grounding").prepare(session, task)
-    assert evidence["requested_cursor_start"] == [444, 333]
-
-
-def test_the_grounding_preparer_records_a_refused_cursor_move() -> None:
-    """A VM that clamps the cursor must be recorded, not asserted away."""
-
-    class Stubborn(FakeSession):
-        def execute_pyautogui(self, code):
-            self.pyautogui_log.append(code)  # accept the call, ignore it
-
-    session = Stubborn(screen=(1920, 1080), cursor=(1, 1))
-    task = make_task_data(kind="grounding", bbox=(900, 500, 1000, 600), regime="near")
-    evidence = preparer_for("grounding").prepare(session, task)
-    assert evidence["observed_cursor_start"] == [1, 1]
-    assert evidence["requested_cursor_start"] != evidence["observed_cursor_start"]
-
-
-def test_the_grounding_probe_reports_containment_and_distance() -> None:
-    session = FakeSession(cursor=(20, 20))
-    task = make_task_data(kind="grounding", bbox=(10, 10, 50, 50))
-    probe = preparer_for("grounding").probe(session, task)
-    assert probe == {"cursor": [20, 20], "in_bbox": True, "distance": 0.0}
-    outside = FakeSession(cursor=(60, 20))
-    probe = preparer_for("grounding").probe(outside, task)
-    assert probe["in_bbox"] is False and probe["distance"] == 10.0
-
-
-def test_the_grounding_probe_reports_no_distance_without_a_bbox() -> None:
-    probe = preparer_for("grounding").probe(FakeSession(), make_task_data(kind="grounding"))
-    assert probe["distance"] is None and probe["in_bbox"] is False
-
-
-def _traj(tmp_path: Path, rows: list[dict]) -> Path:
-    path = tmp_path / "traj.jsonl"
-    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
-    return path
-
-
-def test_replay_dispatches_the_first_n_non_reset_actions(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("time.sleep", lambda *_: None)
-    path = _traj(
-        tmp_path,
-        [
-            {"step_num": 0, "action": "<reset>"},
-            {"step_num": 1, "action": "pyautogui.click(10, 10)"},
-            {"step_num": 2, "action": "pyautogui.click(20, 20)"},
-        ],
-    )
-    session = FakeSession(screen=(1920, 1080))
-    task = make_task_data(
-        kind="grounding",
-        bbox=(10, 10, 50, 50),
-        regime="near",
-        setup={"replay_trajectory": str(path), "replay_n_steps": 1},
-    )
-    evidence = preparer_for("grounding").prepare(session, task)
-    assert evidence["replayed"] == 1
-    replays = [c for c in session.pyautogui_log if "click" in c]
-    assert replays == ["pyautogui.click(10, 10)"], "n_steps is honoured"
-
-
-def test_replay_skips_a_step_zero_a_blank_line_and_a_reset(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("time.sleep", lambda *_: None)
-    from evals.tasks import _replay
-
-    path = tmp_path / "t.jsonl"
-    path.write_text(
-        "\n".join(
-            [
-                json.dumps({"step_num": 0, "action": "pyautogui.click(0,0)"}),
-                "",
-                json.dumps({"step_num": 1, "action": "<reset>"}),
-                json.dumps({"step_num": 2, "action": ""}),
-                json.dumps({"step_num": 3, "action": "pyautogui.click(9,9)"}),
-            ]
-        )
-    )
-    session = FakeSession()
-    assert _replay(session, path, n_steps=5) == 1
-    assert session.pyautogui_log == ["pyautogui.click(9,9)"]
-
-
-def test_a_bad_cached_row_is_skipped_not_fatal(tmp_path: Path, monkeypatch) -> None:
-    """A bad cached row must not kill a 369-task array run."""
-    monkeypatch.setattr("time.sleep", lambda *_: None)
-    from evals.tasks import _replay
-
-    class Picky(FakeSession):
-        def execute_pyautogui(self, code):
-            if "boom" in code:
-                raise ValueError("unexecutable")
-            super().execute_pyautogui(code)
-
-    path = tmp_path / "t.jsonl"
-    path.write_text(
-        "\n".join(
-            [
-                json.dumps({"step_num": 1, "action": "boom()"}),
-                json.dumps({"step_num": 2, "action": "pyautogui.click(1,1)"}),
-            ]
-        )
-    )
-    session = Picky()
-    assert _replay(session, path, n_steps=2) == 1
-    assert session.pyautogui_log == ["pyautogui.click(1,1)"]
 
 
 def test_the_sign_of_life_probe_carries_the_verdict_alongside_the_state() -> None:

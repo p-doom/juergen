@@ -3,8 +3,7 @@
 `OSWorldEvaluateOracle` says the reward is `DesktopEnv.evaluate()`. This module
 produces that number without letting OSWorld own the VM: `evals/vm.py`'s
 `DesktopFacade` gets `setup()` and `evaluate()` from here, and the OSWorld task
-family (`kind="osworld"`, and `kind="grounding"` which inherits its preparer)
-reaches the guest through them.
+family (`kind="osworld"`) reaches the guest through them.
 
 `DesktopEnv` itself is unusable here: it owns a VM lifecycle through its own
 provider layer, and the lifecycle is ours (qemu + KVM under `desktop`'s pool) —
