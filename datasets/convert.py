@@ -401,6 +401,17 @@ def rollout_step(info: dict[str, Any], screen: tuple[int, int]) -> Step | None:
     )
 
 
+def source_stop_reason(result: dict[str, Any]) -> str | None:
+    """Why the source rollout ended, in the producer's own spelling.
+
+    Keyed on the same declared field :func:`source_reader` is: our harness
+    publishes `outcome` (`evals/harness.py`'s result mirror) and the external
+    teacher collections publish `stop_reason`. Reading only one of the two spellings
+    left this null for every rollout of the other producer.
+    """
+    return result.get("outcome") if result.get("codec") else result.get("stop_reason")
+
+
 def source_reader(result: dict[str, Any]):
     """Which source vocabulary this rollout speaks, from what it DECLARES.
 
@@ -504,10 +515,22 @@ def convert_rollout(
     result = json.loads(result_path.read_text())
 
     # Deterministic-task-success filter (gold): keep only traces the OSWorld
-    # evaluator scored >= threshold. A None success (eval_error / skipped) drops.
+    # evaluator scored >= threshold. The key is `task_reward` — what
+    # `evals/harness.py` publishes from `evaluate_on_finish`; no producer has ever
+    # written `task_success`, so reading that dropped every rollout on every
+    # collection. A collection that carries no score at all cannot be filtered by
+    # one, and silently keeping nothing is how that went unnoticed.
     if min_task_success is not None:
-        ts = result.get("task_success")
-        if ts is None or float(ts) < min_task_success:
+        if "task_reward" not in result:
+            raise SystemExit(
+                f"--min_task_success needs an OSWorld score per rollout, and "
+                f"{result_path} carries no `task_reward` field. Only our own harness "
+                "writes one, and only under `evaluate_on_finish`; the external "
+                "teacher collections carry no score at all, so this flag cannot "
+                "filter them."
+            )
+        reward = result["task_reward"]
+        if reward is None or float(reward) < min_task_success:
             return None
 
     instruction = result.get("instruction")
@@ -595,7 +618,7 @@ def convert_rollout(
         "n_frames": len(turns),
         "subrecord_idx": 0,
         "n_subrecords": 1,
-        "source_stop_reason": result.get("stop_reason"),
+        "source_stop_reason": source_stop_reason(result),
         "source_parse_errors": n_parse_err,
         "messages": messages,
     }
@@ -669,7 +692,7 @@ def _assert_prose_coverage(stats: ConvertStats, keep_prose: bool) -> None:
             "--rollouts_dir points at dirs holding `result.json` + "
             "`trajectory.jsonl` (add --recursive for nested layouts), and that "
             "result.json carries the fields this converter reads "
-            "(`instruction`, `screen_size`, `task_success`) and each trajectory "
+            "(`instruction`, `screen_size`) and each trajectory "
             "entry an `info.parsed` payload."
         )
     if not keep_prose:
