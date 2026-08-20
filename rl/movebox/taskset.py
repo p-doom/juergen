@@ -16,7 +16,7 @@ from typing import Any, Iterable
 import verifiers.v1 as vf
 
 from evals.indicators import MouseIndicators, SamplingProvenance
-from evals.tasks import RESULT_KEY, DesktopTask, DesktopTaskData
+from evals.tasks import RESULT_KEY, DesktopTask, DesktopTaskData, valid_result
 from rl.movebox.dataset import (
     DEFAULT_BACKGROUNDS_DIR,
     SCREEN_H,
@@ -35,18 +35,8 @@ REACH_REWARD = 1.0
 class MoveBoxTask(MouseIndicators, SamplingProvenance, DesktopTask):
     @vf.reward
     async def reach(self, trace: vf.Trace) -> float:
-        """1.0 iff the cursor entered the box at any step.
-
-        Raises when the harness published no result, or published an
-        infrastructure-invalid one: neither must be trained as a zero.
-        """
-        result = trace.info.get(RESULT_KEY)
-        if not isinstance(result, dict):
-            raise RuntimeError("movebox rollout published no result")
-        if result.get("validity") != "valid":
-            raise RuntimeError(
-                f"movebox rollout is infrastructure-invalid: {result.get('infra_error')}"
-            )
+        """1.0 iff the cursor entered the box at any step."""
+        result = valid_result(trace, "movebox")
         return REACH_REWARD if int(result.get("reach_frame", -1)) >= 0 else 0.0
 
     @vf.metric

@@ -24,7 +24,7 @@ from typing import Iterable
 import verifiers.v1 as vf
 
 from evals.indicators import MouseIndicators, SamplingProvenance
-from evals.tasks import RESULT_KEY, DesktopTask, DesktopTaskData
+from evals.tasks import RESULT_KEY, DesktopTask, DesktopTaskData, valid_result
 from rl.grounding.dataset import REGIMES, cursor_start, load_targets
 
 __all__ = ["GroundingTask", "GroundingTaskset", "GroundingTasksetConfig"]
@@ -37,13 +37,7 @@ NO_MOVE_PENALTY = 0.15
 class GroundingTask(MouseIndicators, SamplingProvenance, DesktopTask):
     @vf.reward
     async def reach(self, trace: vf.Trace) -> float:
-        result = trace.info.get(RESULT_KEY)
-        if not isinstance(result, dict):
-            raise RuntimeError("grounding rollout published no result")
-        if result.get("validity") != "valid":
-            raise RuntimeError(
-                f"grounding rollout is infrastructure-invalid: {result.get('infra_error')}"
-            )
+        result = valid_result(trace, "grounding")
         return 1.0 if int(result.get("reach_frame", -1)) >= 0 else 0.0
 
     @vf.reward

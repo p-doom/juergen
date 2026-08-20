@@ -46,11 +46,32 @@ __all__ = [
     "in_bbox",
     "osworld_task_config",
     "register_preparer",
+    "valid_result",
 ]
 
 REGIMES: tuple[str, ...] = ("near", "medium", "far")
 RESULT_KEY = "episode"
 RESULT_SCHEMA_VERSION = 1
+
+
+def valid_result(trace: vf.Trace, family: str) -> dict[str, Any]:
+    """The episode result the rollout published, or raise.
+
+    Every family's sparse reward opens with this, and raising is the point: an
+    infrastructure failure publishes the initial `reach_frame` of -1 and no
+    `steps_detail`, so returning 0.0 trains a booted-VM failure as an ordinary miss
+    — or, wherever a no-move penalty applies, as the worst thing the policy can do.
+    One throwing reward drops the whole group (`Task.score`'s `asyncio.gather`), so
+    the sparse reward covers its family's shaping term too.
+    """
+    result = trace.info.get(RESULT_KEY)
+    if not isinstance(result, dict):
+        raise RuntimeError(f"{family} rollout published no result")
+    if result.get("validity") != "valid":
+        raise RuntimeError(
+            f"{family} rollout is infrastructure-invalid: {result.get('infra_error')}"
+        )
+    return result
 
 
 class DesktopTaskData(vf.TaskData):

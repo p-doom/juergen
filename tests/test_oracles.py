@@ -388,7 +388,7 @@ def test_an_infra_invalid_osworld_rollout_raises() -> None:
 
 def test_a_missing_osworld_result_raises() -> None:
     data = make_task_data(kind="osworld")
-    with pytest.raises(Exception, match="result is missing"):
+    with pytest.raises(Exception, match="published no result"):
         asyncio.run(OSWorld(data).score(make_trace(data), _Runtime()))
 
 

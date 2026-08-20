@@ -35,7 +35,7 @@ from typing import Any
 import verifiers.v1 as vf
 
 from agent.desktop import lease_for_trace
-from evals.tasks import RESULT_KEY, DesktopTaskData, in_bbox, preparer_for
+from evals.tasks import RESULT_KEY, DesktopTaskData, in_bbox, preparer_for, valid_result
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -165,16 +165,7 @@ class ReachOracle:
         del runtime
         task = trace.task.data
         assert isinstance(task, DesktopTaskData)
-        result = trace.info.get(RESULT_KEY)
-        if not isinstance(result, dict):
-            raise RuntimeError("grounding rollout published no result")
-        # Same rule as `OSWorldEvaluateOracle.task_success`: a booted-VM failure is
-        # not a grounding failure. Scoring 0.0 here trains one as the other, and a
-        # cursor that never got a chance to move is indistinguishable from a miss.
-        if result.get("validity") != "valid":
-            raise RuntimeError(
-                f"grounding rollout is infrastructure-invalid: {result.get('infra_error')}"
-            )
+        result = valid_result(trace, "grounding")
         if int(result.get("reach_frame", -1)) >= 0:
             return 1.0
         bbox = task.bbox
@@ -224,13 +215,7 @@ class OSWorldEvaluateOracle:
     @vf.reward
     async def task_success(self, trace: vf.Trace, runtime: vf.Runtime) -> float:
         del runtime
-        result = trace.info.get(RESULT_KEY)
-        if not isinstance(result, dict):
-            raise RuntimeError("OSWorld task result is missing (infrastructure-invalid)")
-        if result.get("validity") != "valid":
-            raise RuntimeError(
-                f"OSWorld task result is infrastructure-invalid: {result.get('infra_error')}"
-            )
+        result = valid_result(trace, "OSWorld")
         raw = result.get("task_reward")
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             raise RuntimeError("OSWorld task reward is missing or non-numeric")

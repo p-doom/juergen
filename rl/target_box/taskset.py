@@ -19,7 +19,7 @@ from typing import Iterable
 import verifiers.v1 as vf
 
 from evals.indicators import MouseIndicators, SamplingProvenance
-from evals.tasks import RESULT_KEY, DesktopTask, DesktopTaskData
+from evals.tasks import RESULT_KEY, DesktopTask, DesktopTaskData, valid_result
 from rl.target_box.geometry import TARGET_BOX_INSTRUCTION
 
 __all__ = ["TargetBoxTask", "TargetBoxTaskset", "TargetBoxTasksetConfig"]
@@ -38,13 +38,7 @@ class TargetBoxTask(MouseIndicators, SamplingProvenance, DesktopTask):
         replay skips it rather than scoring an unreachable VM as a failure.
         """
         del runtime
-        result = trace.info.get(RESULT_KEY)
-        if not isinstance(result, dict):
-            raise RuntimeError("target_box rollout published no result")
-        if result.get("validity") != "valid":
-            raise RuntimeError(
-                f"target_box rollout is infrastructure-invalid: {result.get('infra_error')}"
-            )
+        result = valid_result(trace, "target_box")
         return 1.0 if result.get("outcome") == "postcondition_reached" else 0.0
 
     @vf.reward
