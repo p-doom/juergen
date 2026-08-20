@@ -38,9 +38,11 @@ __all__ = ["TargetBoxHarness", "TargetBoxHarnessConfig", "TargetBoxPreparer"]
 
 def _scene(task: DesktopTaskData) -> tuple[tuple[int, int, int, int], tuple[int, int], tuple[int, int]]:
     setup = task.setup
-    screen = tuple(int(v) for v in (setup.get("screen") or (1920, 1080)))
-    config = TargetBoxConfig(**dict(setup.get("box") or {}))
-    key = str(setup.get("instance_key") or task.name or "")
+    screen = tuple(int(v) for v in setup["screen"])
+    config = TargetBoxConfig(**setup["box"])
+    # The box and the cursor start are both sampled from this key, so falling back
+    # to another string moves them without moving anything that would notice.
+    key = str(setup["instance_key"])
     box = sample_box(config, screen_width=screen[0], screen_height=screen[1], instance_key=key)
     cursor = sample_cursor_start(
         config, box, screen_width=screen[0], screen_height=screen[1], instance_key=key

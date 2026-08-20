@@ -24,6 +24,19 @@ from rl.movebox.dataset import MoveBoxScene, load_canvas
 __all__ = ["MoveBoxHarness", "MoveBoxHarnessConfig", "MoveBoxPreparer"]
 
 
+def _declared_box(task: DesktopTaskData) -> tuple[int, int, int, int]:
+    """The row's box, or refuse the episode.
+
+    `bbox` is optional on `DesktopTaskData` because the OSWorld families have
+    none, so this family asserts its own requirement. The placeholder this
+    replaces was a 1x1 box at the origin, which no cursor enters: every rollout
+    in the group scored 0.0 and nothing recorded why.
+    """
+    if task.bbox is None:
+        raise ValueError(f"movebox task {task.name!r} declares no bbox")
+    return task.bbox
+
+
 class MoveBoxPreparer:
     """Installs the scene on the virtual desktop and reports box containment.
 
@@ -36,16 +49,18 @@ class MoveBoxPreparer:
     def prepare(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
         if not isinstance(session, VirtualDesktop):
             raise TypeError("movebox requires a virtual desktop session")
-        screen = tuple(task.setup.get("screen") or (1920, 1080))
+        if task.cursor_start is None:
+            raise ValueError(f"movebox task {task.name!r} declares no cursor_start")
+        screen = task.setup["screen"]
         scene = MoveBoxScene(
             idx=task.idx,
             background_path=str(task.setup["background_path"]),
-            box=tuple(task.bbox or (0, 0, 1, 1)),
-            cursor_start=tuple(task.cursor_start or (0, 0)),
+            box=_declared_box(task),
+            cursor_start=tuple(task.cursor_start),
             screen_w=int(screen[0]),
             screen_h=int(screen[1]),
-            band=str(task.setup.get("band", "uniform")),
-            start_distance=float(task.setup.get("start_distance", -1.0)),
+            band=str(task.setup["band"]),
+            start_distance=float(task.setup["start_distance"]),
         )
         session.configure(
             canvas=load_canvas(scene),
@@ -61,7 +76,7 @@ class MoveBoxPreparer:
 
     def probe(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
         cursor = tuple(session.cursor_position())
-        box = tuple(task.bbox or (0, 0, 1, 1))
+        box = _declared_box(task)
         inside = in_bbox(cursor, box)
         return {
             "cursor": list(cursor),

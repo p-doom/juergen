@@ -446,6 +446,45 @@ def test_the_movebox_preparer_refuses_a_real_session() -> None:
         MoveBoxPreparer().prepare(FakeSession(), make_task_data(kind="movebox"))
 
 
+@pytest.mark.parametrize(
+    "drop,error",
+    [
+        ("bbox", "declares no bbox"),
+        ("cursor_start", "declares no cursor_start"),
+        ("band", "band"),
+        ("start_distance", "start_distance"),
+        ("screen", "screen"),
+    ],
+)
+def test_the_movebox_preparer_refuses_an_underdeclared_row(tmp_path, drop, error) -> None:
+    """Every one of these had a plausible default: a 1x1 box at the origin, (0, 0),
+    the band "uniform" (a real BAND_ORDER member), -1.0, and 1920x1080. Each scored
+    the episode against a scene nobody chose and none of them failed."""
+    from rl.desktop import VirtualDesktop
+    from rl.movebox.harness import MoveBoxPreparer
+
+    background = tmp_path / "bg.png"
+    background.write_bytes(png(400, 300))
+    fields = {
+        "bbox": (100, 100, 200, 200),
+        "cursor_start": (10, 10),
+        "setup": {
+            "background_path": str(background),
+            "band": "near",
+            "start_distance": 120.0,
+            "screen": [400, 300],
+        },
+    }
+    if drop in fields:
+        del fields[drop]
+    else:
+        del fields["setup"][drop]
+    task = make_task_data(kind="movebox", **fields)
+
+    with pytest.raises((ValueError, KeyError), match=error):
+        MoveBoxPreparer().prepare(VirtualDesktop(), task)
+
+
 def test_the_grounding_canvas_preparer_loads_the_labelled_screenshot(tmp_path) -> None:
     from rl.desktop import VirtualDesktop
     from rl.grounding.harness import GroundingCanvasPreparer
@@ -475,6 +514,43 @@ def test_the_grounding_canvas_preparer_refuses_a_real_session() -> None:
 
     with pytest.raises(TypeError, match="requires a virtual desktop"):
         GroundingCanvasPreparer().prepare(FakeSession(), make_task_data(kind="grounding_canvas"))
+
+
+@pytest.mark.parametrize(
+    "drop,error", [("bbox", "declares no bbox"), ("cursor_start", "declares no cursor_start")]
+)
+def test_the_grounding_canvas_preparer_refuses_an_underdeclared_row(
+    tmp_path, drop, error
+) -> None:
+    from rl.desktop import VirtualDesktop
+    from rl.grounding.harness import GroundingCanvasPreparer
+
+    image = tmp_path / "step_001.png"
+    image.write_bytes(png(320, 240))
+    fields = {"bbox": (50, 50, 100, 100), "cursor_start": (5, 5)}
+    del fields[drop]
+    task = make_task_data(
+        kind="grounding_canvas",
+        regime="near",
+        setup={"image_path": str(image), "screen": [320, 240]},
+        **fields,
+    )
+
+    with pytest.raises(ValueError, match=error):
+        GroundingCanvasPreparer().prepare(VirtualDesktop(), task)
+
+
+@pytest.mark.parametrize("drop", ["screen", "instance_key", "box"])
+def test_the_target_box_scene_refuses_an_underdeclared_row(drop) -> None:
+    """`instance_key` seeds both the box and the cursor start, so the old fallback
+    to `task.name` moved the whole scene with nothing to notice."""
+    from rl.target_box.harness import _scene
+
+    setup = {"screen": [1920, 1080], "instance_key": "k:p", "box": {}}
+    del setup[drop]
+
+    with pytest.raises(KeyError, match=drop):
+        _scene(make_task_data(kind="target_box", setup=setup))
 
 
 def test_the_target_box_preparer_places_the_real_cursor_and_annotates_every_frame() -> None:

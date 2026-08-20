@@ -20,6 +20,19 @@ from rl.geometry import distance_to_box, in_bbox
 __all__ = ["GroundingHarness", "GroundingHarnessConfig", "GroundingCanvasPreparer"]
 
 
+def _declared_box(task: DesktopTaskData) -> tuple[int, int, int, int]:
+    """The row's target box, or refuse the episode.
+
+    `bbox` is optional on `DesktopTaskData` because the OSWorld families have
+    none, so this family asserts its own requirement. The placeholder this
+    replaces was a 1x1 box at the origin, which no cursor enters: reach scored
+    0.0 and the shaping term measured distance to the wrong place.
+    """
+    if task.bbox is None:
+        raise ValueError(f"grounding task {task.name!r} declares no bbox")
+    return task.bbox
+
+
 class GroundingCanvasPreparer:
     """Loads the labelled screenshot and places the stratified cursor start.
 
@@ -36,23 +49,25 @@ class GroundingCanvasPreparer:
             raise TypeError("grounding canvas requires a virtual desktop session")
         from PIL import Image
 
-        screen = tuple(task.setup.get("screen") or (1920, 1080))
+        if task.cursor_start is None:
+            raise ValueError(f"grounding task {task.name!r} declares no cursor_start")
+        screen = task.setup["screen"]
         with Image.open(Path(str(task.setup["image_path"]))) as handle:
             canvas = handle.convert("RGB")
         session.configure(
             canvas=canvas,
-            cursor=tuple(task.cursor_start or (0, 0)),
+            cursor=tuple(task.cursor_start),
             screen=(int(screen[0]), int(screen[1])),
         )
         return {
             "regime": task.regime,
-            "cursor_start": list(task.cursor_start or (0, 0)),
-            "bbox": list(task.bbox or ()),
+            "cursor_start": list(task.cursor_start),
+            "bbox": list(_declared_box(task)),
         }
 
     def probe(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
         cursor = tuple(session.cursor_position())
-        box = tuple(task.bbox or (0, 0, 1, 1))
+        box = _declared_box(task)
         return {
             "cursor": list(cursor),
             "in_bbox": in_bbox(cursor, box),
