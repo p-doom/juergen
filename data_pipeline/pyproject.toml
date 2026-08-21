@@ -6,32 +6,22 @@ license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.11"
-# This dep set is the one the stages need — they live at ../pipeline and are
-# run from this venv. pmanager itself is loaded by the outer process (the
-# `pmanager launch` invocation), not by the stages. The configs here use
-# ``from pmanager.configs.schema import …``, but those imports resolve in
-# pmanager's own venv, not this one.
-#
-# Two stages run their work in another venv and so do not contribute here:
-# pipeline/stage_05_measure_lengths.py and stage_06_training_records.py
-# subprocess-wrap omegalax scripts via ``uv run --project <omegalax_repo>``.
+# The dependencies of the stages in ../pipeline, which run from this venv. pmanager is
+# not one: the configs' `pmanager.configs.schema` imports resolve in pmanager's own venv.
 dependencies = [
     "absl-py>=2.0",                # flag-based entrypoints: pipeline/stage_05_measure_lengths.py + stage_06_training_records.py
     "msgpack>=1.0",                # parse per-recording keylog msgpacks: pipeline/lib/{realign,common}.py + stage_02_realign.py
     "Pillow>=11.3.0",              # JPEG encode/decode: pipeline/stage_01_master_frames.py + pipeline/lib/image_store.py
     "numpy>=2.0",                  # frame-array math: pipeline/lib/image_store.py + pipeline/annotation/lib/units.py
     "array-record>=0.5.1",         # ArrayRecord (grain) JPEG image store: pipeline/stage_01_master_frames.py + pipeline/lib/{frames_actions,image_store}.py
-    # Floor at 0.5.1 (not 0.6.0) so sglang's diffusion extra — which pins ==0.5.1 — can co-resolve in the workspace lock. Only a PATH fallback; minor version doesn't matter.
     "imageio-ffmpeg>=0.5.1",       # ffmpeg binary lookup: pipeline/lib/config.py
     "openai>=2.26.0",              # VLM labeler (Azure/OpenAI-compatible) + local Qwen: pipeline/annotation/lib/labeler.py
     "PyYAML>=6.0",                 # prompts.yaml loaders: pipeline/annotation/lib/prompts.py
     "opencv-python-headless>=4.10.0.84",  # video probing / frame decode: pipeline/stage_00_clip_manifest.py + pipeline/lib; matches sglang workspace pin
     "tqdm>=4.66",                  # decode progress bar: pipeline/stage_01_master_frames.py
-    # Unfloored because it is the path-sourced sibling checkout, not an index
-    # package. Four stages import `grammars` (via the repo-root sys.path their
-    # entrypoints set up) and `grammars` hard-imports desktop, so a stage
-    # dispatched against this venv fails at import without it. The suites do not
-    # catch that: conftest.py appends the sibling checkout for them.
+    # Unfloored: this is the path-sourced sibling checkout, not an index package. The
+    # suites do not catch a missing desktop -- conftest.py appends the sibling
+    # checkout for them.
     "desktop",                     # via grammars: pipeline/stage_03_filter.py + stage_04_build_conversations.py + annotation/stage_annotate.py + annotation/lib/days.py
 ]
 
@@ -40,10 +30,6 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-# Not a published package — pyproject anchors a uv venv at this directory.
-# `pipeline/`, `tooling/` and `datasets/` live at the repo root and are not
-# packaged (their entrypoints put the repo root on sys.path themselves), so
-# `configs` is the only package here.
 packages = ["configs"]
 py-modules = []
 

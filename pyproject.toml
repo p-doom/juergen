@@ -4,36 +4,17 @@ version = "0.1.0"
 description = "Crowd-cast SFT supply-chain monorepo: data pipeline, action grammars, and the closed-loop eval harness. The model trainer (omegalax) is a separate generic library, kept as its own repo."
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    # grammars/ hard-imports desktop: `_support.py` takes Operation and
-    # DisplayGeometry from it, and every codec's `compile` signature names
-    # DisplayGeometry.
     "desktop",
     "av>=16.1.0",
-    # `verifiers.v1` is the framework agent/, evals/ and rl/ are written against:
-    # fifteen modules do `import verifiers.v1 as vf`, every Taskset/Harness/Task/
-    # Config base comes from it, and `evals/signoflife` is a verifiers plugin
-    # package (its `__all__` contract is verifiers').
-    #
-    # Pinned exactly, not floored: `loaders._plugin_class`, `narrow_plugin_field`
-    # and the `Harness.launch(endpoint, secret, ...)` signature are unversioned
-    # internal API we call directly.
-    #
-    # Bare, without the `harbor` extra: that extra pulls `harbor==0.14.0`, which
-    # is excluded from this resolve (see project_harbor_migration -- audit-only,
-    # opt-in).
     "verifiers==0.2.1",
 ]
 
 [project.optional-dependencies]
-# Test-only. `pytest grammars/` runs the grammar conformance vectors, which need
-# nothing but desktop, so this extra stays cheap enough to run the gate without
-# resolving the training stack.
+# Test-only.
 dev = ["pytest>=8"]
 
-# One entry per grammar directory under grammars/. This table plus the directory
-# is the registration; nothing else in the repo enumerates grammars, and
-# grammars/__init__.py falls back to scanning peer directories so an uninstalled
-# checkout still discovers a new one.
+# One entry per grammar directory under grammars/. This table plus the directory is
+# the registration.
 [project.entry-points."juergen.grammars"]
 compact_absolute = "grammars.compact_absolute.codec:CODEC"
 compact_raw = "grammars.compact_raw.codec:CODEC"
@@ -52,45 +33,15 @@ override-dependencies = [
     "openai>=2.26.0",
 ]
 
-# The torch stack is no longer resolved here. It entered only through the `eval`
-# workspace member's sglang[all] extra, deleted 2026-08-06 along with the member;
-# with it went the `pytorch-cu128` explicit index (the hai nodes' driver 12080
-# rejects the default +cu130 wheels), the four torch/torchaudio/torchvision/
-# torchcodec source redirects onto it, and the nvidia-cudnn-cu12 override.
-# Resolution went 382 -> 124 packages. Restore all of it together if anything
-# here depends on torch again.
+# No torch is resolved here. If anything needs it again, restore all of it together:
+# the `pytorch-cu128` explicit index (the hai nodes' driver 12080 rejects the default
+# +cu130 wheels), the torch/torchaudio/torchvision/torchcodec source redirects onto
+# it, and the nvidia-cudnn-cu12 override.
 
 [tool.uv.sources]
-# desktop has no index presence. It is not a workspace member: it is its own
-# repository, with one runtime dependency (Pillow). That repository also holds
-# `desktop-fleet`, a second distribution nothing here depends on.
-#
-# Pinned by rev against a bare repo on cluster storage, which is what this entry
-# asked for while it was still a path. A path source resolves to whatever is on
-# disk, so two checkouts of juergen at the same commit could install different
-# desktop code and nothing recorded which -- and it could not resolve at all
-# inside a dispatched run's staged snapshot, because labctl stages one repository
-# by copying its tracked files and `../desktop` is simply absent there. A rev
-# resolves in a snapshot and is written into `uv.lock`, so a run's own record
-# names the desktop commit it used.
-#
-# The obligation: a desktop commit is not visible here until this rev is bumped
-# and `uv lock` re-run. That is the point. The divergence was always there; now
-# it is stated instead of silently followed.
-#
-# The import name is the constraint that fixed the name. `evals/osworld.py`
-# imports OSWorld's `desktop_env.controllers.setup` and `desktop_env.evaluators`
-# to score the benchmark, in this process -- and sys.path cannot override an
-# entry already in sys.modules, so our package must not own `desktop_env`.
-# `desktop` is distinct from it, but it is not unclaimed: PyPI's `desktop` 0.4.2
-# is a different package with the same distribution AND import name. This source
-# entry is read only by uv, so `pip install .` resolves that one from the index
-# and the first codec import fails on a missing `desktop.geometry`. That is the
-# failure the guard in `grammars/load()` explains.
-#
-# Not editable: an editable path source makes this package's installed behaviour
-# change when a sibling directory is edited. Developers working on both do
-# `uv pip install -e ../desktop` explicitly, which overrides this.
+# Pinned by rev, not by path: labctl stages one repository, so `../desktop` is absent
+# from a dispatched run's snapshot and a path source cannot resolve there. A desktop
+# commit is invisible here until this rev is bumped and `uv lock` re-run.
 desktop = { git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git", rev = "5ed77a58b821be6dc02522f9fc1c998d230f5f59" }
 
 [build-system]
@@ -98,11 +49,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-# The five flat plugin ids. verifiers 0.2.1 cannot resolve a dotted one (see
-# signoflife.py), so each is a module at the repo root -- and a root module is
-# not a package, so `packages.find` never sees it. Left out of the wheel they
-# resolve only from a cwd that happens to be the checkout, and every
-# `--taskset.id` breaks the moment a run is dispatched from anywhere else.
+# verifiers 0.2.1 cannot resolve a dotted plugin id, so each is a module at the repo
+# root -- and a root module is not a package, so `packages.find` never sees it.
 py-modules = [
     "osworld_bench",
     "rl_grounding",
@@ -112,15 +60,11 @@ py-modules = [
 ]
 
 [tool.setuptools.packages.find]
-# The import closure of those five: they re-export from evals/ and rl/, evals/
-# imports agent/, and agent/ imports grammars/. Shipping only grammars/ made
-# every one of them uninstallable. pipeline/ is deliberately absent: labctl
-# invokes its stages as file paths in a checkout, nothing imports it.
+# The import closure of those five root modules. pipeline/ is absent: labctl invokes
+# its stages as file paths in a checkout, nothing imports it.
 include = ["agent", "agent.*", "evals", "evals.*", "grammars", "grammars.*", "rl", "rl.*"]
 
 [tool.setuptools.package-data]
 "*" = ["vectors/*.json"]
-# `SUITE_PATH = Path(__file__).with_name("suite.json")`: the sign-of-life cell
-# table is read beside its module, and a wheel built straight from the tree (what
-# `uv sync` and `pip install .` do) carries no data file nobody names here.
+# Read beside its module, so a wheel built from the tree must carry it.
 "evals.signoflife" = ["suite.json"]
