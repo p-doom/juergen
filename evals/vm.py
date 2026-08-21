@@ -112,7 +112,7 @@ class DesktopFacade:
         return self._transport.screen_size()
 
     def execute_argv(self, argv: list[str]) -> dict[str, Any]:
-        """One guest command. `check=False` on purpose.
+        """One guest command, with `check=False`.
 
         The preparers and the oracle read `result["output"]` and decide for
         themselves; a non-zero exit is frequently the *answer* (`pgrep chrome`
@@ -162,8 +162,7 @@ class DesktopFacade:
     # The OSWorld half (`evals/osworld.py`) is named, not proxied:
     # `harness._evaluate` probes `getattr(session, "evaluate")` and the OSWorld
     # preparer calls `session.setup(...)`, so under a `__getattr__` catch-all both
-    # would answer yes on a session with no OSWorld tree behind it and fail
-    # mid-episode, after the boot and the guest setup.
+    # would answer yes on a session with no OSWorld tree behind it.
 
     @property
     def _osworld(self) -> Any:

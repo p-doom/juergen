@@ -123,7 +123,7 @@ class DiffabsCodec:
 
     name = "diffabs"
 
-    #: Empty by design: reasoning legally precedes the action line, so no token
+    #: Empty: reasoning legally precedes the action line, so no token
     #: sequence marks the end of a turn.
     stop_sequences: tuple[str, ...] = ()
 

@@ -107,7 +107,7 @@ class CompactAbsoluteCodec:
 
     name = "compact_absolute"
 
-    #: Empty by design: the prose sentence precedes the action line, so no token
+    #: Empty: the prose sentence precedes the action line, so no token
     #: sequence marks the end of a turn.
     stop_sequences: tuple[str, ...] = ()
 

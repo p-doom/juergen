@@ -114,7 +114,7 @@ def _recv_message(sock: socket.socket) -> bytes:
 def cdp_evaluate(websocket_url: str, expression: str, *, timeout_s: float) -> Any:
     """Evaluate `expression` in the page and return its value by value.
 
-    `awaitPromise` is False on purpose: a fixture diagnostic must be a synchronous
+    `awaitPromise` is False: a fixture diagnostic must be a synchronous
     read of current DOM state, and awaiting would let the page's own async work
     change what is being measured.
     """

@@ -362,8 +362,7 @@ def cursor_start(
             "target, so any start would score a reach at step 0"
         )
     # The per-axis furthest screen extreme maximises both legs of the distance at
-    # once, so this is the furthest corner; it is preferred verbatim to keep the
-    # pre-fix near/medium fallback byte-identical wherever it was already admissible.
+    # once, so this is the furthest corner.
     furthest = (
         0 if cx > screen_w // 2 else screen_w - 1,
         0 if cy > screen_h // 2 else screen_h - 1,

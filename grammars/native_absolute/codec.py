@@ -66,13 +66,9 @@ CLICKS = {
 }
 DRAGS = {"left_click_drag"}
 
-#: Accepted on input, not advertised in the prompt. ``rung1``'s
-#: ``NativeAbsoluteExecutor`` exposed ``drag_to`` for exactly the gesture
-#: ``left_click_drag`` names, so a checkpoint trained or evaluated through it may
-#: still emit that spelling. It is normalised to the advertised name here rather
-#: than declared as a production, which would put a second name for one gesture
-#: into the tool schema the model reads. ``format`` re-emits the canonical name,
-#: so the alias canonicalises on the round trip.
+#: Accepted on input, not advertised in the prompt: a checkpoint trained through
+#: ``rung1``'s executor may still emit this spelling. ``format`` re-emits the
+#: canonical name, so the alias canonicalises on the round trip.
 ACTION_ALIASES = {"drag_to": "left_click_drag"}
 
 BUTTON_NAMES = ("left", "right", "middle")
@@ -144,7 +140,7 @@ class NativeAbsoluteCodec:
 
     name = "native_absolute"
 
-    #: Empty by design: several tool calls per turn are legal, so no token
+    #: Empty: several tool calls per turn are legal, so no token
     #: sequence marks the end of a turn.
     stop_sequences: tuple[str, ...] = ()
 

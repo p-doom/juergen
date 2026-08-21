@@ -655,10 +655,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         if not isinstance(trace.state, DesktopState):
             raise TypeError("DesktopHarness requires DesktopState")
 
-        # Everything resolvable from config, resolved before a VM is booted:
-        # an unknown grammar, an unregistered task kind and a scripted arm on a
-        # family with no gold plan are config errors, and discovering one at step 1
-        # has already cost a boot and the cell's whole guest setup.
+        # Everything resolvable from config is resolved before a VM is booted.
         codec = _codec(self.config.codec)
         preparer = preparer_for(task.kind)
         if self.config.scripted.enabled and not callable(
@@ -668,9 +665,6 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 f"task kind {task.kind!r} has no scripted arm; scripted.enabled "
                 "requires a preparer implementing script_plan() + render_step()"
             )
-        # Same reason: the digest gate needs the codec and nothing else, so an
-        # unjustified mismatch must be refused here rather than one boot and one
-        # guest setup per task into a 369-cell array.
         trace.info["prompt"] = self._prompt_report(codec)
 
         spec = PoolSpec(
@@ -715,9 +709,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 # `_run` publishes an episode failure as `infra_invalid` instead of
                 # letting it escape, so this flag would otherwise only ever catch an
                 # `acquire` failure. `failed` is what makes desktop retire the VM
-                # rather than hand it to the next rollout (`vm/pool.py:509-519`):
-                # a wedged guest — dead executor transport, unreadable state — was
-                # being recycled as healthy.
+                # rather than hand it to the next rollout.
                 published = trace.info.get(RESULT_KEY) or {}
                 if published.get("validity") == "infra_invalid":
                     failed = True
@@ -832,10 +824,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                     artifacts=artifacts,
                 )
                 # Only a real turn updates the provenance. Assigning unconditionally
-                # erased it on the terminal non-turn: a scripted arm exhausting its
-                # script is the normal end of every negative control, and it left
-                # `sampling` empty in the published result, so `SamplingProvenance`
-                # reported temperature -1.0 and no source for the whole arm.
+                # erased it on the terminal non-turn.
                 if step_sampling:
                     sampling_record = step_sampling
                 if decision is None:
@@ -941,9 +930,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         except ModelCallError as exc:
             # The orchestrator halts a rollout by stamping `stop_condition` and
             # refusing the call with a 400 (`interception/server.py:400-406`,
-            # `:445-449`), which arrives here as a transport failure. Publishing
-            # that as `infra_invalid` scores a healthy rollout the framework ended
-            # as a booted-VM failure and drops it from N.
+            # `:445-449`), which arrives here as a transport failure.
             if trace.stop_condition is None:
                 infra_error = {
                     "stage": "model",
@@ -1046,9 +1033,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         }
         if self.config.parse_error_notice:
             # Only when configured, like `control_conformant`: an arm whose prompts
-            # carry a notice is not comparable to one whose prompts do not, and a key
-            # written unconditionally would change the bytes of every result that has
-            # already been published without one.
+            # carry a notice is not comparable to one whose prompts do not.
             trace.info[RESULT_KEY]["parse_error_notice"] = self.config.parse_error_notice
         self._persist(artifacts, trace, frames)
         trace.stop(outcome)

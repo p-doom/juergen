@@ -89,10 +89,7 @@ class IntendedCursor:
 
 
 #: One cursor request in absolute pixel space: ``("rel", dx, dy)`` folds onto the
-#: current position, ``("abs", x, y)`` names it. The codec converts its own
-#: convention first — ``move_rel`` denormalizes thousandths against the display,
-#: the raw-delta grammars pass their delta through — so nothing here knows which
-#: convention it was, exactly as with every other helper in this module.
+#: current position, ``("abs", x, y)`` names it.
 CursorRequest = tuple[str, int, int]
 
 
@@ -362,8 +359,7 @@ BUTTONS = {"LMB": "left", "RMB": "right", "MMB": "middle"}
 
 #: The key/button names a bare-token tail can spell. ``Element`` enforces it on
 #: construction, so a label emitter cannot write a name this family's parser then
-#: calls malformed -- the pipeline's ``format_action`` did exactly that, spelling
-#: an unmapped keycode ``KC_-1``.
+#: calls malformed.
 EVENT_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 _EVENT_RE = re.compile(rf"^([+-])({EVENT_NAME_RE.pattern})$")
@@ -558,10 +554,6 @@ def lower_transitions(
 # lives here. Its ``terminate`` argument is carried straight to the Action's
 # ``terminate`` field and rendered by ``with_control``, so the lift resolves a
 # coordinate convention and nothing else.
-#
-# Where a grammar cannot express what the Operations say, the lift raises. A
-# ``glide_to`` inside a held button is a drag, and the converters this replaces
-# degraded it into a stationary ``+LMB -LMB``, discarding the stroke.
 
 
 @dataclass(frozen=True)
@@ -972,20 +964,13 @@ def render_tool_calls(calls: Sequence[dict[str, Any]]) -> str:
 # The episode-control channel.
 #
 # Ending an episode dispatches nothing: it is a message to the episode driver, not
-# something the computer does. A grammar's ``compile`` emits ``Operation``s, so a
-# control token inside one lowers to zero operations — a category error, and every
-# grammar reinvented it (a whole action line, a call in an ordered list, a
-# TERMINATE with no FAIL, or nothing at all). One spelling lives here instead,
-# rendered into every prompt by the two renderers above and read back once by the
-# driver before any codec sees the text.
+# something the computer does.
 
 CONTROL_TOKEN = "TERMINATE"
 
 _CONTROL_LINE_RE = re.compile(rf"^{CONTROL_TOKEN}:\s*(success|failure)$")
 
-#: Appended to every grammar's prompt. It names no coordinate, no key and no
-#: action, which is what makes it grammar-independent rather than a shared token
-#: seven grammars happen to agree on.
+#: Appended to every grammar's prompt.
 CONTROL_SPEC = f"""Ending the episode
   {CONTROL_TOKEN}: success
       The goal has been achieved. Stop.
@@ -1106,9 +1091,8 @@ def _vendor_control(text: str) -> Control:
     return Control(None, text)
 
 
-# pyautogui-style key words -> rdev names, so ``key_down``/``key_up`` args are
-# one vocabulary across every grammar. Retained from the sign-of-life executor,
-# including its fallback: an unrecognised name passes through unchanged.
+# pyautogui-style key words -> rdev names, so ``key_down``/``key_up`` args are one
+# vocabulary across every grammar. An unrecognised name passes through unchanged.
 _KEY_ALIASES = {
     "CTRL": "ControlLeft",
     "CONTROL": "ControlLeft",
@@ -1159,20 +1143,12 @@ def normalize_key(value: object, *, error: type[Exception] = ValueError) -> str:
 
 
 # No handler tables live here, and none should be added. There is no dispatch
-# engine in desktop for a grammar to contribute a ``dict[str, Handler]`` to. A
-# shared ``match`` over grammar-specific action names would be wrong, because
-# that set is open per grammar; a codec's job ends at ``compile``, and the
-# Operation vocabulary on the far side is closed: a pointer moves, a button
-# transitions, a wheel turns, text arrives. Lowering it is a fixed
-# ``if kind ==`` chain in ``desktop.execute.guest_program`` over something no
-# grammar extends.
+# engine in desktop for a grammar to contribute a ``dict[str, Handler]`` to.
 
 
 #: The preamble of both bare-line paired-eval arms, ``compact_raw`` and
 #: ``compact_absolute``, held in one string and assigned to both codec
-#: classes' ``__doc__``. A constant rather than two docstrings because the arms
-#: had drifted: the same sentence wrapped at a different column in each, so the
-#: two prompts tokenised differently.
+#: classes' ``__doc__``.
 MATCHED_ARM_PREAMBLE = """You operate a real desktop VM with a mouse and keyboard.
 
 First write one short sentence describing the action, without numbers. Then

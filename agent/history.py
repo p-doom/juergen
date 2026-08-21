@@ -285,10 +285,7 @@ class ProseSummarisedWindow:
         # `images` is the in-window frames; `outputs` is every action ever taken.
         # The two live in different index spaces the moment `History` block-evicts,
         # and `len(history.evicted)` is exactly the number of frames that left the
-        # window (one output per dropped turn). Comparing `outputs` against
-        # `images` alone raised for every window past `n_history_frames`, and
-        # indexing `outputs` with a position derived from `images` paired the wrong
-        # action with each frame.
+        # window (one output per dropped turn).
         dropped = len(history.evicted)
         if len(outputs) != dropped + len(images) - 1:
             raise ValueError(
@@ -319,9 +316,7 @@ class ProseSummarisedWindow:
             messages.append(vf.UserMessage(content=content))
             if index < len(visible_outputs):
                 # `vf.AssistantMessage.content` is `str | None` (`types.py:79`), not
-                # `MessageContent` — only user/system/tool turns take content parts. A
-                # one-element text list raised `ValidationError` here for every window
-                # with a completed turn, i.e. every step after the first.
+                # `MessageContent` — only user/system/tool turns take content parts.
                 messages.append(vf.AssistantMessage(content=visible_outputs[index]))
         return messages
 

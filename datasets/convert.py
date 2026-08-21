@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """One converter: recorded rollouts -> training records in any target grammar.
 
-Replaces the five ``convert_abs_to_{absolute,relative,moverel,diffabs,deltatype}.py``
-scripts (1,389 LOC). Rollout walking, task-success / slug filtering, per-step frame
-pairing, parse-error accounting, terminate handling, message assembly, the
-deterministic split and the manifest live here once; the encoding is the target
-grammar's job, selected with ``--codec``:
+Rollout walking, task-success / slug filtering, per-step frame pairing, parse-error
+accounting, terminate handling, message assembly, the deterministic split and the
+manifest live here once; the encoding is the target grammar's job, selected with
+``--codec``:
 
     codec  = grammars.load("deltatype_v2")     # grammars/deltatype_v2/
     action = codec.action_from_operations(ops, geometry=geom, cursor=cursor_before)
@@ -38,13 +37,6 @@ relative codec's diff telescopes exactly — the cursor motion is identical to t
 teacher's, only the encoding changes.
 
 Prose is preserved by default (``--keep_prose``, on unless ``--no_keep_prose``).
-Measured over ``/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/
-onpolicy_distill/converted/*/_normalized/*/chat.jsonl`` (2026-08-05), all three
-arms built from ``rollouts/teacher_8b_osworld_train_v1``:
-
-    osworld_train_absolute        10721 / 10721 assistant turns prose-bearing
-    osworld_train_deltatype_raw       0 / 11337
-    osworld_train_diffabs             0 / 11102
 
 Under a uniform loss mask the relative arms carried zero reasoning supervision
 while the absolute control carried full coverage, which invalidates every trained
@@ -72,19 +64,10 @@ of 733 turns, none of them prose-bearing, and its raw frac reads 9.96% above
 ``deltatype_v2``'s from expressiveness alone. Both divergences are recorded; only
 the normalized one gates.
 
-Gaps neither check closes. (1) The divergence check is order-dependent: it only
-sees arms that have already finished, so the first arm of a sweep is compared
-against nothing and an absent or mid-build sibling is skipped, never aborts — run
-the last arm with ``--prose_divergence abort`` or diff the manifests when the
-sweep is done. (2) It cannot tell a stale sibling manifest from a current one.
-(3) A failure that zeroes prose in every arm diverges nowhere and is caught only
-by the zero-abort. (4) The normalization forgives the supervision-density
-difference the trainer sees (``diffabs`` gets ~10% more prose per turn than
-``deltatype_v2`` on ``teacher_8b_v1``); that shows only in the ungated raw figure.
-(5) At small prose counts the statistic is coarse: on ``teacher_8b_v1``'s 32 prose
-turns one lost turn is 3.1% and passes, two is 6.25% and fires. So compare
-``n_turns``, ``n_turns_with_prose`` and ``n_turns_dropped_by_codec`` across arms
-before believing any format comparison.
+The divergence check only sees arms that have already finished, so the first arm of
+a sweep is compared against nothing and an absent or mid-build sibling is skipped,
+never aborts. Run the last arm with ``--prose_divergence abort`` or diff the
+manifests when the sweep is done.
 """
 from __future__ import annotations
 
@@ -192,9 +175,6 @@ def teacher_operations(
             ops.append(_support.mouse_up(button))
     elif kind == "left_click_drag":
         # A press at the current cursor, a timed stroke to the target, a release.
-        # The two bare-token originals degraded this to a stationary `+LMB -LMB`,
-        # losing the stroke; routing through Operations keeps it, and each codec
-        # renders as much of it as its grammar can express.
         if cursor is not None:
             ops.append(_support.move_to(cursor))
         ops.append(_support.mouse_down("left"))
@@ -251,9 +231,7 @@ def _number(value: Any, default: float = 0.0) -> float:
 #: The keys the teacher collections in scope have used for a scroll magnitude.
 #: The teacher is an external, unversioned producer, so this reads all three —
 #: but only these three, and a step carrying none of them is off-grammar rather
-#: than a zero scroll. A zero scroll lowers to `scroll(0, 0)`, which every
-#: bare-token grammar renders as its idle line: a real scroll silently labelled
-#: as doing nothing.
+#: than a zero scroll.
 _SCROLL_KEYS = ("pixels", "scroll_amount", "amount")
 
 
@@ -335,8 +313,7 @@ def format_step(codec: Any, step: Step) -> str | None:
     except ValueError:
         # An expressiveness ceiling, and the only thing a dropped turn may mean.
         # Every codec's error type subclasses ValueError; an AssertionError or a
-        # KeyError out of a lift is a broken codec invariant, and swallowing one
-        # here booked a bug as a per-arm `n_turns_dropped_by_codec`.
+        # KeyError out of a lift is a broken codec invariant.
         return None
 
 
@@ -371,8 +348,6 @@ def teacher_step(info: dict[str, Any], screen: tuple[int, int]) -> Step | None:
 
 
 #: The harness's grammar-independent control verdict -> the lift's terminate status.
-#: `no_op` is deliberately absent: idling is not a termination, and it arrives as
-#: the empty operation stream every target grammar already spells its own way.
 _TERMINAL_CONTROL = {"terminate": "success", "fail": "failure"}
 
 
@@ -492,11 +467,7 @@ class ConvertStats:
     #: for every codec, so it never skews a cross-arm comparison.
     n_turns_teacher_parse_error: int = 0
     #: Turns this codec could not express, so they are absent from this arm and
-    #: this arm only. Kept separate from the teacher errors because it is the
-    #: number that differs between arms built from one collection (e.g. diffabs
-    #: cannot spell ``type()`` and compact_raw / compact_absolute have no
-    #: TERMINATE); a format comparison is only meaningful if it matches, exactly
-    #: like ``n_turns_with_prose``.
+    #: this arm only.
     n_turns_dropped_by_codec: int = 0
     #: Rollouts carrying a non-null ``task_reward``, counted only under
     #: ``--min_task_success``. Zero means the flag filtered on a score no rollout in
@@ -526,14 +497,6 @@ def convert_rollout(
     # `evals/harness.py` publishes from `evaluate_on_finish`; no producer has ever
     # written `task_success`, so reading that dropped every rollout on every
     # collection.
-    #
-    # `task_reward` is present-but-null on every rollout our harness did not score
-    # (it is written unconditionally, `evals/harness.py:953`), so a key-presence
-    # check cannot tell "scored 0.0" from "never scored" and a null cannot be
-    # distinguished from a genuine miss here, one rollout at a time. Dropping a null
-    # is right — an unscored rollout cannot be filtered by a score — but dropping
-    # EVERY rollout means the flag cannot filter this collection at all, which
-    # `main` refuses via `n_scored`.
     if min_task_success is not None:
         reward = result.get("task_reward")
         if reward is not None and stats is not None:
@@ -570,13 +533,6 @@ def convert_rollout(
         # which only `teacher_step` speaks; `rollout_step` reads `operations`, so
         # requiring a truthy `parsed` discarded one of our own rollouts as a parse
         # error while its dispatched Operation stream sat right there.
-        #
-        # Nor is `truncated`: a turn `max_tokens` cut off has no post-action frame,
-        # so the harness writes no row for it at all
-        # (`evals/harness.py::_trajectory_rows` emits `steps_detail[: n_frames - 1]`,
-        # which is exactly the entry it excludes; asserted by
-        # `test_a_truncated_turn_is_never_written_to_the_trajectory`). Filtering it
-        # here would be a condition nothing can trigger.
         if info.get("parse_error"):
             n_parse_err += 1
             continue
@@ -589,9 +545,7 @@ def convert_rollout(
         text = format_step(codec, step)
         if text is None:
             # Off-grammar for this grammar only. Counted into ``n_parse_err`` so
-            # the max_parse_error_frac gate behaves as before, and counted
-            # separately as the per-arm number: it is why two arms built from one
-            # collection can end up with different turn sets (see ConvertStats).
+            # the max_parse_error_frac gate behaves as before.
             n_parse_err += 1
             n_codec_drop += 1
             continue
@@ -694,12 +648,7 @@ def _assert_prose_coverage(stats: ConvertStats, keep_prose: bool) -> None:
     measured by :func:`prose_divergence`.
     """
     # An empty result is also how the prose guard gets bypassed if
-    # ``n_turns == 0`` returns early: pointing the converter at a rollout
-    # collection whose trajectory file / result schema it cannot read (e.g. the
-    # ``traj.jsonl`` + nested-``params`` layout of
-    # rollouts/teacher_8b_osworld_train_v1, which is where all three arms above
-    # came from) exited 0 with a zero-record dataset and a manifest reading
-    # prose_turn_frac 0.0.
+    # ``n_turns == 0`` returns early.
     if stats.n_turns == 0:
         raise SystemExit(
             f"REFUSING TO WRITE: 0 usable assistant turns from {stats.n_seen} "
@@ -733,15 +682,7 @@ def _assert_prose_coverage(stats: ConvertStats, keep_prose: bool) -> None:
 
 
 #: Default relative tolerance for the cross-arm prose-coverage check, on the
-#: pre-codec statistic (see ``_prose_frac_pre_codec``). Chosen from measurement:
-#: over real collections the legitimate spread of that statistic between codecs
-#: is 0.00% (teacher_8b_v1/v2/v3, all seven codecs, prose counts 32/34/4 against
-#: an identical pre-codec denominator 734/1053/2011); the smallest real defect
-#: instance is compact_raw and compact_absolute on teacher_8b_v1 losing 2
-#: of 32 prose turns because they have no TERMINATE token (6.25%); the historical
-#: defect this guard exists for was 100%. 0.05 sits above the observed legitimate
-#: spread and below the smallest observed real defect. Its cost: on 32 prose
-#: turns a single lost turn is 3.1% and passes.
+#: pre-codec statistic (see ``_prose_frac_pre_codec``).
 PROSE_DIVERGENCE_TOL = 0.05
 
 
@@ -1035,8 +976,6 @@ def main(argv: list[str] | None = None) -> int:
 
     # Before the prose guard: an all-dropped filter also trips that one, and its
     # message blames the rollout layout, which sends the reader after the wrong bug.
-    # The slug counts are quoted because they are the other way to reach zero
-    # scored: rollouts the slug filters removed never reached the score filter.
     if args.min_task_success is not None and not stats.n_scored:
         raise SystemExit(
             f"--min_task_success {args.min_task_success} filtered on a score not one "
@@ -1091,8 +1030,6 @@ def main(argv: list[str] | None = None) -> int:
         "prose_turn_frac": (stats.n_turns_with_prose / stats.n_turns) if stats.n_turns else 0.0,
         # Turn accounting split by where the loss came from. The teacher figure is
         # codec-independent; the codec figure is this arm's expressiveness gap,
-        # and two arms are only comparable if it matches (diffabs cannot spell
-        # `type()`, compact_raw / compact_absolute have no TERMINATE).
         "n_turns_teacher_parse_error": stats.n_turns_teacher_parse_error,
         "n_turns_dropped_by_codec": stats.n_turns_dropped_by_codec,
     }

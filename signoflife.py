@@ -22,11 +22,6 @@ returns `None`, and `importlib.import_module("signoflife")` finds this file at t
 repo root. So the gate's plugin id is `signoflife`, and `evals/signoflife/` stays
 where it belongs in the package layout.
 
-Alternatives rejected: vendoring a patched `loaders.py` forks the framework we pin
-exactly (`verifiers==0.2.1`) for its internal API, and moving the package to the
-repo root would drag `evals/harness.py`, `evals/tasks.py` and the fixtures with
-it, since the taskset is a thin shell over those.
-
 The `__all__` below is a verifiers contract. `loaders._plugin_class` scans it and
 requires exactly one `Taskset` subclass and, for the harness, at most one
 `Harness` subclass. Re-exporting anything else from `evals.signoflife` here —

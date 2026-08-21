@@ -93,7 +93,7 @@ class DeltatypeV2Codec:
 
     name = "deltatype_v2"
 
-    #: Empty by design: prose before the action line is legal, so no token
+    #: Empty: prose before the action line is legal, so no token
     #: sequence marks the end of a turn earlier than the completion does.
     stop_sequences: tuple[str, ...] = ()
 

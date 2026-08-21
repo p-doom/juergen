@@ -106,11 +106,6 @@ def load_codec(name: str) -> Codec:
             if entry.name == name:
                 loaded = entry.load()
                 return loaded() if isinstance(loaded, type) else loaded
-    # `grammars.load` is the tree's registry and already falls back to scanning peer
-    # directories, so an uninstalled checkout resolves here. The desktop probe below
-    # cannot: desktop is grammar-free and exposes neither `CODECS` nor `load_codec`,
-    # so without this branch an uninstalled checkout raised LookupError for every
-    # grammar.
     try:
         return grammars.load(name)
     except KeyError:
@@ -195,12 +190,6 @@ def resolve_sampling(
     wire = dialect.apply_overrides(dict(body), ctx.model, ctx.sampling)
     offered = [key for key in ("tools", "tool_choice") if key in wire]
     if offered:
-        # `vf.Sampling` is `extra="allow"` and `apply_overrides` puts every extra key
-        # on the wire (`dialects/chat.py:352`), so `--sampling.tools=...` reaches the
-        # server without touching this repo. Probed on the sign-of-life serving path
-        # (sglang 0.5.10.post1): `tool_choice="required"` rewrote the turn into a bare
-        # JSON array that no codec parses, while `tool_calls` stayed null -- an arm
-        # that reads as a model collapse and is a config change.
         raise ValueError(
             f"sampling put {offered} on the wire; this driver offers no tool schema and "
             "parses the action out of `content`, so a served tool protocol silently "
@@ -405,8 +394,6 @@ class Decision:
 
 
 #: The control channel's status -> the name published as `control`. Two
-#: vocabularies exist by contract: `datasets/convert.py::_TERMINAL_CONTROL` maps
-#: this name back to the status when it builds a training target from a rollout.
 _TERMINAL = {"success": "terminate", "failure": "fail"}
 
 
@@ -476,12 +463,8 @@ class Agent:
             budget=self.budget,
         )
         if history.note is not None:
-            # Here, not in a policy: every policy ends on the user turn carrying the
-            # newest frame (the newest window turn has no output, so no assistant
-            # message follows it), so one append covers all four instead of four
-            # implementations of one thing. The user channel, never the assistant one:
-            # `datasets/convert.py` builds training targets out of the recorded model
-            # output, and a note in there would be trained on as the model's own words.
+            # The user channel, never the assistant one: a note on the assistant
+            # channel would be trained on as the model's own words.
             last = messages[-1]
             assert isinstance(last, vf.UserMessage) and isinstance(last.content, list)
             messages[-1] = vf.UserMessage(
@@ -519,8 +502,6 @@ class Agent:
             ctx, program, session_id=session_id
         )
         if finish_reason == "length":
-            # Not handed to `decide`: parsing a truncated turn either invents an
-            # action the model never finished emitting or, worse, succeeds on a
             # fragment and dispatches it. `pipeline/annotation/lib/labeler.py:270`
             # refuses the same response for the same reason.
             return Decision(
@@ -566,12 +547,7 @@ class Agent:
                 # A turn that only ends the episode has no action of the grammar
                 # to parse — prose and a control line, or the control line alone —
                 # and that is not a parse error. Only `NoAction`: a MALFORMED
-                # action line alongside a termination is still one. The action the
-                # turn amounts to is the grammar's own empty one, and the codec is
-                # asked for it rather than left null: `parsed_action` is a
-                # published field, and `datasets/convert.py:567` drops every turn
-                # whose value is falsy — which would delete exactly the terminal
-                # turns from any dataset built off these rollouts.
+                # action line alongside a termination is still one.
                 return Decision(
                     step=step,
                     text=text,

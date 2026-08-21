@@ -487,8 +487,7 @@ class SignOfLifePreparer:
             task.name or "", self.kind, dict(task.expected), state
         )
         # The verdict rides the probe so the harness can stop as soon as the
-        # postcondition is reached (the original runner's behaviour) while the
-        # authoritative judgement still happens in the oracle reward.
+        # postcondition is reached.
         return {
             **state,
             "postcondition_status": outcome.status,

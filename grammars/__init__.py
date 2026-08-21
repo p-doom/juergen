@@ -37,10 +37,7 @@ from typing import Any
 ENTRY_POINT_GROUP = "juergen.grammars"
 
 #: Re-exported from ``_support`` on first access, never at import. ``_support``
-#: needs ``desktop``, and ``import grammars`` must not: ``available()`` lists all
-#: seven from entry-point metadata before anything is imported, which is what lets
-#: ``_explain_desktop`` report a wrong install as one instead of as a bare
-#: ``No module named 'desktop.geometry'``.
+#: needs ``desktop``, and ``import grammars`` must not.
 _FROM_SUPPORT = (
     "CONTROL_SPEC",
     "CONTROL_TOKEN",
@@ -171,9 +168,7 @@ def describe(name: str) -> str:
 #
 # It lives here, not in ``datasets/convert.py``, because the dataset builder and
 # the eval harness have to assemble the SAME prompt from the same codec and the
-# harness compares digests against what the builder wrote. With a copy on each
-# side the two drift and the comparison silently stops meaning anything, and the
-# harness must not import the dataset tool to avoid that.
+# harness compares digests against what the builder wrote.
 THINKING_PREAMBLE = (
     "For each step, first reason in a single <think>...</think> block — your current "
     "sub-goal and what you observe on the screen — then a one-line `Action:` describing "

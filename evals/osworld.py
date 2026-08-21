@@ -69,7 +69,7 @@ _LOGGER = logging.getLogger(__name__)
 class OSWorldNotAvailable(RuntimeError):
     """OSWorld's tree is missing, unreadable, or not importable.
 
-    Distinct from a scoring failure on purpose: a run that cannot reach the
+    Distinct from a scoring failure: a run that cannot reach the
     benchmark's own definition of success has produced no measurement, and must
     never be recorded as a task the model failed.
     """
@@ -351,10 +351,6 @@ class OSWorldBridge:
                     # OSWorld falls through to use an unbound `result_state`
                     # (OSWorld's `desktop_env.py:491-495` — an UnboundLocalError, not a
                     # score), and an all-missing `or` list then divides by zero.
-                    # Skipping the metric and returning 0.0 for "no metric could
-                    # be read" is the same verdict its `and` branch already
-                    # gives. The `and` path — the one every published number
-                    # goes through — is byte-for-byte upstream's.
                     _LOGGER.error("OSWorld getter: file not found")
                     if self.metric_conj == "and":
                         return 0.0

@@ -42,8 +42,7 @@ from .. import _support
 
 #: Rendered names must be unambiguous inside the mini-program syntax. Wider than
 #: the bare-token family's ``_support.EVENT_NAME_RE`` because a name here sits
-#: inside parentheses instead of after a ``+``/``-`` sign. ``Primitive`` enforces
-#: it on construction, so a label emitter cannot write a name ``_scan`` rejects.
+#: inside parentheses instead of after a ``+``/``-`` sign.
 NAME_RE = re.compile(r"[^\s(),;]+")
 _CALL_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 _PAIR_RE = re.compile(r"\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)")
@@ -183,7 +182,7 @@ class OrderedEventsV3Codec:
 
     name = "ordered_events_v3"
 
-    #: Empty by design: a `<think>` block legally precedes the action line, so
+    #: Empty: a `<think>` block legally precedes the action line, so
     #: no newline or token sequence ends the turn early.
     stop_sequences: tuple[str, ...] = ()
 

@@ -150,7 +150,7 @@ class MoveRelCodec:
 
     name = "move_rel"
 
-    #: Empty by design: a move_rel and its follow-on click are separate calls in
+    #: Empty: a move_rel and its follow-on click are separate calls in
     #: the same turn, so no token sequence marks the end of a turn.
     stop_sequences: tuple[str, ...] = ()
 

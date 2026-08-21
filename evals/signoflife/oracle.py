@@ -18,7 +18,7 @@ def history_has_exact(history: object, command: str) -> bool:
     """True iff a shell-history line is exactly `command`.
 
     The leading-digit strip handles numbered `history` output; the equality is
-    exact on purpose — a cell that accepts a superstring accepts `ls -la` for `ls`.
+    exact: a cell that accepts a superstring accepts `ls -la` for `ls`.
     """
     if not isinstance(history, str):
         return False

@@ -317,12 +317,8 @@ class WebFixtureServer:
     def __init__(self, fixtures: dict[str, WebFixture], *, host: str = "0.0.0.0") -> None:
         self.store = FixtureStateStore(fixtures=dict(fixtures))
         store = self.store
-        # The store's dict IS the registry — deliberately not a second copy.
-        # `preparers.web_fixture_server` registers later fixtures by assigning into
-        # `server.store.fixtures`, so a private snapshot taken here went permanently
-        # stale: every fixture after the first 404'd from `/fixture/<id>`, and because
-        # the symptom is a page that never loads, it presented as `wait_ready` burning
-        # the whole 120 s Chrome deadline over three relaunches on every rollout.
+        # The store's dict IS the registry, not a copy: `preparers.web_fixture_server`
+        # registers later fixtures by assigning into `server.store.fixtures`.
         registry = store.fixtures
 
         class Handler(BaseHTTPRequestHandler):
