@@ -83,8 +83,14 @@ def test_a_reading_names_the_sha_the_interpreter_and_the_cleanliness_it_measured
     code, out = _read(root)
     assert code == 0, out
     sha = _git(root, "rev-parse", "--short=12", "HEAD")
+    # The venv's directory name, not just its version: this estate has had two
+    # different 3.13.5 venvs for one cell on the same day.
+    home = Path(sys.executable).parent.parent
+    venv = f"{home.parent.name}/{home.name}"
     assert re.search(
-        rf"desktop\s+{sha}\s+py{re.escape(platform.python_version())}\s+clean", out
+        rf"desktop\s+{sha}\s+py{re.escape(platform.python_version())}\s+"
+        rf"{re.escape(venv)}\s+clean",
+        out,
     ), out
     assert _verdict(out) == "ESTATE GATE: GREEN", out
 

@@ -27,8 +27,10 @@
 # that as green).
 #
 # A reading says what it measured. Before the first test runs, every suite's
-# repository sha, uncommitted-file counts and interpreter version are printed, so
-# a run that is killed halfway still leaves that record in its log. Two RED
+# repository sha, uncommitted-file counts, interpreter version and environment are
+# printed, so a run that is killed halfway still leaves that record in its log.
+# The environment and not just the version, because this estate has run one cell
+# under two different 3.13.5 venvs inside a day. Two RED
 # readings in one day were mid-edit snapshots of another agent's working tree --
 # a `build/lib` a `pip install` had just left behind, and a symbol deleted out
 # from under `conftest.py` -- and both were misattributed to the code before
@@ -208,25 +210,30 @@ probe_tree() {
     IFS='|' read -r name root python marker targets <<<"$entry"
     [ -n "$ONLY" ] && [ "$ONLY" != "$name" ] && continue
     porcelain="$(git -C "$root" status --porcelain)"
-    printf '%s|%s|%s|%s|%s\n' "$name" \
+    # The venv's own path, not only its version: this cell has been moved between
+    # three interpreters in a day and two of them are 3.13.5, so a version alone
+    # stopped identifying what was measured. Two components, because every
+    # project's in-tree environment is called `.venv`.
+    printf '%s|%s|%s|%s|%s|%s\n' "$name" \
       "$(git -C "$root" rev-parse --short=12 HEAD)" \
       "$(printf '%s\n' "$porcelain" | grep -c '^[^?]')" \
       "$(printf '%s\n' "$porcelain" | grep -c '^??')" \
-      "$("$python" -V 2>&1 | cut -d' ' -f2)"
+      "$("$python" -V 2>&1 | cut -d' ' -f2)" \
+      "$(cd -- "$(dirname -- "$(dirname -- "$python")")" && printf '%s/%s' "$(basename "$(dirname -- "$PWD")")" "$(basename -- "$PWD")")"
   done
 }
 
 dirty_suites=()
 print_tree_state() {
   bold "estate gate: tree state"
-  while IFS='|' read -r name sha tracked untracked py; do
+  while IFS='|' read -r name sha tracked untracked py venv; do
     if [ "$tracked" -eq 0 ] && [ "$untracked" -eq 0 ]; then
       state="clean"
     else
       state="DIRTY: $tracked tracked, $untracked untracked"
       dirty_suites+=("$name")
     fi
-    printf '  %-16s %s  py%-9s %s\n' "$name" "$sha" "$py" "$state"
+    printf '  %-16s %s  py%-8s %-28s %s\n' "$name" "$sha" "$py" "$venv" "$state"
   done <<<"$1"
 }
 
