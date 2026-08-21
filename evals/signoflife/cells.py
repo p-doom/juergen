@@ -87,6 +87,19 @@ ORDERED_CODEC = "ordered_events_v3"
 renderer — while a training job was already running on it, so every number it
 produced would have been uncalibrated."""
 
+ORDERED_SYSTEM_PROMPT_SHA256 = (
+    "48f9c95dfc22ca462425d6ab67c826d03c73be060a3f3635df0fd66438bb2dc4"
+)
+"""`ordered_events_v3.describe()` — the prompt stage 04 writes into `chat.jsonl`,
+so a checkpoint trained under any other one is refused rather than scored.
+
+This is trunk's CURRENT digest, and
+`test_every_shipped_arm_passes_its_own_prompt_digest_check` is what keeps it so:
+the value first proposed here was `13e761cb…`, already 63 tokens stale, and that
+test is what caught it. This arm sets no `expect_prompt_mismatch`, so any pin
+that is not the digest `describe()` renders today fails there rather than at the
+first VM dispatch."""
+
 PHASEB_SYSTEM_PROMPT_SHA256 = (
     "57f7d0b230974068618b48151b73215d5517d5445a99dbf5abdc05557e3482e6"
 )
@@ -253,6 +266,7 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
         codec=ORDERED_CODEC,
         history=HistoryConfig(name="interleaved_frames", n_history_frames=8),
         images=ImageBudgetConfig(max_images=8),
+        system_prompt_sha256=ORDERED_SYSTEM_PROMPT_SHA256,
         settle=_settle(),
         max_tokens=256,
         artifacts=ArtifactConfig(save_prompts=True, write_gif=True),
@@ -282,10 +296,8 @@ whose cells all sit near the origin certifies its convention weakly.
 was added: `compile` still takes exactly one convention per grammar and every
 Operation downstream is still absolute pixels.
 
-`ordered` has no reference reading and no `system_prompt_sha256`, because no
-checkpoint is pinned to it yet: whichever model the runner serves is scored under
-`ordered_events_v3.describe()`. Pin the digest when the first eov3 checkpoint is
-evaluated, or the arm will happily score a checkpoint trained on another prompt."""
+`ordered` has no reference reading yet, but its prompt digest is pinned: a
+checkpoint trained under any other prompt is refused instead of scored."""
 
 
 ARMS: dict[str, DesktopHarnessConfig] = {**CONTROL_ARMS, **MODEL_ARMS}
