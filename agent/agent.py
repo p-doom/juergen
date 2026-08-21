@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol, Sequence
 
@@ -369,6 +370,13 @@ class Decision:
     neither parsed nor dispatched. Only the vendor tool-call spelling can have any
     — the control line has to be last — so a non-zero value means an off-the-shelf
     model kept acting after declaring it was done."""
+    control_error: dict[str, Any] | None = None
+    """A control line `split_control` refused, on a turn whose action still ran.
+
+    The two channels are independent, so a defect in one costs that channel and
+    not the turn: the refused line is recorded here, does NOT end the episode, and
+    the action on the lines above it is parsed and dispatched as if it stood
+    alone."""
     intended_cursor: Any = None
     """Where the turn asked the cursor to go, before the display clamped it
     (`grammars._support.IntendedCursor`), or None when it named no position.
@@ -397,6 +405,7 @@ class Decision:
             "parse_error": self.parse_error,
             "truncated": self.truncated,
             "ignored_after_terminate": self.ignored_after_terminate,
+            "control_error": self.control_error,
             "intended_cursor": (
                 None if self.intended_cursor is None else self.intended_cursor.to_dict()
             ),
@@ -408,6 +417,42 @@ class Decision:
 #: vocabularies exist by contract: `datasets/convert.py::_TERMINAL_CONTROL` maps
 #: this name back to the status when it builds a training target from a rollout.
 _TERMINAL = {"success": "terminate", "failure": "fail"}
+
+
+def _split_refused_control(body: str) -> tuple[str, dict[str, Any] | None]:
+    """A refused control line, taken off the end of the body the codec will read.
+
+    `grammars.split_control` accepts only `CONTROL_SPEC`'s exact line and leaves a
+    near-miss — a mistyped token, an unknown status — in the body on purpose, so a
+    malformed termination scores as a defect instead of silently ending the
+    episode. That part is deliberate and is kept.
+
+    What was never argued is the collateral. Five of the seven codecs read the LAST
+    non-empty line as the action, so the refused line BECAME the action and the
+    well-formed one above it was never parsed: `0 0 0 ; +LMB -LMB` dispatches two
+    operations, and the same reply with `TERMINATE` underneath it dispatches none.
+    Splitting them here keeps the refusal and drops the collateral. The other two
+    scan for `<tool_call>` blocks and were never affected; they gain the record.
+
+    Only a near-miss of the CURRENT control token is separated. A retired token
+    from an older vocabulary is not a misspelling of this one, and rescuing it
+    would be reviving the second spelling this grammar removed on purpose.
+    """
+    lines = body.splitlines()
+    for index in range(len(lines) - 1, -1, -1):
+        line = lines[index].strip()
+        if not line:
+            continue
+        if re.split(r"[\s:]", line, maxsplit=1)[0] != grammars.CONTROL_TOKEN:
+            return body, None
+        return "\n".join(lines[:index]), {
+            "type": "RefusedControlLine",
+            "message": (
+                f"{line!r} is not {grammars.CONTROL_TOKEN}: success|failure; "
+                "it does not end the episode and it does not consume the action"
+            ),
+        }
+    return body, None
 
 
 def _action_record(action: Any) -> Any:
@@ -553,14 +598,18 @@ class Agent:
         the system under test, not an exception.
 
         The control channel is read FIRST and exactly once, and the codec is given
-        only `control.body` — the text before the termination. So a turn like
+        only the body before the termination — so a turn like
         `[move_rel, left_click, TERMINATE: success]` still dispatches its work,
-        while nothing on the far side of the termination can be parsed at all.
+        while nothing on the far side of the termination can be parsed at all. A
+        control line the channel REFUSED is taken off that body too
+        (`_split_refused_control`): it does not end the episode, and it no longer
+        consumes the action it happened to sit under.
         """
         control = grammars.split_control(text)
+        body, control_error = _split_refused_control(control.body)
         terminal = _TERMINAL[control.status] if control.status else None
         try:
-            action = self.codec.parse(control.body)
+            action = self.codec.parse(body)
         except (TypeError, ValueError) as exc:
             if terminal is not None and isinstance(exc, grammars.NoAction):
                 # A turn that only ends the episode has no action of the grammar
@@ -583,6 +632,7 @@ class Agent:
                     parse_error=None,
                     sampling=sampling,
                     ignored_after_terminate=control.ignored,
+                    control_error=control_error,
                 )
             return Decision(
                 step=step,
@@ -593,9 +643,10 @@ class Agent:
                 parse_error={"type": type(exc).__name__, "message": str(exc)},
                 sampling=sampling,
                 ignored_after_terminate=control.ignored,
+                control_error=control_error,
             )
         try:
-            operations = tuple(self.codec.compile(control.body, geometry, cursor))
+            operations = tuple(self.codec.compile(body, geometry, cursor))
         except (TypeError, ValueError) as exc:
             return Decision(
                 step=step,
@@ -606,6 +657,7 @@ class Agent:
                 parse_error={"type": type(exc).__name__, "message": str(exc)},
                 sampling=sampling,
                 ignored_after_terminate=control.ignored,
+                control_error=control_error,
             )
         return Decision(
             step=step,
@@ -616,6 +668,7 @@ class Agent:
             parse_error=None,
             sampling=sampling,
             ignored_after_terminate=control.ignored,
+            control_error=control_error,
             # Resolved from the same three inputs as `operations`, and only here:
             # a "cursor_before + parsed delta" reconstruction downstream is wrong
             # by a grid step for `move_rel`, whose deltas are thousandths of an

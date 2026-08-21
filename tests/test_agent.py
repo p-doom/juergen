@@ -791,3 +791,129 @@ def test_a_turn_that_did_dispatch_is_not_relabelled() -> None:
     for ended in ("terminate", "fail"):
         assert _decision(control=ended).control == ended
         assert _decision(control=ended).terminated
+
+
+#: The five grammars whose action line is the LAST non-empty line, and which
+#: therefore read a refused control line as the action and dropped the real one.
+#: `native_absolute` / `move_rel` scan for `<tool_call>` blocks and were never
+#: affected; they gain only the recorded defect.
+_LAST_LINE_GRAMMARS = {
+    "deltatype_v2": "0 0 0 ; +LMB -LMB",
+    "compact_raw": "100 200 0",
+    "compact_absolute": "700 400 0",
+    "diffabs": "700 400 0",
+    "ordered_events_v3": "move(10,10); down(LMB); up(LMB)",
+}
+
+
+def _decide(codec_name: str, text: str):
+    return _agent(codec_name).decide(
+        text, step=1, geometry=_geometry(), cursor=(500, 500), sampling=_sampling()
+    )
+
+
+@pytest.mark.parametrize("codec_name", sorted(_LAST_LINE_GRAMMARS))
+@pytest.mark.parametrize("refused", ["TERMINATE", "TERMINATE: done", "TERMINATE now"])
+def test_a_refused_control_line_does_not_consume_the_action(
+    codec_name: str, refused: str
+) -> None:
+    """THE ACTION CHANNEL, alone. A defect in the control line costs that line.
+
+    `split_control` refuses a near-miss and leaves it in the body on purpose. But
+    these five grammars read the LAST non-empty line as the action, so the refused
+    line became the action and the well-formed one above it was never parsed:
+    `0 0 0 ; +LMB -LMB` dispatched two operations and the same reply with
+    `TERMINATE` under it dispatched none.
+    """
+    action = _LAST_LINE_GRAMMARS[codec_name]
+    alone = _decide(codec_name, action)
+    with_refused = _decide(codec_name, f"{action}\n{refused}")
+
+    assert alone.operations, "the action alone must dispatch, or this proves nothing"
+    assert with_refused.operations == alone.operations, (
+        "the refused control line must cost the control channel and nothing else"
+    )
+    assert with_refused.parse_error is None
+    assert with_refused.control_error is not None, "and the defect is recorded"
+    assert with_refused.control_error["type"] == "RefusedControlLine"
+
+
+@pytest.mark.parametrize("codec_name", sorted(_LAST_LINE_GRAMMARS))
+def test_a_refused_control_line_still_never_ends_the_episode(codec_name: str) -> None:
+    """The property this change must NOT break.
+
+    Rescuing the action is not accepting the spelling. A bare `TERMINATE` is still
+    not a termination — that second spelling was removed on purpose — so the
+    episode continues and only the well-formed line ends it.
+    """
+    action = _LAST_LINE_GRAMMARS[codec_name]
+    refused = _decide(codec_name, f"{action}\nTERMINATE")
+    assert not refused.terminated and refused.control is None
+
+    accepted = _decide(codec_name, f"{action}\nTERMINATE: success")
+    assert accepted.terminated and accepted.control == "terminate"
+    assert accepted.control_error is None
+    assert accepted.operations == refused.operations, (
+        "both spellings dispatch the same work; only the ending differs"
+    )
+
+
+@pytest.mark.parametrize("codec_name", sorted(_LAST_LINE_GRAMMARS))
+def test_a_malformed_action_with_a_good_control_line_terminates_without_dispatching(
+    codec_name: str,
+) -> None:
+    """THE CONTROL CHANNEL, alone. Independence has to hold in both directions."""
+    decision = _decide(codec_name, "%%% not an action %%%\nTERMINATE: failure")
+    assert decision.control == "fail" and decision.terminated
+    assert decision.operations == ()
+    assert decision.control_error is None, "the control line was well-formed"
+
+
+@pytest.mark.parametrize("codec_name", sorted(_LAST_LINE_GRAMMARS))
+def test_both_channels_malformed_dispatches_nothing_and_records_both(
+    codec_name: str,
+) -> None:
+    decision = _decide(codec_name, "%%% not an action %%%\nTERMINATE")
+    assert decision.operations == ()
+    assert decision.control == "no_op" and not decision.terminated
+    assert decision.parse_error is not None, "the action channel failed"
+    assert decision.control_error is not None, "and so did the control channel"
+
+
+@pytest.mark.parametrize("codec_name", sorted(_LAST_LINE_GRAMMARS))
+def test_a_token_from_a_retired_vocabulary_is_deliberately_not_rescued(
+    codec_name: str,
+) -> None:
+    """The scope limit, pinned so it is a decision and not an oversight.
+
+    Only a near-miss of the CURRENT control token is separated. `FAIL` is not a
+    misspelling of `TERMINATE`; it is a token from a vocabulary this grammar
+    removed, and rescuing it would mean deciding what an arbitrary trailing line
+    means. It still costs the turn.
+    """
+    decision = _decide(codec_name, f"{_LAST_LINE_GRAMMARS[codec_name]}\nFAIL")
+    assert decision.control_error is None
+    assert decision.operations == ()
+    assert decision.parse_error is not None
+
+
+@pytest.mark.parametrize("codec_name", TOOL_CALL_GRAMMARS)
+def test_the_tool_call_grammars_were_never_affected_but_now_record_the_defect(
+    codec_name: str,
+) -> None:
+    """Scope, measured rather than assumed: these two scan for `<tool_call>` blocks
+    and ignored a trailing line, so the refused control line was silently dropped
+    instead of eating the action."""
+    action = _SMOKE_TEXT[codec_name]
+    alone = _decide(codec_name, action)
+    with_refused = _decide(codec_name, f"{action}\nTERMINATE")
+    assert alone.operations and with_refused.operations == alone.operations
+    assert with_refused.control_error is not None, "no longer silent"
+
+
+def test_a_refused_control_line_rides_the_published_record() -> None:
+    """`control_error` is a trajectory field, so an eval can rate it."""
+    record = _decide("deltatype_v2", "0 0 0 ; +LMB -LMB\nTERMINATE").as_record()
+    assert record["control_error"]["type"] == "RefusedControlLine"
+    assert record["parse_error"] is None
+    assert _decide("deltatype_v2", "0 0 0 ; +LMB -LMB").as_record()["control_error"] is None
