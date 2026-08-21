@@ -1,0 +1,323 @@
+{
+  "suite": "cuagym-mini-v1",
+  "dataset_revision": "3c021d06e2b01bbb6ad28cfddec41d856e4a78c5",
+  "archive": "artifacts/cua_gym_tasks_v1.tar.zst",
+  "provenance": {
+    "selection": "Tasks a stronger teacher model solved end to end (score 1.0) in 15 steps or fewer, whose graders paid nothing on a freshly reset VM: every gradeable task's grader was run before any agent acted, and the 455 of 7,871 that paid at reset or failed their own setup were excluded. Instructions and teacher_steps are informational; the grader is the task's own reward.py at the pinned dataset version.",
+    "selected": "2026-08-21",
+    "exclusion_measurement_sha256": "34834a3c8039169819e9e71ec9ab9a1a248d805f2ece92c4738e378049f8e17b"
+  },
+  "defaults": {
+    "max_steps": 25
+  },
+  "tasks": [
+    {
+      "id": "61210f40-13f2-586d-bd6a-51da07471c80",
+      "app": "vscode",
+      "teacher_steps": 5,
+      "instruction": "Rebase the current branch 'feature/api-v2' onto 'main' using VSCode's terminal, resolving any conflicts that arise by accepting incoming changes.",
+      "sha256": {
+        "initial_setup.py": "cd3772b8044a1e729c7bf2331aeb60b24380ef71b5f50ccad76795864e087705",
+        "reward.py": "ec77770278200981a550e686bb9649b6fed44368c2eb73d38ca28cf33db9bbaa",
+        "task.json": "1921620d3d430554120b5b9417a40f247f40e7e103c9a278638cf72fdc352884"
+      }
+    },
+    {
+      "id": "42edca96-75b7-5321-90e7-bf78a1b3d78b",
+      "app": "vscode",
+      "teacher_steps": 7,
+      "instruction": "Perform a force push of the current branch 'feature/rewrite' to origin after a rebase, using VSCode's Git integration or terminal.",
+      "sha256": {
+        "initial_setup.py": "545e3b8c0060f1859a4d7f4e85770a2e2185149becb15fdb14064a50ae83fa7d",
+        "reward.py": "393eb276a40374d37102c6ec8ad4be89e1a13225759ecc7494877d369bc9072e",
+        "task.json": "3d9ebc562c26c256f14b6a9f8528aff04386cc0b84f50166ff18c9af62c464b8"
+      }
+    },
+    {
+      "id": "ef9cfd85-834c-5629-b1c5-55f03e590db1",
+      "app": "vscode",
+      "teacher_steps": 9,
+      "instruction": "I'm collaborating on a project and need quick access to our common assets. How can I add the folder located at “/home/user/shared” to my current VS Code workspace?",
+      "sha256": {
+        "initial_setup.sh": "61d8b6c4cc0a0b6896eaeca724270b1e6d9bcd9067b905e60c7db14ed7bc6049",
+        "reward.py": "44d08b732fa88956b1ee52d753d11bab807d766a1c76587b558fbe0853a7507b",
+        "task.json": "24080da8c57e7b8e3ed275e17d6e35dad22f10d827c11cba176a671d7c64e0b6"
+      }
+    },
+    {
+      "id": "f90e91b9-89be-56a8-9441-2859fdb3abe8",
+      "app": "vscode",
+      "teacher_steps": 10,
+      "instruction": "My professor said I need to turn on word wrap so I can see long lines without scrolling sideways. Please enable word wrap in VSCode.",
+      "sha256": {
+        "initial_setup.py": "ef91100bdb94396933d4be7f5e27085cb63231bae0018e29e895aae9c8c97c05",
+        "reward.py": "f037f0176016138b2084b2dcd88c34add489cc609db341298237cc281d4e2fb1",
+        "task.json": "96897787e22066c1616390546bae38f20cfe563abfdacf706e8b9fe7c718a8db"
+      }
+    },
+    {
+      "id": "5f5dfefa-51c3-575e-99da-3f71637ea730",
+      "app": "vscode",
+      "teacher_steps": 11,
+      "instruction": "My project at /home/user/dev/ is cluttered with JetBrains’ “.idea” folders that keep showing up in the Explorer. Could you help me hide every folder named “.idea” so they don’t appear in the VS Code file tree?",
+      "sha256": {
+        "initial_setup.sh": "86f3e743433bc7dadc8e862499fc6d4c2bb75dc74ffa3a3ef0e5b59674b07f0d",
+        "reward.py": "b96df9632f3ecd850fea0321bab495326bbb6d45c402d692114be6bb219f6152",
+        "task.json": "7e50b2e937d5d7194279fae3a886f4c47285d353cc794cc9593bf6b376a79a61"
+      }
+    },
+    {
+      "id": "d64ecc66-9439-5af7-98af-ce0b891c714f",
+      "app": "vscode",
+      "teacher_steps": 12,
+      "instruction": "I’m tidying up the UI guide—could you go into /home/user/docs/components.md and replace every instance of the word “button” with “btn”?",
+      "sha256": {
+        "initial_setup.sh": "efe3964e19bb5f4cb1b6885a717aad3b0bd48bad67adff0b90f07e55b9e281d2",
+        "reward.py": "db53bfba9ecdb1d9f9d47cf2df8f80999223cbc772141731c538873b5d4eccce",
+        "task.json": "4def019b99b36ef3ad6600b723538419e350ec7a3f9cd454a8e72b4d5ea9b5a4"
+      }
+    },
+    {
+      "id": "fe22559b-9348-5c11-bcaf-36deb3c7d506",
+      "app": "vscode",
+      "teacher_steps": 12,
+      "instruction": "Open VSCode and write a Playwright test file at '/home/user/projects/e2e-tests/tests/checkout.spec.ts'. The test should: import from '@playwright/test', describe a 'Checkout Flow' suite, write a test named 'should complete purchase with valid payment' that navigates to '/shop', clicks 'Add to Cart' on the first product, navigates to '/cart', clicks 'Checkout', fills in credit card details using page.fill(), and asserts the order confirmation page shows 'Order Confirmed'.",
+      "sha256": {
+        "initial_setup.py": "36f55b0531d21964909c645140b83af5e7919d2a884f958dcbea8a7bb1ce7f53",
+        "reward.py": "bcd045d0518708b13ccb266043861565106b5ee6574b5e59714171e0d92038c1",
+        "task.json": "353a7f7467714c44fb2c51182e2e73b2dfa81c47a87cc052b6aafe5fb0c15249"
+      }
+    },
+    {
+      "id": "45d9eb12-a626-5c3a-8965-de415db83d1a",
+      "app": "vscode",
+      "teacher_steps": 13,
+      "instruction": "I need to open a new terminal split so I can have one terminal running my server and another for testing commands. Create a split terminal.",
+      "sha256": {
+        "initial_setup.py": "5015f4c089bfca2cad3544f8c442f88605486c51ad51d745e7ac63a0f416103e",
+        "reward.py": "6ba1df0e4f2dc2c203bf6f12ac5758b6473cc5fb8e9a4828db2a487a622dcd36",
+        "task.json": "1b22596daff6d159d2742cd6853f05ee47eac409dd312b22817b363c1418670e"
+      }
+    },
+    {
+      "id": "79a6f8ba-e7d0-54e3-8254-4a48b3269831",
+      "app": "vscode",
+      "teacher_steps": 13,
+      "instruction": "I need to create a workspace file that saves my window layout. Save the current workspace as a .code-workspace file called 'cs101-project.code-workspace' in my home directory.",
+      "sha256": {
+        "initial_setup.py": "434c0dbe34e779d1ee0d8e617c66035a501689242854d585e753890ee2521158",
+        "reward.py": "3fbee4034b86957129ec17c18b9223e88a92a00f802a3a82d57c6779d7871e26",
+        "task.json": "de7908e8fb3846d05e10498f9d9cd9b6f77617d20b2b8673b51cff74e33aaf98"
+      }
+    },
+    {
+      "id": "564519a6-d67b-5cc3-868f-eddcd62076b5",
+      "app": "vscode",
+      "teacher_steps": 15,
+      "instruction": "I’m coding on my Django project well past midnight, and the default light theme is glaring; could you help me change VS Code to the “Night Owl” color theme to ease the eye strain?",
+      "sha256": {
+        "initial_setup.sh": "9b03ab78acd93114a4539865bd6eee62d7203f14f59d59572a1f4036d204a754",
+        "reward.py": "1cfb1aca4dbebd493fdcbb28fd42a11536de81fe350fa4954875903472f60886",
+        "task.json": "b4ac147e4b791b9c0d1c9a9364c6585a287175211d3fb5466eebbbdbd63fa95f"
+      }
+    },
+    {
+      "id": "92156488-35ce-5f9d-ae71-43e949ee8773",
+      "app": "libreoffice_calc",
+      "teacher_steps": 5,
+      "instruction": "On the 'Dynamic' sheet, create a formula in B1 that references a cell on a sheet whose name is built from cells A1 and A2. A1 contains 'Region' and A2 contains '_North'. The formula should resolve to the value in cell C5 on the 'Region_North' sheet.",
+      "sha256": {
+        "initial_setup.py": "e9fd6f28ef83b957456b559fba50b93a4a2dcc20182cc6941d82f44a1edb9d52",
+        "reward.py": "723c44417ca12d2ed5b97a65f77f8b76978dc19b811cc739b0a5f3657227c023",
+        "task.json": "4e54113f6ba735dc6642dd401fe8fdb1497abbf903a7adfe4cfadc43fa7a7b8f"
+      }
+    },
+    {
+      "id": "5244c76f-8eb8-53af-a586-835fecd87b75",
+      "app": "libreoffice_calc",
+      "teacher_steps": 6,
+      "instruction": "In the 'Summary' sheet, create a formula in cell B3 that dynamically references a cell on another sheet based on the sheet name entered in A3. If A3 contains 'Sales', the formula should return the value from cell D15 on the Sales sheet.",
+      "sha256": {
+        "initial_setup.py": "0a10a5ca13d9012f971a2129b41890da6bd997f20a05cf5d75544d783217111c",
+        "reward.py": "e8c12ddee286732c3da58598d42260e056c2adb7a95e8efc337dd27496aa1045",
+        "task.json": "12b1d05c067ee1375a79eb809ba9caecdb16190bb1fe4cbc511b6c6dc4f4a04e"
+      }
+    },
+    {
+      "id": "b517afc0-bfc1-5102-8463-5875600d4145",
+      "app": "libreoffice_calc",
+      "teacher_steps": 8,
+      "instruction": "I'm documenting environment variables for a DevOps guide in LibreOffice Writer. Execute 'env | sort' in a terminal and save the screenshot of the sorted environment variables as 'env_vars.png' on the Desktop.",
+      "sha256": {
+        "initial_setup.py": "0b1a58c416c44a8bdce7a017b9d6b39fca34054a3d70c09a39c560606fd9bc6e",
+        "reward.py": "360da083106a5b3ee98de1598355e8f4811fc94c606abb64a153c6174232a453",
+        "task.json": "a1e944835a475af46f2f01ff3775249d043ea4d98e4a8ede8d0892872d5bec5e"
+      }
+    },
+    {
+      "id": "e1d005ef-f087-5778-85a7-976dad84916b",
+      "app": "libreoffice_calc",
+      "teacher_steps": 9,
+      "instruction": "Create a cascading dropdown: cell B2 should have a dropdown with regions 'North', 'South', 'East', 'West'. For now, just set up the B2 dropdown using a list of values.",
+      "sha256": {
+        "initial_setup.py": "89676f86ac43a31ca31136c59bed07b987e6c6dde8e548328264f7701eb72df8",
+        "reward.py": "8e602995e889bd4adc0637a61a13f026cec933bbc26671c5d2b15a8e432de197",
+        "task.json": "55a14b03ecfffa8f229944b99b70f54895a462ab821d6042ab2050e02ee586d0"
+      }
+    },
+    {
+      "id": "95b51960-0c88-5db8-a8b9-0d2c7fa01ccd",
+      "app": "libreoffice_calc",
+      "teacher_steps": 11,
+      "instruction": "Save the active workbook in LibreOffice Calc as an ODS file named 'budget_final.ods' to the Documents folder, keeping the original XLSX file unchanged.",
+      "sha256": {
+        "initial_setup.py": "d3096dd5cb3bb3343ed896ff5b0a824bec5ac30c1a692549200174bbebdd0adc",
+        "reward.py": "dd077c60c2fbcbfa50f8cc4f2970c2807b5859c7993425fd07c4ebd9964adab0",
+        "task.json": "884bfff02da31540ccbe6e9f5ed66f7bea821a551a26626283c2f5897e7c1d71"
+      }
+    },
+    {
+      "id": "fdd98cee-f28f-5e5d-a081-41e4e2c6ce04",
+      "app": "libreoffice_calc",
+      "teacher_steps": 12,
+      "instruction": "The column chart on the sheet is missing a title. Add the title 'Annual Revenue Trend' to it.",
+      "sha256": {
+        "initial_setup.py": "e7f33d005f75b68d8e5370c2acfcf02c1db61b6ffd2f24ea7d7280ec3a59dca7",
+        "reward.py": "23263a9557c1a89e53fb50bf3f054b4b13fd5b787b7f20395546893f560e461b",
+        "task.json": "5d4d62b093117b30ef99c19bb4eb3f1e2034a6e918c847ef96fd1740c40f9c5b"
+      }
+    },
+    {
+      "id": "9f1818c7-94b4-5635-af5a-53c5869d70ce",
+      "app": "libreoffice_calc",
+      "teacher_steps": 13,
+      "instruction": "Use INDEX/MATCH to do a left-direction lookup: given the salary 88000, find the employee's department which is to the left of the salary column.",
+      "sha256": {
+        "initial_setup.py": "402bad059e9cd78773c18053a876517529d078d44e9c794e5172f3ce98a94654",
+        "reward.py": "61e9fcfbc98cb8e904f5d38cf10062c6685ec76b613aa9ba2aff4e5769ffc09a",
+        "task.json": "7ce2fa580339bad55354e9c9bc489114a02e2d93f7f6f9735dc4b293bcd7d454"
+      }
+    },
+    {
+      "id": "b0cee013-283f-540b-bf1d-a24f93344ddb",
+      "app": "libreoffice_calc",
+      "teacher_steps": 15,
+      "instruction": "A spreadsheet displays ### in several cells (B3, B7, B12, B18) instead of values because the column is too narrow for the numbers. Auto-fit column B width to display all values. Also check if any cells have excessive decimal places and format to 2 decimal places.",
+      "sha256": {
+        "initial_setup.py": "4863f8f35d663924c5058a44c7507a4a105c175cb4550656305762866ff680ab",
+        "reward.py": "dbd027e402426c586b621da74d766fbca4aa4f4772c87ea8fa9aaa8a69f58138",
+        "task.json": "106ce0db4caf44944a86731e5e455c4da24ec3aef26916c5000f1282f2e8d856"
+      }
+    },
+    {
+      "id": "bfe9c0cc-3862-5439-b34d-1f14ec44ccbf",
+      "app": "libreoffice_writer",
+      "teacher_steps": 8,
+      "instruction": "While reviewing this document in LibreOffice Writer I realized the third paragraph is a bit fuzzy. Could you walk me through how to stick a comment that reads exactly \"Clarify scope.\" onto paragraph 3 so it’s obvious what needs fixing?",
+      "sha256": {
+        "initial_setup.docx": "828aa14f4f35ea0c96ee72376e79903e0e5747d47fe4cf6125e1adc2d6727c36",
+        "reward.py": "ea360263534f3083b67abcc9a16c7e068d2a2e32df924f294c40ae44c9847caf",
+        "task.json": "6789fa22c78cc3f65abdc0f4b1f3e7426988585515616c7cbe71b014aeac729f"
+      }
+    },
+    {
+      "id": "5449b4c4-e924-5732-8eb0-f3e21123224b",
+      "app": "libreoffice_writer",
+      "teacher_steps": 11,
+      "instruction": "Is there a quick trick in LibreOffice Writer to slap the word “Confidential” into the header, flush left, so it shows up on every single page? I’m tired of adding it manually one page at a time.",
+      "sha256": {
+        "initial_setup.docx": "20692e754b572fa0e9746f17986c189d752c6a519e03fd20ac9318f920eabf51",
+        "reward.py": "018d54ac6e1b15257268ef8705d69f34bd6778c30e8fa888c4211c00d672ae1a",
+        "task.json": "b081dd308cb3ea705f0a99c36b12ba680dc380771661dab669af975630deab8c"
+      }
+    },
+    {
+      "id": "624da8b2-a47a-51a0-89b4-c0b7463d7c36",
+      "app": "libreoffice_writer",
+      "teacher_steps": 11,
+      "instruction": "Create a nested table inside cell B3 of my project plan. The inner table should be 2x3 to list sub-tasks.",
+      "sha256": {
+        "initial_setup.py": "36210e7e1b81a66b132a6ab6fa46c65dad2a6f252c2b428d90aa5fe9c73a101b",
+        "reward.py": "062932545ef4c92b2043b4d0fa240abf7bade119d5521557eb0ea964598743d9",
+        "task.json": "eebf94e5c8eee2ca88474041710974b6064de85596b962fc587664f2d347a671"
+      }
+    },
+    {
+      "id": "6701a985-47b3-56be-8d26-f75c17260941",
+      "app": "libreoffice_writer",
+      "teacher_steps": 14,
+      "instruction": "Make all section headings start with uppercase letters for each word.",
+      "sha256": {
+        "initial_setup.docx": "c1880706c02865978321b565b02abd5d91fd6f207ecf220f0d78409754c5c38e",
+        "reward.py": "4ad35efca54cfc1f366efc6b2f6f7a5ef29efb4d7ca4568d3cd58f8e3a3716ff",
+        "task.json": "5c646451e29b8336012e7bc1771afed6284b93980b3c057e2ad0d4be2cd5007f"
+      }
+    },
+    {
+      "id": "b81f13c1-1092-50e4-a2a4-1235daf74577",
+      "app": "libreoffice_impress",
+      "teacher_steps": 10,
+      "instruction": "Add caption 'Table 2: Metrics' below Table 2.",
+      "sha256": {
+        "initial_setup.pptx": "7e57be81316948b1535fcdee8c1282fb50da11a45ba56b65d41d94afa87527bb",
+        "reward.py": "ab3997a40e44dc2df83d6f4f58ff170ba57f075546e6c16ffc6ceb10262cb0f9",
+        "task.json": "bee7d2b0ebd4239f05a1b17549684e0360f230dfb7cf0168dfdbc11afc0f1f02"
+      }
+    },
+    {
+      "id": "07391058-dd4b-5684-aad4-de109b9cdb66",
+      "app": "libreoffice_impress",
+      "teacher_steps": 13,
+      "instruction": "Change the pie chart on slide 4 to a donut chart and set the inner hole size to 50%.",
+      "sha256": {
+        "initial_setup.py": "1ab9d3e79ff14a4e54df3d3af5bb081572aac25055c6caeef32b944d6fe9024b",
+        "reward.py": "c4ee3e4b9c9a221522df28d7a146a36ccb8c25d965cdde313f196d946cc981d0",
+        "task.json": "a64aa32ee12e1c51fe9351a2e5413580e41e0e00a4740c58549b7d80c46d7ff8"
+      }
+    },
+    {
+      "id": "bc067b58-ab1b-5be3-b7f6-e97159a0f4ba",
+      "app": "libreoffice_impress",
+      "teacher_steps": 14,
+      "instruction": "Insert the image '/home/user/photos/team_photo.jpg' onto slide 2 of my presentation.",
+      "sha256": {
+        "initial_setup.py": "87245aa3b0ea01b4cd94c685107b5109a2776940787c1567da45b45cfa34d6ae",
+        "reward.py": "b2093a9a1a9a8e5c033daec9870e792f87b25d9847c9ea733e9a783b860ea481",
+        "task.json": "c446102d7281e46b866ee9cb1ef33d3f93394a78370f53825aefb770bb46cbf0"
+      }
+    },
+    {
+      "id": "5bfb9011-c7a4-5e34-8c1c-d3a5fb925fd6",
+      "app": "pdf",
+      "teacher_steps": 9,
+      "instruction": "I have 8 signed contract pages as separate PDFs (signature_page_1.pdf through signature_page_8.pdf) in /home/user/Documents/Contracts. Merge them into 'signed_contract.pdf' in order.",
+      "sha256": {
+        "initial_setup.sh": "fdbe7f714b6c0c1f1327117275cd5113ff6753d2ad1391ebda24821d90d9a3b1",
+        "reward.py": "98e78dbeb72cd83461254c5f530045d61e7f5d17404b90bc213f22bc3275a5d0",
+        "task.json": "62fe2980563bee8f56265d2bf922af9514026199aecf79c0ccb2141e5a567a81"
+      }
+    },
+    {
+      "id": "a78579d5-3af9-5470-904f-847a37ad192c",
+      "app": "pdf",
+      "teacher_steps": 14,
+      "instruction": "I have 'contract_v1.pdf' (10 pages) and need to insert 'addendum.pdf' (3 pages) after page 10. Save the result as 'contract_v2.pdf' in /home/user/Documents/Legal.",
+      "sha256": {
+        "initial_setup.sh": "99d83ebf1d0ace97704df745b7fe90fe8702e06069f84a7ad0df5d579b39f664",
+        "reward.py": "46f7ebaf52ac0531f820a34a812b27f37f133caeb37754fd8886a87071207d73",
+        "task.json": "56f43db6966759c131ab79ed872c073f08a1ac94146279d074ee81b9d0a9b266"
+      }
+    },
+    {
+      "id": "ae6f5ebd-6e74-5382-a3e6-8103b1ce23b7",
+      "app": "pdf",
+      "teacher_steps": 15,
+      "instruction": "Please rename all PDFs in /home/user/Documents/Papers to include page count in filename (e.g., 'paper.pdf' becomes 'paper_15pages.pdf').",
+      "sha256": {
+        "initial_setup.sh": "4b6bdd5152d75a06c208aa9fb9d51830f4a093944cb6ac313e706cbbc60568fa",
+        "reward.py": "64bc4543b767370f56a140e6e34be953b119e288fdfb8a974a3c4a92c5aa7f24",
+        "task.json": "b99b49de71d661dbec7f6ad9a8cb5aa5b6dafed4cfc1d141a9754842aa864d98"
+      }
+    }
+  ]
+}
