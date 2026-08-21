@@ -31,6 +31,7 @@ import verifiers.v1 as vf
 from pydantic import Field, model_validator
 
 import grammars
+from desktop.execute.guest_program import HeldStateError
 
 from agent.agent import (
     Agent,
@@ -862,7 +863,15 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                         )
                         budget.dispatched(len(decision.operations))
                         _update_held(held, decision.operations)
-                    except (TypeError, ValueError) as exc:
+                    except (TypeError, ValueError, HeldStateError) as exc:
+                        # `HeldStateError` is the executor refusing an operation
+                        # sequence the MODEL composed -- an unmatched `up(...)` or a
+                        # double press -- host-side, before anything is sent. Its base
+                        # `ExecutionError` also covers the guest and the transport
+                        # failing, which is ours; only this subclass is the model's.
+                        # Read as an executor error it nulls the episode, drops it from
+                        # `n_valid` and marks the run `infrastructure_failure`, i.e. the
+                        # check doing its job destroys the measurement.
                         action_error = {"type": type(exc).__name__, "message": str(exc)}
                         state.action_errors += 1
                     except Exception as exc:  # noqa: BLE001 - transport, fails closed

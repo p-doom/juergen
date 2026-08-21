@@ -504,6 +504,47 @@ def test_a_bad_action_is_a_scored_outcome_not_an_infra_failure(tmp_path, prepare
     assert result["steps_detail"][0]["action_error"]["type"] == "ValueError"
 
 
+def test_a_release_of_a_key_never_pressed_is_the_model_not_the_infrastructure(
+    tmp_path, preparer
+) -> None:
+    """The real sequence that destroyed a measurement: `up(ShiftLeft)` with no press.
+
+    `expected_atomic_input_state` refuses it host-side, before anything reaches the
+    guest, so the executor worked. Read as an `executor_error` instead, the episode
+    is nulled, dropped from `n_valid`, and the whole run is marked
+    `infrastructure_failure` -- which is what happened to
+    `solv2r_ordered_yll_s35k_producer_full` trial 2. Its base `ExecutionError` still
+    has to mean infrastructure, and the second half asserts that it does.
+    """
+    from desktop.execute.guest_program import ExecutionError, HeldStateError
+
+    class Unbalanced(FakeSession):
+        def execute_atomic(self, operations):
+            raise HeldStateError("key not held: shiftleft")
+
+    _, result, _ = _run(
+        _config(tmp_path), _task(max_steps=2), replies=["0 0 0 ; +LMB -LMB"] * 2,
+        session=Unbalanced(),
+    )
+    assert result["validity"] == "valid", "the executor refused; it did not fail"
+    assert result["action_errors"] == 2 and result["executor_errors"] == 0
+    assert result["steps_detail"][0]["action_error"]["type"] == "HeldStateError"
+    assert result["success"] is False, "a scored failure, not a null"
+
+    class GuestGone(FakeSession):
+        def execute_atomic(self, operations):
+            raise ExecutionError("guest request POST /execute failed: connection reset")
+
+    _, infra, _ = _run(
+        # Its own artifact directory: `_persist` cross-checks frames against
+        # trajectory rows, and a second episode under the same one trips that.
+        _config(tmp_path / "infra"), _task(max_steps=2), replies=["0 0 0 ; +LMB -LMB"],
+        session=GuestGone(),
+    )
+    assert infra["outcome"] == "executor_error", "the base class is still ours"
+    assert infra["validity"] == "infra_invalid" and infra["success"] is None
+
+
 def test_a_model_call_failure_is_infrastructure(tmp_path, preparer) -> None:
     class Angry:
         async def get_response(self, *args, **kwargs):
