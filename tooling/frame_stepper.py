@@ -23,9 +23,7 @@ from pathlib import Path
 
 import cv2
 
-# ``pipeline`` lives at the repo root; this viewer was split out to ``tooling/``
-# in the data-layer restructure, so put that root on the path when run directly
-# (``uv run python tooling/frame_stepper.py``).
+# ``pipeline`` lives at the repo root; put that root on the path when run directly.
 import sys as _sys
 from pathlib import Path as _Path
 

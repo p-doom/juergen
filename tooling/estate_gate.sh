@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
 # Run every test suite in the estate, each under the interpreter it needs.
 #
-# There is no CI. Nothing is pushed. Three repositories hold the code and each
-# suite needs a different interpreter, so a single `pytest` cannot cover them:
+# Each suite needs a different interpreter, so a single `pytest` cannot cover them:
 #
-#   juergen/tests + juergen/grammars   verifiers + Pillow, and desktop on
-#                                      sys.path (juergen/tests/conftest.py adds
-#                                      the sibling checkout).
-#   juergen/data_pipeline/tests        needs cv2 (opencv-python-headless), which
-#                                      the testgate venv does not have -- so it
-#                                      runs under its own. Not `juergen/.venv`:
-#                                      that one is uv's project environment, so
-#                                      any `uv sync` without the `dev` extra
-#                                      prunes pytest out from under a run in
-#                                      progress (observed mid-gate).
+#   juergen/tests + juergen/grammars   verifiers + Pillow, and desktop on sys.path
+#                                      (juergen/tests/conftest.py adds the sibling
+#                                      checkout).
+#   juergen/data_pipeline/tests        needs cv2 (opencv-python-headless), which the
+#                                      testgate venv does not have. Not
+#                                      `juergen/.venv`: a `uv sync` there without
+#                                      the `dev` extra prunes pytest out from under
+#                                      a run in progress.
 #   desktop                            Pillow and nothing else.
 #   desktop/desktop_fleet              the second distribution in the desktop
 #                                      repository: the ZMQ stack plus desktop
@@ -26,36 +23,20 @@
 # suite failed, 2 an environment is missing (nothing was measured -- do not read
 # that as green).
 #
-# A reading says what it measured. Before the first test runs, every suite's
-# repository sha, uncommitted-file counts, interpreter version and environment are
-# printed, so a run that is killed halfway still leaves that record in its log.
-# The environment and not just the version, because this estate has run one cell
-# under two different 3.13.5 venvs inside a day. Two RED
-# readings in one day were mid-edit snapshots of another agent's working tree --
-# a `build/lib` a `pip install` had just left behind, and a symbol deleted out
-# from under `conftest.py` -- and both were misattributed to the code before
-# being tracked down.
+# Before the first test runs, every suite's repository sha, uncommitted-file
+# counts, interpreter version and environment are printed, so a run that is killed
+# halfway still leaves that record in its log.
 #
 # An uncommitted file annotates the verdict (`ESTATE GATE: GREEN (DIRTY TREE:
-# ...)`) and does not change the exit status. It is not code 2: that code means
-# nothing was measured, and a run over uncommitted bytes measured everything. It
-# is not a fourth code either, because agents run this against a dirty tree
-# constantly, so a non-zero status for the ordinary case would train everyone to
-# ignore the status. The claim is weaker, so the verdict line says so and no
-# longer matches a `GREEN`-anchored grep.
+# ...)`) and does not change the exit status: such a run measured everything, it
+# just measured uncommitted bytes rather than a commit.
 #
-# The tree is read again at the end, and a `MOVED` line names what changed: over
-# twenty minutes of suites, several agents land commits, so the state a run began
-# on is not the state it ended on. `REPLACED` is the same thing one level up --
-# an editor replaces this script rather than rewriting it, so a run in flight
-# keeps executing the inode it started on (visible on NFS as a stray
-# `tooling/.nfs*` file) and its output describes a gate no longer on disk.
+# The tree is read again at the end. A `MOVED` line names what changed under the
+# run; `REPLACED` says this script itself was rewritten mid-run.
 #
 # Each suite reports wall seconds, CPU seconds, and the share of one core it
-# obtained. The gate is sequential and single-threaded, so a share well below 1
-# is wall time lost waiting for CPU rather than work done: a run three times
-# slower because four suites and several agents were contending for a two-core
-# quota is then visible in the reading instead of inferred from a stopwatch.
+# obtained. A share well below 1 is wall time lost waiting for CPU, so those
+# seconds are not comparable with an idle run's.
 #
 # Five interpreters, each overridable. The defaults are the venvs these suites
 # are run under on this cluster; on another machine, set the variables.
@@ -72,8 +53,7 @@
 #
 #   JUERGEN_ROOT  DESKTOP_ROOT  OMEGALAX_REARCH_ROOT  DESKTOP_FLEET_ROOT
 #
-# Each must be a git checkout and `git` must be on PATH; a tree whose state
-# cannot be read is an incomplete environment, not something to measure anyway.
+# Each must be a git checkout and `git` must be on PATH.
 #
 # `--list` prints the plan, the preflight verdict and the tree state without
 # running anything.
@@ -82,8 +62,7 @@
 #
 # omegalax-rearch: only the test files the rearchitecture touches are run. The
 # rest of that repo's tests want real GPUs and real checkpoints and would fail on
-# a CPU node. The count is not stated here: it read 44, then 56, then 57 within
-# one day, and a number that rots that fast belongs in a reading, not a comment.
+# a CPU node.
 
 set -uo pipefail
 
@@ -100,30 +79,15 @@ VENVS=/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/venvs
 : "${DESKTOP_PYTHON:=$VENVS/juergen-testgate-venv/bin/python}"
 : "${DESKTOP_FLEET_PYTHON:=$DESKTOP_FLEET_ROOT/.venv/bin/python}"
 # Built by `uv sync --locked --extra torch-tests --python 3.13` from that repo's
-# lockfile, so it reproduces exactly what the repo declares -- unlike the old
-# testgate venv, which had drifted months ahead of the lock (transformers 5.14.1 vs
-# 5.2.0, jax 0.11.0 vs 0.9.2) and failed the Qwen3-VL MoE loader on a config key HF
-# renamed after the locked version.
-#
-# Dedicated rather than the repo's own `.venv`, which the training jobs share: a
-# bare `uv sync --locked` there uninstalls 11 packages including torch and the
-# torchvision the collator test imports, and would do it under a running gate. The
-# two agree by construction, and were measured agreeing -- same versions, and
-# 109 passed / rc=0 on both -- so the isolation costs nothing.
+# lockfile, so it reproduces what the repo declares. Dedicated rather than the
+# repo's own `.venv`, which the training jobs share: a bare `uv sync --locked`
+# there uninstalls torch and the torchvision the collator test imports, and would
+# do it under a running gate.
 : "${OMEGALAX_PYTHON:=$VENVS/omegalax-rearch-gate-venv/bin/python}"
 
 # omegalax-rearch's gate: what the rearchitecture changed, nothing GPU-bound.
-#
-# `tests/test_qwen3_moe_smoke.py` is excluded by decision, not oversight -- and
-# for neither reason usually given for it. It is said to reject any pytest flag
-# with absl's `UnrecognizedFlagError`: that is the argv trap the PYTEST_ADDOPTS
-# export below already avoids, and under this gate's invocation the file runs and
-# that error never appears. It is also said to fail `NotImplementedError: Not
-# supported on cpu`, which does not appear either. What actually happens is that
-# 2 of its 3 cases fail on numerical agreement with HF, by a wide margin and on
-# CPU. No figures here on purpose: the metric and threshold were rewritten inside
-# one day. That is a correctness question needing an owner, not a cell a green
-# gate can carry.
+# `tests/test_qwen3_moe_smoke.py` is excluded: 2 of its 3 cases fail numerical
+# agreement with HF on CPU, which needs an owner rather than a green gate.
 OMEGALAX_TESTS=(
   tests/test_sft_collators.py
   tests/test_arrayrecord_image_refs.py
@@ -153,8 +117,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --list) LIST_ONLY=1; shift ;;
     --only) ONLY="${2:-}"; shift 2 ;;
-    # Printed by matching the header block, not by line number: this header
-    # grows, and a range would silently start cutting it off.
+    # Printed by matching the header block, not by line number.
     -h|--help) awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown argument: $1 (try --help)" >&2; exit 2 ;;
   esac
@@ -210,10 +173,8 @@ probe_tree() {
     IFS='|' read -r name root python marker targets <<<"$entry"
     [ -n "$ONLY" ] && [ "$ONLY" != "$name" ] && continue
     porcelain="$(git -C "$root" status --porcelain)"
-    # The venv's own path, not only its version: this cell has been moved between
-    # three interpreters in a day and two of them are 3.13.5, so a version alone
-    # stopped identifying what was measured. Two components, because every
-    # project's in-tree environment is called `.venv`.
+    # The venv's own path, not only its version: two of this estate's interpreters
+    # are 3.13.5, and every project's in-tree environment is called `.venv`.
     printf '%s|%s|%s|%s|%s|%s\n' "$name" \
       "$(git -C "$root" rev-parse --short=12 HEAD)" \
       "$(printf '%s\n' "$porcelain" | grep -c '^[^?]')" \
@@ -268,10 +229,8 @@ print_tree_state "$tree_before"
 echo
 
 # A concurrent editor replaces this file rather than rewriting it in place, so a
-# run keeps executing the inode it started on -- on NFS as one of those stray
-# `tooling/.nfs*` files. The output then describes a gate nobody can see, which
-# is the same defect as a dirty tree one level up, so the inode is recorded here
-# and compared at the end.
+# run keeps executing the inode it started on. The inode is recorded here and
+# compared at the end.
 script_inode="$(stat -c %i "${BASH_SOURCE[0]}")"
 
 log_dir="$(mktemp -d -t estate-gate-XXXXXX)"
@@ -315,8 +274,8 @@ for entry in "${SUITES[@]}"; do
   cpu_cs=$((cpu_cs + suite_cpu_cs))
   timing="$(awk -v w="$suite_cs" -v c="$suite_cpu_cs" \
     'BEGIN{printf "%ds wall  %ds cpu  %.2f core", w / 100, c / 100, (w > 0) ? c / w : 0}')"
-  # Counted off pytest's own last summary line, not off the whole log: a test
-  # that prints "12 passed" is captured output, and it used to be read first.
+  # Counted off pytest's own last summary line, not off the whole log: a test that
+  # prints "12 passed" is captured output.
   summary="$(grep -E '[0-9]+ (passed|failed|error|skipped)' "$log" | tail -1)"
   count="$(printf '%s' "$summary" | grep -Eo '[0-9]+ (passed|failed|error)' | tr '\n' ' ' | sed 's/ $//')"
   # pytest exits 0 when every test SKIPPED (rc=5 only covers zero collected), so

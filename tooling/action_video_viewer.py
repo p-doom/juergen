@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """Realtime video/action viewer for one crowd-cast clip.
 
-This intentionally uses the raw encoded video timeline: video time t is paired
-with keylog action bin t. It does not apply any wall-clock stretch or drift
-correction.
+Uses the raw encoded video timeline: video time t is paired with keylog action
+bin t. No wall-clock stretch or drift correction is applied.
 
-Example:
-    cd /fast/project/HFMI_SynergyUnit/yll/juergen/data_pipeline
-    uv run python tooling/action_video_viewer.py \
-        --clip-dir annotation_pipeline/iteration_runs/merge_v2/clips/ghostty_term_402fe670_s38 \
-        --port 8772
+Example::
+
+    uv run python tooling/action_video_viewer.py --clip-dir <clip> --port 8772
 """
 
 from __future__ import annotations
@@ -24,9 +21,7 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
-# ``pipeline`` lives at the repo root; this viewer was split out to ``tooling/``
-# in the data-layer restructure, so put that root on the path when run directly
-# (``uv run python tooling/action_video_viewer.py``).
+# ``pipeline`` lives at the repo root; put that root on the path when run directly.
 import sys as _sys
 from pathlib import Path as _Path
 

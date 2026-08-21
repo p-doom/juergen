@@ -1,25 +1,14 @@
 #!/usr/bin/env bash
 # Print the immutable source a dispatched job must run from, or refuse.
 #
-# Every solv2r recipe resolves `provenance.repo_path` -- the *live* checkout --
-# because labctl's staged snapshot could not resolve the sibling `desktop` path
-# dependency. Three jobs died of that in one night: two read a half-edited
-# `suite.py`, and one returned a clean 6/6 on trial 1 then failed trial 2 because
-# `suite.json` was reverted underneath it. It is not a discipline problem. The
-# author of "a pinned worktree is only pinned if you stop editing it -- commit
-# first, then measure" reproduced the failure twenty-five minutes later.
+# A job reads a detached worktree pinned at the sha labctl recorded at dispatch,
+# keyed by that sha, created once and thereafter never written, so an edit to the
+# live tree cannot reach a running job. Recipes resolve `provenance.repo_path`
+# -- the live checkout -- because labctl's staged snapshot cannot resolve the
+# sibling `desktop` path dependency.
 #
-# So a job reads a detached worktree pinned at the sha labctl recorded at
-# dispatch, keyed by that sha, created once and thereafter never written. An edit
-# to the live tree cannot reach a running job, rather than being discouraged from
-# doing so. This is the same move as pinning `desktop` by rev, applied to the
-# repository the recipe itself runs from -- and the general form of what the 31
-# hand-registered `[repos]` worktrees each did by hand, once per experiment.
-#
-# It refuses instead of falling back to the live path. All three failures above
-# were loud -- two loader refusals and an off-tier guard -- and that is why none
-# of them produced a number anyone could quote. A fallback would have converted
-# three honest crashes into three plausible wrong results.
+# It refuses rather than falling back to the live path: a fallback converts an
+# honest crash into a plausible wrong result.
 #
 # Keyed by sha, so concurrent jobs at one commit share one tree and distinct
 # commits never collide. The trees are disposable: `git worktree prune` after
@@ -56,8 +45,7 @@ fi
 exec 9<&-
 
 # A pin is only a pin while nobody has written to it. Both halves are checked on
-# every job, not only at creation: this is the exact condition whose absence cost
-# three jobs.
+# every job, not only at creation.
 [ "$(git -C "$pin" rev-parse HEAD 2>/dev/null)" = "$sha" ] || fail "pinned checkout is not at $sha: $pin"
 [ -z "$(git -C "$pin" status --porcelain 2>/dev/null)" ] || fail "pinned checkout has been edited: $pin"
 

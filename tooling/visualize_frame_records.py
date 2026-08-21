@@ -83,7 +83,6 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 # Make the ``pipeline`` package importable when run directly
-# (mirrors build_frames_master.py's PYTHONPATH setup).
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -553,7 +552,7 @@ class ConversationsDataset(FrameRecordsDataset):
 class FramesMasterDataset:
     """A stage-01a *frames-master* store browsed directly — raw frames, no actions.
 
-    The frames-master is keylog-free by design: it holds decoded JPEG frames at
+    The frames-master is keylog-free: it holds decoded JPEG frames at
     ``master_fps`` and nothing about the keylog (actions are added later by the
     stage 03). So this view shows frames + timing only; the action HUD stays
     empty. Segments are listed from ``segment_index.jsonl`` up front (cheap), and
