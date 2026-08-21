@@ -6,6 +6,9 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "desktop",
     "av>=16.1.0",
+    # Pinned exactly, not floored: `loaders._plugin_class`, `narrow_plugin_field`
+    # and the `Harness.launch(endpoint, secret, ...)` signature are unversioned
+    # internal API we call directly.
     "verifiers==0.2.1",
 ]
 

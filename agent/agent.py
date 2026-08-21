@@ -502,8 +502,9 @@ class Agent:
             ctx, program, session_id=session_id
         )
         if finish_reason == "length":
-            # fragment and dispatches it. `pipeline/annotation/lib/labeler.py:270`
-            # refuses the same response for the same reason.
+            # Not handed to `decide`: parsing a truncated turn either invents an
+            # action the model never finished emitting or, worse, succeeds on a
+            # fragment and dispatches it.
             return Decision(
                 step=step,
                 text=text,
