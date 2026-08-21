@@ -26,11 +26,12 @@ import juergen_fake_desktop
 from evals.signoflife.__main__ import main
 from evals.signoflife.suite import load_suite
 
-# The scored tier: what an unqualified run of this dispatcher is. Six cells since
-# the two panel cells were promoted, which is why `juergen_fake_desktop` has to
-# serve the Tk fixture's published measurement -- a panel that never mapped would
-# make two scored cells unrunnable without a VM.
+# The scored tier: what an unqualified run of this dispatcher is. `CANDIDATE_IDS`
+# is the other tier, and it is covered too -- `juergen_fake_desktop` serves the Tk
+# fixture's published measurement, so the panel cells' dispatch path is exercised
+# here without a VM.
 CELL_IDS = [task.id for task in load_suite().for_tier("scored")]
+CANDIDATE_IDS = [task.id for task in load_suite().for_tier("candidate")]
 
 
 @pytest.fixture(autouse=True)
@@ -464,7 +465,7 @@ def test_the_tier_reaches_the_taskset_and_the_record(tmp_path) -> None:
     config = _eval_config(
         arm="ordered_oracle",
         tier="candidate",
-        task_ids=["terminal_submit_only"],
+        task_ids=["panel_offset_button"],
         artifacts=tmp_path / "a",
         traces_dir=tmp_path / "t",
         pool={},
@@ -474,14 +475,14 @@ def test_the_tier_reaches_the_taskset_and_the_record(tmp_path) -> None:
         max_tokens=256,
     )
     assert config.taskset.tier == "candidate"
-    assert config.taskset.task_ids == ["terminal_submit_only"]
+    assert config.taskset.task_ids == ["panel_offset_button"]
 
 
 def test_a_cell_from_the_other_tier_is_refused_rather_than_quietly_mixed(tmp_path) -> None:
     """Averaging a calibrated cell with an unmeasured one is the uncalibrated
     number the controls exist to prevent, so the runner refuses the mix."""
     with pytest.raises(SystemExit, match="is not in the 'scored' tier"):
-        main(_argv(tmp_path / "run", tmp_path, "--cell", "terminal_submit_only"))
+        main(_argv(tmp_path / "run", tmp_path, "--cell", "panel_offset_button"))
     with pytest.raises(SystemExit, match="is not in the 'candidate' tier"):
         main(
             _argv(
@@ -490,6 +491,28 @@ def test_a_cell_from_the_other_tier_is_refused_rather_than_quietly_mixed(tmp_pat
                 "--tier",
                 "candidate",
                 "--cell",
-                "panel_offset_button",
+                "terminal_ls",
             )
         )
+
+
+@pytest.mark.slow
+def test_the_candidate_tier_dispatches_too_and_reads_its_negative(tmp_path) -> None:
+    """The other tier's cells reach a desktop and score, with no VM.
+
+    Worth covering because two of them are panel cells: their setup only works if
+    the guest publishes a widget measurement, and the double serves the one a real
+    run produced. The reading is the negative arm's calibrated 0/N -- the guest
+    reports a desktop where nothing happened.
+    """
+    output = tmp_path / "candidate"
+    _fresh_process()
+    code = main(_argv(output, tmp_path, "--tier", "candidate"))
+    result = json.loads((output / "result.json").read_text())
+    assert code == 0, result["infrastructure_errors"]
+    assert result["tier"] == "candidate"
+    assert sorted(result["aggregate"]["per_cell"]) == sorted(CANDIDATE_IDS)
+    assert result["aggregate"]["controls_ok"] is True
+    assert {row["cell"]: row["success"] for row in result["episodes"]} == {
+        cell: False for cell in CANDIDATE_IDS
+    }, "a negative control must fail every cell of the tier it runs"

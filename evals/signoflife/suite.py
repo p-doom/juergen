@@ -55,36 +55,61 @@ SCORED_KINDS = {
     "terminal_exact_text",
     "open_chrome",
     "focus_terminal_and_type",
-    "tk_target_click",
-    "tk_no_submit_entry",
 }
-"""Six cells whose oracle passes and whose negative fails on a real VM, per
-grammar, and which the off-the-shelf reference does not already pass.
-
-The last two were promoted from `candidate` once both halves were measured:
-oracle 3/3 per cell in all three grammars (jobs 141317 eov3, 141322 native,
-141320 compact), negative 0/4 in all three (141316, 141323, 141321), and
-off-the-shelf Qwen3-VL-4B 0/3 on each (141319)."""
+"""The calibrated four. Oracle 4/4 and negative 0/4 on a real VM, per grammar."""
 
 CANDIDATE_KINDS = {
     "submit_only",
     "staged_confirm",
+    "tk_target_click",
+    "tk_no_submit_entry",
 }
-"""Held out of the scored set, and not because they are broken.
+"""Four cells, all four fully calibrated, none yet admissible to the scored tier.
+Calibration is not what blocks them; a valid reference reading is.
 
-Both are fully calibrated — oracle 3/3 and negative 0/4 in all three grammars —
-and both isolate a defect a trained checkpoint commits: `submit_only` records
-every character that arrived before the newline, so the literal
-`\\n`-inside-`type()` defect (`0 0 0 ; type("ls\\\\n")`, 3 of 3 Phase-B draws)
-reads as a two-character prefix on a read that never completed; `staged_confirm`
-names the goal and not the steps, so a policy that stops when the first stage
-looks done fails instead of scoring.
+Rule 1 is satisfied for every one on real VMs: oracle 3/3 per cell in
+`ordered_events_v3` (141317), `native_absolute` (141322) and `deltatype_v2`
+(141320); negative 0/4 in all three (141316, 141323, 141321), and for the two
+panel cells 0/3 at three trials as well (141407, 141408, 141409). The scripted
+arms resolve every coordinate from the fixture's own measurement, so none of that
+depends on model output.
 
-What disqualifies them from the scored tier is that the off-the-shelf
-Qwen3-VL-4B passes both 3/3 (job 141319). A cell the reference already passes
-cannot register a capability gain and only dilutes the mean, so they stay here as
-regression detectors — which is what this tier is for. Promote either one only if
-a reference model is measured failing it."""
+  * `submit_only` -- submission as a key transition. The guest reader publishes
+    every character that arrived before the newline, so a literal `\\n` inside
+    `type()` (3 of 3 Phase-B draws) reads as a two-character prefix on a read
+    that never completed. HELD: off-the-shelf Qwen3-VL-4B passes it 3/3 (141319),
+    and the cell needs no click, so that reading is clean. A cell the reference
+    passes cannot register a gain.
+  * `staged_confirm` -- stopping when the first sub-goal looks done; the
+    instruction names the goal and only the screen names the second stage. HELD
+    on the same clean evidence: base 3/3, no click involved.
+  * `tk_target_click` -- a target no single move from the declared cursor start
+    reaches, since the observed output support collapses to {0, +-1, +-10,
+    +-100}. The premise is asserted at setup from the measured bbox.
+  * `tk_no_submit_entry` -- the reflexive Return: type into a field and click a
+    named button *without* submitting, with `submitted` sticky in the fixture.
+
+The last two were promoted on a base reading of 0/3 each and returned here,
+because that 0/3 was the arm failing rather than the model. The off-the-shelf arm
+emits 0-999-per-axis coordinates while `native_absolute`'s prompt declares
+absolute screen pixels, so its clicks land ~460 px left and ~50 px high: in six of
+six episodes the de-normalised point falls INSIDE the measured target, 6-31 px
+from centre, on targets 172x31 and 230x23. The model grounds these cells
+correctly, and under a matched convention it plausibly passes both -- which would
+make them base-passing cells like the two above. Unproven, not rejected.
+
+A valid re-probe has to satisfy three things, because pass/fail alone hid that
+artefact for six episodes:
+
+  * a matched coordinate convention, established from the run's own prompt and
+    the model's own output rather than assumed;
+  * targets far from the origin. Near (0,0) the conventions nearly coincide --
+    emitted (15,59), de-normalised (29,64), dock icon at (35,60) -- so a cell
+    whose target sits near the origin cannot expose a convention error at all,
+    and the error grows with distance from it;
+  * residuals reported, not pass/fail alone. The distance from the click to the
+    measured target centre is what turned "the model cannot ground this" into
+    "the arm mis-reads its output"."""
 
 ALLOWED_KINDS = SCORED_KINDS | CANDIDATE_KINDS
 
@@ -100,10 +125,10 @@ NO_SUBMIT_CELLS: frozenset[str] = frozenset({"panel_no_submit_entry"})
 """Cells whose success must not depend on pressing Return, read by failure-mode
 indicator D.
 
-`panel_no_submit_entry` is the first genuine entry, and since its promotion it is
-a *scored* cell — so D now has a valid cell to fire on for the first time. It was
-structurally zero before that, which is why every non-zero D reading ever
-published against the scored gate is the old misclassification and not a signal.
+`panel_no_submit_entry` is the first genuine entry, and it is a candidate cell —
+so D remains structurally zero on the scored tier, and every non-zero D reading
+ever published against the scored gate is the old misclassification rather than a
+signal. D becomes a live scored signal only if that cell is promoted.
 
 That misclassification: `terminal_exact_text` was listed here, and it requires
 submission four ways over — its instruction ends *"and press Enter"*, its guest

@@ -10,18 +10,14 @@ The calibration semantics, per tier — an arm runs one tier at a time
     artefact of the harness;
   * both exist per grammar, since a control that certified only one grammar would
     leave the other's parse/compile path unmeasured;
-  * the model arms are what the controls calibrate. The scored tier is six cells
-    and no single run has covered all six, so its off-the-shelf reference is
-    spliced, not measured at once: 3/4 on the original four (run
-    019fd5be788b7793a8a777da2a0f7531, 3 trials, original qcow —
-    `focus_terminal_and_type` 0/3, every draw
-    `model_terminate_without_postcondition`) and 0/2 on the promoted pair (job
-    141319, 3 trials, re-baked qcow). Quote it as 3/4 + 0/2, or take one 6-cell
-    run and quote that. Phase-B-compact is 2/4 on the original four (run
-    01a01e7c171e7dc1b681725c7066d0bd) and has no reading on the promoted pair.
-    The 4/4 once recorded here for the off-the-shelf arm is not what its
-    result.json says. A model number is uncalibrated without its two controls in
-    the same configuration and the same tier.
+  * the model arms are what the controls calibrate. Scored-tier readings, all over
+    3 trials: off-the-shelf Qwen3-VL-4B native = 3/4 (run
+    019fd5be788b7793a8a777da2a0f7531, original qcow -- `focus_terminal_and_type`
+    0/3, every draw `model_terminate_without_postcondition`) and Phase-B-compact =
+    2/4 (run 01a01e7c171e7dc1b681725c7066d0bd). The 4/4 once recorded here for the
+    off-the-shelf arm is not what its result.json says. A model number is
+    uncalibrated without its two controls in the same configuration and the same
+    tier.
 
 Baseline incomparability — read this before quoting a number. The only calibrated
 external reference we have is off-the-shelf Qwen3-VL-8B = 33.9% OSWorld-Verified,
@@ -257,25 +253,25 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
         artifacts=ArtifactConfig(save_prompts=True, write_gif=True),
     ),
 }
-"""The arms the controls calibrate. Reference readings over the original four
-scored cells: off-the-shelf Qwen3-VL-4B native = 3/4, Phase-B step-900 compact =
-2/4, both over 3 trials. On the two promoted cells the off-the-shelf arm is 0/3
-each (job 141319, native_absolute only — the base probe has not been run in the
-other two grammars, which is the conservative direction since native is that
-model's own format).
+"""The arms the controls calibrate. Scored-tier reference readings: off-the-shelf
+Qwen3-VL-4B native = 3/4, Phase-B step-900 compact = 2/4, both over 3 trials.
 
-How it fails those two is worth knowing before reading a gain: both times it
-clicked outside the panel window (473,463 and 502,614 against measured widgets at
-x 815-1056), so it fails them by mis-grounding the click, not by the reflexive
-Return or the lattice the cells were built to isolate. A systematic ~240 px
-x-undershoot at roughly correct y appeared in both, and a coordinate-convention
-artefact is not excluded — the same arm clicked correctly at x=710 inside a
-terminal, which argues against a plain scale error but does not settle it.
+READ THIS BEFORE QUOTING ANY CLICK-BASED NUMBER FROM `offshelf_native`. That arm
+emits 0-999-per-axis coordinates, while `native_absolute`'s prompt declares
+"Coordinates are ABSOLUTE screen pixels". Nothing rescales, so every click lands
+at roughly (0.51x, 0.92y) of where the model aimed. Measured on the two panel
+cells over six episodes (job 141319): emitted (502,614) and (473,463), which
+de-normalise to (964,663) and (908,500) -- both INSIDE the measured target, 6 and
+22 px from its centre, against targets 172x31 and 230x23. The model grounds them
+correctly and the arm reports a miss.
 
-Both fail the same way, which is what the candidate tier was built to isolate:
-every failing draw of either arm ends `model_terminate_without_postcondition`, and
-the Phase-B arm reaches it after emitting `0 0 0 ; type("ls\\\\n")` — a literal
-backslash and `n` typed instead of a Return, 3 draws out of 3.
+Two consequences. Any absolute-grammar click far from the origin is suspect: this
+arm's 3/4 survives only because its clicks landed inside a 1120x720 window either
+way, and near (0,0) the two conventions nearly coincide -- emitted (15,59),
+de-normalised (29,64), dock icon at (35,60) -- which is why it stayed invisible.
+And the fix belongs in the prompt or in the arm: `codec.compile` takes absolute
+screen pixels with no coordinate-space enum, and that contract is not up for
+renegotiation.
 
 `ordered` has no reference reading and no `system_prompt_sha256`, because no
 checkpoint is pinned to it yet: whichever model the runner serves is scored under

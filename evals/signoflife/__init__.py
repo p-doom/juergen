@@ -1,7 +1,7 @@
 """Crowd-Cast sign-of-life v2 — one fixed development gate.
 
 Deterministic cells whose success is decided from realized guest state, in two
-tiers. The scored tier is six cells — the original four:
+tiers. The scored tier is the calibrated four:
 
   * run `ls` in an already-focused terminal, and observe both exact shell history
     and a unique directory-listing marker in the terminal output;
@@ -11,15 +11,16 @@ tiers. The scored tier is six cells — the original four:
   * focus a visible-but-unfocused terminal, enter an exact command, and verify the
     resulting file bytes and the shell history.
 
-plus two promoted from the candidate tier once measured: click a small target no
-single move reaches among confusable neighbours, and type into a field and click a
-named button *without* submitting. Both are decided from a Tk fixture's own
-runtime widget measurements (`evals/fixtures/tk.py`).
+The candidate tier holds four more, each isolating one mechanism: submission as a
+key transition, stopping when the first stage looks done, a target no single move
+reaches, and the reflexive Return. All four are fully calibrated on real VMs; what
+holds them back is the reference reading. Two are passed by the off-the-shelf
+model, and two were promoted on a base failure that turned out to be a
+coordinate-convention artefact in the arm rather than a fact about the model. See
+`suite.CANDIDATE_KINDS`, which records what a valid re-probe requires.
 
-The candidate tier holds two more — submission as a key transition, and stopping
-when the first stage looks done. Both are fully calibrated; they are held back
-because the off-the-shelf reference passes them, so they can only dilute the
-scored mean. See `suite.CANDIDATE_KINDS`.
+The last two are decided from a Tk fixture's own runtime widget measurements
+(`evals/fixtures/tk.py`).
 
 Not a benchmark and not a train/dev/test split. The gate is calibrated: within a
 tier, the scripted oracle arm must pass every cell and the negative arm must fail

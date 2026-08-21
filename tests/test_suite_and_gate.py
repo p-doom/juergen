@@ -58,10 +58,12 @@ from evals.signoflife.suite import (
 from evals.signoflife.taskset import SignOfLifeTask, SignOfLifeTaskset, SignOfLifeTasksetConfig
 from juergen_doubles import make_trace
 
-MANIFEST_SHA256 = "ce3776c4012d0349176ff693dd6d1a024eeb087a7d86f66a9ec55b09b90896ce"
-SCORED_SHA256 = "81b4b5c2374d4f507bd91c294f97bfd9794c3a18647a9d6d1f888db1d1e3e23e"
-"""Moved when `panel_offset_button` and `panel_no_submit_entry` were promoted.
-It is meant to move for that and only that: the gate is a different gate."""
+MANIFEST_SHA256 = "014d334e3dc4dd93f4af9b3b2ba762423f5e1be0fba78b87a41b81f18b6b18c4"
+SCORED_SHA256 = "f95e03c263c1c9befdd508f6a9b34a00f601137572b0345005cb0f2a382d0aa9"
+"""The four-cell gate. It moved once, to 81b4b5c2... when the two panel cells were
+promoted, and moved back when that promotion was reverted: the base failure it
+rested on was a coordinate-convention artefact in the arm, not a fact about the
+model. A restored known digest, not a newly minted one."""
 EXACT_TEXT_CELL = "terminal_exact_text"
 
 
@@ -72,9 +74,8 @@ def _cell(cell_id: str = EXACT_TEXT_CELL):
 def test_14a_the_cell_is_no_longer_classified_no_submit() -> None:
     assert EXACT_TEXT_CELL not in NO_SUBMIT_CELLS
     rows = list(SignOfLifeTaskset(SignOfLifeTasksetConfig()).load())
-    assert [t.data.name for t in rows if t.data.no_submit] == ["panel_no_submit_entry"], (
-        "exactly one scored cell carries the flag, and it is the one whose success "
-        "requires not submitting -- not the paragraph cell that requires Enter"
+    assert [t.data.name for t in rows if t.data.no_submit] == [], (
+        "no cell in the scored tier is a no-submit cell"
     )
 
 
@@ -216,7 +217,7 @@ def test_14g_the_misclassification_cannot_move_a_pass_count() -> None:
     assert not flag.search(oracle_source), "the oracle must not read the flag"
 
 
-def test_14i_indicator_D_fires_on_exactly_one_scored_cell_and_it_is_the_right_one() -> None:
+def test_14i_indicator_D_has_no_valid_cell_to_fire_on_in_the_scored_tier() -> None:
     """`terminal_exact_text` was the only entry, and it demanded submission.
 
     So every non-zero D reading ever published against the scored gate came from
@@ -228,8 +229,8 @@ def test_14i_indicator_D_fires_on_exactly_one_scored_cell_and_it_is_the_right_on
     suite = load_suite()
     assert NO_SUBMIT_CELLS == frozenset({"panel_no_submit_entry"})
     assert {task.tier for task in suite.tasks if task.id in NO_SUBMIT_CELLS} == {
-        "scored"
-    }, "the flag is on a scored cell now, which is what makes D a live signal"
+        "candidate"
+    }, "a no-submit cell in the scored tier would make D a live scored signal"
     submit_everywhere = [
         task.id
         for task in suite.for_tier("scored")
@@ -241,7 +242,6 @@ def test_14i_indicator_D_fires_on_exactly_one_scored_cell_and_it_is_the_right_on
         "terminal_ls",
     ], submit_everywhere
     rows = list(SignOfLifeTaskset(SignOfLifeTasksetConfig()).load())
-    readings = {}
     for row in rows:
         steps = [
             {
@@ -251,11 +251,7 @@ def test_14i_indicator_D_fires_on_exactly_one_scored_cell_and_it_is_the_right_on
         ]
         trace = make_trace(row.data, episode={"success": True, "steps_detail": steps})
         asyncio.run(SignOfLifeTask(row.data).score(trace))
-        readings[row.data.name] = trace.metrics["D_submitted_in_no_submit_cell"]
-    assert readings.pop("panel_no_submit_entry") == 1.0, (
-        "the same Return that every other scored cell requires must be flagged here"
-    )
-    assert set(readings.values()) == {0.0}, readings
+        assert trace.metrics["D_submitted_in_no_submit_cell"] == 0.0, row.data.name
 
 
 def test_14j_the_loader_refuses_a_no_submit_cell_that_demands_submission(monkeypatch) -> None:
@@ -729,13 +725,7 @@ def test_the_candidate_tier_is_not_in_the_scored_run() -> None:
     scored = {task.id for task in suite.for_tier("scored")}
     candidates = {task.id for task in suite.for_tier("candidate")}
     assert scored.isdisjoint(candidates)
-    assert candidates == {"terminal_submit_only", "terminal_staged_confirm"}
-    assert set(CELL_STATES) == scored.union(candidates) - {
-        "terminal_ls",
-        "terminal_exact_text",
-        "desktop_open_chrome",
-        "focus_terminal_and_type",
-    }, "every cell this file states a truth table for must still be in the suite"
+    assert candidates == set(CELL_STATES)
     default = {t.data.name for t in SignOfLifeTaskset(SignOfLifeTasksetConfig()).load()}
     assert default == scored
     asked = {
