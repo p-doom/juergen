@@ -106,6 +106,17 @@ VENVS=/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/venvs
 : "${OMEGALAX_PYTHON:=$OMEGALAX_REARCH_ROOT/.venv/bin/python}"
 
 # omegalax-rearch's gate: what the rearchitecture changed, nothing GPU-bound.
+#
+# `tests/test_qwen3_moe_smoke.py` is excluded by decision, not oversight -- and
+# for neither reason usually given for it. It is said to reject any pytest flag
+# with absl's `UnrecognizedFlagError`: that is the argv trap the PYTEST_ADDOPTS
+# export below already avoids, and under this gate's invocation the file runs and
+# that error never appears. It is also said to fail `NotImplementedError: Not
+# supported on cpu`, which does not appear either. What actually happens is that
+# 2 of its 3 cases fail on numerical agreement with HF, by a wide margin and on
+# CPU. No figures here on purpose: the metric and threshold were rewritten inside
+# one day. That is a correctness question needing an owner, not a cell a green
+# gate can carry.
 OMEGALAX_TESTS=(
   tests/test_sft_collators.py
   tests/test_arrayrecord_image_refs.py
@@ -114,6 +125,9 @@ OMEGALAX_TESTS=(
   tests/test_grain_pipeline.py
   tests/test_export_roundtrip_smoke.py
   tests/test_deltanet_kernel_dispatch.py
+  tests/test_data_mixing.py
+  tests/test_qwen3_configs.py
+  tests/test_perf.py
 )
 
 # name | root | interpreter | marker module | pytest targets
