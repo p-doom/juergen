@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+import grammars
 import juergen_fake_desktop
 from evals.signoflife.__main__ import main
 from evals.signoflife.suite import load_suite
@@ -162,6 +163,7 @@ def test_the_pool_flags_reach_the_pool(tmp_path) -> None:
         "native_negative",
         artifacts=output,
         pool={"scoring_grace_s": 7.5, "pool_target": "evals.vm:kvm_desktop_pool"},
+        system_prompt=None,
     )
     pool = DesktopPoolConfig(**payload["pool"])
     assert pool.scoring_grace_s == 7.5
@@ -473,9 +475,52 @@ def test_the_tier_reaches_the_taskset_and_the_record(tmp_path) -> None:
         temperature=0.0,
         top_p=1.0,
         max_tokens=256,
+        system_prompt=None,
     )
     assert config.taskset.tier == "candidate"
     assert config.taskset.task_ids == ["panel_offset_button"]
+
+
+def test_the_supplied_system_prompt_is_what_the_model_is_shown(tmp_path) -> None:
+    """`--system-prompt-file` is the served prompt, not a recorded preference.
+
+    Asserted through `Agent.system`, which is the property the request is built
+    from: a config field that holds the bytes while `describe()` still answers is
+    the failure this flag exists to avoid.
+    """
+    from agent.agent import Agent
+    from evals.harness import DesktopHarnessConfig
+    from evals.signoflife.__main__ import _harness_payload
+
+    prompt = tmp_path / "producer_prompt.txt"
+    prompt.write_text("The mouse is RELATIVE.\n", encoding="utf-8")
+    payload = _harness_payload(
+        "ordered",
+        artifacts=tmp_path / "a",
+        pool={"pool_target": "evals.vm:kvm_desktop_pool"},
+        system_prompt=prompt.read_text(encoding="utf-8"),
+    )
+    config = DesktopHarnessConfig(**payload)
+    assert config.system_prompt_override == "The mouse is RELATIVE.\n"
+
+    codec = grammars.load(config.codec)
+    served = Agent(
+        codec=codec,
+        policy=None,
+        budget=None,
+        transport=None,
+        system_prompt=config.system_prompt_override,
+    ).system
+    assert served == "The mouse is RELATIVE.\n"
+    assert served != codec.describe()
+
+
+def test_a_scripted_arm_refuses_a_system_prompt_it_would_ignore(tmp_path) -> None:
+    """A scripted arm renders no prompt, so accepting one would record a prompt
+    the run never served — the same silent-substitution the digest check exists
+    for, one layer up."""
+    with pytest.raises(SystemExit, match="renders no system prompt"):
+        main(_argv(tmp_path / "run", tmp_path, "--system-prompt-file", str(tmp_path / "p.txt")))
 
 
 def test_a_cell_from_the_other_tier_is_refused_rather_than_quietly_mixed(tmp_path) -> None:

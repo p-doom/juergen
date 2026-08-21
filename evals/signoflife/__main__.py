@@ -208,7 +208,9 @@ def _model_provenance(model_path: Path | None) -> dict[str, Any] | None:
     return record
 
 
-def _harness_payload(arm: str, *, artifacts: Path, pool: dict[str, Any]) -> dict[str, Any]:
+def _harness_payload(
+    arm: str, *, artifacts: Path, pool: dict[str, Any], system_prompt: str | None
+) -> dict[str, Any]:
     """One arm's `DesktopHarnessConfig` as verifiers wants it.
 
     `id` is overwritten with the plugin id, and it has to be: `HarnessConfig.id` is
@@ -216,11 +218,18 @@ def _harness_payload(arm: str, *, artifacts: Path, pool: dict[str, Any]) -> dict
     uses it as the arm's human name (`sol_native_oracle`, ...). Resolving
     `sol_native_oracle` as a package fails, so the arm name moves into the run
     record and the field goes back to meaning what verifiers means by it.
+
+    `system_prompt` is the dispatcher's, not the arm's: an external checkpoint was
+    trained under a prompt written in its own producer's tree, and that prompt is
+    that run's input rather than something `cells.py` can name. `_prompt_report`
+    hashes whatever is rendered, so which bytes answered is recorded per episode
+    either way.
     """
     payload = ARMS[arm].model_dump()
     payload["id"] = PLUGIN_ID
     payload["artifacts"] = {**payload["artifacts"], "output_dir": str(artifacts)}
     payload["pool"] = {**payload["pool"], **pool}
+    payload["system_prompt_override"] = system_prompt
     return payload
 
 
@@ -236,10 +245,13 @@ def _eval_config(
     temperature: float,
     top_p: float,
     max_tokens: int,
+    system_prompt: str | None,
 ) -> EvalConfig:
     return EvalConfig(
         taskset={"id": PLUGIN_ID, "tier": tier, "task_ids": task_ids},
-        harness=_harness_payload(arm, artifacts=artifacts, pool=pool),
+        harness=_harness_payload(
+            arm, artifacts=artifacts, pool=pool, system_prompt=system_prompt
+        ),
         model=SERVED_MODEL,
         client={"base_url": base_url, "api_key_var": API_KEY_VAR},
         sampling={"temperature": temperature, "top_p": top_p, "max_tokens": max_tokens},
@@ -405,6 +417,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "runtime-declaring reward can probe live guest state. Pure wall clock per "
         "cell, and until now it was pinned in code with no way to name it.",
     )
+    parser.add_argument(
+        "--system-prompt-file",
+        type=Path,
+        default=None,
+        help="serve these bytes verbatim instead of the codec's describe(). For a "
+        "checkpoint trained under a prompt written outside this repo: scoring it "
+        "under describe() measures our prompt, not the checkpoint. The digest of "
+        "whatever is served is recorded per episode either way.",
+    )
     parser.add_argument("--model-path", type=Path, default=None)
     parser.add_argument("--base-url", default=None, help="serve externally instead")
     parser.add_argument("--sglang-python", default=None)
@@ -464,6 +485,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.model_path is None:
             raise SystemExit("--verify-phaseb checks a checkpoint: pass --model-path")
         verify_phaseb_provenance(args.model_path)
+    if args.system_prompt_file is not None and scripted:
+        raise SystemExit(
+            f"arm {args.arm} is scripted: it renders no system prompt, so "
+            "--system-prompt-file would be recorded and ignored"
+        )
+    system_prompt = (
+        None
+        if args.system_prompt_file is None
+        else args.system_prompt_file.read_text(encoding="utf-8")
+    )
 
     output: Path = args.output
     output.mkdir(parents=True, exist_ok=True)
@@ -515,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
                 temperature=args.temperature,
                 top_p=args.top_p,
                 max_tokens=args.max_tokens,
+                system_prompt=system_prompt,
             )
             environment = vf.Environment(config)
             traces = asyncio.run(run_eval(environment, config))
