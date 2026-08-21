@@ -26,10 +26,10 @@ import juergen_fake_desktop
 from evals.signoflife.__main__ import main
 from evals.signoflife.suite import load_suite
 
-# The scored tier: what an unqualified run of this dispatcher is. The candidate
-# cells are reachable only through `--tier candidate`, and their control arms need a
-# real VM (a Tk panel that never mapped publishes no measurement), so the no-VM path
-# stays on the four calibrated cells.
+# The scored tier: what an unqualified run of this dispatcher is. Six cells since
+# the two panel cells were promoted, which is why `juergen_fake_desktop` has to
+# serve the Tk fixture's published measurement -- a panel that never mapped would
+# make two scored cells unrunnable without a VM.
 CELL_IDS = [task.id for task in load_suite().for_tier("scored")]
 
 
@@ -64,7 +64,7 @@ def _argv(output: Path, tmp_path: Path, *extra: str) -> list[str]:
         "--qcow",
         str(tmp_path / "desktop.qcow2"),
         # Both are real flags and both are here for wall clock: the default
-        # 120 s scoring grace plus a single node slot serialises the four cells
+        # 120 s scoring grace plus a single node slot serialises the cells
         # behind a 120 s lease each, and the reaper only looks every 15 s.
         "--scoring-grace-s",
         "0",
@@ -99,7 +99,7 @@ def _run(output: Path, tmp_path: Path, *extra: str) -> tuple[int, dict]:
 
 
 @pytest.mark.slow
-def test_the_dispatcher_runs_all_four_cells_and_writes_the_readers_shape(
+def test_the_dispatcher_runs_the_whole_scored_tier_and_writes_the_readers_shape(
     tmp_path,
 ) -> None:
     output = tmp_path / "run"
@@ -121,7 +121,7 @@ def test_the_dispatcher_runs_all_four_cells_and_writes_the_readers_shape(
     assert aggregate["expected_per_cell_pass_rate"] == 0.0
     assert aggregate["controls_ok"] is True
     assert result["suite_manifest_sha256"] == load_suite().manifest_sha256
-    assert len(result["episodes"]) == 4
+    assert len(result["episodes"]) == len(CELL_IDS)
 
 
 @pytest.mark.slow
@@ -185,7 +185,7 @@ def test_a_single_cell_can_be_reproduced_by_id_and_by_index(tmp_path) -> None:
     assert code == 0
     assert result["selection"] == {
         "task_ids": [CELL_IDS[0]],
-        "full_tier_task_count": 4,
+        "full_tier_task_count": len(CELL_IDS),
     }
     assert list(result["aggregate"]["per_cell"]) == [CELL_IDS[0]]
 
@@ -464,7 +464,7 @@ def test_the_tier_reaches_the_taskset_and_the_record(tmp_path) -> None:
     config = _eval_config(
         arm="ordered_oracle",
         tier="candidate",
-        task_ids=["panel_offset_button"],
+        task_ids=["terminal_submit_only"],
         artifacts=tmp_path / "a",
         traces_dir=tmp_path / "t",
         pool={},
@@ -474,14 +474,14 @@ def test_the_tier_reaches_the_taskset_and_the_record(tmp_path) -> None:
         max_tokens=256,
     )
     assert config.taskset.tier == "candidate"
-    assert config.taskset.task_ids == ["panel_offset_button"]
+    assert config.taskset.task_ids == ["terminal_submit_only"]
 
 
 def test_a_cell_from_the_other_tier_is_refused_rather_than_quietly_mixed(tmp_path) -> None:
     """Averaging a calibrated cell with an unmeasured one is the uncalibrated
     number the controls exist to prevent, so the runner refuses the mix."""
     with pytest.raises(SystemExit, match="is not in the 'scored' tier"):
-        main(_argv(tmp_path / "run", tmp_path, "--cell", "panel_offset_button"))
+        main(_argv(tmp_path / "run", tmp_path, "--cell", "terminal_submit_only"))
     with pytest.raises(SystemExit, match="is not in the 'candidate' tier"):
         main(
             _argv(
@@ -490,6 +490,6 @@ def test_a_cell_from_the_other_tier_is_refused_rather_than_quietly_mixed(tmp_pat
                 "--tier",
                 "candidate",
                 "--cell",
-                "terminal_ls",
+                "panel_offset_button",
             )
         )

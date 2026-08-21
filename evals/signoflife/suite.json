@@ -71,7 +71,7 @@
     {
       "id": "panel_offset_button",
       "kind": "tk_target_click",
-      "tier": "candidate",
+      "tier": "scored",
       "instruction": "In the `SOLV2 panel_offset_button` window, click the button labelled `Commit B3`. Click no other button.",
       "expected": {
         "target_label": "Commit B3",
@@ -93,7 +93,7 @@
     {
       "id": "panel_no_submit_entry",
       "kind": "tk_no_submit_entry",
-      "tier": "candidate",
+      "tier": "scored",
       "instruction": "In the `SOLV2 panel_no_submit_entry` window, click the Name field, type exactly `Ada Lovelace` into it, then click `Save draft`. Do not submit the form.",
       "expected": {
         "text": "Ada Lovelace",

@@ -58,8 +58,10 @@ from evals.signoflife.suite import (
 from evals.signoflife.taskset import SignOfLifeTask, SignOfLifeTaskset, SignOfLifeTasksetConfig
 from juergen_doubles import make_trace
 
-MANIFEST_SHA256 = "014d334e3dc4dd93f4af9b3b2ba762423f5e1be0fba78b87a41b81f18b6b18c4"
-SCORED_SHA256 = "f95e03c263c1c9befdd508f6a9b34a00f601137572b0345005cb0f2a382d0aa9"
+MANIFEST_SHA256 = "ce3776c4012d0349176ff693dd6d1a024eeb087a7d86f66a9ec55b09b90896ce"
+SCORED_SHA256 = "81b4b5c2374d4f507bd91c294f97bfd9794c3a18647a9d6d1f888db1d1e3e23e"
+"""Moved when `panel_offset_button` and `panel_no_submit_entry` were promoted.
+It is meant to move for that and only that: the gate is a different gate."""
 EXACT_TEXT_CELL = "terminal_exact_text"
 
 
@@ -70,8 +72,9 @@ def _cell(cell_id: str = EXACT_TEXT_CELL):
 def test_14a_the_cell_is_no_longer_classified_no_submit() -> None:
     assert EXACT_TEXT_CELL not in NO_SUBMIT_CELLS
     rows = list(SignOfLifeTaskset(SignOfLifeTasksetConfig()).load())
-    assert [t.data.name for t in rows if t.data.no_submit] == [], (
-        "no cell in the scored tier is a no-submit cell"
+    assert [t.data.name for t in rows if t.data.no_submit] == ["panel_no_submit_entry"], (
+        "exactly one scored cell carries the flag, and it is the one whose success "
+        "requires not submitting -- not the paragraph cell that requires Enter"
     )
 
 
@@ -213,18 +216,20 @@ def test_14g_the_misclassification_cannot_move_a_pass_count() -> None:
     assert not flag.search(oracle_source), "the oracle must not read the flag"
 
 
-def test_14i_indicator_D_has_no_valid_cell_to_fire_on_in_the_scored_tier() -> None:
-    """`terminal_exact_text` was the only entry.
+def test_14i_indicator_D_fires_on_exactly_one_scored_cell_and_it_is_the_right_one() -> None:
+    """`terminal_exact_text` was the only entry, and it demanded submission.
 
     So every non-zero D reading ever published against the scored gate came from
-    the misclassified cell, and it stays structurally zero there: the first genuine
-    no-submit cell is `panel_no_submit_entry`, which is a candidate.
+    that misclassification, and D was structurally zero once it was removed. The
+    promotion of `panel_no_submit_entry` gives D a valid cell for the first time:
+    it fires there and nowhere else, and every other scored cell that presses
+    Return must still read 0.0.
     """
     suite = load_suite()
     assert NO_SUBMIT_CELLS == frozenset({"panel_no_submit_entry"})
     assert {task.tier for task in suite.tasks if task.id in NO_SUBMIT_CELLS} == {
-        "candidate"
-    }, "a no-submit cell in the scored tier would change what the scored gate means"
+        "scored"
+    }, "the flag is on a scored cell now, which is what makes D a live signal"
     submit_everywhere = [
         task.id
         for task in suite.for_tier("scored")
@@ -236,6 +241,7 @@ def test_14i_indicator_D_has_no_valid_cell_to_fire_on_in_the_scored_tier() -> No
         "terminal_ls",
     ], submit_everywhere
     rows = list(SignOfLifeTaskset(SignOfLifeTasksetConfig()).load())
+    readings = {}
     for row in rows:
         steps = [
             {
@@ -245,7 +251,11 @@ def test_14i_indicator_D_has_no_valid_cell_to_fire_on_in_the_scored_tier() -> No
         ]
         trace = make_trace(row.data, episode={"success": True, "steps_detail": steps})
         asyncio.run(SignOfLifeTask(row.data).score(trace))
-        assert trace.metrics["D_submitted_in_no_submit_cell"] == 0.0, row.data.name
+        readings[row.data.name] = trace.metrics["D_submitted_in_no_submit_cell"]
+    assert readings.pop("panel_no_submit_entry") == 1.0, (
+        "the same Return that every other scored cell requires must be flagged here"
+    )
+    assert set(readings.values()) == {0.0}, readings
 
 
 def test_14j_the_loader_refuses_a_no_submit_cell_that_demands_submission(monkeypatch) -> None:
@@ -613,7 +623,7 @@ def test_every_shipped_arm_passes_its_own_prompt_digest_check(tmp_path) -> None:
 # actually reading full marks on hardware — is what promotion to the scored tier
 # waits for, and nothing here stands in for it.
 
-CANDIDATE_STATES = {
+CELL_STATES = {
     "terminal_submit_only": (
         {"keystroke_state": {"prefix": "", "prefix_len": 0, "completed": True}},
         # `type("\n")`: two literal characters, and the reader never completed.
@@ -650,13 +660,12 @@ CANDIDATE_STATES = {
 }
 
 
-@pytest.mark.parametrize("cell_id", sorted(CANDIDATE_STATES))
-def test_a_candidate_oracle_accepts_its_gold_state_and_rejects_its_negative(
-    cell_id: str,
-) -> None:
+@pytest.mark.parametrize("cell_id", sorted(CELL_STATES))
+def test_an_oracle_accepts_its_gold_state_and_rejects_its_negative(cell_id: str) -> None:
+    """Both tiers: this is the non-VM half of rule 1 and it does not stop applying
+    to a cell once the cell is promoted."""
     cell = load_suite().by_id(cell_id)
-    assert cell.tier == "candidate"
-    gold, bad = CANDIDATE_STATES[cell_id]
+    gold, bad = CELL_STATES[cell_id]
     identity = {"schema_version": 1, "task_id": cell.id}
     passed = evaluate_postcondition(
         cell.id, cell.kind, dict(cell.expected), {**identity, **gold}
@@ -668,8 +677,8 @@ def test_a_candidate_oracle_accepts_its_gold_state_and_rejects_its_negative(
     assert failed.status == "ok" and failed.success is False, failed.evidence
 
 
-@pytest.mark.parametrize("cell_id", sorted(CANDIDATE_STATES))
-def test_a_candidate_cell_starts_unsolved(cell_id: str) -> None:
+@pytest.mark.parametrize("cell_id", sorted(CELL_STATES))
+def test_a_cell_starts_unsolved(cell_id: str) -> None:
     """`require_unsolved_start` refuses an episode that begins already passing.
 
     The initial probe of each candidate is the fixture's own startup state: no
@@ -700,8 +709,8 @@ def test_a_candidate_cell_starts_unsolved(cell_id: str) -> None:
     assert outcome.status == "ok" and outcome.success is False, outcome.evidence
 
 
-@pytest.mark.parametrize("cell_id", sorted(CANDIDATE_STATES))
-def test_an_unreadable_candidate_fixture_is_an_error_not_a_failure(cell_id: str) -> None:
+@pytest.mark.parametrize("cell_id", sorted(CELL_STATES))
+def test_an_unreadable_fixture_is_an_error_not_a_failure(cell_id: str) -> None:
     """A panel that never published must not read as a model that never clicked."""
     cell = load_suite().by_id(cell_id)
     outcome = evaluate_postcondition(
@@ -720,7 +729,13 @@ def test_the_candidate_tier_is_not_in_the_scored_run() -> None:
     scored = {task.id for task in suite.for_tier("scored")}
     candidates = {task.id for task in suite.for_tier("candidate")}
     assert scored.isdisjoint(candidates)
-    assert candidates == set(CANDIDATE_STATES)
+    assert candidates == {"terminal_submit_only", "terminal_staged_confirm"}
+    assert set(CELL_STATES) == scored.union(candidates) - {
+        "terminal_ls",
+        "terminal_exact_text",
+        "desktop_open_chrome",
+        "focus_terminal_and_type",
+    }, "every cell this file states a truth table for must still be in the suite"
     default = {t.data.name for t in SignOfLifeTaskset(SignOfLifeTasksetConfig()).load()}
     assert default == scored
     asked = {
@@ -773,7 +788,7 @@ def test_the_loader_refuses_a_cell_with_no_tier_or_a_bad_one() -> None:
             raise AssertionError(name)
 
 
-def test_every_candidate_cell_has_both_control_plans_and_they_differ() -> None:
+def test_every_added_cell_has_both_control_plans_and_they_differ() -> None:
     from evals.tasks import DesktopTaskData
 
     for cell in load_suite().for_tier("candidate"):
