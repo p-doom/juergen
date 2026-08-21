@@ -1,26 +1,33 @@
 """In-guest setup, read-only state extraction, and the scripted control arms.
 
-Everything family-specific about the four cells lives here, behind the `Preparer`
-seam, so the harness never branches on task kind.
+Everything family-specific about the cells lives here, behind the `Preparer` seam,
+so the harness never branches on task kind.
 
 Three properties are load-bearing:
 
   * Setup is hermetic per cell. Each cell wipes and rebuilds
     `/tmp/crowdcast_sign_of_life_v2/<cell>`, launches its own terminal with its own
-    rcfile (own `HISTFILE`, own `PS1`, `tee`'d transcript), and positions the window
-    at a fixed geometry. Two cells that shared a shell would share history.
+    rcfile (own `HISTFILE`, own `PS1`, `tee`'d transcript) or its own Tk panel, and
+    positions the window at a fixed geometry. Two cells that shared a shell would
+    share history.
   * Extraction is read-only and input-free. `probe` runs one `python3 -c`
     inside the guest and prints a single `SOLV2_STATE=` line; missing or ambiguous
     evidence raises rather than degrading to `success=False`.
   * The control arms go through the codec. `render_step` produces codec text, not
-    operations, so the oracle (expected 4/4) and negative (expected 0/4) arms
-    exercise the same `parse` and `compile` the model arm does. It renders one
+    operations, so the oracle (expected all-pass) and negative (expected all-fail)
+    arms exercise the same `parse` and `compile` the model arm does. It renders one
     intent at a time, because the relative encodings resolve a click against a
     cursor read that must be fresh.
+
+Every click on a panel cell is resolved from the fixture's own runtime
+measurement (`evals/fixtures/tk.py`), never from a coordinate typed into this
+file: a fixture that measures its widgets and is then never asked for the
+measurement is the same defect as an eyeballed bbox.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import shlex
 from dataclasses import dataclass
@@ -30,6 +37,7 @@ from typing import Any, Callable
 from grammars.native_absolute.codec import norm_from_pixels
 from grammars.ordered_events_v3.codec import escape
 
+from evals.fixtures import tk
 from evals.signoflife.oracle import evaluate_postcondition
 from evals.signoflife.suite import ALLOWED_KINDS
 from evals.tasks import DesktopTaskData, register_preparer
@@ -155,6 +163,10 @@ value={{
  'captured_text':text(root/'captured.txt'),
  'proof_file_exists':False if proof is None else proof.is_file(),
  'proof_file_content':None if proof is None else text(proof),
+ 'keystroke_state':json.loads(text(root/'keys.json') or 'null'),
+ 'stage_one_text':text(root/'stage_one.txt'),
+ 'commit_text':text(root/'committed.txt'),
+ 'panel_state':json.loads(text(root/{tk.STATE_NAME!r}) or 'null'),
 }}
 print({STATE_PREFIX!r}+json.dumps(value,ensure_ascii=False,sort_keys=True))
 """.strip()
@@ -287,11 +299,215 @@ sleep 1
     }
 
 
+def _keystroke_reader(state: Path) -> str:
+    """A reader that records what arrived, not just whether it succeeded.
+
+    `ICANON` off with `ECHO` left on: the reader sees every character as it lands
+    (so a literal `\\n` typed instead of a Return is published as a two-character
+    prefix that never completed) while the terminal still shows the model what it
+    typed. Publishing on every character, not only on completion, is what makes a
+    failure diagnosable without re-running the VM.
+    """
+    return f"""
+import json,os,sys,tempfile,termios,time
+STATE={str(state)!r}
+def publish(prefix,completed):
+ fd,tmp=tempfile.mkstemp(dir=os.path.dirname(STATE))
+ with os.fdopen(fd,'w') as handle:
+  json.dump({{'schema_version':1,'prefix':prefix,'prefix_len':len(prefix),
+   'completed':completed}},handle,sort_keys=True)
+ os.replace(tmp,STATE)
+fd=sys.stdin.fileno()
+saved=termios.tcgetattr(fd)
+mode=termios.tcgetattr(fd)
+mode[3]&=~termios.ICANON
+mode[6][termios.VMIN]=1
+mode[6][termios.VTIME]=0
+termios.tcsetattr(fd,termios.TCSANOW,mode)
+prefix=''
+publish(prefix,False)
+sys.stdout.write('Press Enter. Type nothing else.\\r\\n')
+sys.stdout.flush()
+try:
+ while True:
+  data=os.read(fd,1)
+  if not data: break
+  char=data.decode('utf-8','replace')
+  if char in ('\\r','\\n'):
+   publish(prefix,True)
+   break
+  prefix+=char
+  publish(prefix,False)
+finally:
+ termios.tcsetattr(fd,termios.TCSADRAIN,saved)
+sys.stdout.write('\\r\\nKeypress recorded.\\r\\n')
+sys.stdout.flush()
+time.sleep(600)
+""".strip()
+
+
+def _setup_submit_only(session: Any, task: DesktopTaskData) -> dict[str, Any]:
+    root = _task_root(task.name or "")
+    title = f"SOLV2 {task.name}"
+    reader = root / "reader.py"
+    encoded = base64.b64encode(
+        _keystroke_reader(root / "keys.json").encode("utf-8")
+    ).decode("ascii")
+    rc_body = f"""
+printf '%s' {shlex.quote(encoded)} | base64 -d > {shlex.quote(str(reader))}
+exec python3 {shlex.quote(str(reader))}
+""".strip()
+    script = _launch_terminal_script(root, title, rc_body, geometry="90x18+80+120")
+    # Wait for the reader's first publish. Without it the initial probe can find no
+    # keystroke evidence at all, which `evaluate_postcondition` reports as
+    # `status="error"` and `require_unsolved_start` then raises on: a race that
+    # presents as an infrastructure failure rather than as the cell it is.
+    keys = shlex.quote(str(root / "keys.json"))
+    script += f"\nfor _ in $(seq 1 80); do [ -s {keys} ] && break; sleep 0.25; done\ntest -s {keys}"
+    output = _bash(session, script)
+    return {
+        "title": title,
+        "window": _window_geometry(session, title),
+        "expected_prefix": str(task.expected["keystroke_prefix"]),
+        "setup_output": output,
+    }
+
+
+def _setup_staged_confirm(session: Any, task: DesktopTaskData) -> dict[str, Any]:
+    """Two stages, and only the screen says there is a second one.
+
+    The instruction names the goal, not the steps, so a policy that stops when the
+    first sub-goal looks done fails the cell instead of scoring it.
+    """
+    root = _task_root(task.name or "")
+    title = f"SOLV2 {task.name}"
+    confirmation = str(task.expected["confirmation"])
+    rc_body = f"""
+export PS1='SOLV2-STAGE$ '
+printf 'Report id: '
+IFS= read -r SOLV2_ID
+printf '%s' "$SOLV2_ID" > {shlex.quote(str(root / 'stage_one.txt'))}
+printf '\\nStage 1 recorded %s. Now type {confirmation} and press Enter to commit.\\n> ' "$SOLV2_ID"
+IFS= read -r SOLV2_CONFIRM
+if [ "$SOLV2_CONFIRM" = {shlex.quote(confirmation)} ]; then
+  printf '%s' "$SOLV2_ID" > {shlex.quote(str(root / 'committed.txt'))}
+  printf '\\nCommitted.\\n'
+else
+  printf '\\nAborted: nothing committed.\\n'
+fi
+sleep 600
+""".strip()
+    output = _bash(
+        session, _launch_terminal_script(root, title, rc_body, geometry="100x24+80+120")
+    )
+    return {
+        "title": title,
+        "window": _window_geometry(session, title),
+        "expected_report_id": str(task.expected["report_id"]),
+        "setup_output": output,
+    }
+
+
+def _launch_panel(session: Any, task: DesktopTaskData) -> dict[str, Any]:
+    root = _task_root(task.name or "")
+    title = f"SOLV2 {task.name}"
+    panel = tk.panel_from_expected(task.expected.get("panel"), title=title)
+    cursor_start = _cursor_start(task)
+    output = _bash(session, tk.setup_script(panel, root=root, cursor_start=cursor_start))
+    if tk.TK_MISSING_MARKER in output:
+        raise RuntimeError(
+            "the guest image cannot import tkinter, so the panel cells cannot run; "
+            "re-bake the image with python3-tk"
+        )
+    state = tk.parse_state(output)
+    measured = state.get("widgets") or {}
+    missing = [name for name in panel.widgets if name not in measured]
+    if missing:
+        raise RuntimeError(f"the panel published no measured bbox for {missing}")
+    return {
+        "title": title,
+        "cursor_start": list(cursor_start),
+        "panel_state": state,
+        "setup_output": output,
+    }
+
+
+def _setup_tk_target_click(session: Any, task: DesktopTaskData) -> dict[str, Any]:
+    evidence = _launch_panel(session, task)
+    evidence["single_move_reach"] = _assert_off_lattice(task, evidence["panel_state"])
+    return evidence
+
+
+def _setup_tk_no_submit_entry(session: Any, task: DesktopTaskData) -> dict[str, Any]:
+    return _launch_panel(session, task)
+
+
+def _cursor_start(task: DesktopTaskData) -> tuple[int, int]:
+    x, y = (int(value) for value in task.expected["cursor_start"])
+    return (x, y)
+
+
+def _lattice_move_count(low: int, high: int, support: tuple[int, ...]) -> int:
+    """Fewest support-sized steps that land the cursor inside `[low, high]`.
+
+    `0` means the interval already contains the cursor. Exact rather than greedy
+    over one target, because the admissible landing zone is the whole measured
+    widget and the cheapest point in it is the one a policy would find.
+    """
+    units = sorted({abs(int(value)) for value in support} - {0}, reverse=True)
+    if not units:
+        raise ValueError("the single-move support must contain a non-zero step")
+    best: int | None = None
+    for value in range(low, high + 1):
+        count = 0
+        rest = abs(value)
+        for unit in units:
+            count += rest // unit
+            rest %= unit
+        if rest:
+            continue
+        best = count if best is None else min(best, count)
+    if best is None:
+        raise ValueError(f"no point in [{low}, {high}] is reachable from {support}")
+    return best
+
+
+def _assert_off_lattice(task: DesktopTaskData, state: dict[str, Any]) -> int:
+    """The cell's premise, checked against the measured target.
+
+    A collapsed policy's observed output support is {0, +-1, +-10, +-100} per
+    axis, so a cell that means to require chained moves must name a target no
+    single support value reaches — and one a chain still reaches inside the step
+    budget, or it measures nothing but the budget. Both are properties of the
+    measured bbox, so both are asserted here instead of assumed from the nominal
+    window position.
+    """
+    support = tuple(int(value) for value in task.expected["single_move_support"])
+    cursor = _cursor_start(task)
+    box = tk.widget_bbox(state, tk.button_widget(str(task.expected["target_label"])))
+    moves = max(
+        _lattice_move_count(box[0] - cursor[0], box[2] - 1 - cursor[0], support),
+        _lattice_move_count(box[1] - cursor[1], box[3] - 1 - cursor[1], support),
+    )
+    if not 2 <= moves <= task.max_steps:
+        raise RuntimeError(
+            f"{task.name}: the measured target at {box} is {moves} support-sized "
+            f"moves from the cursor start {cursor}; the cell requires 2 to "
+            f"{task.max_steps}, so it measures a single move or an impossible one. "
+            "Move `expected.cursor_start`, not the assertion."
+        )
+    return moves
+
+
 _SETUPS: dict[str, Callable[[Any, DesktopTaskData], dict[str, Any]]] = {
     "terminal_command": _setup_terminal_command,
     "terminal_exact_text": _setup_terminal_exact_text,
     "open_chrome": _setup_open_chrome,
     "focus_terminal_and_type": _setup_focus_terminal_and_type,
+    "submit_only": _setup_submit_only,
+    "staged_confirm": _setup_staged_confirm,
+    "tk_target_click": _setup_tk_target_click,
+    "tk_no_submit_entry": _setup_tk_no_submit_entry,
 }
 
 
@@ -299,22 +515,44 @@ _SETUPS: dict[str, Callable[[Any, DesktopTaskData], dict[str, Any]]] = {
 class Intent:
     """One scripted step, grammar-neutral.
 
-    `kind` is `click` (at `target`, a screen coordinate), `type` (`text`) or
-    `submit`. The plan is the cell's gold (or plausibly-wrong) behaviour; the
-    renderer is the encoding.
+    `kind` is `click` (at `target`, a screen coordinate, or at `widget`, a name the
+    fixture measured), `type` (`text`) or `submit`. The plan is the cell's gold (or
+    plausibly-wrong) behaviour; the renderer is the encoding.
     """
 
     kind: str
     target: tuple[int, int] | None = None
     text: str = ""
+    widget: str = ""
 
 
-def _click_target(session: Any, task: DesktopTaskData) -> tuple[int, int]:
-    """Where the gold click lands, recomputed from the guest rather than cached.
+def _panel_state(session: Any, task: DesktopTaskData) -> dict[str, Any]:
+    return tk.parse_state(
+        _stdout(
+            session.execute_argv(
+                ["cat", str(_task_root(task.name or "") / tk.STATE_NAME)]
+            )
+        )
+    )
+
+
+def _click_target(
+    session: Any, task: DesktopTaskData, intent: Intent
+) -> tuple[int, int]:
+    """Where the click lands, recomputed from the guest rather than cached.
 
     One `Preparer` instance is shared by every concurrent rollout in the process, so
     caching a coordinate on `self` would let one cell's geometry leak into another's.
+
+    Three sources, in falling order of specificity: the plan's own coordinate, the
+    fixture's measured widget, the window rectangle. A named widget resolves through
+    `tk.widget_centre`, which raises when the measurement is missing — a control arm
+    that silently fell back to a nominal pixel would certify nothing.
     """
+    if intent.target is not None:
+        return intent.target
+    if intent.widget:
+        return tk.widget_centre(_panel_state(session, task), intent.widget)
     if task.kind == "open_chrome":
         return DOCK_CHROME_COORDINATE
     geometry = _window_geometry(session, f"SOLV2 {task.name}")
@@ -326,7 +564,10 @@ def script_plan(task: DesktopTaskData, *, negative: bool) -> list[Intent]:
 
     The negatives are plausible actions that cannot succeed, not no-ops: `pwd`
     instead of the required command, the wrong paragraph, a click at screen centre
-    instead of the dock icon, and typing without focusing first.
+    instead of the dock icon, and typing without focusing first. On the candidate
+    cells each negative is a defect we have measured a checkpoint commit: a literal
+    `\\n` instead of a Return, stopping when the first stage looks done, clicking the
+    confusable neighbour, and the reflexive submit.
     """
     if task.kind == "terminal_command":
         return [
@@ -352,6 +593,40 @@ def script_plan(task: DesktopTaskData, *, negative: bool) -> list[Intent]:
             [Intent("type", text=str(task.expected["command"])), Intent("submit")]
         )
         return rows
+    if task.kind == "submit_only":
+        # The negative IS the defect: `type("\\n")` puts two literal characters in
+        # the reader's buffer and no newline, in every grammar — the bare-line ones
+        # unescape it to a backslash and an `n`, and the tool-call one has to, since
+        # a real newline inside type() is refused by `lower_typing`.
+        return [Intent("type", text="\\n") if negative else Intent("submit")]
+    if task.kind == "staged_confirm":
+        rows = [
+            Intent("type", text=str(task.expected["report_id"])),
+            Intent("submit"),
+        ]
+        if negative:
+            return rows
+        return rows + [
+            Intent("type", text=str(task.expected["confirmation"])),
+            Intent("submit"),
+        ]
+    if task.kind == "tk_target_click":
+        label = (
+            str(task.expected["decoy_labels"][0])
+            if negative
+            else str(task.expected["target_label"])
+        )
+        return [Intent("click", widget=tk.button_widget(label))]
+    if task.kind == "tk_no_submit_entry":
+        rows = [
+            Intent("click", widget=tk.ENTRY_WIDGET),
+            Intent("type", text=str(task.expected["text"])),
+        ]
+        if negative:
+            return rows + [Intent("submit")]
+        return rows + [
+            Intent("click", widget=tk.button_widget(str(task.expected["draft_label"])))
+        ]
     raise ValueError(task.kind)
 
 
@@ -379,7 +654,7 @@ def _render_native_absolute(
     if intent.kind == "submit":
         return _tool_call({"action": "key", "keys": ["ENTER"]})
     if intent.kind == "click":
-        target = intent.target or _click_target(session, task)
+        target = _click_target(session, task, intent)
         width, height = session.screen_size()
         return _tool_call(
             {
@@ -411,7 +686,7 @@ def _render_compact_absolute(
     if intent.kind == "submit":
         return "0 0 0 ; +Return -Return"
     if intent.kind == "click":
-        target = intent.target or _click_target(session, task)
+        target = _click_target(session, task, intent)
         return f"{int(target[0])} {int(target[1])} 0 ; +LMB -LMB"
     raise ValueError(intent.kind)
 
@@ -429,7 +704,7 @@ def _render_relative(intent: Intent, session: Any, task: DesktopTaskData) -> str
         return "0 0 0 ; +Return -Return"
     if intent.kind == "click":
         cursor = tuple(session.cursor_position())
-        target = intent.target or _click_target(session, task)
+        target = _click_target(session, task, intent)
         return f"{int(target[0]) - cursor[0]} {int(target[1]) - cursor[1]} 0 ; +LMB -LMB"
     raise ValueError(intent.kind)
 
@@ -450,7 +725,7 @@ def _render_ordered_events_v3(
         return "down(Return); up(Return)"
     if intent.kind == "click":
         cursor = tuple(session.cursor_position())
-        target = intent.target or _click_target(session, task)
+        target = _click_target(session, task, intent)
         delta = (int(target[0]) - cursor[0], int(target[1]) - cursor[1])
         return f"move({delta[0]},{delta[1]}); down(LMB); up(LMB)"
     raise ValueError(intent.kind)

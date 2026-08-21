@@ -38,8 +38,36 @@ GEOMETRY_JSON = "SOLV2_GEOMETRY=" + json.dumps(
 )
 
 
+PANEL_JSON = json.dumps(
+    {
+        "schema_version": 1,
+        "title": "SOLV2 panel",
+        "clicked": [],
+        "entry_text": "",
+        "submitted": False,
+        "screen": [1920, 1080],
+        "widgets": {
+            "entry": [800, 500, 1000, 530],
+            "button:Commit B1": [820, 560, 960, 590],
+            "button:Commit B2": [820, 600, 960, 630],
+            "button:Commit B3": [820, 640, 960, 670],
+            "button:Commit B4": [820, 680, 960, 710],
+            "button:Save draft": [780, 560, 920, 590],
+            "button:Submit": [780, 600, 920, 630],
+        },
+    },
+    sort_keys=True,
+)
+PANEL = {"x": 760, "y": 470, "width": 420, "height": 300, "entry_label": "Reference"}
+
+
 def _session(cursor=(0, 0)) -> FakeSession:
-    return FakeSession(cursor=cursor, argv_responses={"python3": GEOMETRY_JSON})
+    # `panel.json` is the fixture's own runtime measurement; a scripted click on a
+    # panel cell resolves through it, so the double has to serve it.
+    return FakeSession(
+        cursor=cursor,
+        argv_responses={"panel.json": PANEL_JSON, "python3": GEOMETRY_JSON},
+    )
 
 
 def _task(kind: str, **kwargs):
@@ -48,6 +76,25 @@ def _task(kind: str, **kwargs):
         "terminal_exact_text": {"text": "hello there"},
         "open_chrome": {"active_window_class_any": ["chrome"]},
         "focus_terminal_and_type": {"command": "printf x > /tmp/p", "file": "/tmp/p", "content": "x"},
+        "submit_only": {"keystroke_prefix": ""},
+        "staged_confirm": {"report_id": "SOLV2-4718", "confirmation": "CONFIRM"},
+        "tk_target_click": {
+            "target_label": "Commit B3",
+            "decoy_labels": ["Commit B1", "Commit B2", "Commit B4"],
+            "cursor_start": [650, 407],
+            "single_move_support": [0, 1, 10, 100],
+            "panel": {**PANEL, "buttons": ["Commit B1", "Commit B3"], "submit_labels": []},
+        },
+        "tk_no_submit_entry": {
+            "text": "Ada Lovelace",
+            "draft_label": "Save draft",
+            "cursor_start": [1500, 900],
+            "panel": {
+                **PANEL,
+                "buttons": ["Save draft", "Submit"],
+                "submit_labels": ["Submit"],
+            },
+        },
     }[kind]
     return make_task_data(kind=kind, name=f"cell_{kind}", expected=expected, **kwargs)
 

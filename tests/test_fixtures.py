@@ -629,3 +629,304 @@ def test_the_chrome_fixture_page_hides_the_control_below_the_fold_per_direction(
     assert "margin-top:400px" in up, (
         "otherwise 'scroll up' would be satisfiable by not scrolling at all"
     )
+
+
+# --- the Tk panel: ground truth, measured at runtime --------------------------
+
+
+class _FakeWidget:
+    """A widget that reports the geometry the window manager would have given it."""
+
+    def __init__(self, box: tuple[int, int, int, int]) -> None:
+        self._box = box
+        self.bindings: dict[str, object] = {}
+
+    def pack(self, **kwargs) -> None:
+        del kwargs
+
+    def bind(self, sequence: str, callback) -> None:
+        self.bindings[sequence] = callback
+
+    def winfo_rootx(self) -> int:
+        return self._box[0]
+
+    def winfo_rooty(self) -> int:
+        return self._box[1]
+
+    def winfo_width(self) -> int:
+        return self._box[2]
+
+    def winfo_height(self) -> int:
+        return self._box[3]
+
+
+class _FakeEntry(_FakeWidget):
+    def __init__(self, box, **kwargs) -> None:
+        super().__init__(box)
+        self.text = ""
+
+    def get(self) -> str:
+        return self.text
+
+
+class _FakeButton(_FakeWidget):
+    def __init__(self, box, *, text: str, command) -> None:
+        super().__init__(box)
+        self.text = text
+        self.command = command
+
+
+class _FakeRoot(_FakeWidget):
+    def __init__(self) -> None:
+        super().__init__((0, 0, 0, 0))
+        self.title_text = ""
+        self.geometry_spec = ""
+        self.deferred: list = []
+
+    def title(self, value: str) -> None:
+        self.title_text = value
+
+    def geometry(self, value: str) -> None:
+        self.geometry_spec = value
+
+    def resizable(self, *args) -> None:
+        del args
+
+    def update_idletasks(self) -> None:
+        pass
+
+    def winfo_screenwidth(self) -> int:
+        return 1920
+
+    def winfo_screenheight(self) -> int:
+        return 1080
+
+    def after(self, delay: int, callback) -> None:
+        del delay
+        self.deferred.append(callback)
+
+    def mainloop(self) -> None:
+        pass
+
+
+class _FakeTkinter:
+    """Just enough tkinter to run the real panel program with no X server.
+
+    Source-grepping the program would prove nothing about the JSON the oracle
+    reads; executing it produces the actual `panel.json`.
+    """
+
+    BOXES = {
+        "entry": (800, 500, 200, 30),
+        "Commit B1": (820, 560, 140, 30),
+        "Commit B3": (820, 640, 140, 30),
+        "Submit": (820, 700, 140, 30),
+    }
+
+    def __init__(self) -> None:
+        self.root = _FakeRoot()
+        self.entry: _FakeEntry | None = None
+        self.buttons: dict[str, _FakeButton] = {}
+
+    def Tk(self) -> _FakeRoot:
+        return self.root
+
+    def Label(self, master, text: str) -> _FakeWidget:
+        del master, text
+        return _FakeWidget((0, 0, 0, 0))
+
+    def Entry(self, master, width: int) -> _FakeEntry:
+        del master, width
+        self.entry = _FakeEntry(self.BOXES["entry"])
+        return self.entry
+
+    def Button(self, master, text: str, width: int, command) -> _FakeButton:
+        del master, width
+        button = _FakeButton(self.BOXES[text], text=text, command=command)
+        self.buttons[text] = button
+        return button
+
+
+def _run_panel(tmp_path, panel):
+    """Run the real panel program with the fake bound to the name it imports.
+
+    Injected into `sys.modules`, not into the exec namespace: the program does
+    `import tkinter` itself, which would otherwise rebind the name to the real
+    module and need an X server.
+    """
+    import sys
+
+    from evals.fixtures import tk as tk_fixture
+
+    state = tmp_path / tk_fixture.STATE_NAME
+    fake = _FakeTkinter()
+    saved = sys.modules.get("tkinter")
+    sys.modules["tkinter"] = fake
+    try:
+        exec(  # noqa: S102 - the program under test is the artifact being verified
+            compile(tk_fixture.panel_program(panel, state_path=state), "panel.py", "exec"),
+            {},
+        )
+    finally:
+        if saved is None:
+            del sys.modules["tkinter"]
+        else:
+            sys.modules["tkinter"] = saved
+    for callback in list(fake.root.deferred):
+        callback()
+    return fake, state
+
+
+def _panel(**overrides):
+    from evals.fixtures.tk import TkPanel
+
+    return TkPanel(
+        **{
+            "title": "SOLV2 panel_offset_button",
+            "x": 760,
+            "y": 470,
+            "width": 420,
+            "height": 300,
+            "entry_label": "Reference",
+            "buttons": ("Commit B1", "Commit B3"),
+            "submit_labels": (),
+            **overrides,
+        }
+    )
+
+
+def test_the_panel_publishes_the_geometry_it_measured_not_a_declared_one(tmp_path) -> None:
+    """The bboxes are `winfo_root*` + `winfo_width/height`, half-open on the max
+    edge to match `in_bbox`. Nothing in the manifest can put a coordinate here."""
+    from evals.fixtures.tk import widget_bbox, widget_centre
+
+    fake, state = _run_panel(tmp_path, _panel())
+    value = json.loads(state.read_text())
+    assert value["schema_version"] == 1
+    assert value["title"] == "SOLV2 panel_offset_button"
+    assert fake.root.geometry_spec == "420x300+760+470"
+    assert widget_bbox(value, "button:Commit B3") == (820, 640, 960, 670)
+    assert widget_centre(value, "button:Commit B3") == (890, 655)
+    assert widget_bbox(value, "entry") == (800, 500, 1000, 530)
+    assert value["clicked"] == [] and value["submitted"] is False
+
+
+def test_a_click_is_recorded_in_order_and_only_a_submit_label_submits(tmp_path) -> None:
+    fake, state = _run_panel(
+        tmp_path, _panel(buttons=("Commit B1", "Commit B3", "Submit"), submit_labels=("Submit",))
+    )
+    fake.buttons["Commit B1"].command()
+    fake.buttons["Commit B3"].command()
+    value = json.loads(state.read_text())
+    assert value["clicked"] == ["Commit B1", "Commit B3"], (
+        "the click order is the evidence a cell needs to fail a decoy click"
+    )
+    assert value["submitted"] is False
+    fake.buttons["Submit"].command()
+    assert json.loads(state.read_text())["submitted"] is True
+
+
+def test_return_anywhere_submits_and_the_flag_is_sticky(tmp_path) -> None:
+    """The reflexive Return is the defect the no-submit cell measures, so it must
+    be unrecoverable: a policy cannot un-submit by carrying on."""
+    fake, state = _run_panel(tmp_path, _panel())
+    assert "<Return>" in fake.root.bindings and "<KP_Enter>" in fake.root.bindings
+    fake.root.bindings["<Return>"](None)
+    assert json.loads(state.read_text())["submitted"] is True
+    fake.buttons["Commit B1"].command()
+    assert json.loads(state.read_text())["submitted"] is True
+
+
+def test_the_entry_text_is_published_as_typed(tmp_path) -> None:
+    fake, state = _run_panel(tmp_path, _panel())
+    fake.entry.text = "Ada Lovelace"
+    fake.entry.bindings["<KeyRelease>"](None)
+    assert json.loads(state.read_text())["entry_text"] == "Ada Lovelace"
+
+
+def test_the_state_file_is_replaced_atomically(tmp_path) -> None:
+    """The probe and the panel are concurrent by construction, so a half-written
+    file would be read as a cell that failed."""
+    from evals.fixtures import tk as tk_fixture
+
+    source = tk_fixture.panel_program(_panel(), state_path=tmp_path / "panel.json")
+    assert "mkstemp" in source and "os.replace" in source
+    fake, state = _run_panel(tmp_path, _panel())
+    fake.buttons["Commit B1"].command()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["panel.json"], (
+        "no temporary file left behind for a probe to trip over"
+    )
+
+
+def test_a_missing_or_degenerate_measurement_fails_closed() -> None:
+    from evals.fixtures.tk import widget_bbox, widget_centre
+
+    for state in (None, {}, {"widgets": None}, {"widgets": {}}):
+        with pytest.raises(RuntimeError):
+            widget_bbox(state, "entry")
+    with pytest.raises(RuntimeError, match="empty rectangle"):
+        widget_bbox({"widgets": {"entry": [10, 10, 10, 40]}}, "entry")
+    with pytest.raises(RuntimeError, match="no measured bbox"):
+        widget_centre({"widgets": {"entry": [10, 10, 20]}}, "entry")
+
+
+def test_a_panel_declaration_is_validated_before_it_reaches_the_guest() -> None:
+    from evals.fixtures.tk import TkPanel, panel_from_expected
+
+    with pytest.raises(ValueError, match="unique"):
+        _panel(buttons=("Same", "Same"))
+    with pytest.raises(ValueError, match="submit_labels"):
+        _panel(submit_labels=("Absent",))
+    with pytest.raises(ValueError, match="on-screen"):
+        _panel(width=10)
+    with pytest.raises(ValueError, match="title and an entry label"):
+        _panel(entry_label="")
+    panel = panel_from_expected(
+        {
+            "x": 700,
+            "y": 420,
+            "width": 460,
+            "height": 240,
+            "entry_label": "Name",
+            "buttons": ["Save draft", "Submit"],
+            "submit_labels": ["Submit"],
+        },
+        title="SOLV2 panel_no_submit_entry",
+    )
+    assert isinstance(panel, TkPanel)
+    assert panel.widgets == ("entry", "button:Save draft", "button:Submit")
+    with pytest.raises(ValueError, match="expected.panel"):
+        panel_from_expected(None, title="t")
+
+
+def test_the_setup_script_refuses_a_guest_without_tkinter_and_parks_the_cursor_last() -> None:
+    from evals.fixtures.tk import STATE_NAME, TK_MISSING_MARKER, setup_script
+
+    from pathlib import PurePosixPath
+
+    script = setup_script(
+        _panel(), root=PurePosixPath("/tmp/solv2/panel_cell"), cursor_start=(650, 407)
+    )
+    assert "import tkinter" in script and TK_MISSING_MARKER in script
+    assert "rm -rf --" in script, "each cell wipes and rebuilds its own root"
+    assert "wmctrl -ia" in script, "the panel must be the focused window"
+    state_wait = script.index(f"{STATE_NAME} ] && break")
+    park = script.index("moveTo(650,407)")
+    assert state_wait < park, (
+        "the cursor is parked after the panel has published: a cell whose premise "
+        "is a fixed offset has no premise if the cursor moves later"
+    )
+    assert script.index("moveTo(650,407)") < script.rindex(STATE_NAME), (
+        "and the state is re-read afterwards, which is what the setup returns"
+    )
+
+
+def test_the_panel_state_is_read_from_the_last_json_object_in_the_output() -> None:
+    from evals.fixtures.tk import parse_state
+
+    payload = json.dumps({"schema_version": 1, "widgets": {}}, sort_keys=True)
+    assert parse_state(f"some wmctrl noise\n{payload}") == json.loads(payload)
+    with pytest.raises(RuntimeError, match="panel state evidence missing"):
+        parse_state("no json here")
+    with pytest.raises(RuntimeError, match="panel state evidence missing"):
+        parse_state(json.dumps({"schema_version": 2}))

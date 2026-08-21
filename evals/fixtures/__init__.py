@@ -16,6 +16,9 @@ Chrome, LibreOffice or Nautilus reaches the session API.
   * `chrome.py` — Chrome launch under one absolute deadline, plus browser diagnostics.
   * `apps.py`   — Writer / Calc / Files fixtures and an in-guest Chrome fixture
                   that serves its own page on loopback.
+  * `tk.py`     — a stdlib-Tk panel that measures its own widgets at runtime and
+                  publishes exact screen bboxes plus semantic state, so a click
+                  target is ground truth rather than a hand-labelled pixel.
 
 Two conventions to keep straight: `web.py` fixtures are loaded from the guest at
 `10.0.2.2` (qemu user-mode networking exposes the host there, so no forward is needed
@@ -39,6 +42,7 @@ from evals.fixtures.chrome import (
     capture_chrome_log,
 )
 from evals.fixtures.chrome import launch as launch_chrome_fixture
+from evals.fixtures.tk import TkPanel, widget_bbox, widget_centre
 from evals.fixtures.web import (
     TEMPLATES,
     FixtureServerError,
@@ -58,6 +62,7 @@ __all__ = [
     "ChromeLaunch",
     "FixtureServerError",
     "FixtureStateStore",
+    "TkPanel",
     "WebFixture",
     "WebFixtureServer",
     "capture_browser_diagnostics",
@@ -69,4 +74,6 @@ __all__ = [
     "render_fixture_html",
     "resolve_guest_root",
     "setup_app_fixture",
+    "widget_bbox",
+    "widget_centre",
 ]

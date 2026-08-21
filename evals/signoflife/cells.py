@@ -1,22 +1,28 @@
 """The gate's arms, as `DesktopHarnessConfig`s over one taskset.
 
-The calibration semantics:
+The calibration semantics, per tier — an arm runs one tier at a time
+(`--tier`), and a reading is only calibrated by controls from the same tier:
 
-  * the oracle arm must read 4/4 — the suite is solvable, the executor dispatches,
-    and the guest probe can observe success;
-  * the negative arm must read 0/4 — a plausibly-wrong action through the same
-    parse/compile/executor path is scored as a failure, so a pass is not an
+  * the oracle arm must pass every cell of the tier — it is solvable, the executor
+    dispatches, and the guest probe can observe success;
+  * the negative arm must fail every cell — a plausibly-wrong action through the
+    same parse/compile/executor path is scored as a failure, so a pass is not an
     artefact of the harness;
   * both exist per grammar, since a control that certified only one grammar would
     leave the other's parse/compile path unmeasured;
-  * the model arms are what the controls calibrate. Their published readings are
-    off-the-shelf-4B-native 4/4 and Phase-B-compact 2/4; the ordered arm has none
-    yet. A model number is uncalibrated without its two controls in the same
-    configuration. The native 4/4 is STALE: it was read while `native_absolute`
-    declared absolute pixels and consumed the model's 0-999 answer as one, so
-    every native arm — oracle, negative and model — needs re-running before that
-    number is quoted again. Only `desktop_open_chrome`'s dock icon sits where the
-    two readings nearly agree, which is how a wrong convention read 4/4 at all.
+  * the model arms are what the controls calibrate. Scored-tier readings, all over
+    3 trials: off-the-shelf Qwen3-VL-4B native = 3/4 (run
+    019fd5be788b7793a8a777da2a0f7531, original qcow -- `focus_terminal_and_type`
+    0/3, every draw `model_terminate_without_postcondition`) and Phase-B-compact =
+    2/4 (run 01a01e7c171e7dc1b681725c7066d0bd). The 4/4 once recorded here for the
+    off-the-shelf arm is not what its result.json says. A model number is
+    uncalibrated without its two controls in the same configuration and the same
+    tier. Every native reading above is also STALE for a second, independent
+    reason: it was read while `native_absolute` declared absolute pixels and
+    consumed the model's 0-999 answer as one, so every native arm — oracle,
+    negative and model — needs re-running before any of those numbers is quoted
+    again. Only `desktop_open_chrome`'s dock icon sits where the two conventions
+    nearly agree, which is how a wrong convention scored at all.
 
 Baseline incomparability — read this before quoting a number. The only calibrated
 external reference we have is off-the-shelf Qwen3-VL-8B = 33.9% OSWorld-Verified,
@@ -200,9 +206,8 @@ CONTROL_ARMS: dict[str, DesktopHarnessConfig] = {
 }
 """The six control arms: {oracle, negative} x {native, compact, ordered}.
 
-Not the four suite cells — those are `terminal_ls`, `terminal_exact_text`,
-`desktop_open_chrome` and `focus_terminal_and_type`, and they live in `suite.json`
-behind `suite.load_suite()`. Every arm here runs all four of them.
+Not the suite cells — those live in `suite.json` behind `suite.load_suite()`, and
+every arm here runs a whole tier of them.
 
 A model arm never ships without its pair: the pair is what says a reading is the
 model's and not the harness's. `ordered_events_v3` had a model arm's worth of
@@ -253,8 +258,29 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
         artifacts=ArtifactConfig(save_prompts=True, write_gif=True),
     ),
 }
-"""The arms the controls calibrate. Reference readings: off-the-shelf Qwen3-VL-4B
-native = 4/4, Phase-B step-900 compact = 2/4.
+"""The arms the controls calibrate. Scored-tier reference readings: off-the-shelf
+Qwen3-VL-4B native = 3/4, Phase-B step-900 compact = 2/4, both over 3 trials.
+
+READ THIS BEFORE QUOTING ANY CLICK-BASED NUMBER FROM `offshelf_native` MEASURED
+BEFORE `native_absolute` NAMED ITS GRID. That arm emits 0-999-per-axis
+coordinates, and the grammar's prompt used to declare "Coordinates are ABSOLUTE
+screen pixels" with nothing rescaling, so every click landed at roughly (0.51x,
+0.92y) of where the model aimed. Measured on the two panel cells over six
+episodes (job 141319): emitted (502,614) and (473,463), which de-normalise to
+(964,663) and (908,500) -- both INSIDE the measured target, 6 and 22 px from its
+centre, against targets 172x31 and 230x23. The model grounded them correctly and
+the arm reported a miss.
+
+Why the defect stayed invisible, which is the part that outlives the fix: near
+(0,0) the two conventions nearly coincide -- emitted (15,59), de-normalised
+(29,64), dock icon at (35,60) -- and this arm's 3/4 survived only because its
+clicks landed inside a 1120x720 window either way. Any absolute-grammar reading
+whose cells all sit near the origin certifies its convention weakly.
+
+`native_absolute.compile` now resolves the 0-999 grid to pixels itself
+(`pixels_from_norm`), so the arm and the model agree and no coordinate-space enum
+was added: `compile` still takes exactly one convention per grammar and every
+Operation downstream is still absolute pixels.
 
 `ordered` has no reference reading and no `system_prompt_sha256`, because no
 checkpoint is pinned to it yet: whichever model the runner serves is scored under

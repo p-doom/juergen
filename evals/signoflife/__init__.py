@@ -1,6 +1,7 @@
 """Crowd-Cast sign-of-life v2 — one fixed development gate.
 
-Four deterministic cells whose success is decided from realized guest state:
+Deterministic cells whose success is decided from realized guest state, in two
+tiers. The scored tier is the calibrated four:
 
   * run `ls` in an already-focused terminal, and observe both exact shell history
     and a unique directory-listing marker in the terminal output;
@@ -10,9 +11,21 @@ Four deterministic cells whose success is decided from realized guest state:
   * focus a visible-but-unfocused terminal, enter an exact command, and verify the
     resulting file bytes and the shell history.
 
-Not a benchmark and not a train/dev/test split. The gate is calibrated: the
-scripted oracle arm must read 4/4 and the negative arm 0/4, per grammar, through
-the same parse/compile/executor path the model arms use.
+The candidate tier holds four more, each isolating one mechanism: submission as a
+key transition, stopping when the first stage looks done, a target no single move
+reaches, and the reflexive Return. All four are fully calibrated on real VMs; what
+holds them back is the reference reading. Two are passed by the off-the-shelf
+model, and two were promoted on a base failure that turned out to be a
+coordinate-convention artefact in the arm rather than a fact about the model. See
+`suite.CANDIDATE_KINDS`, which records what a valid re-probe requires.
+
+The last two are decided from a Tk fixture's own runtime widget measurements
+(`evals/fixtures/tk.py`).
+
+Not a benchmark and not a train/dev/test split. The gate is calibrated: within a
+tier, the scripted oracle arm must pass every cell and the negative arm must fail
+every cell, per grammar, through the same parse/compile/executor path the model
+arms use.
 
 `verifiers`' plugin loader requires `__all__` to name exactly one `Taskset`
 subclass and at most one `Harness` subclass; exporting `DesktopHarness` here makes
@@ -29,7 +42,10 @@ from evals.signoflife.cells import (
 from evals.signoflife.guest import SignOfLifePreparer, register_preparers
 from evals.signoflife.oracle import evaluate_postcondition
 from evals.signoflife.suite import (
+    CANDIDATE_KINDS,
     NO_SUBMIT_CELLS,
+    SCORED_KINDS,
+    TIERS,
     DevelopmentSuite,
     DevelopmentTask,
     load_suite,
@@ -42,9 +58,12 @@ from evals.signoflife.taskset import (
 
 __all__ = [
     "ARMS",
+    "CANDIDATE_KINDS",
     "CONTROL_ARMS",
     "MODEL_ARMS",
     "NO_SUBMIT_CELLS",
+    "SCORED_KINDS",
+    "TIERS",
     "DesktopHarness",
     "DevelopmentSuite",
     "DevelopmentTask",

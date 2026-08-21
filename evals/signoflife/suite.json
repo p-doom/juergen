@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "suite_id": "crowdcast_sign_of_life_v2",
   "role": "single_fixed_development_gate",
   "final_benchmark": false,
@@ -7,6 +7,7 @@
     {
       "id": "terminal_ls",
       "kind": "terminal_command",
+      "tier": "scored",
       "instruction": "In the already-open terminal, type exactly `ls` and press Enter.",
       "expected": {
         "command": "ls",
@@ -17,6 +18,7 @@
     {
       "id": "terminal_exact_text",
       "kind": "terminal_exact_text",
+      "tier": "scored",
       "instruction": "In the already-open terminal, type exactly `Transformers map token sequences with attention; exact actions keep the interface reliable.` and press Enter.",
       "expected": {
         "text": "Transformers map token sequences with attention; exact actions keep the interface reliable."
@@ -26,6 +28,7 @@
     {
       "id": "desktop_open_chrome",
       "kind": "open_chrome",
+      "tier": "scored",
       "instruction": "Open Google Chrome by clicking its icon in the left-side desktop dock.",
       "expected": {
         "active_window_class_any": ["google-chrome", "chromium", "chrome"]
@@ -35,6 +38,7 @@
     {
       "id": "focus_terminal_and_type",
       "kind": "focus_terminal_and_type",
+      "tier": "scored",
       "instruction": "Click inside the visible terminal, type exactly `printf SOLV2_COMPOUND_OK > /tmp/solv2_compound.txt`, and press Enter.",
       "expected": {
         "command": "printf SOLV2_COMPOUND_OK > /tmp/solv2_compound.txt",
@@ -42,6 +46,70 @@
         "content": "SOLV2_COMPOUND_OK"
       },
       "max_steps": 8
+    },
+    {
+      "id": "terminal_submit_only",
+      "kind": "submit_only",
+      "tier": "candidate",
+      "instruction": "The terminal is waiting for a single keypress. Press Enter in the terminal, and type no characters before it.",
+      "expected": {
+        "keystroke_prefix": ""
+      },
+      "max_steps": 3
+    },
+    {
+      "id": "terminal_staged_confirm",
+      "kind": "staged_confirm",
+      "tier": "candidate",
+      "instruction": "File the report id SOLV2-4718 in the terminal. Keep following the terminal's own prompts until it reports the entry committed.",
+      "expected": {
+        "report_id": "SOLV2-4718",
+        "confirmation": "CONFIRM"
+      },
+      "max_steps": 8
+    },
+    {
+      "id": "panel_offset_button",
+      "kind": "tk_target_click",
+      "tier": "candidate",
+      "instruction": "In the `SOLV2 panel_offset_button` window, click the button labelled `Commit B3`. Click no other button.",
+      "expected": {
+        "target_label": "Commit B3",
+        "decoy_labels": ["Commit B1", "Commit B2", "Commit B4"],
+        "cursor_start": [650, 407],
+        "single_move_support": [0, 1, 10, 100],
+        "panel": {
+          "x": 760,
+          "y": 470,
+          "width": 420,
+          "height": 300,
+          "entry_label": "Reference",
+          "buttons": ["Commit B1", "Commit B2", "Commit B3", "Commit B4"],
+          "submit_labels": []
+        }
+      },
+      "max_steps": 8
+    },
+    {
+      "id": "panel_no_submit_entry",
+      "kind": "tk_no_submit_entry",
+      "tier": "candidate",
+      "instruction": "In the `SOLV2 panel_no_submit_entry` window, click the Name field, type exactly `Ada Lovelace` into it, then click `Save draft`. Do not submit the form.",
+      "expected": {
+        "text": "Ada Lovelace",
+        "draft_label": "Save draft",
+        "cursor_start": [1500, 900],
+        "panel": {
+          "x": 700,
+          "y": 420,
+          "width": 460,
+          "height": 240,
+          "entry_label": "Name",
+          "buttons": ["Save draft", "Submit"],
+          "submit_labels": ["Submit"]
+        }
+      },
+      "max_steps": 6
     }
   ]
 }

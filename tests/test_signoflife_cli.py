@@ -26,7 +26,12 @@ import juergen_fake_desktop
 from evals.signoflife.__main__ import main
 from evals.signoflife.suite import load_suite
 
-CELL_IDS = [task.id for task in load_suite().tasks]
+# The scored tier: what an unqualified run of this dispatcher is. `CANDIDATE_IDS`
+# is the other tier, and it is covered too -- `juergen_fake_desktop` serves the Tk
+# fixture's published measurement, so the panel cells' dispatch path is exercised
+# here without a VM.
+CELL_IDS = [task.id for task in load_suite().for_tier("scored")]
+CANDIDATE_IDS = [task.id for task in load_suite().for_tier("candidate")]
 
 
 @pytest.fixture(autouse=True)
@@ -60,7 +65,7 @@ def _argv(output: Path, tmp_path: Path, *extra: str) -> list[str]:
         "--qcow",
         str(tmp_path / "desktop.qcow2"),
         # Both are real flags and both are here for wall clock: the default
-        # 120 s scoring grace plus a single node slot serialises the four cells
+        # 120 s scoring grace plus a single node slot serialises the cells
         # behind a 120 s lease each, and the reaper only looks every 15 s.
         "--scoring-grace-s",
         "0",
@@ -95,7 +100,7 @@ def _run(output: Path, tmp_path: Path, *extra: str) -> tuple[int, dict]:
 
 
 @pytest.mark.slow
-def test_the_dispatcher_runs_all_four_cells_and_writes_the_readers_shape(
+def test_the_dispatcher_runs_the_whole_scored_tier_and_writes_the_readers_shape(
     tmp_path,
 ) -> None:
     output = tmp_path / "run"
@@ -108,7 +113,7 @@ def test_the_dispatcher_runs_all_four_cells_and_writes_the_readers_shape(
     assert result["arm_kind"] == "scripted_negative"
 
     aggregate = result["aggregate"]
-    assert sorted(aggregate["per_cell"]) == sorted(CELL_IDS), "the gate is all four cells"
+    assert sorted(aggregate["per_cell"]) == sorted(CELL_IDS), "the gate is the whole scored tier"
     for cell, row in aggregate["per_cell"].items():
         assert row["trials"] == 1, cell
         assert row["valid_trials"] == 1, f"{cell}: {result['infrastructure_errors']}"
@@ -117,7 +122,7 @@ def test_the_dispatcher_runs_all_four_cells_and_writes_the_readers_shape(
     assert aggregate["expected_per_cell_pass_rate"] == 0.0
     assert aggregate["controls_ok"] is True
     assert result["suite_manifest_sha256"] == load_suite().manifest_sha256
-    assert len(result["episodes"]) == 4
+    assert len(result["episodes"]) == len(CELL_IDS)
 
 
 @pytest.mark.slow
@@ -181,7 +186,7 @@ def test_a_single_cell_can_be_reproduced_by_id_and_by_index(tmp_path) -> None:
     assert code == 0
     assert result["selection"] == {
         "task_ids": [CELL_IDS[0]],
-        "full_suite_task_count": 4,
+        "full_tier_task_count": len(CELL_IDS),
     }
     assert list(result["aggregate"]["per_cell"]) == [CELL_IDS[0]]
 
@@ -231,7 +236,7 @@ def test_the_ordered_events_v3_arm_runs_the_whole_dispatch(tmp_path) -> None:
     assert result["codec"] == "ordered_events_v3"
     assert result["arm_kind"] == "scripted_negative"
     aggregate = result["aggregate"]
-    assert sorted(aggregate["per_cell"]) == sorted(CELL_IDS), "the gate is all four cells"
+    assert sorted(aggregate["per_cell"]) == sorted(CELL_IDS), "the gate is the whole scored tier"
     for cell, row in aggregate["per_cell"].items():
         assert row["valid_trials"] == 1, f"{cell}: {result['infrastructure_errors']}"
         assert row["pass_rate"] == 0.0, f"{cell} is a negative control"
@@ -451,3 +456,63 @@ def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_se
     assert len(result["model"]["meta_sha256"]) == 64
     assert result["aggregate"]["controls_ok"] is None, "a model arm calibrates nothing"
     assert result["aggregate"]["per_cell"][CELL_IDS[0]]["pass_rate"] is None
+
+
+def test_the_tier_reaches_the_taskset_and_the_record(tmp_path) -> None:
+    """`--tier` is the one knob that decides which cells a number is over."""
+    from evals.signoflife.__main__ import _eval_config
+
+    config = _eval_config(
+        arm="ordered_oracle",
+        tier="candidate",
+        task_ids=["panel_offset_button"],
+        artifacts=tmp_path / "a",
+        traces_dir=tmp_path / "t",
+        pool={},
+        base_url="http://127.0.0.1:1/v1",
+        temperature=0.0,
+        top_p=1.0,
+        max_tokens=256,
+    )
+    assert config.taskset.tier == "candidate"
+    assert config.taskset.task_ids == ["panel_offset_button"]
+
+
+def test_a_cell_from_the_other_tier_is_refused_rather_than_quietly_mixed(tmp_path) -> None:
+    """Averaging a calibrated cell with an unmeasured one is the uncalibrated
+    number the controls exist to prevent, so the runner refuses the mix."""
+    with pytest.raises(SystemExit, match="is not in the 'scored' tier"):
+        main(_argv(tmp_path / "run", tmp_path, "--cell", "panel_offset_button"))
+    with pytest.raises(SystemExit, match="is not in the 'candidate' tier"):
+        main(
+            _argv(
+                tmp_path / "run",
+                tmp_path,
+                "--tier",
+                "candidate",
+                "--cell",
+                "terminal_ls",
+            )
+        )
+
+
+@pytest.mark.slow
+def test_the_candidate_tier_dispatches_too_and_reads_its_negative(tmp_path) -> None:
+    """The other tier's cells reach a desktop and score, with no VM.
+
+    Worth covering because two of them are panel cells: their setup only works if
+    the guest publishes a widget measurement, and the double serves the one a real
+    run produced. The reading is the negative arm's calibrated 0/N -- the guest
+    reports a desktop where nothing happened.
+    """
+    output = tmp_path / "candidate"
+    _fresh_process()
+    code = main(_argv(output, tmp_path, "--tier", "candidate"))
+    result = json.loads((output / "result.json").read_text())
+    assert code == 0, result["infrastructure_errors"]
+    assert result["tier"] == "candidate"
+    assert sorted(result["aggregate"]["per_cell"]) == sorted(CANDIDATE_IDS)
+    assert result["aggregate"]["controls_ok"] is True
+    assert {row["cell"]: row["success"] for row in result["episodes"]} == {
+        cell: False for cell in CANDIDATE_IDS
+    }, "a negative control must fail every cell of the tier it runs"

@@ -794,3 +794,228 @@ def test_capture_chrome_log_never_raises() -> None:
     assert capture_chrome_log(Angry())["status"] == "unavailable"
     ok = capture_chrome_log(FakeSession(argv_responses={"tail": "log tail here"}))
     assert ok == {"status": "captured", "log": "log tail here"}
+
+
+# --- the candidate cells' setups ----------------------------------------------
+
+_PANEL_STATE = {
+    "schema_version": 1,
+    "title": "SOLV2 panel_offset_button",
+    "clicked": [],
+    "entry_text": "",
+    "submitted": False,
+    "screen": [1920, 1080],
+    "widgets": {
+        "entry": [800, 500, 1000, 530],
+        "button:Commit B1": [820, 560, 960, 590],
+        "button:Commit B2": [820, 600, 960, 630],
+        "button:Commit B3": [820, 640, 960, 670],
+        "button:Commit B4": [820, 680, 960, 710],
+    },
+}
+_PANEL_EXPECTED = {
+    "target_label": "Commit B3",
+    "decoy_labels": ["Commit B1", "Commit B2", "Commit B4"],
+    "cursor_start": [650, 407],
+    "single_move_support": [0, 1, 10, 100],
+    "panel": {
+        "x": 760,
+        "y": 470,
+        "width": 420,
+        "height": 300,
+        "entry_label": "Reference",
+        "buttons": ["Commit B1", "Commit B2", "Commit B3", "Commit B4"],
+        "submit_labels": [],
+    },
+}
+
+
+def _panel_session():
+    import json as _json
+
+    state = _json.dumps(_PANEL_STATE, sort_keys=True)
+    # Two calls, one measurement: the setup script cats the state it just created,
+    # and a click at render time re-reads the file directly.
+    return FakeSession(argv_responses={"panel.py": state, "panel.json": state})
+
+
+def test_the_submit_only_setup_execs_its_reader_so_stdin_is_the_terminal() -> None:
+    """A heredoc would give the reader the rcfile as stdin, not the keyboard."""
+    import evals.signoflife.guest as guest
+
+    session = _guest_session()
+    task = make_task_data(
+        kind="submit_only", name="terminal_submit_only", expected={"keystroke_prefix": ""}
+    )
+    evidence = guest._setup_submit_only(session, task)
+    script = session.argv_log[0][2]
+    assert "exec python3" in script and "reader.py" in script
+    assert "<<" not in script.split("SOLV2_RC")[-1], "the reader is not fed a heredoc"
+    assert evidence["expected_prefix"] == ""
+
+
+def test_the_keystroke_reader_records_every_character_and_keeps_the_echo() -> None:
+    """ICANON off, ECHO left alone: the model still sees what it typed, and a
+    literal `\\n` lands as two characters in the published prefix."""
+    import evals.signoflife.guest as guest
+
+    source = guest._keystroke_reader(Path("/tmp/solv2/keys.json"))
+    assert "ICANON" in source and "ECHO" not in source
+    assert "publish(prefix,False)" in source, "state is published per character"
+    assert "if char in ('\\r','\\n'):" in source
+    assert "publish(prefix,True)\n   break" in source, (
+        "the completed state is published only on the newline branch"
+    )
+    compile(source, "reader.py", "exec")
+
+
+def test_the_staged_confirm_setup_has_two_reads_and_commits_only_on_the_token() -> None:
+    import evals.signoflife.guest as guest
+
+    session = _guest_session()
+    task = make_task_data(
+        kind="staged_confirm",
+        name="terminal_staged_confirm",
+        expected={"report_id": "SOLV2-4718", "confirmation": "CONFIRM"},
+    )
+    guest._setup_staged_confirm(session, task)
+    script = session.argv_log[0][2]
+    assert script.count("IFS= read -r") == 2, "one read per stage"
+    stage_one = script.index("stage_one.txt")
+    second_read = script.index("SOLV2_CONFIRM")
+    assert stage_one < second_read, "stage one is recorded before the second prompt"
+    assert "Now type CONFIRM and press Enter to commit" in script, (
+        "the second stage is only discoverable on screen, which is the point"
+    )
+    assert "committed.txt" in script and '"$SOLV2_CONFIRM" = CONFIRM' in script
+
+
+def test_the_panel_setup_returns_the_measured_state_and_the_parked_cursor() -> None:
+    import evals.signoflife.guest as guest
+
+    session = _panel_session()
+    task = make_task_data(
+        kind="tk_target_click",
+        name="panel_offset_button",
+        max_steps=8,
+        expected=_PANEL_EXPECTED,
+    )
+    evidence = guest._setup_tk_target_click(session, task)
+    assert evidence["cursor_start"] == [650, 407]
+    assert evidence["panel_state"]["widgets"]["button:Commit B3"] == [820, 640, 960, 670]
+    assert evidence["single_move_reach"] == 6, (
+        "the premise is recorded as a number, so a layout change shows up in the run"
+    )
+
+
+def test_a_guest_without_tkinter_is_named_rather_than_timing_out() -> None:
+    import evals.signoflife.guest as guest
+    from evals.fixtures.tk import TK_MISSING_MARKER
+
+    session = FakeSession(argv_responses={"panel.py": TK_MISSING_MARKER})
+    task = make_task_data(
+        kind="tk_no_submit_entry",
+        name="panel_no_submit_entry",
+        expected={
+            "text": "Ada Lovelace",
+            "draft_label": "Save draft",
+            "cursor_start": [1500, 900],
+            "panel": {
+                "x": 700,
+                "y": 420,
+                "width": 460,
+                "height": 240,
+                "entry_label": "Name",
+                "buttons": ["Save draft", "Submit"],
+                "submit_labels": ["Submit"],
+            },
+        },
+    )
+    with pytest.raises(RuntimeError, match="python3-tk"):
+        guest._setup_tk_no_submit_entry(session, task)
+
+
+def test_the_off_lattice_premise_is_asserted_against_the_measured_bbox() -> None:
+    """A cell that means "no single move reaches this" has to check it, or a theme
+    change quietly turns it into a one-move cell that measures nothing."""
+    import evals.signoflife.guest as guest
+
+    task = make_task_data(
+        kind="tk_target_click",
+        name="panel_offset_button",
+        max_steps=8,
+        expected=_PANEL_EXPECTED,
+    )
+    assert guest._assert_off_lattice(task, _PANEL_STATE) == 6
+
+    single_move = {
+        **_PANEL_STATE,
+        "widgets": {**_PANEL_STATE["widgets"], "button:Commit B3": [740, 497, 760, 517]},
+    }
+    with pytest.raises(RuntimeError, match="measures a single move"):
+        guest._assert_off_lattice(task, single_move)
+
+    far_away = {
+        **_PANEL_STATE,
+        "widgets": {**_PANEL_STATE["widgets"], "button:Commit B3": [1550, 1010, 1560, 1020]},
+    }
+    with pytest.raises(RuntimeError, match="measures a single move or an impossible"):
+        guest._assert_off_lattice(task, far_away)
+
+
+def test_the_lattice_move_count_is_the_cheapest_point_in_the_interval() -> None:
+    import evals.signoflife.guest as guest
+
+    support = (0, 1, 10, 100)
+    assert guest._lattice_move_count(0, 0, support) == 0
+    assert guest._lattice_move_count(100, 100, support) == 1
+    assert guest._lattice_move_count(170, 309, support) == 2, "200 is two moves of 100"
+    assert guest._lattice_move_count(233, 262, support) == 6, "240 = 2x100 + 4x10"
+    assert guest._lattice_move_count(-309, -170, support) == 2, "sign is irrelevant"
+    assert guest._lattice_move_count(-5, 5, support) == 0, "the cursor is already in"
+    with pytest.raises(ValueError, match="non-zero step"):
+        guest._lattice_move_count(1, 2, (0,))
+
+
+def test_a_panel_click_resolves_through_the_measurement_and_never_around_it() -> None:
+    import evals.signoflife.guest as guest
+    from agent.agent import load_codec
+
+    session = _panel_session()
+    task = make_task_data(
+        kind="tk_target_click", name="panel_offset_button", expected=_PANEL_EXPECTED
+    )
+    plan = guest.script_plan(task, negative=False)
+    text = guest.render_step(
+        session, task, codec=load_codec("compact_absolute"), intent=plan[0]
+    )
+    assert text == "890 655 0 ; +LMB -LMB", "the centre of the measured bbox"
+    assert any("panel.json" in " ".join(argv) for argv in session.argv_log), (
+        "read from the guest at render time, not from cached setup evidence"
+    )
+    bad = guest.script_plan(task, negative=True)
+    assert guest.render_step(
+        session, task, codec=load_codec("compact_absolute"), intent=bad[0]
+    ) == "890 575 0 ; +LMB -LMB", "the negative clicks the measured decoy"
+
+    blind = FakeSession(argv_responses={"panel.json": '{"schema_version":1,"widgets":{}}'})
+    with pytest.raises(RuntimeError, match="no measured bbox"):
+        guest.render_step(
+            blind, task, codec=load_codec("compact_absolute"), intent=plan[0]
+        )
+
+
+def test_the_submit_only_setup_waits_for_the_readers_first_publish() -> None:
+    """Otherwise the initial probe finds no keystroke evidence, the oracle reports
+    `status="error"`, and `require_unsolved_start` raises — a race that reads as an
+    infrastructure failure instead of as the cell it is."""
+    import evals.signoflife.guest as guest
+
+    session = _guest_session()
+    task = make_task_data(
+        kind="submit_only", name="terminal_submit_only", expected={"keystroke_prefix": ""}
+    )
+    guest._setup_submit_only(session, task)
+    script = session.argv_log[0][2]
+    assert script.rstrip().endswith("keys.json"), script[-200:]
+    assert "test -s" in script.split("SOLV2_RC")[-1]
