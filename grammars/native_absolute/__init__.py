@@ -1,4 +1,4 @@
-"""native_absolute: computer_use tool calls with absolute pixel coordinates."""
+"""native_absolute: computer_use tool calls on an absolute 0-999 coordinate grid."""
 
 from .codec import (
     CODEC,

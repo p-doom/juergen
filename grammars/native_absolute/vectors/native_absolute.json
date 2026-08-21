@@ -1,6 +1,6 @@
 {
   "grammar": "native_absolute",
-  "prompt_sha256": "883a4350aa220a7942a4081047e5916e139e7072f0cc4e93feb69f4d691b807c",
+  "prompt_sha256": "a3f871d697597c9c071d337f490845b9197d0b3fe66c73fc98d4d9214827e64c",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080
@@ -9,10 +9,10 @@
     960,
     540
   ],
-  "note": "cases pin all three directions: parse(text) == action, format(action) == canonical, compile(text, geometry, cursor) == operations.",
+  "note": "cases pin all three directions: parse(text) == action, format(action) == canonical, compile(text, geometry, cursor) == operations. Every pixel here is int(v * (1920/999)) or int(v * (1080/999)) -- upstream's own arithmetic (OSWorld mm_agents/qwen3vl_agent.py:383-385), including its truncation -- computed by hand rather than by this codec, so a change to the resolution is a failure here rather than a silently updated expectation.",
   "cases": [
     {
-      "name": "click_at_absolute_coordinate",
+      "name": "click_resolves_the_grid_against_the_display",
       "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [300, 200]}}\n</tool_call>",
       "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [300, 200]}}\n</tool_call>",
       "action": {
@@ -30,8 +30,8 @@
         [
           "move_to",
           [
-            300,
-            200
+            576,
+            216
           ]
         ],
         [
@@ -47,6 +47,70 @@
           ]
         ]
       ]
+    },
+    {
+      "name": "the_reading_an_off_the_shelf_model_actually_produced",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [504, 616]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [504, 616]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "left_click",
+            "coordinate": [
+              504,
+              616
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            968,
+            665
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "What Qwen3-VL-4B-Instruct and 8B-Instruct answered for a widget centred at (970, 670) (jobs 141419 / 141421): 4.8 px away on this grid, 469 px away read as pixels. The grammar declared pixels for six episodes and this case is why it no longer does."
+    },
+    {
+      "name": "the_last_grid_unit_is_clamped_onto_the_display",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [999, 999]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [999, 999]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "mouse_move",
+            "coordinate": [
+              999,
+              999
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            1919,
+            1079
+          ]
+        ]
+      ],
+      "documents": "int(999 * (1920/999)) is 1920, one past the last column: upstream's own off-by-one, which this repo's clamp absorbs. Without the clamp the grid's own maximum would be off-screen."
     },
     {
       "name": "coordinate_less_click_lands_at_the_cursor",
@@ -96,8 +160,8 @@
         [
           "move_to",
           [
-            500,
-            400
+            960,
+            432
           ]
         ],
         [
@@ -140,8 +204,8 @@
         [
           "glide_to",
           [
-            100,
-            100,
+            192,
+            108,
             0.5
           ]
         ],
@@ -450,7 +514,7 @@
         [
           "move_to",
           [
-            10,
+            19,
             10
           ]
         ],
@@ -496,15 +560,15 @@
     },
     {
       "name": "drag_to_is_accepted_as_an_alias",
-      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"drag_to\", \"coordinate\": [1240, 700]}}\n</tool_call>",
-      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [1240, 700]}}\n</tool_call>",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"drag_to\", \"coordinate\": [645, 648]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [645, 648]}}\n</tool_call>",
       "action": {
         "calls": [
           {
             "action": "left_click_drag",
             "coordinate": [
-              1240,
-              700
+              645,
+              648
             ]
           }
         ]
@@ -519,7 +583,7 @@
         [
           "glide_to",
           [
-            1240,
+            1239,
             700,
             0.5
           ]
@@ -620,7 +684,7 @@
         [
           "move_to",
           [
-            300,
+            301,
             200
           ]
         ],
@@ -642,18 +706,18 @@
           {
             "action": "left_click",
             "coordinate": [
-              300,
-              200
+              157,
+              185
             ]
           }
         ]
       },
-      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [300, 200]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [157, 185]}}\n</tool_call>",
       "recompiled": [
         [
           "move_to",
           [
-            300,
+            301,
             200
           ]
         ],
@@ -670,7 +734,7 @@
           ]
         ]
       ],
-      "documents": "emits the idiomatic native form the base model speaks, and the collapse is exactly invertible."
+      "documents": "emits the idiomatic native form the base model speaks, and the collapse is exactly invertible. (301, 200) is on the grid's own lattice, so the coordinate quantisation is not folded into a case whose subject is the collapse; the case below pins it alone."
     },
     {
       "name": "coordinate_less_click",
@@ -863,8 +927,8 @@
         [
           "glide_to",
           [
-            100,
-            100,
+            99,
+            99,
             0.5
           ]
         ],
@@ -880,13 +944,13 @@
           {
             "action": "left_click_drag",
             "coordinate": [
-              100,
-              100
+              52,
+              92
             ]
           }
         ]
       },
-      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [100, 100]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [52, 92]}}\n</tool_call>",
       "recompiled": [
         [
           "mouse_down",
@@ -897,8 +961,8 @@
         [
           "glide_to",
           [
-            100,
-            100,
+            99,
+            99,
             0.5
           ]
         ],
@@ -917,8 +981,8 @@
         [
           "move_to",
           [
-            500,
-            500
+            499,
+            499
           ]
         ],
         [
@@ -930,8 +994,8 @@
         [
           "glide_to",
           [
-            600,
-            600,
+            599,
+            601,
             0.5
           ]
         ],
@@ -947,26 +1011,26 @@
           {
             "action": "mouse_move",
             "coordinate": [
-              500,
-              500
+              260,
+              462
             ]
           },
           {
             "action": "left_click_drag",
             "coordinate": [
-              600,
-              600
+              312,
+              556
             ]
           }
         ]
       },
-      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [500, 500]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [600, 600]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [260, 462]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [312, 556]}}\n</tool_call>",
       "recompiled": [
         [
           "move_to",
           [
-            500,
-            500
+            499,
+            499
           ]
         ],
         [
@@ -978,8 +1042,8 @@
         [
           "glide_to",
           [
-            600,
-            600,
+            599,
+            601,
             0.5
           ]
         ],
@@ -1152,9 +1216,9 @@
         [
           "drag",
           [
-            1100,
-            640,
-            1240,
+            1099,
+            641,
+            1239,
             700
           ]
         ]
@@ -1164,26 +1228,26 @@
           {
             "action": "mouse_move",
             "coordinate": [
-              1100,
-              640
+              572,
+              593
             ]
           },
           {
             "action": "left_click_drag",
             "coordinate": [
-              1240,
-              700
+              645,
+              648
             ]
           }
         ]
       },
-      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [1100, 640]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [1240, 700]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [572, 593]}}\n</tool_call>\n<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [645, 648]}}\n</tool_call>",
       "recompiled": [
         [
           "move_to",
           [
-            1100,
-            640
+            1099,
+            641
           ]
         ],
         [
@@ -1195,7 +1259,7 @@
         [
           "glide_to",
           [
-            1240,
+            1239,
             700,
             0.5
           ]
@@ -1260,6 +1324,64 @@
         ]
       ],
       "documents": "two synthesised `click` operations are one double_click, exactly as two mouse_down/mouse_up pairs are."
+    },
+    {
+      "name": "a_pixel_off_the_grid_lattice_loses_one_pixel",
+      "operations": [
+        [
+          "move_to",
+          [
+            300,
+            200
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "left_click",
+            "coordinate": [
+              156,
+              185
+            ]
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [156, 185]}}\n</tool_call>",
+      "recompiled": [
+        [
+          "move_to",
+          [
+            299,
+            200
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "The quantisation ceiling, pinned rather than avoided: one grid unit is 1.92 px at 1920 wide, so 52% of columns are not addressable and x=300 is one of them. round(300*999/1920)=156 and int(156*(1920/999))=299. Harmless in the direction this grammar consumes -- the model answers ON the grid -- and the reason a pixel-precise training label must not be built through it."
     }
   ],
   "lift_invalid": [

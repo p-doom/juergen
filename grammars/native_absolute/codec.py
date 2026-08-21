@@ -1,9 +1,21 @@
-"""The native ``computer_use`` grammar with ABSOLUTE pixel coordinates.
+"""The native ``computer_use`` grammar with ABSOLUTE coordinates on a 0-999 grid.
 
 This is the dialect an off-the-shelf Qwen3-VL already speaks — the reference
 grammar the 33.9% OSWorld-Verified baseline was measured in — so its surface is
 kept exactly: ``<tool_call>{"name":"computer_use","arguments":{…}}</tool_call>``,
-one or more calls per turn, ``coordinate`` is an absolute screen pixel.
+one or more calls per turn, ``coordinate`` is an absolute position addressed on a
+0-999 grid per axis, resolved to pixels inside ``compile``.
+
+The grid is the model's, measured not assumed. Probed on the serving path the
+evals use (sglang 0.5.10.post1, Qwen3-VL-4B-Instruct and 8B-Instruct, jobs
+141419 / 141421): asked to click a widget centred at (970, 670), the model
+answered (504, 616) — 469 px wrong read as pixels, 4.8 px from the centre read
+on the grid. 32 of 32 responses were normalized. Three prompt variants (a worked
+example at four-digit magnitudes, an explicit "NOT normalized to 0-999", and
+both) moved the emitted numbers by at most one unit, so this is not a convention
+prose can override. Declaring pixels here understated x by ``(1 - 999/W) * x``,
+which is 0.48*x at 1920 wide: the two readings agree only in the leftmost tenth
+of the screen, which is why dock icons and ``desktop_open_chrome`` kept passing.
 
 Collapses into one codec:
 
@@ -43,7 +55,7 @@ Semantics chosen where the sources disagreed:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from desktop.geometry import DisplayGeometry
@@ -56,6 +68,43 @@ from .. import _support
 #: ``describe()`` regenerates that envelope from docstrings, so the digests are
 #: not expected to match; ``report()`` records that rather than raising.
 PRODUCER = {"prompt_id": "computer_use_v1"}
+
+#: The divisor upstream's parser uses, copied rather than derived. Its prompt says
+#: "The screen's resolution is 1000x1000" while its parser divides by 999
+#: (``mm_agents/qwen3vl_agent.py:383-385``), so upstream is internally
+#: inconsistent by one part in a thousand; 999 is the half that decided the
+#: published numbers, so it is the half reproduced here.
+GRID = 999
+
+
+def pixels_from_norm(value: int, dimension: int) -> int:
+    """One axis of a 0-999 coordinate -> pixels on that axis.
+
+    Upstream's arithmetic, including its order and its truncation:
+    ``int(value * (dimension / 999))``. The scale is a float computed before the
+    multiply, so this is neither ``value * dimension // 999`` nor
+    ``desktop.geometry.scale_normalized_coordinate`` (Harbor's ``round(value *
+    (W - 1) / 999)``, which ``move_rel`` uses at its own ``GRID``), and it
+    disagrees with both by a pixel at some values. Reach for neither: the only
+    number this grammar is read against was produced by these exact operations.
+    Our own fine-tuned checkpoints were labelled through a third variant
+    (``round(value * dimension / 1000)``, then clip), which disagrees by up to
+    2 px at 1920 — inside the residual either convention leaves, and far inside
+    any clickable target.
+    """
+    return int(float(value) * (float(dimension) / float(GRID)))
+
+
+def norm_from_pixels(pixels: int, dimension: int) -> int:
+    """One axis of an absolute pixel -> its 0-999 coordinate. The encoder's direction.
+
+    Ours alone; upstream never converts this way. Rounds rather than truncates, so
+    a pixel on the grid's own lattice returns to itself.
+    """
+    if not dimension:
+        return 0
+    return int(round(float(pixels) * float(GRID) / float(dimension)))
+
 
 CLICKS = {
     "left_click": ("left", 1),
@@ -91,7 +140,7 @@ class NativeAbsoluteError(ValueError):
 
 @dataclass(frozen=True)
 class NativeCall:
-    """One validated ``computer_use`` call. ``coordinate`` is absolute pixels."""
+    """One validated ``computer_use`` call. ``coordinate`` is on the 0-999 grid."""
 
     action: str
     coordinate: tuple[int, int] | None = None
@@ -152,7 +201,7 @@ class NativeAbsoluteCodec:
         """Use a mouse and keyboard to interact with a computer, and take screenshots.
         * This is an interface to a desktop GUI. You do not have access to a terminal or applications menu. You must click on desktop icons to start applications.
         * Some applications may take time to start or process actions, so you may need to wait and take successive screenshots to see the results of your actions.
-        * Coordinates are ABSOLUTE screen pixels: (0, 0) is the top-left corner, x grows right and y grows down. Read the target's position off the screenshot before moving.
+        * The screen's resolution is 1000x1000. Coordinates are positions on that grid, not pixel counts, so the centre of the screen is (500, 500) whatever the display's real size. Read the target's position off the screenshot before moving.
         * Whenever you intend to move the cursor to click on an element like an icon, consult the screenshot to determine the coordinates of the element before moving the cursor.
         * Make sure to click any buttons, links, icons with the cursor tip in the CENTER of the element, not on its edge.
         """
@@ -175,7 +224,7 @@ class NativeAbsoluteCodec:
 
     @_support.production("mouse_move")
     def _mouse_move(self) -> None:
-        """Move the cursor to a specified (x, y) absolute pixel coordinate on the screen."""
+        """Move the cursor to a specified (x, y) coordinate on the 0-999 grid."""
 
     @_support.production("left_click")
     def _left_click(self) -> None:
@@ -245,7 +294,7 @@ class NativeAbsoluteCodec:
                     "type": "string",
                 },
                 "coordinate": {
-                    "description": "(x, y): the absolute x (pixels from the left edge) and y (pixels from the top edge) coordinate.",
+                    "description": "(x, y): the position on a 0-999 grid per axis — x from the left edge, y from the top edge — not a pixel count. The centre of any screen is (500, 500).",
                     "type": "array",
                 },
                 "pixels": {
@@ -302,12 +351,25 @@ class NativeAbsoluteCodec:
         geometry: DisplayGeometry,
         cursor: tuple[int, int],
     ) -> tuple[Operation, ...]:
-        """Clamp each absolute coordinate onto the display and lower in order."""
+        """Resolve each 0-999 coordinate against the display, clamp, lower in order.
+
+        The one place a coordinate of this grammar becomes a pixel; nothing
+        downstream of here sees the grid. The clamp is where upstream's edge
+        off-by-one is absorbed: ``int(999 * (1920/999))`` is 1920, one past the
+        last column, and upstream hands that straight to pyautogui.
+        """
+        width, height = _support.screen_size(geometry)
         operations: list[Operation] = []
         here = _support.clamp(cursor, geometry)
         for call in action.calls:
             target = (
-                _support.clamp(call.coordinate, geometry)
+                _support.clamp(
+                    (
+                        pixels_from_norm(call.coordinate[0], width),
+                        pixels_from_norm(call.coordinate[1], height),
+                    ),
+                    geometry,
+                )
                 if call.coordinate is not None
                 else None
             )
@@ -374,16 +436,23 @@ class NativeAbsoluteCodec:
         geometry: DisplayGeometry,
         cursor: tuple[int, int],
     ) -> _support.IntendedCursor | None:
-        """Every coordinate the turn named, in order, as absolute pixels.
+        """Every coordinate the turn named, in order, resolved to pixels here.
 
         A coordinate on any call moves the pointer here — a click, a drag and a
         button transition all move to theirs first — so every one of them is a
-        request. ``None`` when no call carries a coordinate, which is the whole
-        coordinate-less half of this schema.
+        request. Resolved on this grammar's own grid: reading a 0-999 coordinate
+        as a pixel would understate the request by exactly the artifact this
+        grammar's convention exists to remove. ``None`` when no call carries a
+        coordinate, which is the whole coordinate-less half of this schema.
         """
+        width, height = _support.screen_size(geometry)
         return _support.fold_requests(
             tuple(
-                ("abs", call.coordinate[0], call.coordinate[1])
+                (
+                    "abs",
+                    pixels_from_norm(call.coordinate[0], width),
+                    pixels_from_norm(call.coordinate[1], height),
+                )
                 for call in action.calls
                 if call.coordinate is not None
             ),
@@ -480,8 +549,26 @@ class NativeAbsoluteCodec:
                 "an empty operation stream has no representation: this grammar "
                 "has no idle action, only an explicit wait"
             )
+        # Normalized once, here: the lift assembles calls in pixels because that is
+        # what the Operations carry, and this is the single boundary where they
+        # become this grammar's grid. Doing it at each `coordinate=` site instead
+        # would be five places to keep in step.
+        width, height = _support.screen_size(geometry)
         return NativeAbsoluteAction(
-            calls=tuple(calls), terminate=status, prompt_digest=self.digest
+            calls=tuple(
+                call
+                if call.coordinate is None
+                else replace(
+                    call,
+                    coordinate=(
+                        norm_from_pixels(call.coordinate[0], width),
+                        norm_from_pixels(call.coordinate[1], height),
+                    ),
+                )
+                for call in calls
+            ),
+            terminate=status,
+            prompt_digest=self.digest,
         )
 
     def _absorb_move(
