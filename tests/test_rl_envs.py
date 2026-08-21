@@ -2,7 +2,7 @@
 
 `VirtualDesktop` gives a canvas the same session surface a real desktop has, so
 movebox/grounding run under the shared driver. It applies absolute pixel operations
-only — there is deliberately no relative move, because every convention is resolved
+only — there is no relative move, because every convention is resolved
 inside the codec.
 
 `band_sequence` decorrelates task index from difficulty: emitting band repeats in

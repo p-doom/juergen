@@ -123,7 +123,7 @@ def test_an_unknown_activity_is_refused() -> None:
 
 def test_the_recorded_set_is_the_judgment_set_plus_only_the_qc_knob() -> None:
     """`qc_view_fps` only affects the diagnostic view. It is recorded in the
-    manifest but deliberately excluded from the judgment set, because adding it
+    manifest but excluded from the judgment set, because adding it
     would invalidate the resume cache of every artifact already on disk."""
     params = _from_cli()
     assert "qc_view_fps" not in params

@@ -106,13 +106,6 @@ def _cases(section: str):
 
 
 #: One codec's source file, as it was when this process imported it.
-#:
-#: A codec's rendered prompt comes from docstrings, which are fixed when the
-#: module is imported; its pin is read from disk when the assertion runs. Editing
-#: a grammar during a ten-minute suite therefore reported ``rendered`` from the
-#: old text against a pin from the new one -- a mismatch describing two different
-#: trees rather than a bad pin. That inversion was read as a real regression
-#: twice. Comparing this against the file at assert time separates the two.
 _SOURCE_WHEN_IMPORTED: dict[str, bytes] = {}
 
 
@@ -199,9 +192,7 @@ _MOVE_KINDS = ("move_to", "glide_to")
 #: where it is, and whether ``compile`` still emits a move operation for the
 #: first. The cursor is placed on the right edge, so both turns dispatch the
 #: same thing in the six grammars that drop a zero-extent move — which is the
-#: blind spot ``IntendedCursor`` exists to remove. Declared per grammar rather
-#: than discovered at runtime, so a grammar that starts or stops dropping the
-#: move fails here instead of quietly changing what an idle turn means.
+#: blind spot ``IntendedCursor`` exists to remove.
 _EDGE_OF_DISPLAY = {
     "compact_raw": ("5000 0 0", "0 0 0", False),
     "deltatype_v2": ("5000 0 0", "0 0 0", False),
@@ -463,10 +454,9 @@ def test_prompt_digest_matches_its_pin(name):
     prompt turns this red. Rewrite the pin in the same commit as the edit, and
     the digest change is then reviewable as a line of the diff.
 
-    The two sides are sampled at different instants — the rendering at import,
-    the pin here — so a grammar edited while this suite runs used to be reported
-    as a digest regression. A moving tree is refused instead, because a check
-    that fails wrongly costs more than one that does not run.
+    A tree that moves while this suite runs is refused rather than reported as a
+    digest regression: the rendering is sampled at import and the pin when the
+    assertion runs, so the two would be measuring different trees.
     """
     codec = _codec(name)
     rendered = codec.digest
@@ -605,8 +595,7 @@ def test_the_vendor_terminate_is_read_and_the_calls_after_it_are_counted():
     [
         ({"status": "success"}, "success"),
         ({"status": "failure"}, "failure"),
-        # The vendor's own default, and the one the 33.9% reference was measured
-        # under. Not invented here, so it is not ours to change.
+        # The vendor's own default, and the one the 33.9% reference was measured under.
         ({}, "success"),
         # Present and unrecognised is refused rather than guessed: a status that
         # decays to success is how a lost failure becomes a claimed success.
@@ -737,10 +726,7 @@ def test_the_recovered_kinds_reach_a_grammar_that_can_express_them(kind):
     assert able, f"no grammar can lift {kind!r}"
     if kind == "drag":
         # The press and the release survive and the stroke stays inside them,
-        # rather than being degraded into a stationary click. Asserted on the
-        # parsed primitives, not on substring positions -- the approach move to
-        # the drag's start point also spells `move(`, and it correctly precedes
-        # the press.
+        # rather than being degraded into a stationary click.
         assert "deltatype_v2" in able and "ordered_events_v3" in able
         assert "MOVE(" in able["deltatype_v2"]
         assert "left_click_drag" in able["native_absolute"]
@@ -904,12 +890,11 @@ def test_importing_grammars_imports_neither_a_codec_nor_desktop():
 def test_the_declared_entry_points_are_exactly_the_grammar_directories():
     """Registration is a line in ``pyproject.toml``, and this is what checks it.
 
-    Hermetic on purpose: it reads the tracked declaration and the directories, and
-    nothing installed. The paired test below can only run where the distribution's
-    metadata exists, which in a plain checkout is an untracked ``juergen.egg-info``
-    — so on its own it passed in place, failed in every fresh worktree and
-    snapshot, and told two agents in one day that a clean clone was red. This half
-    holds the invariant that actually regresses: a new grammar directory that
+    Hermetic: it reads the tracked declaration and the directories, and nothing
+    installed. The paired test below can only run where the distribution's metadata
+    exists, which in a plain checkout is an untracked ``juergen.egg-info``, so on
+    its own it passes in place and fails in every fresh worktree and snapshot. This
+    half holds the invariant that actually regresses: a new grammar directory that
     nobody registered is invisible once installed.
     """
     declared = tomllib.loads(
@@ -954,10 +939,7 @@ def test_entry_points_alone_discover_every_grammar():
     [
         "native_rel_v1",
         "native_rel_think",
-        # `compact_absolute`'s former id. Both halves of it were wrong: it is not
-        # the native tool-call grammar, and "control" meant control ARM while the
-        # grammar has no control tokens. It must not resolve to `native_absolute`,
-        # whose name it contains.
+        # `compact_absolute`'s former id.
         "native_absolute_control",
     ],
 )

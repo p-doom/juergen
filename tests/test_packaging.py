@@ -130,7 +130,6 @@ def test_the_desktop_that_answers_is_ours_and_not_the_index_one(resolved) -> Non
 def test_the_sign_of_life_cell_table_ships_beside_its_module(resolved) -> None:
     # `suite.py` reads `Path(__file__).with_name("suite.json")`, so a data file
     # left out of the wheel is a missing file at dispatch, not an import error.
-    # It was left out: only `vectors/*.json` was declared.
     _, files = resolved
     assert (files["evals.signoflife.suite"].parent / "suite.json").is_file()
 

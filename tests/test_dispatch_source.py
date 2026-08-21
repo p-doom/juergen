@@ -1,11 +1,4 @@
-"""A dispatched job reads a pinned checkout, and a live edit cannot reach it.
-
-Three jobs died in one night because every solv2r recipe resolves
-`provenance.repo_path`, the live checkout: two read a half-edited `suite.py`, and
-one returned a clean 6/6 on trial 1 then failed trial 2 because `suite.json` was
-reverted underneath it. Those three ran this file's central experiment by
-accident. It runs it on purpose.
-"""
+"""A dispatched job reads a pinned checkout, and a live edit cannot reach it."""
 
 from __future__ import annotations
 
@@ -67,15 +60,12 @@ def test_it_prints_a_checkout_pinned_at_the_recorded_sha(live: Path, tmp_path: P
 
 
 def test_an_edit_to_the_live_tree_cannot_reach_the_pinned_one(live: Path, tmp_path: Path) -> None:
-    """The accidental experiment, run on purpose.
-
-    A job holding the pinned path reads the commit it was dispatched against, for
+    """A job holding the pinned path reads the commit it was dispatched against, for
     as long as it runs, no matter what happens to the checkout it came from.
     """
     sha = _git(live, "rev-parse", "HEAD")
     pin = Path(_resolve(live, sha, tmp_path / "pins").stdout.strip())
 
-    # What the three failures were: the tree changing under a running job.
     (live / MEASURED).write_text("half-edited, mid-revert\n")
 
     assert (live / MEASURED).read_text() == "half-edited, mid-revert\n", "the live tree did change"
@@ -188,7 +178,7 @@ cat {MEASURED}
     assert done.returncode == 0, done.stderr
     assert done.stdout == "committed\n", done.stdout
 
-    # The live tree moves under the job, as it did for all three failures.
+    # The live tree moves under the job.
     (live / MEASURED).write_text("half-edited\n")
     assert run().stdout == "committed\n", "the job must still read the commit it was sent with"
 

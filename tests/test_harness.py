@@ -166,8 +166,8 @@ def test_a_model_terminate_without_the_postcondition_is_recorded_as_such(tmp_pat
 def test_a_terminating_turn_dispatches_its_work_before_the_episode_stops(
     tmp_path, preparer
 ) -> None:
-    """`[move_rel, left_click, terminate]` used to dispatch nothing at all, so the
-    TERMINATE audit read it as a bare premature terminate.
+    """A terminating turn must dispatch its work, or the TERMINATE audit reads it as
+    a bare premature terminate.
     """
     calls = [
         {"action": "move_rel", "coordinate": [50, 50]},
@@ -864,11 +864,10 @@ def test_nothing_shells_out_to_register_external(tmp_path) -> None:
 
 
 def test_the_harness_refuses_to_run_without_an_artifact_root(tmp_path) -> None:
-    """`output_dir` used to fall back to the system temp dir, so a dispatch that
-    forgot it published `<root>/result.json` -- the file the recipe registers as its
-    `eval_result` -- into a reaped directory, and every concurrent run wrote the
-    same shared index. Arms are templates that carry no root, so the check belongs
-    where a config becomes a run.
+    """Without a root, `result.json` -- the file the recipe registers as its
+    `eval_result` -- lands in a reaped temp directory and every concurrent run
+    writes the same shared index. Arms are templates that carry no root, so the
+    check belongs where a config becomes a run.
     """
     from evals.harness import DesktopHarness
 
@@ -1097,9 +1096,8 @@ def test_a_rerun_replaces_the_trajectory_rather_than_doubling_it(tmp_path, prepa
 def test_an_unjustified_digest_mismatch_is_refused(tmp_path) -> None:
     """A digest that is not a prompt this codec renders means the checkpoint was
     trained under a different one, so its score is not the number it looks like.
-
-    This used to be recorded and not enforced, which made "evaluated under the
-    wrong prompt" a field in a JSON blob nobody reads rather than a failure.
+    Recorded and not enforced makes "evaluated under the wrong prompt" a field in a
+    JSON blob nobody reads rather than a failure.
     """
     from agent.agent import load_codec
 

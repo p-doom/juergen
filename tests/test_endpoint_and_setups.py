@@ -542,8 +542,8 @@ def test_the_grounding_canvas_preparer_refuses_an_underdeclared_row(
 
 @pytest.mark.parametrize("drop", ["screen", "instance_key", "box"])
 def test_the_target_box_scene_refuses_an_underdeclared_row(drop) -> None:
-    """`instance_key` seeds both the box and the cursor start, so the old fallback
-    to `task.name` moved the whole scene with nothing to notice."""
+    """`instance_key` seeds both the box and the cursor start, so a fallback to
+    another string moves the whole scene with nothing to notice."""
     from rl.target_box.harness import _scene
 
     setup = {"screen": [1920, 1080], "instance_key": "k:p", "box": {}}

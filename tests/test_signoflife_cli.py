@@ -73,7 +73,7 @@ def _argv(output: Path, tmp_path: Path, *extra: str) -> list[str]:
 def _fresh_process() -> None:
     """Model what a real dispatch is: one `python -m evals.signoflife`, one pool.
 
-    `agent.desktop.pool_for` deliberately refuses to hand back a pool registered
+    `agent.desktop.pool_for` refuses to hand back a pool registered
     under the same key with a different `PoolSpec` — returning the live one would
     run the episode under someone else's slot budget and TTLs. The dispatcher's
     key is `signoflife-<arm>` while its `slot_dir` is derived from `--output`, so
@@ -386,7 +386,7 @@ def test_an_episode_that_publishes_nothing_still_records_why(tmp_path) -> None:
     assert code == 0
 
     second = tmp_path / "second"
-    # Deliberately not `_fresh_process()`: keep the first run's pool registered.
+    # Not `_fresh_process()`: keep the first run's pool registered.
     assert main(_argv(second, tmp_path, "--cell", CELL_IDS[0])) == 3
     result = json.loads((second / "result.json").read_text())
     assert result["status"] == "infrastructure_failure"

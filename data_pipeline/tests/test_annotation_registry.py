@@ -117,14 +117,11 @@ class UnitTest(unittest.TestCase):
         self.assertEqual(wins, [(0, 9), (9, 20)])
 
 
-#: Every key/button name the crowd-cast keylogs spell. Measured 2026-08-20 over
-#: the first 3,000 keylogs by segment id of ccast0618d_dataset_full_v3 stage
-#: 01+02 -- 2,436 segments with events, 388,113 windows, at the planner's 0.5 fps
-#: geometry. Re-measure there; do not extend this by hand. A name that slice does
-#: not spell stays pinned: ``common.resolve_key_name`` synthesises ``KC_<code>``
-#: for macOS codes it does not map, and widening from 346 segments to 2,436 is
-#: what turned up ``Delete`` and ``MMB``. So the awkward ones are here on
-#: purpose: ``KC_*``, ``ISO_Section``, the media keys.
+#: Every key/button name the crowd-cast keylogs spell, measured over stage 01+02 of
+#: ccast0618d_dataset_full_v3 at the planner's 0.5 fps geometry. Re-measure there;
+#: do not extend this by hand. ``common.resolve_key_name`` synthesises ``KC_<code>``
+#: for macOS codes it does not map, so the awkward names belong here: ``KC_*``,
+#: ``ISO_Section``, the media keys.
 _OBSERVED_KEY_NAMES = (
     "Alt", "AltGr", "BackQuote", "BackSlash", "Backspace", "BrightnessDown",
     "BrightnessUp", "CapsLock", "Comma", "ControlLeft", "ControlRight",

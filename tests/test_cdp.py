@@ -124,8 +124,6 @@ class FakeCdpServer:
                 self.requests.append(request)
                 if getattr(self, "ping_first", False):
                     # Deterministic ordering: ping, block on the pong, then reply.
-                    # Sending both frames and reading afterwards races the client's
-                    # close, which made this flaky rather than wrong.
                     conn.sendall(_server_frame(b"hb", opcode=0x9))
                     self.pongs.append(_read_client_message(conn))
                 for frame in self.frames_for(request):

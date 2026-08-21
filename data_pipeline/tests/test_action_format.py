@@ -124,8 +124,8 @@ class ByteIdentityTest(unittest.TestCase):
         )
 
     def test_negative_keycode_is_not_a_keycode(self) -> None:
-        """``Unknown(-1)`` used to resolve to the name ``KC_-1``, which the
-        bare-token parser rejects — a label no eval could read."""
+        """``Unknown(-1)`` must not resolve to ``KC_-1``, a name the bare-token
+        parser rejects and no eval could read."""
         self.assertEqual(resolve_key_name([0, "Unknown(-1)"]), None)
         self.assertEqual(resolve_key_name([0, "Unknown(1)"]), "KC_1")
 
@@ -150,9 +150,8 @@ def _key(seq: int, t_s: float, kind: str, name: str) -> RawEvent:
 
 
 class OrderedFormatterTest(unittest.TestCase):
-    """Ported from the yll/action-format branch's project_ordered_action tests,
-    re-expressed over the realigned formatter interface (windows in master
-    ticks at 15 fps; the default 10 Hz motor grid)."""
+    """The ordered formatter over the realigned interface: windows in master ticks
+    at 15 fps, on the default 10 Hz motor grid."""
 
     def labels(self, events: list[RawEvent], windows: list[Window], hz: float = 10.0) -> list[str]:
         result = get_formatter("ordered_events_v2", continuous_action_hz=hz).format_segment(
@@ -412,10 +411,9 @@ class EmitterSpeaksItsGrammarTest(unittest.TestCase):
     """Every label a formatter writes must parse — and re-render identically —
     under the codec of the grammar it names.
 
-    The emitter and the eval parser used to be independent implementations:
-    ``format_action`` interpolated ``f"{sign}{name}"`` with no name validation
-    while the bare-token parser rejected anything outside
-    ``[A-Za-z_][A-Za-z0-9_]*``, so nothing detected a label no eval could read.
+    The emitter and the eval parser must not be independent implementations: a
+    ``f"{sign}{name}"`` interpolation with no name validation can write a name the
+    bare-token parser rejects, and no eval could then read the label.
     """
 
     def round_trip(self, format_name: str, events: list[RawEvent]) -> list[str]:

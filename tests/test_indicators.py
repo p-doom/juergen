@@ -71,12 +71,11 @@ def _score(steps, *, no_submit=False, **result):
 
 
 def test_an_episode_that_published_no_step_records_reads_as_absent_not_as_zero() -> None:
-    """The false zero this test used to assert as correct behaviour.
+    """An absent `steps_detail` must read as absent, not as a measured zero.
 
-    Every rate in `MouseIndicators` is a `sum`/`len` over these records, so an
-    absent `steps_detail` read as `[]` reported `no_op_rate` and `zero_delta_rate`
-    as 0.0 — unmeasured and measured-none were the same number. 24,832 of the
-    24,912 archived eval cells were in that state.
+    Every rate in `MouseIndicators` is a `sum`/`len` over these records, so reading
+    an absent one as `[]` reports `no_op_rate` and `zero_delta_rate` as 0.0 —
+    unmeasured and measured-none become the same number.
     """
     for episode in (None, {}, {"steps_detail": "nope"}, {"steps_detail": {}}):
         trace = make_trace() if episode is None else make_trace(episode=episode)

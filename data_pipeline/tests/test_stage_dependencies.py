@@ -4,10 +4,7 @@ The stages are dispatched as file paths (``python pipeline/stage_NN_*.py --flags
 from whatever cwd the scheduler picks, and their dependency set is declared here,
 in ``data_pipeline/pyproject.toml`` -- not in the root project, which packages no
 ``pipeline/`` and carries neither cv2 nor array-record. Nothing tied the two
-together, so ``absl`` reached stage 05/06 declared in one venv and dispatched
-against another: job 141103 died with ``ModuleNotFoundError: No module named
-'absl'`` after being scheduled, and stage 06 followed it into
-DependencyNeverSatisfied.
+together, so a stage could be declared in one venv and dispatched against another.
 
 Reading the TOML cannot catch that. Each stage is executed in a subprocess under
 ``-I`` from a temporary directory, so nothing resolves out of the checkout except

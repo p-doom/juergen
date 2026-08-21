@@ -517,7 +517,7 @@ def test_the_facade_delegates_the_rest_of_the_surface(tmp_path) -> None:
     assert facade.execute_atomic([1, 2, 3]) == FakeGuestReceipt(
         ok=True, cursor_before=(5, 6), cursor_after=(5, 6)
     )
-    # check=False on purpose: `pgrep chrome` returning 1 is an answer, not an error.
+    # check=False: `pgrep chrome` returning 1 is an answer, not an error.
     assert facade.execute_argv(["pgrep", "chrome"])["check"] is False
     facade.execute_pyautogui("pyautogui.moveTo(1, 2)")
     facade.release(failed=True, error="boom")

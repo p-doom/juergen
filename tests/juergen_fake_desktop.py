@@ -7,7 +7,7 @@ The only thing standing between the dispatcher and a booted VM is
 these fakes. This is the path every real gate run takes, and where a missing
 `evaluate()` once hid.
 
-The guest is a VM where nothing happened, deliberately. It answers the four cells'
+The guest is a VM where nothing happened. It answers the four cells'
 probes with well-formed evidence in which every postcondition is false, which is
 the negative control's calibrated reading (0/4), so the dispatcher can be run end
 to end without touching what a cell scores. Making this guest report success would

@@ -178,8 +178,6 @@ def test_a_bare_control_line_is_a_termination_and_not_a_parse_error(
 @pytest.mark.parametrize(
     "prose",
     [
-        # Verbatim from job 141143, where a turn of this shape was scored a parse
-        # error in 8 of 12 episodes -- including two that passed their cell.
         "Action: The task is completed successfully.",
         "The file is saved and the window is closed.",
         "Done",
@@ -216,7 +214,7 @@ def test_a_malformed_action_line_still_scores_when_the_turn_terminates(
 ) -> None:
     """The other half of the distinction: only `NoAction` may be swallowed.
 
-    The prose line carries no `Action:` marker on purpose — in `diffabs` that
+    The prose line carries no `Action:` marker: in `diffabs` that
     marker is where the action goes, so a marked line would be the text parsed
     and the malformed line below it would never be read.
     """
@@ -673,7 +671,7 @@ def test_dump_prompt_elides_image_bytes() -> None:
 
 
 def test_load_codec_resolves_every_registered_grammar() -> None:
-    """desktop exposes neither `CODECS` nor `load_codec` — it is deliberately
+    """desktop exposes neither `CODECS` nor `load_codec` — it is
     grammar-free — so the in-tree fallback goes through `grammars.load`, which has
     its own peer-directory scan. Probing desktop instead would raise
     `LookupError` on any interpreter where juergen's entry points are not
