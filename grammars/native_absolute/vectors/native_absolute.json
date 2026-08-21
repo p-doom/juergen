@@ -113,6 +113,32 @@
       "documents": "int(999 * (1920/999)) is 1920, one past the last column: upstream's own off-by-one, which this repo's clamp absorbs. Without the clamp the grid's own maximum would be off-screen."
     },
     {
+      "name": "the_grid_origin_is_the_display_origin",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [0, 0]}}\n</tool_call>",
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [0, 0]}}\n</tool_call>",
+      "action": {
+        "calls": [
+          {
+            "action": "mouse_move",
+            "coordinate": [
+              0,
+              0
+            ]
+          }
+        ]
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            0,
+            0
+          ]
+        ]
+      ],
+      "documents": "Where the two conventions agree, and the reason the artifact survived: near the origin a grid coordinate and a pixel coordinate are the same point."
+    },
+    {
       "name": "coordinate_less_click_lands_at_the_cursor",
       "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>",
       "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\"}}\n</tool_call>",
@@ -638,6 +664,11 @@
       "name": "mouse_move_without_coordinate",
       "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\"}}\n</tool_call>",
       "error": "requires coordinate"
+    },
+    {
+      "name": "coordinate_must_be_a_pair",
+      "text": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [5]}}\n</tool_call>",
+      "error": "coordinate must be [x, y]"
     },
     {
       "name": "coordinate_on_type",
@@ -1324,6 +1355,64 @@
         ]
       ],
       "documents": "two synthesised `click` operations are one double_click, exactly as two mouse_down/mouse_up pairs are."
+    },
+    {
+      "name": "a_pixel_on_the_grid_lattice_round_trips_exactly",
+      "operations": [
+        [
+          "move_to",
+          [
+            201,
+            300
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "action": {
+        "calls": [
+          {
+            "action": "left_click",
+            "coordinate": [
+              105,
+              278
+            ]
+          }
+        ]
+      },
+      "canonical": "<tool_call>\n{\"name\": \"computer_use\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [105, 278]}}\n</tool_call>",
+      "recompiled": [
+        [
+          "move_to",
+          [
+            201,
+            300
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "Not the display centre: (960, 540) is on the lattice too, but it is also the default cursor, so the recompiled move would be dropped as redundant and the case would pin the wrong thing."
     },
     {
       "name": "a_pixel_off_the_grid_lattice_loses_one_pixel",
