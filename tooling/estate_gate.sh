@@ -128,6 +128,7 @@ OMEGALAX_TESTS=(
   tests/test_data_mixing.py
   tests/test_qwen3_configs.py
   tests/test_perf.py
+  tests/test_sft_training.py
 )
 
 # name | root | interpreter | marker module | pytest targets
