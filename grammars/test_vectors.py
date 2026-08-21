@@ -215,11 +215,14 @@ _EDGE_OF_DISPLAY = {
         '{"action": "move_rel", "coordinate": [0, 0]}}\n</tool_call>',
         False,
     ),
+    # The grid's own maximum already resolves one pixel past the last column, so
+    # the clamped turn does not need an out-of-range coordinate to be clamped —
+    # and 998 is the rightmost column this grammar can still ask for on-display.
     "native_absolute": (
         '<tool_call>\n{"name": "computer_use", "arguments": '
-        '{"action": "mouse_move", "coordinate": [99999, 540]}}\n</tool_call>',
+        '{"action": "mouse_move", "coordinate": [999, 500]}}\n</tool_call>',
         '<tool_call>\n{"name": "computer_use", "arguments": '
-        '{"action": "mouse_move", "coordinate": [1919, 540]}}\n</tool_call>',
+        '{"action": "mouse_move", "coordinate": [998, 500]}}\n</tool_call>',
         True,
     ),
 }

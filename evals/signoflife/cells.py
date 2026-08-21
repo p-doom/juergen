@@ -12,7 +12,11 @@ The calibration semantics:
   * the model arms are what the controls calibrate. Their published readings are
     off-the-shelf-4B-native 4/4 and Phase-B-compact 2/4; the ordered arm has none
     yet. A model number is uncalibrated without its two controls in the same
-    configuration.
+    configuration. The native 4/4 is STALE: it was read while `native_absolute`
+    declared absolute pixels and consumed the model's 0-999 answer as one, so
+    every native arm — oracle, negative and model — needs re-running before that
+    number is quoted again. Only `desktop_open_chrome`'s dock icon sits where the
+    two readings nearly agree, which is how a wrong convention read 4/4 at all.
 
 Baseline incomparability — read this before quoting a number. The only calibrated
 external reference we have is off-the-shelf Qwen3-VL-8B = 33.9% OSWorld-Verified,

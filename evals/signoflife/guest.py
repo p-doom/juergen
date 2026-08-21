@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from grammars.native_absolute.codec import norm_from_pixels
 from grammars.ordered_events_v3.codec import escape
 
 from evals.signoflife.oracle import evaluate_postcondition
@@ -362,14 +363,33 @@ def _tool_call(arguments: dict[str, Any]) -> str:
 def _render_native_absolute(
     intent: Intent, session: Any, task: DesktopTaskData
 ) -> str:
-    """`native_absolute` — the tool-call arm. Coordinates are absolute pixels."""
+    """`native_absolute` — the tool-call arm, on that grammar's 0-999 grid.
+
+    The conversion is imported from the codec, not repeated: emit the raw pixel
+    here and `compile` resolves it a second time, putting the oracle's click at
+    1.92x its intended x — and an oracle that misses is read as the grammar
+    failing. Like `compact_absolute` this needs no cursor read, so nothing about
+    this rendering can go stale, but it does need the screen, because the grid is
+    a fraction of it. One grid unit is 1.92 px at 1920 wide, so the round trip can
+    land a pixel short of `target`; a cell whose postcondition needs the exact
+    pixel is not expressible in this grammar and must not be scripted in it.
+    """
     if intent.kind == "type":
         return _tool_call({"action": "type", "text": intent.text})
     if intent.kind == "submit":
         return _tool_call({"action": "key", "keys": ["ENTER"]})
     if intent.kind == "click":
         target = intent.target or _click_target(session, task)
-        return _tool_call({"action": "left_click", "coordinate": [target[0], target[1]]})
+        width, height = session.screen_size()
+        return _tool_call(
+            {
+                "action": "left_click",
+                "coordinate": [
+                    norm_from_pixels(target[0], width),
+                    norm_from_pixels(target[1], height),
+                ],
+            }
+        )
     raise ValueError(intent.kind)
 
 

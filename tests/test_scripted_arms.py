@@ -148,13 +148,19 @@ def test_an_unknown_kind_is_refused_by_the_planner() -> None:
         script_plan(make_task_data(kind="not_a_cell"), negative=False)
 
 
-def test_native_absolute_renders_tool_calls_with_absolute_pixels() -> None:
+def test_native_absolute_renders_tool_calls_on_the_grid_the_model_reads() -> None:
+    """The oracle must name the grid, because `compile` resolves what it names.
+
+    Emitting the raw pixel (300, 400) resolves a second time to (576, 432) — 276 px
+    past the target — and past the dock an oracle that misses is read as the
+    grammar failing rather than as the arm being rendered wrong.
+    """
     codec = load_codec("native_absolute")
     task = _task("open_chrome")
     text = render_step(_session(), task, codec=codec, intent=Intent("click", target=(300, 400)))
     payload = json.loads(text.split("<tool_call>\n")[1].split("\n</tool_call>")[0])
     assert payload["name"] == "computer_use"
-    assert payload["arguments"] == {"action": "left_click", "coordinate": [300, 400]}
+    assert payload["arguments"] == {"action": "left_click", "coordinate": [156, 370]}
     codec.parse(text)  # must round-trip through the real parser
 
 
@@ -311,6 +317,14 @@ def test_a_scripted_click_compiles_to_a_press_and_a_release(codec_name: str) -> 
     assert kinds.count("mouse_down") == 1 and kinds.count("mouse_up") == 1
 
 
+#: Where a scripted click at (300, 400) lands, for the one grammar whose
+#: coordinate is coarser than a pixel: `native_absolute`'s 0-999 grid is 1.92 px
+#: wide at 1920, so x=300 is not addressable and the click lands one column short.
+#: Declared rather than tolerated — the other six must land exactly, and a grammar
+#: that starts or stops quantising fails here instead of clicking somewhere else.
+_SCRIPTED_LANDING = {"native_absolute": (299, 400)}
+
+
 @pytest.mark.parametrize("codec_name", sorted(SCRIPT_RENDERERS))
 def test_a_scripted_click_lands_on_the_target_in_absolute_pixels(codec_name: str) -> None:
     """Whatever the encoding, `compile` must resolve to the same screen pixel."""
@@ -323,4 +337,8 @@ def test_a_scripted_click_lands_on_the_target_in_absolute_pixels(codec_name: str
         for op in codec.compile(text, _geo(), session.cursor)
         if op.kind in ("move_to", "glide_to")
     ]
-    assert moves == [(300, 400)], (codec_name, text, moves)
+    assert moves == [_SCRIPTED_LANDING.get(codec_name, (300, 400))], (
+        codec_name,
+        text,
+        moves,
+    )
