@@ -343,10 +343,15 @@ class ContextTransport:
 class Decision:
     """One model turn, all the way through to executable operations.
 
-    `control` names a non-dispatching outcome, so `operations` can be empty without
-    a parse error: `terminate` / `fail` come from the grammar-independent control
-    channel (`grammars.split_control`), `no_op` is derived from an action that
-    compiled to nothing.
+    `control` names a non-dispatching outcome, and an empty `operations` always
+    carries one: `terminate` / `fail` come from the grammar-independent control
+    channel (`grammars.split_control`), and `no_op` is every other way a turn
+    dispatched nothing — an action that compiled to nothing, one that could not be
+    read at all, or a reply cut off at `max_tokens`. WHY it dispatched nothing is
+    `parse_error` and `truncated`; THAT it dispatched nothing must not depend on
+    which, because only `control` is aggregated. Labelling the compiled-to-nothing
+    case alone left 8.9% of archived turns dispatching nothing under `control=None`,
+    where no rate over `control` could see them.
     """
 
     step: int
@@ -373,6 +378,10 @@ class Decision:
     when the resolved target equals the current position. At an edge that makes a
     +5000 delta and a 0 delta the same empty stream and the same `no_op`: this is
     the only field in which they differ."""
+
+    def __post_init__(self) -> None:
+        if self.control is None and not self.operations:
+            object.__setattr__(self, "control", "no_op")
 
     @property
     def terminated(self) -> bool:
@@ -598,8 +607,6 @@ class Agent:
                 sampling=sampling,
                 ignored_after_terminate=control.ignored,
             )
-        if terminal is None and not operations:
-            terminal = "no_op"
         return Decision(
             step=step,
             text=text,

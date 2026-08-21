@@ -70,10 +70,33 @@ def _score(steps, *, no_submit=False, **result):
     return trace
 
 
-def test_step_records_ignores_a_missing_or_malformed_result() -> None:
-    assert step_records(make_trace()) == []
-    assert step_records(make_trace(episode={"steps_detail": "nope"})) == []
+def test_an_episode_that_published_no_step_records_reads_as_absent_not_as_zero() -> None:
+    """The false zero this test used to assert as correct behaviour.
+
+    Every rate in `MouseIndicators` is a `sum`/`len` over these records, so an
+    absent `steps_detail` read as `[]` reported `no_op_rate` and `zero_delta_rate`
+    as 0.0 — unmeasured and measured-none were the same number. 24,832 of the
+    24,912 archived eval cells were in that state.
+    """
+    for episode in (None, {}, {"steps_detail": "nope"}, {"steps_detail": {}}):
+        trace = make_trace() if episode is None else make_trace(episode=episode)
+        assert step_records(trace) is None
+
+
+def test_step_records_keeps_an_empty_list_and_drops_non_records() -> None:
+    assert step_records(make_trace(episode={"steps_detail": []})) == []
     assert step_records(make_trace(episode={"steps_detail": [1, {"a": 1}]})) == [{"a": 1}]
+
+
+def test_the_indicators_publish_no_rate_at_all_when_the_episode_published_no_steps() -> None:
+    """A missing metric is conspicuous; a 0.0 averages into a conclusion."""
+    data = make_task_data()
+    trace = make_trace(data)
+    asyncio.run(Probe(data).score(trace))
+    for absent in ("no_op_rate", "zero_delta_rate", "on_lattice_rate", "n_deltas",
+                   "dropped_move_rate", "move_requests"):
+        assert absent not in trace.metrics, absent
+    assert trace.metrics, "the result-derived metrics still report"
 
 
 _GEOMETRY = DisplayGeometry(desktop_width=1920, desktop_height=1080)
@@ -519,3 +542,61 @@ def test_an_absent_temperature_reads_as_minus_one_not_zero() -> None:
 def test_a_scripted_arm_reports_its_own_source() -> None:
     trace = _score([], sampling={"temperature": None, "temperature_source": "scripted"})
     assert trace.metrics["temperature_from_ctx_sampling"] == 0.0
+
+
+def _dstep(intended, before, operations, **extra):
+    return _step(
+        "x",
+        None,
+        intended_cursor=intended,
+        cursor_before=list(before),
+        operations=list(operations),
+        **extra,
+    )
+
+
+_MOVE = {"kind": "move_to", "args": [5, 5]}
+_CLICK = ({"kind": "mouse_down", "args": ["left"]}, {"kind": "mouse_up", "args": ["left"]})
+
+
+def test_the_displacement_metric_sees_a_dropped_move_the_no_op_label_cannot() -> None:
+    """The case that makes this metric necessary rather than redundant.
+
+    Both turns request the same displacement and both dispatch a click, so BOTH
+    have a non-`no_op` control and `no_op_rate` reads them identically. Only the
+    requested-vs-realised comparison separates them. Retrospectively this is 6.16%
+    of 186,051 archived movement requests, 2.1x what the label could see, and the
+    two worst arms at ~19% had no `no_op` turn at all.
+    """
+    dropped = _dstep({"x": -95, "y": 990, "clamped": True}, (0, 1079), _CLICK)
+    realised = _dstep({"x": 865, "y": 530, "clamped": False}, (960, 540), (_MOVE, *_CLICK))
+    trace = _score([dropped, realised], control_terminate=None)
+    assert trace.metrics["move_requests"] == 2.0
+    assert trace.metrics["moves_dropped"] == 1.0
+    assert trace.metrics["dropped_move_rate"] == 0.5
+    assert trace.metrics["clamped_request_rate"] == 0.5
+    assert trace.metrics["no_op_rate"] == 0.0, (
+        "neither turn is a no_op: the click dispatched in both, which is exactly "
+        "why a rate over `control` cannot see the dropped move"
+    )
+
+
+def test_the_displacement_metric_does_not_count_a_turn_that_asked_to_stay_put() -> None:
+    """The mirror. A zero delta and an absent request are both non-requests, so a
+    metric that counted them would report a dropped move for a turn that never
+    asked to move."""
+    stayed = _dstep({"x": 960, "y": 540, "clamped": False}, (960, 540), ())
+    named_nothing = _dstep(None, (960, 540), _CLICK)
+    trace = _score([stayed, named_nothing])
+    assert trace.metrics["move_requests"] == 0.0
+    assert trace.metrics["moves_dropped"] == 0.0
+    assert trace.metrics["dropped_move_rate"] == 0.0
+
+
+def test_a_dropped_move_is_counted_even_when_the_turn_also_terminated() -> None:
+    """A terminating turn's move is as erasable as any other, and `control` is
+    `terminate` there, so the label is blind to this one too."""
+    trace = _score(
+        [_dstep({"x": -95, "y": 990, "clamped": True}, (0, 1079), (), control="terminate")]
+    )
+    assert trace.metrics["move_requests"] == 1.0 and trace.metrics["moves_dropped"] == 1.0

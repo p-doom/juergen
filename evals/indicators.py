@@ -14,7 +14,8 @@ declares no `runtime`, so it is never skipped).
      over-generalisation the A-fix risks.
 
 `MouseIndicators` covers the relative-move diagnostics: on-lattice rate,
-delta-magnitude histogram, in-bbox rate, terminate rate.
+delta-magnitude histogram, in-bbox rate, terminate rate, and the requested-vs-
+realised displacement that says how much of the mouse channel the display refused.
 """
 
 from __future__ import annotations
@@ -65,10 +66,29 @@ class UnreadableAction(ValueError):
     """
 
 
-def step_records(trace: vf.Trace) -> list[dict[str, Any]]:
+def step_records(trace: vf.Trace) -> list[dict[str, Any]] | None:
+    """The episode's step records, or None if it published none.
+
+    None is not the same as an empty episode, and that is the whole reason this
+    returns an option. Every rate below is a `sum`/`len` over these records, so
+    reading an absent `steps_detail` as `[]` published `no_op_rate`,
+    `zero_delta_rate`, `on_lattice_rate` and `n_deltas` as 0.0 — a run that
+    measured nothing was indistinguishable from one that measured and found none.
+    24,832 of the 24,912 archived eval cells were in that state, which is why no
+    historical `no_op_rate` survives to audit. The indicators publish no key at
+    all for None; a report missing a metric is conspicuous, whereas a 0.0
+    averages into a conclusion.
+
+    Absent rather than raised on purpose. An infrastructure failure publishes no
+    `steps_detail` either, and a metric that raised would win the race against
+    the sparse reward's own `valid_result` and report a booted VM as an indicator
+    defect.
+    """
     result = trace.info.get(RESULT_KEY) or {}
     steps = result.get("steps_detail")
-    return [s for s in steps if isinstance(s, dict)] if isinstance(steps, list) else []
+    if not isinstance(steps, list):
+        return None
+    return [s for s in steps if isinstance(s, dict)]
 
 
 def _items(parsed: Any) -> list[dict[str, Any]]:
@@ -286,7 +306,10 @@ class FailureModeIndicators:
         offending_same: list[str] = []
         offending_submit: list[str] = []
 
-        for step in step_records(trace):
+        steps = step_records(trace)
+        if steps is None:
+            return {}
+        for step in steps:
             parsed = step.get("parsed_action")
             raw = step.get("raw_model_output") or ""
             last_line = raw.splitlines()[-1] if raw.splitlines() else ""
@@ -325,12 +348,61 @@ class FailureModeIndicators:
         }
 
 
+#: The two Operations that move the pointer. `glide_to` is the drag stroke; both
+#: are absolute screen pixels by the time they are recorded.
+_MOVE_OPS = frozenset({"move_to", "glide_to"})
+
+
 class MouseIndicators:
     """Relative-move diagnostics: lattice collapse, magnitude spread, reach."""
 
     @vf.metric
+    async def displacement(self, trace: vf.Trace) -> dict[str, float]:
+        """Cursor displacement the turn REQUESTED vs the displacement it got.
+
+        Anchored to displacement rather than to `control == "no_op"`, and that is
+        the whole point: a dropped move rides along with whatever else the turn
+        did, so `move(-100,-10); down(LMB); up(LMB)` at the left edge still
+        dispatches its click, `control` is not `no_op`, and any rate over
+        `control` calls that turn clean. Measured retrospectively over the
+        archive, 11,452 of 186,051 requested movements were erased (6.16%) —
+        2.1x what the `no_op` label could see — and the two worst arms, at 19.3%
+        and 18.5%, had not one `no_op` turn between them.
+
+        `intended_cursor` is the PRE-clamp target, so a request is any turn that
+        named somewhere other than where the pointer already was; six of the seven
+        grammars emit nothing when the resolved target equals the current
+        position, which is what makes the request unrecoverable from `operations`
+        alone.
+        """
+        steps = step_records(trace)
+        if steps is None:
+            return {}
+        requested = dropped = clamped = 0
+        for step in steps:
+            intended = step.get("intended_cursor")
+            before = step.get("cursor_before")
+            if not isinstance(intended, dict) or not isinstance(before, (list, tuple)):
+                continue
+            if (intended.get("x"), intended.get("y")) == tuple(before):
+                continue
+            requested += 1
+            clamped += bool(intended.get("clamped"))
+            operations = step.get("operations") or []
+            if not any(op.get("kind") in _MOVE_OPS for op in operations):
+                dropped += 1
+        return {
+            "move_requests": float(requested),
+            "moves_dropped": float(dropped),
+            "dropped_move_rate": (dropped / requested) if requested else 0.0,
+            "clamped_request_rate": (clamped / requested) if requested else 0.0,
+        }
+
+    @vf.metric
     async def mouse(self, trace: vf.Trace) -> dict[str, float]:
         steps = step_records(trace)
+        if steps is None:
+            return {}
         result = trace.info.get(RESULT_KEY) or {}
         all_deltas: list[tuple[int, int]] = []
         for step in steps:
@@ -338,6 +410,9 @@ class MouseIndicators:
         nonzero = [d for d in all_deltas if d != (0, 0)]
         lattice = [d for d in all_deltas if on_lattice(d)]
         out: dict[str, float] = {
+            # Both denominators, published beside their rates: a 0.0 rate over no
+            # steps and a 0.0 rate over sixty are not the same reading.
+            "n_steps": float(len(steps)),
             "n_deltas": float(len(all_deltas)),
             "on_lattice_rate": (len(lattice) / len(all_deltas)) if all_deltas else 0.0,
             "zero_delta_rate": (

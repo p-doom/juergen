@@ -262,7 +262,9 @@ def test_a_retired_control_token_is_a_scored_parse_error(
     decision = _agent(codec_name).decide(
         legacy, step=1, geometry=_geometry(), cursor=(5, 5), sampling=_sampling()
     )
-    assert decision.control is None and decision.parse_error is not None
+    assert decision.parse_error is not None, "loud rather than silent"
+    assert not decision.terminated, "the retired token does not end the episode"
+    assert decision.control == "no_op", "and it dispatched nothing, so it says so"
 
 
 @pytest.mark.parametrize("codec_name", ALL_FOUR)
@@ -275,7 +277,7 @@ def test_a_parse_failure_is_a_recorded_result_not_an_exception(codec_name: str) 
         sampling=_sampling(),
     )
     assert decision.parse_error is not None
-    assert decision.operations == () and decision.control is None
+    assert decision.operations == () and decision.control == "no_op"
     assert decision.as_record()["parse_error"]["type"], "the error type is recorded"
 
 
@@ -743,3 +745,49 @@ def test_the_idle_action_names_no_position() -> None:
     assert decision.control == "no_op"
     assert decision.intended_cursor is None
     assert decision.as_record()["intended_cursor"] is None
+
+
+def _decision(**overrides) -> Decision:
+    base = dict(
+        step=1,
+        text="x",
+        action=None,
+        operations=(),
+        control=None,
+        parse_error=None,
+        sampling=_sampling(),
+    )
+    return Decision(**{**base, **overrides})
+
+
+def test_a_turn_that_dispatched_nothing_says_so_whatever_the_reason() -> None:
+    """`control` is the only field a rate aggregates, so it must not depend on WHY.
+
+    Labelling only the compiled-to-nothing case left three other ways of
+    dispatching nothing under `control=None` — an unreadable action, a failed
+    compile, and a reply cut off at `max_tokens`. 8.9% of archived turns were in
+    that state, invisible to any rate over `control`.
+    """
+    for reason in (
+        {},
+        {"parse_error": {"type": "DeltatypeV2Error", "message": "m"}},
+        {"truncated": True},
+    ):
+        decision = _decision(**reason)
+        assert decision.control == "no_op", reason
+        assert not decision.terminated, reason
+
+    assert _decision(parse_error={"type": "E", "message": "m"}).parse_error is not None, (
+        "the reason stays distinguishable"
+    )
+
+
+def test_a_turn_that_did_dispatch_is_not_relabelled() -> None:
+    """The mirror. Without it the assertion above passes on a stuck constant."""
+    from desktop.ir import Operation
+
+    moved = _decision(operations=(Operation("move_to", (5, 5)),))
+    assert moved.control is None and not moved.terminated
+    for ended in ("terminate", "fail"):
+        assert _decision(control=ended).control == ended
+        assert _decision(control=ended).terminated
