@@ -10,14 +10,18 @@ The calibration semantics, per tier — an arm runs one tier at a time
     artefact of the harness;
   * both exist per grammar, since a control that certified only one grammar would
     leave the other's parse/compile path unmeasured;
-  * the model arms are what the controls calibrate. On the scored tier the
-    measured readings are off-the-shelf-4B-native 3/4 (run
-    019fd5be788b7793a8a777da2a0f7531, 3 trials: `focus_terminal_and_type` 0/3, all
-    three draws `model_terminate_without_postcondition`) and Phase-B-compact 2/4
-    (run 01a01e7c171e7dc1b681725c7066d0bd, 3 trials). The 4/4 previously recorded
-    here for the off-the-shelf arm is not what its result.json says. No arm has a
-    candidate-tier reading yet. A model number is uncalibrated without its two
-    controls in the same configuration and the same tier.
+  * the model arms are what the controls calibrate. The scored tier is six cells
+    and no single run has covered all six, so its off-the-shelf reference is
+    spliced, not measured at once: 3/4 on the original four (run
+    019fd5be788b7793a8a777da2a0f7531, 3 trials, original qcow —
+    `focus_terminal_and_type` 0/3, every draw
+    `model_terminate_without_postcondition`) and 0/2 on the promoted pair (job
+    141319, 3 trials, re-baked qcow). Quote it as 3/4 + 0/2, or take one 6-cell
+    run and quote that. Phase-B-compact is 2/4 on the original four (run
+    01a01e7c171e7dc1b681725c7066d0bd) and has no reading on the promoted pair.
+    The 4/4 once recorded here for the off-the-shelf arm is not what its
+    result.json says. A model number is uncalibrated without its two controls in
+    the same configuration and the same tier.
 
 Baseline incomparability — read this before quoting a number. The only calibrated
 external reference we have is off-the-shelf Qwen3-VL-8B = 33.9% OSWorld-Verified,
@@ -253,8 +257,20 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
         artifacts=ArtifactConfig(save_prompts=True, write_gif=True),
     ),
 }
-"""The arms the controls calibrate. Scored-tier reference readings: off-the-shelf
-Qwen3-VL-4B native = 3/4, Phase-B step-900 compact = 2/4, both over 3 trials.
+"""The arms the controls calibrate. Reference readings over the original four
+scored cells: off-the-shelf Qwen3-VL-4B native = 3/4, Phase-B step-900 compact =
+2/4, both over 3 trials. On the two promoted cells the off-the-shelf arm is 0/3
+each (job 141319, native_absolute only — the base probe has not been run in the
+other two grammars, which is the conservative direction since native is that
+model's own format).
+
+How it fails those two is worth knowing before reading a gain: both times it
+clicked outside the panel window (473,463 and 502,614 against measured widgets at
+x 815-1056), so it fails them by mis-grounding the click, not by the reflexive
+Return or the lattice the cells were built to isolate. A systematic ~240 px
+x-undershoot at roughly correct y appeared in both, and a coordinate-convention
+artefact is not excluded — the same arm clicked correctly at x=710 inside a
+terminal, which argues against a plain scale error but does not settle it.
 
 Both fail the same way, which is what the candidate tier was built to isolate:
 every failing draw of either arm ends `model_terminate_without_postcondition`, and

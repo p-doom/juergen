@@ -27,6 +27,30 @@ __all__ = ["FakeCheckout", "FakeDesktopPool", "FakeGuestSession", "build_desktop
 
 _TASK_ID = re.compile(r"'task_id':\s*(?P<value>'[^']*'|\"[^\"]*\")")
 
+PANEL_STATE = {
+    "schema_version": 1,
+    "title": "SOLV2 panel",
+    "clicked": [],
+    "entry_text": "",
+    "submitted": False,
+    "screen": [1920, 1080],
+    "widgets": {
+        "entry": [815, 494, 1045, 517],
+        "button:Commit B1": [884, 580, 1056, 611],
+        "button:Commit B2": [884, 617, 1056, 648],
+        "button:Commit B3": [884, 654, 1056, 685],
+        "button:Commit B4": [884, 691, 1056, 722],
+        "button:Save draft": [844, 530, 1016, 561],
+        "button:Submit": [844, 567, 1016, 598],
+    },
+}
+"""The Tk fixture's published measurement, verbatim from a real run (job 141317).
+
+The panel cells resolve every scripted click through this, so a double that
+omitted it would make the two promoted scored cells unrunnable without a VM. The
+bboxes are the guest's own `winfo_root*` numbers rather than invented ones, so the
+lattice premise this suite asserts at setup is the one a VM actually produces."""
+
 WINDOW_GEOMETRY = {
     "window_id": "0x2000001",
     "x": 80,
@@ -58,6 +82,10 @@ def _state_line(task_id: str) -> str:
             "captured_text": None,
             "proof_file_exists": False,
             "proof_file_content": None,
+            "keystroke_state": None,
+            "stage_one_text": None,
+            "commit_text": None,
+            "panel_state": PANEL_STATE,
         },
         sort_keys=True,
     )
@@ -96,6 +124,9 @@ class FakeGuestTransport:
         script = " ".join(argv)
         if "SOLV2_GEOMETRY" in script:
             return {"output": "SOLV2_GEOMETRY=" + json.dumps(WINDOW_GEOMETRY, sort_keys=True)}
+        if "panel.py" in script or script.startswith("cat ") and "panel.json" in script:
+            # The panel setup script cats its state file, and a click re-reads it.
+            return {"output": json.dumps(PANEL_STATE, sort_keys=True)}
         if "SOLV2_STATE=" in script:
             match = _TASK_ID.search(script)
             task_id = ast.literal_eval(match.group("value")) if match else ""

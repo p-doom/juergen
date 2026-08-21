@@ -7,12 +7,19 @@ exactly its own registered set, so neither an orphan kind nor an orphan cell can
 survive a rename.
 
 The two tiers exist because a cell whose oracle has never been measured on real
-hardware cannot be allowed into a mean that is quoted as calibrated. The scored
-tier is the four cells whose oracle reads 4/4 and whose negative reads 0/4 on a
-real VM per grammar; the candidate tier is where a new cell lives until its own
-oracle and negative read the same way. Promotion is a one-word data change here,
-and it moves the scored digest — deliberately, because the gate is then a
-different gate.
+hardware cannot be allowed into a mean that is quoted as calibrated, and because
+a cell the reference model already passes cannot measure a gain. A cell reaches
+the scored tier only with both readings on real VMs: its own oracle passing and
+negative failing, per grammar, and a reference model failing it. Promotion is a
+one-word data change here, and it moves the scored digest — deliberately, because
+the gate is then a different gate.
+
+The tier earned itself on its first use. Two cells were argued into existence as
+"the base model fails premature termination", on the strength of the base failing
+the analogous scored cell 3/3 — and when the probe finally ran against the cells
+themselves, the base passed both 3/3 and failed the two cells that had been filed
+as mere regression detectors. The proxy was inverted; the tier is what kept the
+wrong pair out of the mean.
 
 `scored_sha256` is the canonical-JSON hash of the scored tasks alone, so adding a
 candidate cell cannot silently change the identity a scored run records.
@@ -48,34 +55,36 @@ SCORED_KINDS = {
     "terminal_exact_text",
     "open_chrome",
     "focus_terminal_and_type",
+    "tk_target_click",
+    "tk_no_submit_entry",
 }
-"""The calibrated four. Oracle 4/4 and negative 0/4 on a real VM, per grammar."""
+"""Six cells whose oracle passes and whose negative fails on a real VM, per
+grammar, and which the off-the-shelf reference does not already pass.
+
+The last two were promoted from `candidate` once both halves were measured:
+oracle 3/3 per cell in all three grammars (jobs 141317 eov3, 141322 native,
+141320 compact), negative 0/4 in all three (141316, 141323, 141321), and
+off-the-shelf Qwen3-VL-4B 0/3 on each (141319)."""
 
 CANDIDATE_KINDS = {
     "submit_only",
     "staged_confirm",
-    "tk_target_click",
-    "tk_no_submit_entry",
 }
-"""Each isolates one mechanism we have measured failing:
+"""Held out of the scored set, and not because they are broken.
 
-  * `submit_only` — submission as a key transition. The cell's guest reader
-    records every character that arrived before the newline, so the literal
-    `\\n`-inside-`type()` defect (four characters typed, `command_executed:
-    false`) reads as a non-empty prefix and a run that never completed, instead
-    of hiding inside a cell that also grades typing accuracy.
-  * `staged_confirm` — stopping when the first sub-goal looks done. The
-    instruction names the goal, not the steps; the second stage is only visible
-    on screen. `TERMINATE` is 4.1x under-weighted and has a measured 2.1%
-    false-alarm floor, and this is where that shows up as a failed cell rather
-    than as a footnote.
-  * `tk_target_click` — a target no single move from the declared cursor start
-    can reach, since the observed output support collapses to {0, +-1, +-10,
-    +-100}. The premise is asserted at setup from the measured bbox, not assumed.
-  * `tk_no_submit_entry` — the reflexive Return. Success requires typing into a
-    field and clicking a specific button *without* submitting, and `submitted` is
-    sticky in the fixture, so a Return anywhere in the window is unrecoverable.
-"""
+Both are fully calibrated — oracle 3/3 and negative 0/4 in all three grammars —
+and both isolate a defect a trained checkpoint commits: `submit_only` records
+every character that arrived before the newline, so the literal
+`\\n`-inside-`type()` defect (`0 0 0 ; type("ls\\\\n")`, 3 of 3 Phase-B draws)
+reads as a two-character prefix on a read that never completed; `staged_confirm`
+names the goal and not the steps, so a policy that stops when the first stage
+looks done fails instead of scoring.
+
+What disqualifies them from the scored tier is that the off-the-shelf
+Qwen3-VL-4B passes both 3/3 (job 141319). A cell the reference already passes
+cannot register a capability gain and only dilutes the mean, so they stay here as
+regression detectors — which is what this tier is for. Promote either one only if
+a reference model is measured failing it."""
 
 ALLOWED_KINDS = SCORED_KINDS | CANDIDATE_KINDS
 
@@ -91,9 +100,10 @@ NO_SUBMIT_CELLS: frozenset[str] = frozenset({"panel_no_submit_entry"})
 """Cells whose success must not depend on pressing Return, read by failure-mode
 indicator D.
 
-`panel_no_submit_entry` is the first genuine entry, and it is a candidate cell —
-so D remains structurally zero on the scored tier and every non-zero D reading
-ever published against the scored gate is still the old misclassification.
+`panel_no_submit_entry` is the first genuine entry, and since its promotion it is
+a *scored* cell — so D now has a valid cell to fire on for the first time. It was
+structurally zero before that, which is why every non-zero D reading ever
+published against the scored gate is the old misclassification and not a signal.
 
 That misclassification: `terminal_exact_text` was listed here, and it requires
 submission four ways over — its instruction ends *"and press Enter"*, its guest
@@ -215,8 +225,8 @@ def load_suite(path: Path | None = None) -> DevelopmentSuite:
         seen.add(task_id)
         tasks.append(DevelopmentTask(task_id, kind, tier, instruction, expected, max_steps))
     scored = [task for task in tasks if task.tier == "scored"]
-    if len(scored) != 4 or {task.kind for task in scored} != SCORED_KINDS:
-        raise ValueError("the scored tier is the four calibrated cells, one per kind")
+    if len(scored) != len(SCORED_KINDS) or {task.kind for task in scored} != SCORED_KINDS:
+        raise ValueError("the scored tier is the calibrated cells, one per kind")
     candidate_kinds = [task.kind for task in tasks if task.tier == "candidate"]
     if sorted(candidate_kinds) != sorted(CANDIDATE_KINDS):
         raise ValueError("candidate tier coverage drift: one cell per candidate kind")
