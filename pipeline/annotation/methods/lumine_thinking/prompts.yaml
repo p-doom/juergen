@@ -1,12 +1,6 @@
 # Prompt pack for the lumine_thinking annotation method (stage 03b).
-# Writer/verifier texts transcribed from the validated lumine Track A prompts
-# (hindsight_fold/lumine/prompts/{writer_rules,clip_annotator,verifier}.txt) —
-# content preserved, format adapted to the pipeline's PromptPack (${...}
-# placeholders) and to day-frame labels. Additions over the validated texts:
-# the clip task's stored-only `log` field (never carried, never verified
-# against) and the batched verifier variant with its per-thought evidence
-# cutoff. Templating: ${name} via string.Template.safe_substitute; literal
-# JSON braces pass through.
+# Templating: ${name} via string.Template.safe_substitute; literal JSON braces
+# pass through.
 system: |-
   You write the inner monologue of the person whose screen recording you are watching.
 

@@ -87,14 +87,7 @@ def est_frame_tokens(ref: str) -> int:
 #: A keyboard burst is the text keys plus the ones that edit or commit one without
 #: producing a character. The text keys come from ``lib/action_format.TEXT_KEYS``,
 #: the same set ``ordered_events_v3`` folds into ``type()``, so the planner and the
-#: label emitter cannot disagree about a key: the substring marker list this
-#: replaces called ``.``/``;``/``'``/``=``/``[``/``]`` non-typing while the grammar
-#: folded them into a burst. Exact names now, because three of those markers
-#: (``Digit``, ``Period``, ``Enter``) matched none of the names real keylogs
-#: spell. Both directions of delete are in: with ``Backspace`` alone, the same
-#: correction read as typing or not by which way the demonstrator deleted, so a
-#: window could be cut through a run of forward-deletes retracting the text of the
-#: window before it (``ForwardDelete`` is how macOS spells the key).
+#: label emitter cannot disagree about a key.
 _BURST_KEYS = TEXT_KEYS | {"Return", "Backspace", "Delete", "ForwardDelete"}
 
 

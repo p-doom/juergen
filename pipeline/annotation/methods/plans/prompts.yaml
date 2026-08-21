@@ -1,5 +1,4 @@
 # Prompt pack for the plans enrichment method (stage 03b, input: goals).
-# Ported verbatim from the validated v2 annotation_pipeline/prompts.yaml.
 plan_system: |-
   You are adding the PLAN turn to supervised fine-tuning data for a computer-use agent — a model that drives a real computer (keyboard, mouse, screen) to carry out tasks a person asks of it in natural language. Each training example pairs an INSTRUCTION (what a person types to ask the agent to do something) with the on-screen TRAJECTORY a human performed. Before its first action, the agent states — in one or two first-person sentences — what it is about to do and why. You write that pre-action statement, in hindsight, for goals already recovered from one screen recording.
 

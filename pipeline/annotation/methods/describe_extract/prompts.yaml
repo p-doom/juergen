@@ -1,7 +1,6 @@
-# Prompt pack for the describe_extract annotation method (stage 03b).
-# Ported verbatim from the validated v2 annotation_pipeline/prompts.yaml, with
-# the sampling period parameterized (${frame_period_s}) because the annotation
-# fps is now a stage knob. Templating: ${name} placeholders are filled via
+# Prompt pack for the describe_extract annotation method (stage 03b). The sampling
+# period is parameterized (${frame_period_s}) because the annotation fps is a
+# stage knob. Templating: ${name} placeholders are filled via
 # string.Template.safe_substitute; literal { } (JSON examples) pass through.
 system: |-
   You are an expert observer building supervised fine-tuning data for a computer-use agent — a model that controls a real computer (keyboard, mouse, screen) to carry out tasks a person asks of it in natural language. Each finished example pairs an INSTRUCTION (what a person types to ask the agent to do something) with the on-screen TRAJECTORY a human actually performed. You are the first step: watch one human screen recording and produce a faithful, fine-grained, factual log of everything that happens.

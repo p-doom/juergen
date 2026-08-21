@@ -74,8 +74,7 @@ class LabelerConfig:
     # Reservation for the answer + in-band chain-of-thought (Kimi-K2.6 returns
     # reasoning in `reasoning_content`, which still counts against this cap).
     # Reserved against the model's 262K context, so it competes with the ~150
-    # input frames. Observed describe/extract usage maxed at ~21K, so 32K is
-    # ample and leaves the most room for frames. Override via env.
+    # input frames.
     max_completion_tokens: int = int(os.environ.get("LABELER_MAX_TOKENS") or 32000)
 
     @classmethod
@@ -201,8 +200,7 @@ class Labeler:
                                        model=str(meta.get("model", self.config.model)))
 
         # Interleave a text label before each image when provided (frames stay
-        # unmodified — no burned-in overlay occluding the UI). The v2 describe
-        # pass sends no labels (frame-index anchoring was dropped).
+        # unmodified — no burned-in overlay occluding the UI).
         content_parts: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
         for i, url in enumerate(image_urls):
             if image_labels and i < len(image_labels) and image_labels[i]:

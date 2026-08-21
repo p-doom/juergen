@@ -321,7 +321,7 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
     as a ``failed`` status, so one bad segment cannot abort the pool.
 
     The judgment knobs are read FIRST, outside that capture, and a task dict
-    missing one raises. That is deliberate: every task in a pool is built from
+    missing one raises: every task in a pool is built from
     one ``argparse`` namespace by one ``main()``, so a missing knob is a wiring
     bug affecting all of them equally, not this segment's data. Capturing it
     would turn one bug into N identical ``failed`` rows and a run that exits 0

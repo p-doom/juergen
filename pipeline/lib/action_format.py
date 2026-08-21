@@ -221,11 +221,7 @@ def _ordered_result(
 # the rdev namespace ``common.resolve_key_name`` passes through from the keylog
 # (top-row digits are Num0..Num9, and the brackets are Left/RightBracket, not
 # Bracket Left/Right — spelled the other way round this map never fired and
-# trained a key press where a character belongs); the char pairs mirror the
-# viewer's keyToChar map (tooling/visualize_frame_records.py), the project's
-# existing convention. Keypad digits, Return, Tab, Backspace, Escape, arrows,
-# F-keys and modifiers are deliberately absent: they render as down()/up() and
-# break typing runs.
+# trained a key press where a character belongs).
 _US_PRINTABLE: dict[str, tuple[str, str]] = {
     "Space": (" ", " "),
     **{f"Key{c}": (c.lower(), c) for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"},
@@ -245,10 +241,7 @@ _US_PRINTABLE: dict[str, tuple[str, str]] = {
 
 #: The pipeline's one definition of a text key: every name that puts a character
 #: on the screen. Read here to fold a typing run into ``type()``, and by the
-#: annotation window planner to decide what counts as typing. One set, because two
-#: had drifted — the planner's own frozen marker list called ``.``/``;``/``'``/
-#: ``=``/``[``/``]`` non-typing while this map folded them into a burst, so the
-#: same keystroke was a typing burst or a bare key depending on the grammar.
+#: annotation window planner to decide what counts as typing.
 TEXT_KEYS: frozenset[str] = frozenset(_US_PRINTABLE)
 
 _SHIFT_KEYS = frozenset({"ShiftLeft", "ShiftRight"})

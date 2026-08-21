@@ -59,10 +59,6 @@ def _entrypoint(rel_path: str) -> str:
 
 PROJECT_REPO = _resolve_project_repo()
 DATASETS_ROOT = "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/datasets/yll.kryeziu"
-# Repointed to the v3 lineage 2026-08-05: the previous _v1 names
-# (``..._full_master_fps_15_sharded`` and
-# ``..._full_v1_stage_02_realign_manifest``) no longer exist on disk. Existence
-# is asserted by _source() at config-build time.
 MASTER_DIR = (
     "/fast/project/HFMI_SynergyUnit/p-doom_shared/labctl/datasets/alfred.nguyen/"
     "ccast0618d_dataset_full_v3_stage_01_master_frames_fps_15"
@@ -109,10 +105,7 @@ def stage_03_filter():
     cfg.entrypoint.args.frames_master_dir = _source(MASTER_DIR)
     cfg.entrypoint.args.clips_manifest = _source(CLIPS_MANIFEST)
     cfg.entrypoint.args.num_workers = 32
-    # Idle knobs (seconds; identical semantics on any master fps). These are
-    # the stage defaults, restated for auditability: the legacy rounded NO_OP
-    # predicate per 2 s bin, runs > 4 s thinned keeping 2 s ends — byte-
-    # mirrors the pre-rewrite sampler's default (noop head/tail 1/1 @ 0.5 fps).
+    # Idle knobs (seconds; identical semantics on any master fps).
     cfg.entrypoint.args.idle_activity = "rounded"
     cfg.entrypoint.args.idle_judgment_bin_s = 2.0
     cfg.entrypoint.args.idle_min_duration_s = 4.0
