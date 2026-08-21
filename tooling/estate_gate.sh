@@ -63,7 +63,7 @@
 #                                                   testgate venv)
 #   DESKTOP_PYTHON          desktop                 (default: shared testgate venv)
 #   DESKTOP_FLEET_PYTHON    desktop/desktop_fleet   (default: that project's .venv)
-#   OMEGALAX_PYTHON         omegalax-rearch         (default: that project's .venv)
+#   OMEGALAX_PYTHON         omegalax-rearch         (default: dedicated lock-built venv)
 #
 # Three checkouts, located as siblings of this repository and overridable, plus
 # the fleet project inside the desktop one:
@@ -97,13 +97,18 @@ VENVS=/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/venvs
 : "${DATA_PIPELINE_PYTHON:=$VENVS/data-pipeline-testgate-venv/bin/python}"
 : "${DESKTOP_PYTHON:=$VENVS/juergen-testgate-venv/bin/python}"
 : "${DESKTOP_FLEET_PYTHON:=$DESKTOP_FLEET_ROOT/.venv/bin/python}"
-# The project environment, unlike data_pipeline's above: it is the one `uv.lock`
-# describes, and the testgate venv had drifted months ahead of it (transformers
-# 5.14.1 vs 5.2.0, jax 0.11.0 vs 0.9.2) -- enough skew to fail the Qwen3-VL MoE
-# loader on a config key HF renamed after the locked version. `uv sync` keeps
-# pytest here (it is a default dependency-group, not an extra), but run it with
-# `--extra torch-tests` or it uninstalls the torchvision the collator test needs.
-: "${OMEGALAX_PYTHON:=$OMEGALAX_REARCH_ROOT/.venv/bin/python}"
+# Built by `uv sync --locked --extra torch-tests --python 3.13` from that repo's
+# lockfile, so it reproduces exactly what the repo declares -- unlike the old
+# testgate venv, which had drifted months ahead of the lock (transformers 5.14.1 vs
+# 5.2.0, jax 0.11.0 vs 0.9.2) and failed the Qwen3-VL MoE loader on a config key HF
+# renamed after the locked version.
+#
+# Dedicated rather than the repo's own `.venv`, which the training jobs share: a
+# bare `uv sync --locked` there uninstalls 11 packages including torch and the
+# torchvision the collator test imports, and would do it under a running gate. The
+# two agree by construction, and were measured agreeing -- same versions, and
+# 109 passed / rc=0 on both -- so the isolation costs nothing.
+: "${OMEGALAX_PYTHON:=$VENVS/omegalax-rearch-gate-venv/bin/python}"
 
 # omegalax-rearch's gate: what the rearchitecture changed, nothing GPU-bound.
 #
