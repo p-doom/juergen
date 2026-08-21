@@ -82,7 +82,11 @@ def _state_line(task_id: str) -> str:
             "captured_text": None,
             "proof_file_exists": False,
             "proof_file_content": None,
-            "keystroke_state": None,
+            # What the real reader publishes before the first probe: the setup
+            # waits for this file, so "absent" is not a state a real run reaches
+            # -- and an absent one is `status="error"`, which the harness refuses
+            # as an unreadable initial state rather than scoring as a miss.
+            "keystroke_state": {"schema_version": 1, "prefix": "", "prefix_len": 0, "completed": False},
             "stage_one_text": None,
             "commit_text": None,
             "panel_state": PANEL_STATE,
