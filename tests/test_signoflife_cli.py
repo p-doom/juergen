@@ -475,6 +475,8 @@ def test_the_tier_reaches_the_taskset_and_the_record(tmp_path) -> None:
         temperature=0.0,
         top_p=1.0,
         max_tokens=256,
+        top_k=None,
+        presence_penalty=None,
         system_prompt=None,
     )
     assert config.taskset.tier == "candidate"
@@ -513,6 +515,39 @@ def test_the_supplied_system_prompt_is_what_the_model_is_shown(tmp_path) -> None
     ).system
     assert served == "The mouse is RELATIVE.\n"
     assert served != codec.describe()
+
+
+def test_the_sampling_extras_reach_the_wire_body(tmp_path) -> None:
+    """`top_k` and `presence_penalty` are `vf.Sampling` extras, and an extra that
+    `exclude_none` drops is an extra that never reached the server.
+
+    A repetition penalty is load-bearing here rather than a preference: at
+    temperature 0.7 without one, an eov3 checkpoint emitted 3,276 characters of
+    `down(Backspace); up(Backspace)` until it hit `max_tokens`, and the episode
+    scored `truncated_action` — our own cap published as model behaviour.
+    """
+    from evals.signoflife.__main__ import _eval_config
+
+    common = dict(
+        arm="ordered",
+        tier="scored",
+        task_ids=[CELL_IDS[0]],
+        artifacts=tmp_path / "a",
+        traces_dir=tmp_path / "t",
+        pool={},
+        base_url="http://127.0.0.1:1/v1",
+        temperature=0.7,
+        top_p=0.8,
+        max_tokens=1024,
+        system_prompt=None,
+    )
+    named = _eval_config(**common, top_k=20, presence_penalty=1.5)
+    wire = named.sampling.model_dump(exclude_none=True)
+    assert wire["top_k"] == 20 and wire["presence_penalty"] == 1.5
+
+    unnamed = _eval_config(**common, top_k=None, presence_penalty=None)
+    absent = unnamed.sampling.model_dump(exclude_none=True)
+    assert "top_k" not in absent and "presence_penalty" not in absent
 
 
 def test_a_scripted_arm_refuses_a_system_prompt_it_would_ignore(tmp_path) -> None:

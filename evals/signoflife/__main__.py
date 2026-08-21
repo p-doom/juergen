@@ -245,6 +245,8 @@ def _eval_config(
     temperature: float,
     top_p: float,
     max_tokens: int,
+    top_k: int | None,
+    presence_penalty: float | None,
     system_prompt: str | None,
 ) -> EvalConfig:
     return EvalConfig(
@@ -254,7 +256,21 @@ def _eval_config(
         ),
         model=SERVED_MODEL,
         client={"base_url": base_url, "api_key_var": API_KEY_VAR},
-        sampling={"temperature": temperature, "top_p": top_p, "max_tokens": max_tokens},
+        # `top_k` and `presence_penalty` are extras: `vf.Sampling` is `extra="allow"`
+        # and `apply_overrides` puts every non-None key on the wire. They are here
+        # because a repetition penalty is not a preference on a checkpoint fit to
+        # human keystroke streams -- at temperature 0.7 without one, an eov3
+        # checkpoint emitted 3,276 characters of `down(Backspace); up(Backspace)`
+        # until it hit `max_tokens`, and the run scored `truncated_action`, i.e. our
+        # own cap. `None` is dropped by `exclude_none`, so an arm that names neither
+        # sends neither.
+        sampling={
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+            "top_k": top_k,
+            "presence_penalty": presence_penalty,
+        },
         num_rollouts=1,
         # One episode at a time: concurrency here would put N desktops on the node
         # at once, and the node budget is a slot count, not a promise of memory.
@@ -436,6 +452,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--max-tokens", type=int, default=256)
+    parser.add_argument("--top-k", type=int, default=None)
+    parser.add_argument("--presence-penalty", type=float, default=None)
     parser.add_argument(
         "--verify-phaseb",
         action="store_true",
@@ -546,6 +564,8 @@ def main(argv: list[str] | None = None) -> int:
                 temperature=args.temperature,
                 top_p=args.top_p,
                 max_tokens=args.max_tokens,
+                top_k=args.top_k,
+                presence_penalty=args.presence_penalty,
                 system_prompt=system_prompt,
             )
             environment = vf.Environment(config)
