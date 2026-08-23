@@ -31,6 +31,7 @@ import verifiers.v1 as vf
 from pydantic import Field, model_validator
 
 import grammars
+from desktop.execute.guest_program import HeldStateError
 
 from agent.agent import (
     Agent,
@@ -875,7 +876,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                         )
                         budget.dispatched(len(decision.operations))
                         _update_held(held, decision.operations)
-                    except (TypeError, ValueError) as exc:
+                    except (TypeError, ValueError, HeldStateError) as exc:
                         action_error = {"type": type(exc).__name__, "message": str(exc)}
                         state.action_errors += 1
                     except Exception as exc:  # noqa: BLE001 - transport, fails closed

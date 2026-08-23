@@ -511,6 +511,37 @@ def test_a_bad_action_is_a_scored_outcome_not_an_infra_failure(tmp_path, prepare
     assert result["steps_detail"][0]["action_error"]["type"] == "ValueError"
 
 
+def test_only_a_held_state_refusal_is_a_scored_executor_error(tmp_path, preparer) -> None:
+    from desktop.execute.guest_program import ExecutionError, HeldStateError
+
+    class Unbalanced(FakeSession):
+        def execute_atomic(self, operations):
+            raise HeldStateError("key not held: shiftleft")
+
+    _, refused, _ = _run(
+        _config(tmp_path / "refused"),
+        _task(max_steps=1),
+        replies=["0 0 0 ; +LMB -LMB"],
+        session=Unbalanced(),
+    )
+    assert refused["validity"] == "valid" and refused["success"] is False
+    assert refused["action_errors"] == 1 and refused["executor_errors"] == 0
+    assert refused["steps_detail"][0]["action_error"]["type"] == "HeldStateError"
+
+    class GuestGone(FakeSession):
+        def execute_atomic(self, operations):
+            raise ExecutionError("guest request failed")
+
+    _, failed, _ = _run(
+        _config(tmp_path / "failed"),
+        _task(max_steps=1),
+        replies=["0 0 0 ; +LMB -LMB"],
+        session=GuestGone(),
+    )
+    assert failed["validity"] == "infra_invalid" and failed["success"] is None
+    assert failed["action_errors"] == 0 and failed["executor_errors"] == 1
+
+
 def test_a_model_call_failure_is_infrastructure(tmp_path, preparer) -> None:
     class Angry:
         async def get_response(self, *args, **kwargs):
