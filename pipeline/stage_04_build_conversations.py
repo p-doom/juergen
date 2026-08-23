@@ -37,7 +37,8 @@ realignment health signal.
 
 The conversation shape is the canonical chat.jsonl schema: content blocks,
 instruction text before the image on the first user turn, one assistant turn
-per frame. Stages 05/06 consume the output directly.
+per frame. Each row marks the context messages for split continuations. Stages
+05/06 consume the output directly.
 
 Output (--output-dir):
   conversations.jsonl          one row per conversation {messages, provenance}.
@@ -110,6 +111,8 @@ from pipeline.lib.views import (  # noqa: E402
 # pipeline's assemble step).
 DROP_PLAN_FLAGS = frozenset({"empty", "restates_instruction"})
 
+CARRY_KEY = "_omegalax_carry_messages"
+
 
 def _text_block(text: str) -> dict[str, Any]:
     return {"type": "text", "text": text}
@@ -126,12 +129,13 @@ def build_messages(
     system_prompt: str,
     plan: str | None = None,
     terminal_token: str | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[int]]:
     """Assemble one interleaved conversation. Canonical chat.jsonl schema:
     instruction text before the image on the first user turn, image-only on
     later turns, one assistant turn per frame carrying its action. The plan
     prefixes the first assistant turn (``<plan>\\n<action>``); the terminal
-    token rides at the end of the final assistant message."""
+    token rides at the end of the final assistant message. The returned indices
+    mark the grammar turn and, when present, the instructed first user turn."""
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": [_text_block(system_prompt)]}
     ]
@@ -148,7 +152,7 @@ def build_messages(
         if idx == last and terminal_token:
             text = f"{text}\n{terminal_token}"
         messages.append({"role": "assistant", "content": [_text_block(text)]})
-    return messages
+    return messages, [0, 1] if instruction else [0]
 
 
 def usable_plan(goal: dict[str, Any]) -> str:
@@ -244,7 +248,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
                 instruction=task["instruction"],
                 instruction_field=task["instruction_field"],
             )
-            messages = build_messages(
+            messages, carry = build_messages(
                 turns,
                 instruction=instruction,
                 system_prompt=task["system_prompt"],
@@ -259,6 +263,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
                 "n_turns": len(turns),
                 "n_non_noop": sum(1 for _, a in turns if a != "NO_OP"),
                 "messages": messages,
+                CARRY_KEY: carry,
             })
             return {
                 **base,
@@ -282,7 +287,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
                 instruction_phrasings(goal, task["include_variants"])
             ):
                 suffix = f"_v{variant_idx}" if variant_idx else ""
-                messages = build_messages(
+                messages, carry = build_messages(
                     turns,
                     instruction=phrasing,
                     system_prompt=task["system_prompt"],
@@ -305,6 +310,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
                     "n_turns": len(turns),
                     "n_non_noop": sum(1 for _, a in turns if a != "NO_OP"),
                     "messages": messages,
+                    CARRY_KEY: carry,
                 })
         return {
             **base,
