@@ -112,6 +112,7 @@ from pipeline.lib.views import (  # noqa: E402
 DROP_PLAN_FLAGS = frozenset({"empty", "restates_instruction"})
 
 CARRY_KEY = "_omegalax_carry_messages"
+SPLIT_UNIT_ENDS_KEY = "_omegalax_split_unit_ends"
 
 
 def _text_block(text: str) -> dict[str, Any]:
@@ -122,6 +123,17 @@ def _image_block(image: str) -> dict[str, Any]:
     return {"type": "image", "image": image}
 
 
+def _split_metadata(
+    messages: list[dict[str, Any]], *, instructed: bool
+) -> tuple[list[int], list[int]]:
+    roles = [message.get("role") for message in messages]
+    if len(roles) < 3 or roles[0] != "system" or len(roles[1:]) % 2:
+        raise ValueError(f"invalid Crowd-Cast conversation roles: {roles!r}")
+    if any(roles[i : i + 2] != ["user", "assistant"] for i in range(1, len(roles), 2)):
+        raise ValueError(f"invalid Crowd-Cast conversation roles: {roles!r}")
+    return ([0, 1] if instructed else [0]), [1, *range(3, len(messages) + 1, 2)]
+
+
 def build_messages(
     turns: list[tuple[str, str]],  # ordered (image, action) pairs
     *,
@@ -129,13 +141,12 @@ def build_messages(
     system_prompt: str,
     plan: str | None = None,
     terminal_token: str | None = None,
-) -> tuple[list[dict[str, Any]], list[int]]:
+) -> tuple[list[dict[str, Any]], list[int], list[int]]:
     """Assemble one interleaved conversation. Canonical chat.jsonl schema:
     instruction text before the image on the first user turn, image-only on
     later turns, one assistant turn per frame carrying its action. The plan
     prefixes the first assistant turn (``<plan>\\n<action>``); the terminal
-    token rides at the end of the final assistant message. The returned indices
-    mark the grammar turn and, when present, the instructed first user turn."""
+    token rides at the end of the final assistant message."""
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": [_text_block(system_prompt)]}
     ]
@@ -152,7 +163,8 @@ def build_messages(
         if idx == last and terminal_token:
             text = f"{text}\n{terminal_token}"
         messages.append({"role": "assistant", "content": [_text_block(text)]})
-    return messages, [0, 1] if instruction else [0]
+    carry, split_unit_ends = _split_metadata(messages, instructed=bool(instruction))
+    return messages, carry, split_unit_ends
 
 
 def usable_plan(goal: dict[str, Any]) -> str:
@@ -248,7 +260,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
                 instruction=task["instruction"],
                 instruction_field=task["instruction_field"],
             )
-            messages, carry = build_messages(
+            messages, carry, split_unit_ends = build_messages(
                 turns,
                 instruction=instruction,
                 system_prompt=task["system_prompt"],
@@ -264,6 +276,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
                 "n_non_noop": sum(1 for _, a in turns if a != "NO_OP"),
                 "messages": messages,
                 CARRY_KEY: carry,
+                SPLIT_UNIT_ENDS_KEY: split_unit_ends,
             })
             return {
                 **base,
@@ -287,7 +300,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
                 instruction_phrasings(goal, task["include_variants"])
             ):
                 suffix = f"_v{variant_idx}" if variant_idx else ""
-                messages, carry = build_messages(
+                messages, carry, split_unit_ends = build_messages(
                     turns,
                     instruction=phrasing,
                     system_prompt=task["system_prompt"],
@@ -311,6 +324,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
                     "n_non_noop": sum(1 for _, a in turns if a != "NO_OP"),
                     "messages": messages,
                     CARRY_KEY: carry,
+                    SPLIT_UNIT_ENDS_KEY: split_unit_ends,
                 })
         return {
             **base,

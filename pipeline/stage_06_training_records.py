@@ -43,6 +43,28 @@ FLAGS = flags.FLAGS
 # writes a single split-agnostic cache at <message_lengths_path>/.
 MESSAGE_LENGTHS_FILENAME = "message_lengths.jsonl"
 
+
+def _message_lengths_cache(
+    lengths_root: Path, *, source_id: str, model_id: str, processor: str
+) -> Path:
+    manifest = json.loads((lengths_root / "manifest.json").read_text())
+    assert_same_artifact(
+        manifest["inputs"]["source_id"], source_id, what="message-length cache source"
+    )
+    measured = manifest["params"]
+    requested = {"model_id": model_id, "processor": processor}
+    recorded = {key: measured[key] for key in requested}
+    if recorded != requested:
+        raise ValueError(
+            f"message-length cache profile {recorded!r} does not match requested {requested!r}"
+        )
+    cache_path = lengths_root / MESSAGE_LENGTHS_FILENAME
+    if not cache_path.is_file():
+        raise FileNotFoundError(
+            f"message-length cache has no {MESSAGE_LENGTHS_FILENAME}: {lengths_root}"
+        )
+    return cache_path
+
 # pmanager-injected:
 flags.DEFINE_string("output_dir", None, "Inline-records output dir.", required=True)
 flags.DEFINE_string(
@@ -86,8 +108,9 @@ flags.DEFINE_string(
     f"<root>/{MESSAGE_LENGTHS_FILENAME}. Forwarded to build_sft_records_from_chat.py "
     "so the tokenizer pass is skipped (per-message lengths are independent of "
     "max_length / overflow_mode / split, so one cache serves every sequence length "
-    "and every split). Its manifest must record the same --source_path artifact "
-    "this run reads, or the join is refused. Optional: omit to tokenize in-line.",
+    "and every split). Its manifest must record the same --source_path artifact, "
+    "--model_id, and --processor this run uses, or the join is refused. Optional: "
+    "omit to tokenize in-line.",
 )
 flags.DEFINE_float(
     "val_fraction",
@@ -150,12 +173,12 @@ def main(_) -> None:
     source_id = make_artifact_id(source_path)
     cache_path = None
     if lengths_root is not None:
-        # Per-message lengths are independent of max_length / overflow_mode /
-        # split, but NOT of the chat that produced them: a cache measured from
-        # another dataset would silently pack this one at the wrong lengths.
-        measured_id = json.loads((lengths_root / "manifest.json").read_text())["inputs"]["source_id"]
-        assert_same_artifact(measured_id, source_id, what="message-length cache source")
-        cache_path = lengths_root / MESSAGE_LENGTHS_FILENAME
+        cache_path = _message_lengths_cache(
+            lengths_root,
+            source_id=source_id,
+            model_id=FLAGS.model_id,
+            processor=FLAGS.processor,
+        )
     splits = ("train", "val") if FLAGS.val_fraction > 0.0 else ("train",)
     per_split = [_run_split(s, src_chat, output_dir / s, cache_path) for s in splits]
 
