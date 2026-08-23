@@ -245,9 +245,9 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     pool: DesktopPoolConfig = DesktopPoolConfig()
     max_steps: int = Field(default=0, ge=0)
     """Overrides the task's own `max_steps` when > 0."""
-    max_tokens: int = Field(default=256, ge=1)
+    max_tokens: int = Field(default=256, ge=1, strict=True)
     """Fallback only — used for a knob `ctx.sampling` leaves unset."""
-    temperature: float | None = None
+    temperature: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
     """The arm's sampling temperature, which `evals/signoflife/__main__.py` promotes
     into the eval's `sampling` block; `ctx.sampling` still wins at the wire
     (`agent.agent.resolve_sampling`). `None` names no temperature, which is what a
@@ -263,7 +263,7 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     opens. So `evals/signoflife/__main__.py` refuses a model arm that names a
     temperature neither here nor on the command line, rather than supplying one of
     its own."""
-    top_p: float | None = None
+    top_p: float | None = Field(default=None, gt=0.0, le=1.0, allow_inf_nan=False)
     """`temperature`'s sibling, same contract. 1.0 is the no-op value, not the
     absence: an arm names it so the wire body carries the arm's nucleus setting and
     not the server's."""

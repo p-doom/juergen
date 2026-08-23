@@ -1801,6 +1801,12 @@ def test_a_config_without_a_codec_is_refused() -> None:
     "field,bad",
     [
         ("max_tokens", 0),
+        ("max_tokens", True),
+        ("temperature", float("nan")),
+        ("temperature", -0.1),
+        ("top_p", float("nan")),
+        ("top_p", 0.0),
+        ("top_p", 1.1),
         ("max_steps", -1),
     ],
 )

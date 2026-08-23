@@ -482,7 +482,7 @@ def test_the_tier_reaches_the_taskset_and_the_record(tmp_path) -> None:
 
 
 @pytest.mark.slow
-def test_an_unattended_model_arm_samples_at_its_own_temperature(tmp_path) -> None:
+def test_an_unattended_model_arm_samples_at_its_own_knobs(tmp_path, monkeypatch) -> None:
     """The arm decides, the flag overrides, and the record says which ran.
 
     `--temperature` used to default to 0.0, so every arm was scored greedy unless
@@ -493,6 +493,12 @@ def test_an_unattended_model_arm_samples_at_its_own_temperature(tmp_path) -> Non
     it, so it has to carry what actually ran rather than what was typed.
     """
     from evals.signoflife.cells import ARMS
+
+    monkeypatch.setitem(
+        ARMS,
+        "ordered",
+        ARMS["ordered"].model_copy(update={"top_p": 0.8, "max_tokens": 1024}),
+    )
 
     def _dispatch(*extra: str) -> dict:
         _fresh_process()
@@ -518,32 +524,96 @@ def test_an_unattended_model_arm_samples_at_its_own_temperature(tmp_path) -> Non
         )
         return json.loads((output / "result.json").read_text())
 
-    assert ARMS["ordered"].temperature == 0.7, "the arm is the source of truth"
-    assert _dispatch()["sampling"]["temperature"] == 0.7
-    assert _dispatch("--temperature", "0.0")["sampling"]["temperature"] == 0.0
+    assert _dispatch()["sampling"] == {
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "max_tokens": 1024,
+    }
+    assert _dispatch(
+        "--temperature",
+        "0.0",
+        "--top-p",
+        "0.9",
+        "--max-tokens",
+        "64",
+    )["sampling"] == {"temperature": 0.0, "top_p": 0.9, "max_tokens": 64}
 
 
-def test_a_model_arm_that_names_no_temperature_is_refused(tmp_path, monkeypatch) -> None:
-    """The other half of "no silent default": with the flag gone, an arm that names
-    nothing would sample at whatever the served engine happens to default to, and
-    the run would record that number as a choice this repo made."""
+@pytest.mark.parametrize(
+    ("sampling", "message"),
+    [
+        ({"temperature": None, "top_p": 1.0}, "names no temperature"),
+        ({"temperature": 0.7, "top_p": None}, "names no top_p"),
+    ],
+)
+def test_a_model_arm_that_names_incomplete_sampling_is_refused(
+    tmp_path, monkeypatch, sampling, message
+) -> None:
+    import evals.signoflife.__main__ as dispatcher
     from evals.harness import DesktopHarnessConfig
     from evals.signoflife.cells import ARMS, ORDERED_CODEC
 
     monkeypatch.setitem(
-        ARMS, "unnamed", DesktopHarnessConfig(id="sol_unnamed", codec=ORDERED_CODEC)
+        ARMS,
+        "incomplete",
+        DesktopHarnessConfig(id="sol_incomplete", codec=ORDERED_CODEC, **sampling),
     )
-    with pytest.raises(SystemExit, match="names no temperature"):
+    monkeypatch.setattr(
+        dispatcher,
+        "_eval_config",
+        lambda **kwargs: pytest.fail("sampling validation ran after resource setup"),
+    )
+    with pytest.raises(SystemExit, match=message):
         main(
             [
                 "--arm",
-                "unnamed",
+                "incomplete",
                 "--output",
                 str(tmp_path / "run"),
                 "--qcow",
                 str(tmp_path / "desktop.qcow2"),
                 "--base-url",
                 "http://127.0.0.1:9/v1",
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    ("flag", "value", "message"),
+    [
+        ("--temperature", "nan", "invalid temperature"),
+        ("--temperature", "inf", "invalid temperature"),
+        ("--temperature", "-0.1", "invalid temperature"),
+        ("--top-p", "nan", "invalid top_p"),
+        ("--top-p", "0", "invalid top_p"),
+        ("--top-p", "1.1", "invalid top_p"),
+        ("--max-tokens", "0", "invalid max_tokens"),
+        ("--max-tokens", "-1", "invalid max_tokens"),
+    ],
+)
+def test_a_model_arm_refuses_invalid_sampling_before_resource_setup(
+    tmp_path, monkeypatch, flag, value, message
+) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_eval_config",
+        lambda **kwargs: pytest.fail("sampling validation ran after resource setup"),
+    )
+    with pytest.raises(SystemExit, match=message):
+        main(
+            [
+                "--arm",
+                "ordered",
+                "--output",
+                str(tmp_path / "run"),
+                "--qcow",
+                str(tmp_path / "desktop.qcow2"),
+                "--base-url",
+                "http://127.0.0.1:9/v1",
+                flag,
+                value,
             ]
         )
 

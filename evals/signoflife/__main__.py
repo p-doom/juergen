@@ -45,6 +45,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import math
 import os
 import socket
 import subprocess
@@ -416,7 +417,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--temperature", type=float, default=None, help="override the arm's own value"
     )
     parser.add_argument("--top-p", type=float, default=None, help="override the arm's own value")
-    parser.add_argument("--max-tokens", type=int, default=256)
+    parser.add_argument(
+        "--max-tokens", type=int, default=None, help="override the arm's own value"
+    )
     parser.add_argument(
         "--verify-phaseb",
         action="store_true",
@@ -467,16 +470,27 @@ def main(argv: list[str] | None = None) -> int:
         )
     if not scripted and args.model_path is None and args.base_url is None:
         raise SystemExit(f"arm {args.arm} is a model arm: pass --model-path or --base-url")
-    # The arm is the source of truth and the flag is the override, so an unattended
-    # run cannot silently be handed a temperature this repo never chose.
     temperature = arm.temperature if args.temperature is None else args.temperature
     top_p = arm.top_p if args.top_p is None else args.top_p
+    max_tokens = arm.max_tokens if args.max_tokens is None else args.max_tokens
     if not scripted and temperature is None:
         raise SystemExit(
             f"arm {args.arm} names no temperature: set one on the arm or pass "
             "--temperature. An unnamed one is whatever the server defaults to, and "
             "greedy scores the decoder rather than the checkpoint"
         )
+    if not scripted and top_p is None:
+        raise SystemExit(
+            f"arm {args.arm} names no top_p: set one on the arm or pass --top-p"
+        )
+    if not scripted and (not math.isfinite(temperature) or temperature < 0.0):
+        raise SystemExit(f"invalid temperature {temperature!r}: expected a finite value >= 0")
+    if not scripted and (not math.isfinite(top_p) or not 0.0 < top_p <= 1.0):
+        raise SystemExit(f"invalid top_p {top_p!r}: expected a finite value in (0, 1]")
+    if not scripted and (
+        isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1
+    ):
+        raise SystemExit(f"invalid max_tokens {max_tokens!r}: expected a positive integer")
     if args.verify_phaseb:
         if args.model_path is None:
             raise SystemExit("--verify-phaseb checks a checkpoint: pass --model-path")
@@ -531,7 +545,7 @@ def main(argv: list[str] | None = None) -> int:
                 base_url=base_url,
                 temperature=temperature,
                 top_p=top_p,
-                max_tokens=args.max_tokens,
+                max_tokens=max_tokens,
             )
             environment = vf.Environment(config)
             traces = asyncio.run(run_eval(environment, config))
@@ -585,7 +599,7 @@ def main(argv: list[str] | None = None) -> int:
         "sampling": {
             "temperature": temperature,
             "top_p": top_p,
-            "max_tokens": args.max_tokens,
+            "max_tokens": max_tokens,
         },
         "vm": {
             "qcow": str(args.qcow),
