@@ -1001,6 +1001,72 @@ class NativeOrderedFormatTests(unittest.TestCase):
 
 
 class ResultPersistenceTests(unittest.TestCase):
+    def _run_validation_main(self, success: bool) -> tuple[int, dict, bool, dict]:
+        task = micro.Task(
+            task_id="click.test",
+            category="click",
+            instruction="click",
+            setup={},
+            target={},
+            cursor={},
+            expected={},
+            verifier={},
+        )
+        validation = {
+            "schema_version": 1,
+            "mode": "validate_setups_only",
+            "task_id": task.task_id,
+            "category": task.category,
+            "success": success,
+        }
+
+        def validate(**kwargs: object) -> dict:
+            output_dir = kwargs["output_dir"]
+            assert isinstance(output_dir, Path)
+            (output_dir / "result.json").write_text(json.dumps(validation))
+            return validation
+
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "output"
+            argv = [
+                "cua_micro_eval.py",
+                "--output_dir",
+                str(output_dir),
+                "--validate_setups_only",
+            ]
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(micro, "load_suite", return_value=({"suite": "test"}, [task])),
+                mock.patch.object(micro, "_preflight_ports"),
+                mock.patch.object(micro, "_wait_ports_free"),
+                mock.patch.object(micro, "_launch_vm", return_value=mock.Mock()),
+                mock.patch.object(micro, "_assert_qemu_alive"),
+                mock.patch.object(micro, "OSWorldClient"),
+                mock.patch.object(micro, "validate_task_setup", side_effect=validate),
+                mock.patch.object(micro, "_terminate"),
+            ):
+                return_code = micro.main()
+            result = json.loads((output_dir / "result.json").read_text())
+            marker_exists = (output_dir / "completed.json").exists()
+            validation_result = json.loads(
+                (output_dir / "tasks" / "click.test" / "validation" / "result.json").read_text()
+            )
+        return return_code, result, marker_exists, validation_result
+
+    def test_successful_setup_validation_publishes_completion(self) -> None:
+        return_code, result, marker_exists, validation = self._run_validation_main(True)
+        self.assertEqual(return_code, 0)
+        self.assertTrue(result["success"])
+        self.assertTrue(marker_exists)
+        self.assertTrue(validation["success"])
+
+    def test_failed_setup_validation_preserves_results_without_completion(self) -> None:
+        return_code, result, marker_exists, validation = self._run_validation_main(False)
+        self.assertEqual(return_code, 1)
+        self.assertFalse(result["success"])
+        self.assertFalse(marker_exists)
+        self.assertFalse(validation["success"])
+
     def _run_main(self, attempt: dict) -> tuple[int, dict, bool, dict]:
         task = micro.Task(
             task_id="click.test",

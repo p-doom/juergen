@@ -3083,7 +3083,8 @@ def main() -> int:
                 "per_task": {str(row["task_id"]): row for row in validations},
             }
             (output_dir / "result.json").write_text(json.dumps(summary, indent=2))
-        completion_marker.write_text(json.dumps(summary, indent=2))
+        if summary["success"]:
+            completion_marker.write_text(json.dumps(summary, indent=2))
         return 0 if summary["success"] else 1
 
     system_prompt = SYSTEM_PROMPTS[args.system_prompt_id]
