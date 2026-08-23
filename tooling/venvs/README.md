@@ -61,7 +61,7 @@ defeats `--require-hashes` outright since an override is not `==` pinned.
 
 ## Provenance holes
 
-Fourteen requirements across eight venvs are installed from a path rather than an
+The remaining requirements below are installed from a path rather than an
 identity. The manifest records what the path held at capture time, but the path
 is what gets installed, so a rebuild takes whatever is there when it runs. These
 are the holes, and closing them means publishing those trees and pinning a sha:
@@ -77,9 +77,6 @@ are the holes, and closing them means publishing those trees and pinning a sha:
 | `omegalax-rearch-testgate-venv` | `tokamax @ file://…/tokamax` | `d81bc23bc80f`, `fix/shard-map-nested-mask`, 1 uncommitted |
 | `osworld-parity-venv` | `juergen @ file://…/juergen-nn` | `03a7b04680`, `native-normalized`, 1 uncommitted — a *second* juergen checkout, not this one |
 | `sglang-eval-venv` | `-e file://…/crowd-cast-eval` | **directory no longer exists** |
-| `sign_of_life_eval_v2_venv` | editable `juergen` | `119b2e252b9a`, `franz/sign-of-life-eval-v2-20260803`, clean |
-| `sign_of_life_eval_v2_venv` | editable `crowdcast-data-pipeline` | same commit, `data_pipeline` subdirectory |
-| `sign_of_life_eval_v2_venv` | editable `crowdcast-eval` | same commit, `eval` subdirectory |
 
 Two of them are unrecoverable. `eval-venv`'s `-e file:///fast/home/franz.srambical/eval`
 and `sglang-eval-venv`'s `-e file:///fast/home/franz.srambical/crowd-cast-eval`
@@ -88,9 +85,12 @@ Those lines are commented out in their manifests so the rebuild completes, and
 the rebuild is **not** equivalent to the captured venv. Both venvs are
 serving-only and off every gate path, which is the only reason this is survivable.
 
-The sign-of-life source commit is not on `origin`. Its rebuild script accepts a
-repository containing that object and archives the exact commit rather than
-installing whatever a checkout currently holds.
+The three sign-of-life editables are archived on `origin` at
+`refs/heads/archive/sign-of-life-eval-v2-20260803`, which resolves to
+`119b2e252b9a91ee4e15124b720daccfd1c9789b`. Its rebuild script requires the
+caller repository's `refs/remotes/origin/archive/sign-of-life-eval-v2-20260803`
+to resolve to that exact commit; it neither fetches nor accepts an unverified
+local object.
 
 Three requirements do pin, because the sha is in the URL:
 `tokamax @ git+https://github.com/p-doom/tokamax.git@d81bc23b` (the three omegalax

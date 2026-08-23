@@ -9,13 +9,18 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="${1:?usage: $0 <target-dir> <juergen-repository>}"
 SOURCE="${2:?usage: $0 <target-dir> <juergen-repository>}"
 SOURCE_COMMIT=119b2e252b9a91ee4e15124b720daccfd1c9789b
+SOURCE_REF=refs/remotes/origin/archive/sign-of-life-eval-v2-20260803
 
 if [ -e "$TARGET" ]; then
   echo "target already exists: $TARGET" >&2
   exit 2
 fi
-if ! git -C "$SOURCE" cat-file -e "$SOURCE_COMMIT^{commit}" 2>/dev/null; then
-  echo "source repository does not contain $SOURCE_COMMIT" >&2
+if ! resolved_source=$(git -C "$SOURCE" rev-parse --verify "$SOURCE_REF^{commit}" 2>/dev/null); then
+  echo "source repository does not contain fetched $SOURCE_REF" >&2
+  exit 2
+fi
+if [ "$resolved_source" != "$SOURCE_COMMIT" ]; then
+  echo "$SOURCE_REF resolves to $resolved_source, expected $SOURCE_COMMIT" >&2
   exit 2
 fi
 
