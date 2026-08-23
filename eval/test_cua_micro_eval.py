@@ -1277,6 +1277,76 @@ class SchedulerContractTests(unittest.TestCase):
             (11, 41203),
         )
 
+    def test_aggregation_uses_attempt_order_not_completion_order(self) -> None:
+        task = self._task("task.order")
+        attempts = [
+            {
+                "task_id": task.task_id,
+                "attempt": attempt,
+                "validity": "valid",
+                "success": attempt == 5,
+                "progress": 1.0 if attempt == 5 else 0.0,
+                "parse_valid": True,
+                "expected_action_ok": True,
+            }
+            for attempt in (5, 4, 3, 2, 1)
+        ]
+        row = micro.aggregate_results([task], attempts)["per_task"][task.task_id]
+        self.assertFalse(row["pass_at_4"])
+        self.assertEqual(row["best_of_4_progress"], 0.0)
+
+    def test_attempt_four_finishing_first_is_persisted_after_attempt_one(self) -> None:
+        task = self._task("task.order")
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            for ordinal in (0, 3):
+                (output_dir / f"task_{ordinal:03d}_task.order").mkdir()
+            ctx = micro._RunContext(
+                tasks=[task],
+                suite_raw={"suite": "test"},
+                output_dir=output_dir,
+                sglang_url="http://model.invalid/v1",
+                args=Namespace(
+                    attempts=4,
+                    seed_base=41000,
+                    model_path="model",
+                    system_prompt_id="test",
+                ),
+                action_format=micro._REL_STEP_FORMAT,
+                system_prompt="prompt",
+                sampling=qwen_sampling("thinking"),
+                model_resolution=None,
+                total=4,
+                started=0.0,
+                state_lock=threading.Lock(),
+                attempts=[],
+                runs=[],
+            )
+            result = {
+                "task_id": task.task_id,
+                "validity": "valid",
+                "infra_error": None,
+                "success": False,
+                "progress": 0.0,
+                "parse_valid": True,
+                "expected_action_ok": True,
+            }
+            for attempt_index in (3, 0):
+                micro._record_attempt_result(
+                    ctx,
+                    task_index=0,
+                    task=task,
+                    attempt_index=attempt_index,
+                    result=result,
+                )
+            summary = json.loads((output_dir / "result.json").read_text())
+            first = json.loads((output_dir / "task_000_task.order" / "result.json").read_text())
+            fourth = json.loads((output_dir / "task_003_task.order" / "result.json").read_text())
+
+        self.assertEqual([row["index"] for row in ctx.attempts], [0, 3])
+        self.assertEqual([run["index"] for run in summary["runs"]], [0, 3])
+        self.assertEqual((first["attempt"], fourth["attempt"]), (1, 4))
+
     def test_attempt_deadline_kills_process_and_records_typed_invalid_result(self) -> None:
         task = self._task("task.timeout", turns=64)
         process = mock.Mock(pid=81234, exitcode=None)

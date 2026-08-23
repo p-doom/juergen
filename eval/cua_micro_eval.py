@@ -2479,6 +2479,10 @@ def aggregate_results(tasks: list[Task], attempts: list[dict[str, Any]]) -> dict
     per_task: dict[str, dict[str, Any]] = {}
     for task in tasks:
         rows = by_task.get(task.task_id, [])
+        if any("attempt" in row for row in rows):
+            if not all("attempt" in row for row in rows):
+                raise ValueError(f"task {task.task_id} mixes indexed and unindexed attempts")
+            rows = sorted(rows, key=lambda row: int(row["attempt"]))
         valid_rows = [row for row in rows if row["validity"] == "valid"]
         successes = [bool(row.get("success")) for row in rows]
         valid_successes = [bool(row["success"]) for row in valid_rows]
@@ -3037,6 +3041,8 @@ def _record_attempt_result(
         seed_base=args.seed_base,
     )
     attempt_dir = ctx.output_dir / _run_slug(ordinal_index, task.task_id)
+    result = {**result, "index": ordinal_index, "attempt": attempt_index + 1}
+    (attempt_dir / "result.json").write_text(json.dumps(result, indent=2))
     run_entry = {
         "index": ordinal_index,
         "slug": attempt_dir.name,
@@ -3051,6 +3057,7 @@ def _record_attempt_result(
     }
     with ctx.state_lock:
         ctx.attempts.append(result)
+        ctx.attempts.sort(key=lambda row: int(row["index"]))
         ctx.runs.append(run_entry)
         aggregate = aggregate_results(ctx.tasks, ctx.attempts)
         partial = {
