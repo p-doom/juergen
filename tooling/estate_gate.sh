@@ -23,8 +23,8 @@
 #                                      torchvision) + `renderers` from PyPI.
 #
 # Every suite runs even if an earlier one fails. Exit status: 0 all green, 1 a
-# suite failed, 2 an environment is missing (nothing was measured -- do not read
-# that as green).
+# suite failed -- or, under `--strict`, an integrity signal fired -- 2 an
+# environment is missing (nothing was measured -- do not read that as green).
 #
 # A reading says what it measured. Before the first test runs, every suite's
 # repository sha, uncommitted-file counts, interpreter version and environment are
@@ -51,11 +51,18 @@
 # keeps executing the inode it started on (visible on NFS as a stray
 # `tooling/.nfs*` file) and its output describes a gate no longer on disk.
 #
+# `--strict` makes DIRTY, MOVED, REPLACED and venv drift exit 1. CONTENDED stays a
+# warning because it invalidates timing comparisons, not test results.
+#
 # Each suite reports wall seconds, CPU seconds, and the share of one core it
 # obtained. The gate is sequential and single-threaded, so a share well below 1
 # is wall time lost waiting for CPU rather than work done: a run three times
 # slower because four suites and several agents were contending for a two-core
 # quota is then visible in the reading instead of inferred from a stopwatch.
+#
+# Locked suites run `uv lock --check` and compare the lock plus installed-package
+# hashes with a fingerprint beside the venv. The first run writes the baseline
+# and warns; later mismatches annotate the verdict and fail under `--strict`.
 #
 # Five interpreters, each overridable. The defaults are the venvs these suites
 # are run under on this cluster; on another machine, set the variables.
@@ -79,6 +86,8 @@
 # running anything.
 # `--only <name>` runs one suite (juergen | data_pipeline | desktop |
 # desktop_fleet | omegalax_rearch).
+# `--strict`, or ESTATE_GATE_STRICT=1, fails the run on a dirty tree, MOVED,
+# REPLACED or venv drift.
 #
 # omegalax-rearch: only the test files the rearchitecture touches are run. The
 # rest of that repo's tests want real GPUs and real checkpoints and would fail on
@@ -149,10 +158,12 @@ SUITES=(
 
 ONLY=""
 LIST_ONLY=0
+: "${ESTATE_GATE_STRICT:=0}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --list) LIST_ONLY=1; shift ;;
     --only) ONLY="${2:-}"; shift 2 ;;
+    --strict) ESTATE_GATE_STRICT=1; shift ;;
     # Printed by matching the header block, not by line number: this header
     # grows, and a range would silently start cutting it off.
     -h|--help) awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"; exit 0 ;;
@@ -160,11 +171,17 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+case "$ESTATE_GATE_STRICT" in
+  0|1) ;;
+  *) echo "ESTATE_GATE_STRICT must be 0 or 1" >&2; exit 2 ;;
+esac
+
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 
 # preflight: report every missing thing, not just the first.
 problems=()
 planned=()
+locked=()
 command -v git >/dev/null 2>&1 || problems+=("git not on PATH -- a reading records the sha it measured")
 for entry in "${SUITES[@]}"; do
   IFS='|' read -r name root python marker targets <<<"$entry"
@@ -189,6 +206,7 @@ for entry in "${SUITES[@]}"; do
   if ! "$python" -c "import pytest" 2>/dev/null; then
     problems+=("$name: $python has no pytest")
   fi
+  [ -f "$root/uv.lock" ] && locked+=("$name")
 done
 
 if [ -n "$ONLY" ] && [ ${#planned[@]} -eq 0 ]; then
@@ -196,14 +214,10 @@ if [ -n "$ONLY" ] && [ ${#planned[@]} -eq 0 ]; then
   exit 2
 fi
 
-# tests/test_packaging.py builds the juergen and desktop wheels to prove the five
-# flat plugin ids resolve outside a checkout. uv is the estate's build front end
-# and is in none of the suites' venvs, so it is preflight, not a suite failure.
-case " ${planned[*]} " in
-  *" juergen "*)
-    command -v uv >/dev/null 2>&1 || problems+=("juergen: uv not on PATH -- tests/test_packaging.py builds a wheel with it")
-    ;;
-esac
+# uv is preflight because locked suites and juergen's packaging test need it.
+if [ ${#locked[@]} -gt 0 ] && ! command -v uv >/dev/null 2>&1; then
+  problems+=("uv not on PATH -- ${locked[*]} are read against their locks, and tests/test_packaging.py builds a wheel with it")
+fi
 
 probe_tree() {
   for entry in "${SUITES[@]}"; do
@@ -224,6 +238,8 @@ probe_tree() {
 }
 
 dirty_suites=()
+drifted=()
+violations=()
 print_tree_state() {
   bold "estate gate: tree state"
   while IFS='|' read -r name sha tracked untracked py venv; do
@@ -235,6 +251,48 @@ print_tree_state() {
     fi
     printf '  %-16s %s  py%-8s %-28s %s\n' "$name" "$sha" "$py" "$venv" "$state"
   done <<<"$1"
+}
+
+# importlib.metadata rather than `pip freeze`: uv builds these venvs without pip.
+venv_set_hash() {
+  "$1" - <<'PYEOF'
+import hashlib
+from importlib.metadata import distributions
+
+installed = sorted(f"{d.metadata['Name']}=={d.version}" for d in distributions())
+print(hashlib.sha256("\n".join(installed).encode()).hexdigest()[:16])
+PYEOF
+}
+
+print_lock_state() {
+  bold "estate gate: lock and venv"
+  for entry in "${SUITES[@]}"; do
+    IFS='|' read -r name root python marker targets <<<"$entry"
+    [ -n "$ONLY" ] && [ "$ONLY" != "$name" ] && continue
+    [ -f "$root/uv.lock" ] || continue
+    notes=()
+    uv lock --check --project "$root" >/dev/null 2>&1 ||
+      notes+=("LOCK STALE: uv.lock is not up to date with pyproject.toml")
+    lock_sha="$(sha256sum "$root/uv.lock" | cut -c1-16)"
+    venv_sha="$(venv_set_hash "$python")"
+    record="$(cd -- "$(dirname -- "$(dirname -- "$python")")" && pwd)/.estate_gate_fingerprint.$name"
+    if [ -f "$record" ]; then
+      read -r was_lock was_venv was_when < "$record"
+      [ "$lock_sha" = "$was_lock" ] ||
+        notes+=("DRIFT: uv.lock has moved since this venv was fingerprinted on $was_when -- rebuild it")
+      [ "$venv_sha" = "$was_venv" ] ||
+        notes+=("DRIFT: the installed set has changed since $was_when")
+      state="matches its fingerprint of $was_when"
+    else
+      printf '%s %s %s\n' "$lock_sha" "$venv_sha" "$(date +%F)" > "$record"
+      state="WARNING: first fingerprint written, nothing compared"
+    fi
+    if [ ${#notes[@]} -gt 0 ]; then
+      state="$(printf '%s; ' "${notes[@]}" | sed 's/; $//')"
+      drifted+=("$name")
+    fi
+    printf '  %-16s lock:%s venv:%s  %s\n' "$name" "$lock_sha" "$venv_sha" "$state"
+  done
 }
 
 if [ "$LIST_ONLY" = 1 ]; then
@@ -266,6 +324,10 @@ fi
 tree_before="$(probe_tree)"
 print_tree_state "$tree_before"
 echo
+if [ ${#locked[@]} -gt 0 ]; then
+  print_lock_state
+  echo
+fi
 
 # A concurrent editor replaces this file rather than rewriting it in place, so a
 # run keeps executing the inode it started on -- on NFS as one of those stray
@@ -352,20 +414,33 @@ tree_after="$(probe_tree)"
 if [ "$tree_after" != "$tree_before" ]; then
   bold "MOVED: the tree changed while this ran -- the state above is what it started from"
   diff <(printf '%s\n' "$tree_before") <(printf '%s\n' "$tree_after") | sed 's/^/  /'
+  violations+=("the tree moved mid-run")
 fi
 
 if [ "$script_inode" != "$(stat -c %i "${BASH_SOURCE[0]}" 2>/dev/null)" ]; then
   bold "REPLACED: this script was rewritten mid-run -- the results above came from the previous version"
+  violations+=("this script was replaced mid-run")
 fi
 
-dirty_note=""
+note=""
 if [ ${#dirty_suites[@]} -gt 0 ]; then
-  dirty_note="  (DIRTY TREE: ${dirty_suites[*]} -- uncommitted bytes, not a commit)"
+  note="  (DIRTY TREE: ${dirty_suites[*]} -- uncommitted bytes, not a commit)"
+  violations+=("uncommitted bytes in ${dirty_suites[*]}")
+fi
+if [ ${#drifted[@]} -gt 0 ]; then
+  note="$note  (VENV DRIFT: ${drifted[*]} -- not the versions the lock declares)"
+  violations+=("venv drift in ${drifted[*]}")
+fi
+
+# Strict names every integrity violation in the verdict.
+if [ "$ESTATE_GATE_STRICT" = 1 ] && [ ${#violations[@]} -gt 0 ]; then
+  failed=1
+  note="  (STRICT: $(printf '%s; ' "${violations[@]}" | sed 's/; $//'))"
 fi
 
 if [ "$failed" -ne 0 ]; then
-  bold "ESTATE GATE: RED$dirty_note"
+  bold "ESTATE GATE: RED$note"
   exit 1
 fi
-bold "ESTATE GATE: GREEN$dirty_note"
+bold "ESTATE GATE: GREEN$note"
 exit 0

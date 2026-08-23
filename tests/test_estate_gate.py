@@ -47,6 +47,7 @@ def _estate(tmp_path: Path, test_body: str | None) -> Path:
     """One suite's checkout: a `tests/` directory under git, and nothing else."""
     root = tmp_path / "siblings" / "desktop"
     (root / "tests").mkdir(parents=True)
+    (root / ".gitignore").write_text("__pycache__/\n.venv/\n")
     (root / "README").write_text("the tree state the gate must report\n")
     if test_body is not None:
         (root / "tests" / "test_fake.py").write_text(test_body)
@@ -56,16 +57,30 @@ def _estate(tmp_path: Path, test_body: str | None) -> Path:
     return root
 
 
-def _read(root: Path, gate: Path = GATE) -> tuple[int, str]:
+def _read(
+    root: Path,
+    gate: Path = GATE,
+    strict: str | None = None,
+    python: str | Path = sys.executable,
+) -> tuple[int, str]:
     """The `desktop` suite is the one whose marker and target list are minimal."""
-    env = dict(os.environ, DESKTOP_ROOT=str(root), DESKTOP_PYTHON=sys.executable)
+    env = dict(os.environ, DESKTOP_ROOT=str(root), DESKTOP_PYTHON=str(python))
     env.pop("PYTEST_ADDOPTS", None)
+    env.pop("ESTATE_GATE_STRICT", None)
+    argv = ["bash", str(gate), "--only", "desktop"]
+    if strict == "flag":
+        argv.append("--strict")
+    elif strict == "env":
+        env["ESTATE_GATE_STRICT"] = "1"
+    else:
+        assert strict is None, strict
     done = subprocess.run(
-        ("bash", str(gate), "--only", "desktop"),
+        tuple(argv),
         env=env,
         capture_output=True,
         text=True,
         timeout=600,
+        check=False,
     )
     return done.returncode, _ANSI.sub("", done.stdout + done.stderr)
 
@@ -113,6 +128,43 @@ def test_a_dirty_tree_is_named_in_the_reading_and_weakens_its_green(tmp_path: Pa
     ), out
 
 
+def test_strict_turns_a_dirty_tree_into_the_verdict(tmp_path: Path) -> None:
+    root = _estate(tmp_path, "def test_one():\n    assert True\n")
+    (root / "README").write_text("edited under the gate's feet\n")
+    code, out = _read(root, strict="flag")
+    assert code == 1, out
+    assert re.search(r"PASS\s+desktop\s+1 passed", out), out
+    assert _verdict(out) == (
+        "ESTATE GATE: RED  (STRICT: uncommitted bytes in desktop)"
+    ), out
+
+
+def test_strict_leaves_a_clean_green_run_green(tmp_path: Path) -> None:
+    root = _estate(tmp_path, "def test_one():\n    assert True\n")
+    code, out = _read(root, strict="env")
+    assert code == 0, out
+    assert _verdict(out) == "ESTATE GATE: GREEN", out
+
+
+def test_strict_fails_a_run_whose_tree_moved_under_it(tmp_path: Path) -> None:
+    root = _estate(
+        tmp_path,
+        "import pathlib\n\n\ndef test_lands_a_change():\n"
+        "    (pathlib.Path(__file__).resolve().parents[1] / 'landed.py').write_text('')\n",
+    )
+    code, out = _read(root, strict="flag")
+    assert code == 1, out
+    assert _verdict(out) == "ESTATE GATE: RED  (STRICT: the tree moved mid-run)", out
+
+
+def test_strict_does_not_fail_a_contended_run(tmp_path: Path) -> None:
+    root = _estate(tmp_path, "import time\n\n\ndef test_waits():\n    time.sleep(3)\n")
+    code, out = _read(root, strict="flag")
+    assert code == 0, out
+    assert "CONTENDED" in out, out
+    assert _verdict(out) == "ESTATE GATE: GREEN", out
+
+
 def test_a_tree_that_moves_mid_run_is_named_as_having_moved(tmp_path: Path) -> None:
     """Suites take twenty minutes, over which other agents land commits, so the
     state a run began on is not the state it ended on."""
@@ -129,22 +181,58 @@ def test_a_tree_that_moves_mid_run_is_named_as_having_moved(tmp_path: Path) -> N
 
 
 def test_a_run_whose_own_script_was_replaced_says_so(tmp_path: Path) -> None:
-    """An editor replaces this file rather than rewriting it, so a run in flight
-    keeps executing the inode it started on -- the stray `tooling/.nfs*` files are
-    exactly that -- and its output describes a gate no longer on disk."""
-    gate = tmp_path / "estate_gate.sh"
-    shutil.copy(GATE, gate)
-    root = _estate(
-        tmp_path,
-        "import os\nimport pathlib\nimport shutil\n\n\ndef test_replaces_the_gate():\n"
-        f"    gate = pathlib.Path({str(gate)!r})\n"
-        "    swap = gate.with_suffix('.swap')\n"
-        "    shutil.copy(gate, swap)\n"
-        "    os.replace(swap, gate)\n",
+    for strict, expected_code in ((None, 0), ("flag", 1)):
+        run_dir = tmp_path / (strict or "default")
+        gate = run_dir / "estate_gate.sh"
+        gate.parent.mkdir()
+        shutil.copy(GATE, gate)
+        root = _estate(
+            run_dir,
+            "import os\nimport pathlib\nimport shutil\n\n\ndef test_replaces_the_gate():\n"
+            f"    gate = pathlib.Path({str(gate)!r})\n"
+            "    swap = gate.with_suffix('.swap')\n"
+            "    shutil.copy(gate, swap)\n"
+            "    os.replace(swap, gate)\n",
+        )
+        code, out = _read(root, gate=gate, strict=strict)
+        assert code == expected_code, out
+        assert "REPLACED: this script was rewritten mid-run" in out, out
+        if strict:
+            assert _verdict(out) == (
+                "ESTATE GATE: RED  (STRICT: this script was replaced mid-run)"
+            ), out
+
+
+def test_venv_drift_warns_by_default_and_fails_strict(tmp_path: Path) -> None:
+    root = _estate(tmp_path, "def test_one():\n    assert True\n")
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "estate-test"\nversion = "0"\nrequires-python = ">=3.11"\n'
     )
-    code, out = _read(root, gate=gate)
+    subprocess.run(("uv", "lock", "--project", str(root)), check=True)
+    _git(root, "add", "pyproject.toml", "uv.lock")
+    _git(root, "commit", "-qm", "lock")
+    python = root / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text(f'#!/usr/bin/env bash\nexec "{sys.executable}" "$@"\n')
+    python.chmod(0o770)
+
+    code, out = _read(root, python=python)
     assert code == 0, out
-    assert "REPLACED: this script was rewritten mid-run" in out, out
+    assert "WARNING: first fingerprint written, nothing compared" in out, out
+
+    fingerprint = root / ".venv" / ".estate_gate_fingerprint.desktop"
+    lock_hash, _, recorded = fingerprint.read_text().split()
+    fingerprint.write_text(f"{lock_hash} {'0' * 16} {recorded}\n")
+
+    code, out = _read(root, python=python)
+    assert code == 0, out
+    assert "(VENV DRIFT: desktop -- not the versions the lock declares)" in _verdict(
+        out
+    )
+
+    code, out = _read(root, strict="flag", python=python)
+    assert code == 1, out
+    assert _verdict(out) == "ESTATE GATE: RED  (STRICT: venv drift in desktop)", out
 
 
 def test_a_root_whose_tree_state_cannot_be_read_measures_nothing(tmp_path: Path) -> None:
