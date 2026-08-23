@@ -541,18 +541,68 @@ def test_a_terminating_turn_round_trips_through_the_control_channel(
     assert codec.parse(control.body).terminate is None
 
 
-@pytest.mark.parametrize("legacy", ["TERMINATE", "FAIL", "NO_OP\nTERMINATE"])
+@pytest.mark.parametrize(
+    ("text", "status"),
+    [
+        (_support.CONTROL_TOKEN, None),
+        (f"{_support.CONTROL_TOKEN}: success", "success"),
+        (f"{_support.CONTROL_TOKEN}: failure", "failure"),
+    ],
+)
 @pytest.mark.parametrize("name", NAMES)
-def test_the_retired_control_tokens_are_loud_in_every_grammar(name, legacy):
+def test_the_stop_token_ends_the_episode_with_or_without_a_status(name, text, status):
+    """The status is optional on the way in, and its absence claims nothing.
+
+    This asserted the opposite until a full census of the eov3 corpus read
+    58,459 bare ``TERMINATE`` turns of 497,650 (11.7%) and zero of either colon
+    form: the channel was refusing the only stop token this checkpoint family was
+    ever trained to emit, so 11.7% of its natural output scored as a parse error
+    and `control_terminate` was null in every episode of every arm.
+
+    A missing status is NOT a claimed success: it terminates with a null
+    ``status``, so nothing downstream can read a claim the model did not make, and
+    `evals/harness.py`'s postcondition remains the only thing that sets `success`.
+    """
+    codec = _codec(name)
+    payload = _vectors(name)
+    control = _support.split_control(text)
+    assert control.terminated and control.status == status and control.ignored == 0
+    assert control.body == "", "the whole turn was the control line"
+    # `Agent.decide` keys on `NoAction` exactly: no action of the grammar to parse
+    # is a terminate-only turn, and only a MALFORMED one is a parse error.
+    with pytest.raises(_support.NoAction):
+        codec.parse(control.body)
+    if status is None:
+        # No grammar can spell an unclaimed termination: `native_absolute` and
+        # `move_rel` have no idle action and refuse the empty stream, so
+        # `Agent.decide` publishes a null `parsed_action` for a bare stop in all
+        # seven rather than letting five invent an idle action nobody emitted.
+        # Asserted end-to-end in `tests/test_agent.py`.
+        return
+    assert (
+        codec.action_from_operations(
+            (),
+            geometry=_geometry(payload["geometry"]),
+            cursor=tuple(payload["default_cursor"]),
+            terminate=status,
+        ).terminate
+        == status
+    )
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_the_retired_control_token_is_loud_in_every_grammar(name):
     """What a checkpoint trained before the channel emits, and why it must be loud.
 
-    A bare ``TERMINATE`` is neither the channel's line nor an action, so such a
-    turn is a scored parse error. The alternative — keeping the old token as a
-    second accepted spelling — is what made termination a per-grammar surface.
+    ``FAIL`` is the retired token with no successor spelling: the corpus that
+    forced ``TERMINATE`` open contains no ``FAIL`` span at all, so there is no
+    trained output to accommodate and accepting it would only re-open termination
+    as a per-grammar surface. It is neither the channel's line nor an action, so
+    such a turn stays a scored parse error.
     """
-    assert _support.split_control(legacy).status is None
+    assert not _support.split_control("FAIL").terminated
     with pytest.raises(ValueError):
-        _codec(name).parse(legacy)
+        _codec(name).parse("FAIL")
 
 
 @pytest.mark.parametrize("name", NAMES)
@@ -630,10 +680,16 @@ def test_the_control_line_must_be_last_and_exact():
         "TERMINATE: success\n0 0 0",
         "terminate: success",
         "TERMINATE: succes",
-        "TERMINATE",
+        # The status is optional, so these probe the seam that made it so: an
+        # empty or unknown status is a near-miss, not an unclaimed termination.
+        "TERMINATE:",
+        "TERMINATE: unspecified",
+        "TERMINATEX",
         "I will TERMINATE: success",
+        "I will TERMINATE",
     ):
         control = _support.split_control(near_miss)
+        assert not control.terminated
         assert control.status is None and control.body == near_miss
 
 

@@ -981,7 +981,7 @@ def render_tool_calls(calls: Sequence[dict[str, Any]]) -> str:
 
 CONTROL_TOKEN = "TERMINATE"
 
-_CONTROL_LINE_RE = re.compile(rf"^{CONTROL_TOKEN}:\s*(success|failure)$")
+_CONTROL_LINE_RE = re.compile(rf"^{CONTROL_TOKEN}(?::\s*(success|failure))?$")
 
 #: Appended to every grammar's prompt. It names no coordinate, no key and no
 #: action, which is what makes it grammar-independent rather than a shared token
@@ -1000,6 +1000,12 @@ CONTROL_SPEC = f"""Ending the episode
 class Control:
     """The episode-control decision read off one completion.
 
+    ``terminated`` is whether the episode ends here and ``status`` is the outcome
+    the model CLAIMED, which are two things: a bare ``TERMINATE`` ends the episode
+    and claims nothing, so it is ``terminated`` with a null ``status``. Only the
+    first is a control decision — the claim is recorded as data and arbitrates
+    nothing, because the harness's postcondition is what decides success.
+
     ``body`` is the completion with the control removed, and is the only text a
     codec is given — so nothing on the far side of a termination can be parsed or
     dispatched. ``ignored`` counts the actions the turn placed after its own
@@ -1010,6 +1016,7 @@ class Control:
     status: str | None
     body: str
     ignored: int = 0
+    terminated: bool = False
 
 
 def render_control(status: str, *, error: type[Exception] = ValueError) -> str:
@@ -1035,12 +1042,20 @@ def with_control(
 def split_control(text: str) -> Control:
     """One completion -> its control decision and the text a codec may read.
 
-    Two spellings are accepted and one is written. ``CONTROL_SPEC``'s line is
-    ours. The other is the vendor's ``computer_use`` ``terminate`` call, which we
-    read but never emit: an off-the-shelf Qwen3-VL emits its own termination
-    whatever our prompt says, and that model in ``native_absolute`` is the only
-    calibrated reference this program has (33.9% OSWorld-Verified). Refusing it
-    would turn every off-the-shelf termination into a parse error.
+    Three spellings are read and one is written. ``CONTROL_SPEC``'s line is ours.
+    Its status is optional on the way in: a bare ``TERMINATE`` is 11.7% of the
+    eov3 corpus's 497,650 assistant turns and the colon form is 0% of them, so
+    requiring the status made the stop token this checkpoint family was trained to
+    emit score as a parse error. The third is the vendor's ``computer_use``
+    ``terminate`` call, which we read but never emit: an off-the-shelf Qwen3-VL
+    emits its own termination whatever our prompt says, and that model in
+    ``native_absolute`` is the only calibrated reference this program has (33.9%
+    OSWorld-Verified). Refusing it would turn every off-the-shelf termination into
+    a parse error.
+
+    A missing status is not a claimed success. It ends the episode with a null
+    ``status``, and the harness's postcondition decides the verdict — so a bare
+    stop on a task whose postcondition was never met cannot score as one.
 
     Anything close but not exact — a mistyped token, an unknown status — is NOT a
     control. It stays in ``body``, where the codec rejects it as the action it
@@ -1056,7 +1071,7 @@ def split_control(text: str) -> Control:
         match = _CONTROL_LINE_RE.fullmatch(lines[index].strip())
         if match is None:
             break
-        return Control(match[1], "\n".join(lines[:index]))
+        return Control(match[1], "\n".join(lines[:index]), terminated=True)
     return _vendor_control(text)
 
 
@@ -1093,7 +1108,10 @@ def _vendor_control(text: str) -> Control:
             status = _vendor_terminate_status(payload)
             if status is not None:
                 return Control(
-                    status, text[: match.start()].rstrip(), len(tagged) - index - 1
+                    status,
+                    text[: match.start()].rstrip(),
+                    len(tagged) - index - 1,
+                    terminated=True,
                 )
         return Control(None, text)
     calls = list(iter_tool_calls(text))
@@ -1101,7 +1119,10 @@ def _vendor_control(text: str) -> Control:
         status = _vendor_terminate_status({"arguments": arguments})
         if status is not None:
             return Control(
-                status, render_tool_calls(calls[:index]), len(calls) - index - 1
+                status,
+                render_tool_calls(calls[:index]),
+                len(calls) - index - 1,
+                terminated=True,
             )
     return Control(None, text)
 

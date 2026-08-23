@@ -344,10 +344,11 @@ class Decision:
     """One model turn, all the way through to executable operations.
 
     `control` names a non-dispatching outcome, and an empty `operations` always
-    carries one: `terminate` / `fail` come from the grammar-independent control
-    channel (`grammars.split_control`), and `no_op` is every other way a turn
-    dispatched nothing — an action that compiled to nothing, one that could not be
-    read at all, or a reply cut off at `max_tokens`. WHY it dispatched nothing is
+    carries one: `terminate` / `fail` / `stop` come from the grammar-independent
+    control channel (`grammars.split_control`) — `stop` being a termination that
+    claimed no outcome — and `no_op` is every other way a turn dispatched nothing:
+    an action that compiled to nothing, one that could not be read at all, or a
+    reply cut off at `max_tokens`. WHY it dispatched nothing is
     `parse_error` and `truncated`; THAT it dispatched nothing must not depend on
     which, because only `control` is aggregated. Labelling the compiled-to-nothing
     case alone left 8.9% of archived turns dispatching nothing under `control=None`,
@@ -385,7 +386,7 @@ class Decision:
 
     @property
     def terminated(self) -> bool:
-        return self.control in {"terminate", "fail"}
+        return self.control in {"terminate", "fail", "stop"}
 
     def as_record(self) -> dict[str, Any]:
         return {
@@ -406,8 +407,9 @@ class Decision:
 
 #: The control channel's status -> the name published as `control`. Two
 #: vocabularies exist by contract: `datasets/convert.py::_TERMINAL_CONTROL` maps
-#: this name back to the status when it builds a training target from a rollout.
-_TERMINAL = {"success": "terminate", "failure": "fail"}
+#: this name back to the status when it builds a training target from a rollout —
+#: except `stop`, the bare `TERMINATE`, whose null status is not invertible.
+_TERMINAL = {None: "stop", "success": "terminate", "failure": "fail"}
 
 
 def _action_record(action: Any) -> Any:
@@ -558,7 +560,7 @@ class Agent:
         while nothing on the far side of the termination can be parsed at all.
         """
         control = grammars.split_control(text)
-        terminal = _TERMINAL[control.status] if control.status else None
+        terminal = _TERMINAL[control.status] if control.terminated else None
         try:
             action = self.codec.parse(control.body)
         except (TypeError, ValueError) as exc:
@@ -567,16 +569,28 @@ class Agent:
                 # to parse — prose and a control line, or the control line alone —
                 # and that is not a parse error. Only `NoAction`: a MALFORMED
                 # action line alongside a termination is still one. The action the
-                # turn amounts to is the grammar's own empty one, and the codec is
-                # asked for it rather than left null: `parsed_action` is a
-                # published field, and `datasets/convert.py:567` drops every turn
-                # whose value is falsy — which would delete exactly the terminal
-                # turns from any dataset built off these rollouts.
+                # turn amounts to is the grammar's own empty one carrying the claim,
+                # and the codec is asked for it rather than left null.
+                #
+                # A bare `TERMINATE` claims nothing, and no grammar can spell an
+                # unclaimed termination — `native_absolute` and `move_rel` have no
+                # idle action and RAISE on the empty stream, which inside this
+                # `except` would crash the episode — so `parsed_action` is null for
+                # a bare stop, uniformly in all seven. Nothing reads termination off
+                # it: `datasets/convert.py::rollout_step` takes `operations` and
+                # `control`, and drops a turn on `parse_error`, which this is not.
                 return Decision(
                     step=step,
                     text=text,
-                    action=self.codec.action_from_operations(
-                        (), geometry=geometry, cursor=cursor, terminate=control.status
+                    action=(
+                        self.codec.action_from_operations(
+                            (),
+                            geometry=geometry,
+                            cursor=cursor,
+                            terminate=control.status,
+                        )
+                        if control.status
+                        else None
                     ),
                     operations=(),
                     control=terminal,

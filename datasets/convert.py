@@ -373,6 +373,9 @@ def teacher_step(info: dict[str, Any], screen: tuple[int, int]) -> Step | None:
 #: The harness's grammar-independent control verdict -> the lift's terminate status.
 #: `no_op` is deliberately absent: idling is not a termination, and it arrives as
 #: the empty operation stream every target grammar already spells its own way.
+#: `stop` — a bare `TERMINATE`, which ends the episode claiming no outcome — is
+#: absent for a different reason: no grammar can spell an unclaimed termination,
+#: and mapping it to `success` would put a claim the model never made in a target.
 _TERMINAL_CONTROL = {"terminate": "success", "fail": "failure"}
 
 

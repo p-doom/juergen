@@ -84,9 +84,15 @@ def _tool_call(arguments: dict) -> str:
 
 
 @pytest.mark.parametrize("codec_name", ALL_FOUR)
-def test_terminated_is_true_for_both_terminate_and_fail(codec_name: str) -> None:
+def test_terminated_is_true_for_every_control_channel_verdict(codec_name: str) -> None:
     sampling = EffectiveSampling("m", None, None, None, (), "harness_default", ())
-    for control, terminated in (("terminate", True), ("fail", True), ("no_op", False), (None, False)):
+    for control, terminated in (
+        ("terminate", True),
+        ("fail", True),
+        ("stop", True),
+        ("no_op", False),
+        (None, False),
+    ):
         decision = Decision(1, "t", None, (), control, None, sampling)
         assert decision.terminated is terminated
 
@@ -249,18 +255,52 @@ def test_an_unreadable_tool_call_still_scores_when_the_turn_terminates(
     assert decision.control == "terminate"
 
 
-@pytest.mark.parametrize("legacy", ["TERMINATE", "FAIL"])
+@pytest.mark.parametrize("codec_name", sorted(_SMOKE_TEXT))
+def test_a_bare_terminate_stops_without_claiming_success(codec_name: str) -> None:
+    """The stop token 11.7% of the eov3 corpus's assistant turns actually use.
+
+    It was a scored parse error in every grammar until the channel made the
+    status optional. `stop` rather than `terminate` because the model claimed no
+    outcome: `rl/target_box/taskset.py`'s `declared_success` and
+    `datasets/convert.py`'s lift both key on `terminate`, and neither may read a
+    claim off a turn that made none. What ends the episode is the termination;
+    what decides `success` is `evals/harness.py`'s postcondition.
+    """
+
+    def decide(text: str):
+        return _agent(codec_name).decide(
+            text, step=1, geometry=_geometry(), cursor=(5, 5), sampling=_sampling()
+        )
+
+    action = _SMOKE_TEXT[codec_name]
+    bare = decide(grammars.CONTROL_TOKEN)
+    carrying = decide(f"{action}\n{grammars.CONTROL_TOKEN}")
+    for decision in (bare, carrying):
+        assert decision.control == "stop" and decision.terminated
+        assert decision.parse_error is None, (
+            "the trained stop token is not an error, and `datasets/convert.py` "
+            "drops every turn that carries one"
+        )
+    assert bare.as_record()["parsed_action"] is None, (
+        "no grammar spells an unclaimed termination; `native_absolute` and "
+        "`move_rel` raise on the empty stream, so all seven publish null"
+    )
+    assert carrying.operations == decide(action).operations, (
+        "the work before the termination still runs"
+    )
+
+
 @pytest.mark.parametrize("codec_name", BARE_TOKEN_GRAMMARS)
-def test_a_retired_control_token_is_a_scored_parse_error(
-    codec_name: str, legacy: str
-) -> None:
+def test_a_retired_control_token_is_a_scored_parse_error(codec_name: str) -> None:
     """What a checkpoint trained before the channel emits.
 
-    Loud rather than silent, and it does not end the episode: accepting the old
-    token as a second spelling is the per-grammar surface being removed.
+    ``FAIL`` has no span in the corpus that forced ``TERMINATE`` open, so there is
+    no trained output to accommodate. Loud rather than silent, and it does not end
+    the episode: accepting the old token as a second spelling is the per-grammar
+    surface being removed.
     """
     decision = _agent(codec_name).decide(
-        legacy, step=1, geometry=_geometry(), cursor=(5, 5), sampling=_sampling()
+        "FAIL", step=1, geometry=_geometry(), cursor=(5, 5), sampling=_sampling()
     )
     assert decision.parse_error is not None, "loud rather than silent"
     assert not decision.terminated, "the retired token does not end the episode"
