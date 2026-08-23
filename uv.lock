@@ -311,7 +311,7 @@ dependencies = [
 requires-dist = [
     { name = "absl-py", specifier = ">=2.0" },
     { name = "array-record", specifier = ">=0.5.1" },
-    { name = "desktop", git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git?rev=5ed77a58b821be6dc02522f9fc1c998d230f5f59" },
+    { name = "desktop", git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git?rev=ab37afcc9d62257afc0324176abb26b26beec5f7" },
     { name = "imageio-ffmpeg", specifier = ">=0.5.1" },
     { name = "msgpack", specifier = ">=1.0" },
     { name = "numpy", specifier = ">=2.0" },
@@ -389,7 +389,7 @@ wheels = [
 [[package]]
 name = "desktop"
 version = "0.1.0"
-source = { git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git?rev=5ed77a58b821be6dc02522f9fc1c998d230f5f59#5ed77a58b821be6dc02522f9fc1c998d230f5f59" }
+source = { git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git?rev=ab37afcc9d62257afc0324176abb26b26beec5f7#ab37afcc9d62257afc0324176abb26b26beec5f7" }
 dependencies = [
     { name = "pillow" },
 ]
@@ -714,7 +714,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "av", specifier = ">=16.1.0" },
-    { name = "desktop", git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git?rev=5ed77a58b821be6dc02522f9fc1c998d230f5f59" },
+    { name = "desktop", git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git?rev=ab37afcc9d62257afc0324176abb26b26beec5f7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "verifiers", specifier = "==0.2.1" },
 ]
