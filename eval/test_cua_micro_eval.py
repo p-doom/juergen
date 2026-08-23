@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import threading
 import unittest
@@ -932,6 +933,117 @@ class NativeOrderedFormatTests(unittest.TestCase):
 
 
 class ResultPersistenceTests(unittest.TestCase):
+    def _run_main(self, attempt: dict) -> tuple[int, dict, bool, dict]:
+        task = micro.Task(
+            task_id="click.test",
+            category="click",
+            instruction="click",
+            setup={},
+            target={},
+            cursor={},
+            expected={},
+            verifier={},
+        )
+
+        def run_slot(
+            _slot_id: int,
+            _assigned: list[tuple[int, micro.Task, int]],
+            ctx: micro._RunContext,
+            **_ports: int,
+        ) -> None:
+            attempt_dir = ctx.output_dir / "task_000_click.test"
+            attempt_dir.mkdir()
+            (attempt_dir / "result.json").write_text(json.dumps(attempt))
+            ctx.attempts.append(attempt)
+            ctx.runs.append(
+                {
+                    "index": 0,
+                    "slug": attempt_dir.name,
+                    "task_id": task.task_id,
+                    "subdir": attempt_dir.name,
+                }
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "output"
+            argv = [
+                "cua_micro_eval.py",
+                "--model_path",
+                "model",
+                "--output_dir",
+                str(output_dir),
+                "--attempts",
+                "1",
+                "--vms_per_sglang",
+                "1",
+                "--sglang_url",
+                "http://model.invalid/v1",
+            ]
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(micro, "load_suite", return_value=({"suite": "test"}, [task])),
+                mock.patch.object(micro, "_preflight_ports"),
+                mock.patch.object(micro.signal, "signal"),
+                mock.patch.object(micro.sampling_mod, "from_cli", return_value=qwen_sampling("thinking")),
+                mock.patch.object(micro, "_run_vm_slot", side_effect=run_slot),
+            ):
+                return_code = micro.main()
+            result = json.loads((output_dir / "result.json").read_text())
+            marker_exists = (output_dir / "completed.json").exists()
+            attempt_result = json.loads(
+                (output_dir / "task_000_click.test" / "result.json").read_text()
+            )
+        return return_code, result, marker_exists, attempt_result
+
+    def test_all_valid_attempts_publish_completion_and_exit_zero(self) -> None:
+        attempt = {
+            "task_id": "click.test",
+            "validity": "valid",
+            "success": True,
+            "progress": 1.0,
+            "parse_valid": True,
+            "expected_action_ok": True,
+        }
+        return_code, result, marker_exists, _ = self._run_main(attempt)
+        self.assertEqual(return_code, 0)
+        self.assertTrue(marker_exists)
+        self.assertEqual(result["overall"]["n_attempts_raw"], 1)
+        self.assertEqual(result["overall"]["n_attempts_valid"], 1)
+
+    def test_valid_model_failure_still_completes_and_exits_zero(self) -> None:
+        attempt = {
+            "task_id": "click.test",
+            "validity": "valid",
+            "success": False,
+            "progress": 0.0,
+            "parse_valid": True,
+            "expected_action_ok": False,
+        }
+        return_code, result, marker_exists, _ = self._run_main(attempt)
+        self.assertEqual(return_code, 0)
+        self.assertTrue(marker_exists)
+        self.assertEqual(result["overall"]["pass_at_1_raw"], 0.0)
+        self.assertEqual(result["overall"]["pass_at_1_valid"], 0.0)
+
+    def test_infrastructure_invalid_preserves_results_but_does_not_complete(self) -> None:
+        attempt = {
+            "task_id": "click.test",
+            "validity": "infra_invalid",
+            "infra_error": {"type": "ConnectionError", "message": "guest reset"},
+            "success": None,
+            "progress": 0.0,
+            "parse_valid": False,
+            "expected_action_ok": False,
+        }
+        return_code, result, marker_exists, attempt_result = self._run_main(attempt)
+        self.assertEqual(return_code, 1)
+        self.assertFalse(marker_exists)
+        self.assertEqual(result["overall"]["n_attempts_raw"], 1)
+        self.assertEqual(result["overall"]["n_attempts_valid"], 0)
+        self.assertEqual(result["overall"]["pass_at_1_raw"], 0.0)
+        self.assertIsNone(result["overall"]["pass_at_1_valid"])
+        self.assertEqual(attempt_result, attempt)
+
     def test_suite_round_trips_from_an_arbitrary_path(self) -> None:
         raw = json.loads(_SUITE.read_text())
         with tempfile.TemporaryDirectory() as directory:

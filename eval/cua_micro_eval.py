@@ -3237,7 +3237,9 @@ def main() -> int:
         "runs": sorted(runs, key=lambda run: run["index"]),
     }
     (output_dir / "result.json").write_text(json.dumps(partial, indent=2))
-    completion_marker.write_text(json.dumps(partial, indent=2))
+    all_attempts_valid = aggregate["overall"]["n_attempts_valid"] == total
+    if all_attempts_valid:
+        completion_marker.write_text(json.dumps(partial, indent=2))
     _LOGGER.info(
         "done: tasks=%d attempts=%d overall=%s output=%s",
         len(tasks),
@@ -3245,7 +3247,7 @@ def main() -> int:
         aggregate_results(tasks, attempts)["overall"],
         output_dir,
     )
-    return 0
+    return 0 if all_attempts_valid else 1
 
 
 if __name__ == "__main__":
