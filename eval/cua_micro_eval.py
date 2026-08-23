@@ -169,6 +169,7 @@ _NATIVE_EDITOR_PATH = "/tmp/cua_native_editor.txt"
 _DEFAULT_SUITE = Path(__file__).with_name("cua_micro_tasks.json")
 _REL_STEP_FORMAT = "computer_use_rel_step_v1"
 _QWEN3VL_NATIVE_FORMAT = "qwen3vl_native_cua_v1"
+_RESULT_SCHEMA_VERSION = 2
 # This branch's own ordered_events_v3 format (action_parser.OrderedAction /
 # parse_ordered_action_tolerant), added so the suite can evaluate checkpoints
 # trained on either lineage via the same --action_format knob.
@@ -862,26 +863,23 @@ def _active_title(client: OSWorldClient) -> str:
     semantics hold regardless of which tool happens to be installed in a
     given VM image.
     """
-    try:
-        return str(
-            client.run_command(
-                [
-                    "bash",
-                    "-lc",
-                    "if command -v wmctrl >/dev/null; then "
-                    "wmctrl -l; "
-                    "elif command -v xdotool >/dev/null; then "
-                    "xdotool search --name '.' getwindowname %@; "
-                    "elif command -v gdbus >/dev/null; then "
-                    "gdbus call --session --dest org.gnome.Shell.Introspect "
-                    "--object-path /org/gnome/Shell/Introspect "
-                    "--method org.gnome.Shell.Introspect.GetWindows; "
-                    "else exit 127; fi",
-                ]
-            ).get("output", "")
-        ).strip()
-    except RuntimeError:
-        return ""
+    return str(
+        client.run_command(
+            [
+                "bash",
+                "-lc",
+                "if command -v wmctrl >/dev/null; then "
+                "wmctrl -l; "
+                "elif command -v xdotool >/dev/null; then "
+                "xdotool search --name '.' getwindowname %@; "
+                "elif command -v gdbus >/dev/null; then "
+                "gdbus call --session --dest org.gnome.Shell.Introspect "
+                "--object-path /org/gnome/Shell/Introspect "
+                "--method org.gnome.Shell.Introspect.GetWindows; "
+                "else exit 127; fi",
+            ]
+        ).get("output", "")
+    ).strip()
 
 
 def _wait_until(predicate: Any, *, timeout_s: float = 12.0, poll_s: float = 0.25) -> Any:
@@ -1494,7 +1492,7 @@ def read_verifier_state(  # noqa: PLR0911
         client.execute("pyautogui.hotkey('ctrl', 'c')")
         code = (
             "import tkinter as tk; r=tk.Tk(); r.withdraw(); r.update(); "
-            "print(r.clipboard_get()); r.destroy()"
+            "\ntry: print(r.clipboard_get())\nexcept tk.TclError: print('')\nfinally: r.destroy()"
         )
         return str(client.run_command(["python3", "-c", code]).get("output", "")).strip()
     if kind == "clipboard_equals":
@@ -1765,7 +1763,7 @@ def run_multiturn_attempt(
                     dispatch_action = parsed
                 client.dispatch_ordered_action(dispatch_action)
                 dispatched = True
-            except (TypeError, ValueError, RuntimeError) as error:
+            except (TypeError, ValueError) as error:
                 dispatch_error = str(error)
                 client.release_all_inputs()
 
@@ -1868,7 +1866,9 @@ def run_multiturn_attempt(
         turn_results, turns, task.turn_mode
     )
     result = {
-        "schema_version": 1,
+        "schema_version": _RESULT_SCHEMA_VERSION,
+        "validity": "valid",
+        "infra_error": None,
         "task_id": task.task_id,
         "category": task.category,
         "instruction": task.instruction,
@@ -2036,7 +2036,7 @@ def run_attempt(
                 dispatch_action = parsed
             client.dispatch_ordered_action(dispatch_action)
             dispatched = True
-        except (TypeError, ValueError, RuntimeError) as error:
+        except (TypeError, ValueError) as error:
             dispatch_error = str(error)
             client.release_all_inputs()
 
@@ -2075,7 +2075,9 @@ def run_attempt(
     }
     (output_dir / "conversation.json").write_text(json.dumps(conversation, indent=2))
     result = {
-        "schema_version": 1,
+        "schema_version": _RESULT_SCHEMA_VERSION,
+        "validity": "valid",
+        "infra_error": None,
         "task_id": task.task_id,
         "category": task.category,
         "instruction": task.instruction,
@@ -2433,7 +2435,9 @@ def aggregate_results(tasks: list[Task], attempts: list[dict[str, Any]]) -> dict
     per_task: dict[str, dict[str, Any]] = {}
     for task in tasks:
         rows = by_task.get(task.task_id, [])
+        valid_rows = [row for row in rows if row["validity"] == "valid"]
         successes = [bool(row.get("success")) for row in rows]
+        valid_successes = [bool(row["success"]) for row in valid_rows]
         progress = [float(row.get("progress", 0.0)) for row in rows]
         first_four = successes[:4]
         scheduled_turns = sum(int(row.get("turns_total", 1)) for row in rows)
@@ -2462,8 +2466,15 @@ def aggregate_results(tasks: list[Task], attempts: list[dict[str, Any]]) -> dict
         per_task[task.task_id] = {
             "category": task.category,
             "n": len(rows),
+            "n_attempts_raw": len(rows),
+            "n_attempts_valid": len(valid_rows),
+            "n_infrastructure_failures": len(rows) - len(valid_rows),
             "successes": sum(successes),
             "pass_at_1": sum(successes) / len(successes) if successes else 0.0,
+            "pass_at_1_raw": sum(successes) / len(rows) if rows else 0.0,
+            "pass_at_1_valid": (
+                sum(valid_successes) / len(valid_rows) if valid_rows else None
+            ),
             "pass_at_4": bool(first_four) and any(first_four),
             "all_4_success": len(first_four) == 4 and all(first_four),
             "mean_progress": sum(progress) / len(progress) if progress else 0.0,
@@ -2485,11 +2496,16 @@ def aggregate_results(tasks: list[Task], attempts: list[dict[str, Any]]) -> dict
             "verified_turn_rate": verified_turns / scheduled_turns if scheduled_turns else 0.0,
         }
 
-    def summarize(task_ids: list[str]) -> dict[str, float]:
+    def summarize(task_ids: list[str]) -> dict[str, float | int | None]:
         rows = [per_task[task_id] for task_id in task_ids]
         if not rows:
             return {
+                "n_attempts_raw": 0,
+                "n_attempts_valid": 0,
+                "n_infrastructure_failures": 0,
                 "pass_at_1": 0.0,
+                "pass_at_1_raw": 0.0,
+                "pass_at_1_valid": None,
                 "pass_at_4": 0.0,
                 "all_4_success": 0.0,
                 "mean_progress": 0.0,
@@ -2516,17 +2532,42 @@ def aggregate_results(tasks: list[Task], attempts: list[dict[str, Any]]) -> dict
             "turn_verifier_rate",
             "verified_turn_rate",
         )
-        return {key: sum(float(row[key]) for row in rows) / len(rows) for key in keys}
+        summary: dict[str, float | int | None] = {
+            key: sum(float(row[key]) for row in rows) / len(rows) for key in keys
+        }
+        n_raw = sum(int(row["n_attempts_raw"]) for row in rows)
+        n_valid = sum(int(row["n_attempts_valid"]) for row in rows)
+        successes = sum(int(row["successes"]) for row in rows)
+        summary.update(
+            {
+                "n_attempts_raw": n_raw,
+                "n_attempts_valid": n_valid,
+                "n_infrastructure_failures": n_raw - n_valid,
+                "pass_at_1_raw": successes / n_raw if n_raw else 0.0,
+                "pass_at_1_valid": successes / n_valid if n_valid else None,
+            }
+        )
+        return summary
 
-    categories: dict[str, dict[str, float]] = {}
+    categories: dict[str, dict[str, float | int | None]] = {}
     for category in sorted({task.category for task in tasks}):
         categories[category] = summarize(
             [task.task_id for task in tasks if task.category == category]
         )
     overall = summarize([task.task_id for task in tasks])
-    scores = {f"overall/{key}": value for key, value in overall.items()}
+    scores = {
+        f"overall/{key}": value
+        for key, value in overall.items()
+        if value is not None
+    }
     for category, summary in categories.items():
-        scores.update({f"{category}/{key}": value for key, value in summary.items()})
+        scores.update(
+            {
+                f"{category}/{key}": value
+                for key, value in summary.items()
+                if value is not None
+            }
+        )
     return {
         "scores": scores,
         # labctl's per-checkpoint dashboard (build_eval_series/first_metric)
@@ -2765,11 +2806,16 @@ def _run_one_task_attempt(
     except Exception as error:
         _LOGGER.exception("attempt failed: task=%s seed=%d", task.task_id, seed)
         result = {
-            "schema_version": 1,
+            "schema_version": _RESULT_SCHEMA_VERSION,
             "task_id": task.task_id,
             "category": task.category,
             "seed": seed,
-            "success": False,
+            "validity": "infra_invalid",
+            "infra_error": {
+                "type": type(error).__name__,
+                "message": str(error),
+            },
+            "success": None,
             "progress": 0.0,
             "parse_valid": False,
             "expected_action_ok": False,
@@ -2786,6 +2832,8 @@ def _run_one_task_attempt(
         "instruction": task.instruction,
         "attempt": attempt_index + 1,
         "subdir": str(attempt_dir.relative_to(ctx.output_dir)),
+        "validity": result["validity"],
+        "infra_error": result["infra_error"],
         "success": result.get("success"),
         "stop_reason": result.get("stop_reason"),
     }
@@ -2794,7 +2842,7 @@ def _run_one_task_attempt(
         ctx.runs.append(run_entry)
         aggregate = aggregate_results(ctx.tasks, ctx.attempts)
         partial = {
-            "schema_version": 1,
+            "schema_version": _RESULT_SCHEMA_VERSION,
             "task": ctx.suite_raw["suite"],
             **aggregate,
             "params": {
@@ -3168,7 +3216,7 @@ def main() -> int:
 
     aggregate = aggregate_results(tasks, attempts)
     partial = {
-        "schema_version": 1,
+        "schema_version": _RESULT_SCHEMA_VERSION,
         "task": suite_raw["suite"],
         **aggregate,
         "params": {

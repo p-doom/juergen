@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
+from argparse import Namespace
 from pathlib import Path
 from typing import ClassVar
 from unittest import mock
@@ -458,6 +460,7 @@ class ActionAndAggregationTests(unittest.TestCase):
             {
                 "task_id": task.task_id,
                 "success": success,
+                "validity": "valid",
                 "progress": progress,
                 "parse_valid": parse_valid,
                 "expected_action_ok": expected,
@@ -475,6 +478,208 @@ class ActionAndAggregationTests(unittest.TestCase):
         self.assertTrue(row["pass_at_4"])
         self.assertEqual(row["best_of_4_progress"], 1.0)
         self.assertEqual(row["parse_valid_rate"], 0.75)
+
+    def test_infrastructure_failures_have_raw_and_valid_denominators(self) -> None:
+        task = micro.Task(
+            task_id="click.test",
+            category="click",
+            instruction="click",
+            setup={},
+            target={},
+            cursor={},
+            expected={},
+            verifier={},
+        )
+        attempts = [
+            {
+                "task_id": task.task_id,
+                "success": True,
+                "validity": "valid",
+                "progress": 1.0,
+                "parse_valid": True,
+                "expected_action_ok": True,
+            },
+            {
+                "task_id": task.task_id,
+                "success": False,
+                "validity": "valid",
+                "progress": 0.0,
+                "parse_valid": True,
+                "expected_action_ok": False,
+            },
+            {
+                "task_id": task.task_id,
+                "success": None,
+                "validity": "infra_invalid",
+                "progress": 0.0,
+                "parse_valid": False,
+                "expected_action_ok": False,
+            },
+        ]
+        aggregate = micro.aggregate_results([task], attempts)
+        for row in (aggregate["per_task"][task.task_id], aggregate["overall"]):
+            self.assertEqual(row["n_attempts_raw"], 3)
+            self.assertEqual(row["n_attempts_valid"], 2)
+            self.assertEqual(row["n_infrastructure_failures"], 1)
+            self.assertEqual(row["pass_at_1_raw"], 1 / 3)
+            self.assertEqual(row["pass_at_1_valid"], 1 / 2)
+        self.assertEqual(aggregate["overall"]["pass_at_1"], 1 / 3)
+        self.assertEqual(aggregate["primary"], "overall/pass_at_1")
+
+    def test_empty_calculator_clipboard_is_a_failed_verifier_not_an_exception(self) -> None:
+        class EmptyClipboardClient:
+            def execute(self, _command: str) -> None:
+                pass
+
+            def run_command(self, command: list[str]) -> dict[str, str]:
+                if "except tk.TclError" not in command[-1]:
+                    raise RuntimeError("_tkinter.TclError: CLIPBOARD selection doesn't exist")
+                return {"output": "\n"}
+
+        with mock.patch.object(micro, "_wait_until", side_effect=TimeoutError):
+            passed, state = micro.verifier_passed(
+                EmptyClipboardClient(),
+                {"kind": "calculator_clipboard_equals", "value": "7"},
+            )
+        self.assertFalse(passed)
+        self.assertEqual(state, "")
+
+    def test_active_title_read_failure_is_not_a_negative_verifier(self) -> None:
+        client = mock.Mock()
+        client.run_command.side_effect = RuntimeError("guest command failed")
+        with (
+            mock.patch.object(micro, "_wait_until", side_effect=TimeoutError),
+            self.assertRaisesRegex(RuntimeError, "guest command failed"),
+        ):
+            micro.verifier_passed(
+                client,
+                {"kind": "active_title_regex", "pattern": "target"},
+            )
+
+    def test_attempt_exception_is_infrastructure_invalid_not_a_model_failure(self) -> None:
+        task = micro.Task(
+            task_id="click.test",
+            category="click",
+            instruction="click",
+            setup={},
+            target={},
+            cursor={},
+            expected={},
+            verifier={},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            ctx = micro._RunContext(
+                tasks=[task],
+                suite_raw={"suite": "test"},
+                output_dir=output_dir,
+                sglang_url="http://model.invalid/v1",
+                args=Namespace(
+                    attempts=1,
+                    seed_base=1,
+                    qemu_bin="qemu",
+                    qcow2="vm.qcow2",
+                    sglang_api_key="key",
+                    model_path="model",
+                    no_frames=True,
+                    settle_s=0.0,
+                    n_history_frames=None,
+                    system_prompt_id="test",
+                ),
+                action_format=micro._REL_STEP_FORMAT,
+                system_prompt="prompt",
+                sampling=qwen_sampling("thinking"),
+                model_resolution=None,
+                total=1,
+                started=0.0,
+                state_lock=threading.Lock(),
+                attempts=[],
+                runs=[],
+            )
+            with (
+                mock.patch.object(micro, "_launch_vm", return_value=mock.Mock()),
+                mock.patch.object(
+                    micro,
+                    "_assert_qemu_alive",
+                    side_effect=ConnectionError("guest reset"),
+                ),
+                mock.patch.object(micro._LOGGER, "exception"),
+                mock.patch.object(micro, "_terminate"),
+            ):
+                micro._run_one_task_attempt(
+                    ctx,
+                    task_index=0,
+                    task=task,
+                    attempt_index=0,
+                    vm_port=5000,
+                    vnc_port=5900,
+                )
+            result = json.loads(next(output_dir.glob("task_*/result.json")).read_text())
+            summary = json.loads((output_dir / "result.json").read_text())
+        self.assertEqual(result["validity"], "infra_invalid")
+        self.assertEqual(result["schema_version"], 2)
+        self.assertIsNone(result["success"])
+        self.assertEqual(result["infra_error"]["type"], "ConnectionError")
+        self.assertEqual(summary["schema_version"], 2)
+        self.assertEqual(summary["overall"]["n_attempts_raw"], 1)
+        self.assertEqual(summary["overall"]["n_attempts_valid"], 0)
+        self.assertIsNone(summary["overall"]["pass_at_1_valid"])
+
+    def test_guest_dispatch_failure_escapes_the_model_outcome_path(self) -> None:
+        class BrokenGuestClient:
+            def execute(self, _command: str) -> None:
+                pass
+
+            def screen_size(self) -> tuple[int, int]:
+                return (1000, 1000)
+
+            def cursor_position(self) -> tuple[int, int]:
+                return (500, 500)
+
+            def screenshot_settled(self, **_kwargs: object) -> Image.Image:
+                return Image.new("RGB", (1000, 1000))
+
+            def dispatch_ordered_action(self, _action: object) -> None:
+                raise RuntimeError("guest transport failed")
+
+            def release_all_inputs(self) -> None:
+                pass
+
+        task = micro.Task(
+            task_id="click.test",
+            category="click",
+            instruction="click",
+            setup={},
+            target={"kind": "fixed_norm", "bbox": [400, 400, 600, 600]},
+            cursor={"kind": "target_center"},
+            expected={"kind": "click", "button": "left"},
+            verifier={"kind": "bbox_hit"},
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(micro, "prepare_task", return_value={}),
+            mock.patch.object(
+                micro,
+                "_call_model",
+                return_value=(_tool({"action": "left_click"}), "stop"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "guest transport failed"),
+        ):
+            micro.run_attempt(
+                client=BrokenGuestClient(),
+                task=task,
+                output_dir=Path(tmp),
+                sglang_url="http://model.invalid/v1",
+                api_key="key",
+                model="model",
+                system_prompt="prompt",
+                action_format=micro._REL_STEP_FORMAT,
+                sampling=qwen_sampling("thinking"),
+                seed=1,
+                model_resolution=None,
+                save_frames=False,
+                settle_s=0.0,
+            )
 
     def test_finalize_multiturn_result_prefix_mode_requires_full_ordered_run(self) -> None:
         turns = tuple(
@@ -551,6 +756,7 @@ class ActionAndAggregationTests(unittest.TestCase):
         attempts = [
             {
                 "task_id": task.task_id,
+                "validity": "valid",
                 "multi_turn": True,
                 "turns_total": 3,
                 "turns_attempted": attempted,
