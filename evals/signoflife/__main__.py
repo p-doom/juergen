@@ -602,6 +602,8 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "arm": args.arm,
                 "tier": args.tier,
+                "episodes": aggregate["episodes"],
+                "valid_episodes": aggregate["valid_episodes"],
                 **{k: v["pass_rate"] for k, v in aggregate["per_cell"].items()},
             },
             sort_keys=True,

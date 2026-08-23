@@ -101,7 +101,7 @@ def _run(output: Path, tmp_path: Path, *extra: str) -> tuple[int, dict]:
 
 @pytest.mark.slow
 def test_the_dispatcher_runs_the_whole_scored_tier_and_writes_the_readers_shape(
-    tmp_path,
+    tmp_path, capsys,
 ) -> None:
     output = tmp_path / "run"
     code, result = _run(output, tmp_path)
@@ -123,6 +123,9 @@ def test_the_dispatcher_runs_the_whole_scored_tier_and_writes_the_readers_shape(
     assert aggregate["controls_ok"] is True
     assert result["suite_manifest_sha256"] == load_suite().manifest_sha256
     assert len(result["episodes"]) == len(CELL_IDS)
+    printed = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert printed["episodes"] == len(CELL_IDS)
+    assert printed["valid_episodes"] == len(CELL_IDS)
 
 
 @pytest.mark.slow
