@@ -44,6 +44,7 @@ from agent.agent import (
 from agent.desktop import DEFAULT_SLOT_DIR, PoolSpec, default_pool_factory, pool_for
 from agent.history import History, ImageBudget, history_policy
 from evals.tasks import (
+    FULL_SUCCESS_THRESHOLD,
     RESULT_KEY,
     RESULT_SCHEMA_VERSION,
     DesktopState,
@@ -579,6 +580,18 @@ def _tri_state(value: bool | None) -> float | None:
     return None if value is None else (1.0 if value else 0.0)
 
 
+def _succeeded(outcome: str, task_reward: float | None) -> bool:
+    """The single place an episode's verdict is decided.
+
+    A scored arm's verdict is its OSWorld score and nothing else: `outcome` carries
+    the sign-of-life families' postcondition probe, which an OSWorld task never
+    populates, so reading it on a benchmark arm reports every episode as a failure.
+    """
+    if task_reward is None:
+        return outcome == "postcondition_reached"
+    return task_reward >= FULL_SUCCESS_THRESHOLD
+
+
 _CODECS: dict[str, Any] = {}
 
 
@@ -938,6 +951,16 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                     state.task_reward = await self._evaluate(
                         session, declared=state.control_terminate
                     )
+                    if state.task_reward is None:
+                        # The scorer failed, not the rollout: without a score there
+                        # is no verdict, and leaving one in the denominator reports
+                        # a scorer crash as a task failure. `outcome` is left alone
+                        # so the stop-reason census keeps the real stop.
+                        infra_error = {
+                            "stage": "evaluate",
+                            "type": "EvaluateFailed",
+                            "message": "OSWorld evaluate() returned no score",
+                        }
         except ModelCallError as exc:
             # The orchestrator halts a rollout by stamping `stop_condition` and
             # refusing the call with a 400 (`interception/server.py:400-406`,
@@ -999,12 +1022,15 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
 
         `success` is `None`, not `False`, on infrastructure failure: rewards raise on
         `None` so prime-rl drops the rollout instead of training a booted-VM failure
-        as a task failure.
+        as a task failure. Otherwise it is derived here from the `task_reward`
+        published in the same dict, so the two cannot disagree.
         """
         state.outcome = outcome
         state.infra_error = infra_error
         state.infra_valid = infra_error is None
-        state.success = bool(outcome == "postcondition_reached") if infra_error is None else None
+        state.success = (
+            _succeeded(outcome, state.task_reward) if infra_error is None else None
+        )
         state.temperature = sampling.get("temperature")
         state.temperature_source = sampling.get("temperature_source")
 
@@ -1353,7 +1379,9 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         `tasks` must be a flat metric -> number dict with no nulls: anything else
         falls through to a raw JSON tree (`ui/src/lib/metrics.ts`), and `primary`
         is only honoured alongside it. `success_rate` is over the valid episodes
-        only, so an infra failure cannot look like a task failure.
+        only, so an infra failure cannot look like a task failure — and with no
+        valid episode there is no rate to report, so the key and `primary` are
+        both absent rather than 0.0, which reads as "every episode failed".
         """
         runs = [
             {"index": index, **run} for index, run in enumerate(self._runs.values())
@@ -1361,19 +1389,20 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         valid = [run for run in runs if run["validity"] == "valid"]
         name = self.config.id
         tasks = {
-            f"{name}/success_rate": (
-                sum(1 for run in valid if run["success"]) / len(valid) if valid else 0.0
-            ),
             f"{name}/n_episodes": float(len(runs)),
             f"{name}/n_valid": float(len(valid)),
             f"{name}/mean_steps": (
                 sum(run["n_steps"] for run in runs) / len(runs) if runs else 0.0
             ),
         }
+        if valid:
+            tasks[f"{name}/success_rate"] = sum(
+                1 for run in valid if run["success"]
+            ) / len(valid)
         return {
             "schema_version": RESULT_SCHEMA_VERSION,
             "task": name,
-            "primary": f"{name}/success_rate",
+            "primary": f"{name}/success_rate" if valid else None,
             "tasks": tasks,
             "n_episodes": len(runs),
             "traj_path": runs[0]["traj_path"],

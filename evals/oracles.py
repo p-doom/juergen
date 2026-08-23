@@ -35,7 +35,13 @@ from typing import Any
 import verifiers.v1 as vf
 
 from agent.desktop import lease_for_trace
-from evals.tasks import RESULT_KEY, DesktopTaskData, preparer_for, valid_result
+from evals.tasks import (
+    FULL_SUCCESS_THRESHOLD,
+    RESULT_KEY,
+    DesktopTaskData,
+    preparer_for,
+    valid_result,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -155,7 +161,7 @@ class OSWorldEvaluateOracle:
     hence `runtime`.
     """
 
-    full_success_threshold: float = 0.999
+    full_success_threshold: float = FULL_SUCCESS_THRESHOLD
 
     @vf.reward
     async def task_success(self, trace: vf.Trace, runtime: vf.Runtime) -> float:

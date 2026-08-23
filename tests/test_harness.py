@@ -36,7 +36,14 @@ from evals.harness import (
 )
 from agent.agent import load_codec
 from desktop.geometry import DisplayGeometry
-from evals.tasks import RESULT_KEY, DesktopState, DesktopTaskData, register_preparer, PREPARERS
+from evals.tasks import (
+    FULL_SUCCESS_THRESHOLD,
+    PREPARERS,
+    RESULT_KEY,
+    DesktopState,
+    DesktopTaskData,
+    register_preparer,
+)
 from juergen_doubles import (
     FakeSession,
     load_convert,
@@ -1040,7 +1047,10 @@ def test_an_infra_invalid_episode_is_counted_but_kept_out_of_the_rate(
     assert run["validity"] == "infra_invalid" and run["success"] is None
     assert index["tasks"][f"{index['task']}/n_episodes"] == 1.0
     assert index["tasks"][f"{index['task']}/n_valid"] == 0.0
-    assert index["tasks"][index["primary"]] == 0.0
+    assert index["primary"] is None, "a rate over zero episodes is not a measurement"
+    assert f"{index['task']}/success_rate" not in index["tasks"], (
+        "0.0 here reads as 'every episode failed' when nothing ran"
+    )
 
 
 def test_a_stray_frame_is_refused_by_name(tmp_path, preparer) -> None:
@@ -1583,6 +1593,42 @@ def test_a_failing_evaluate_is_recorded_as_missing_never_as_zero(tmp_path, prepa
     config = _config(tmp_path, evaluate_on_finish=True)
     _, result, _ = _run(config, _task(max_steps=1), replies=["0 0 0 ;"], session=session)
     assert result["task_reward"] is None, "0.0 would be trained as a task failure"
+    assert result["validity"] == "infra_invalid" and result["success"] is None
+    assert result["infra_error"]["stage"] == "evaluate"
+    assert result["outcome"] == "max_steps", "the stop-reason census keeps the real stop"
+    index = json.loads((tmp_path / "result.json").read_text())
+    assert index["primary"] is None, "an unscorable episode is not a failed one"
+
+
+def test_the_osworld_score_is_the_verdict_a_scored_arm_reports(tmp_path, preparer) -> None:
+    """Jobs 141534/141535 reported `success_rate: 0.0` for both arms while episode
+    rewards were 1.000: `success` was reading a postcondition probe that an OSWorld
+    task never populates."""
+    session = FakeSession()
+    session.evaluate_value = 1.0
+    config = _config(tmp_path, evaluate_on_finish=True)
+    _, result, _ = _run(
+        config, _task(max_steps=1, name="scored"), replies=["0 0 0 ;"], session=session
+    )
+    assert result["outcome"] == "max_steps", "no postcondition was ever reached"
+    assert result["success"] is True
+    index = json.loads((tmp_path / "result.json").read_text())
+    assert index["tasks"][index["primary"]] == 1.0
+
+
+@pytest.mark.parametrize("reward", [0.0, 0.5, 0.9989, 1.0])
+def test_no_scored_episode_can_disagree_with_its_own_reward(
+    tmp_path, preparer, reward
+) -> None:
+    """`success` is derived from the `task_reward` published in the same dict, so
+    the pair cannot be constructed inconsistent. Partial credit is a partly-failed
+    metric list in `DesktopEnv.evaluate()`, not a solved task."""
+    session = FakeSession()
+    session.evaluate_value = reward
+    config = _config(tmp_path, evaluate_on_finish=True)
+    _, result, _ = _run(config, _task(max_steps=1), replies=["0 0 0 ;"], session=session)
+    assert result["task_reward"] == reward
+    assert result["success"] is (reward >= FULL_SUCCESS_THRESHOLD)
 
 
 def test_a_session_without_evaluate_refuses_the_flag_it_cannot_honour(
