@@ -44,10 +44,10 @@ uv run --project . python cua_micro_eval.py --validate_setups_only \
 
 # Checkpoint trained on this branch's ordered_events_v3 / cua_ordered_typing_v1:
 # --vms_per_sglang (default 4) runs that many VMs concurrently against the
-# one shared sglang instance instead of one VM at a time -- a single VM's
-# step time is dominated by sglang prefill (batch size 1), badly underusing
-# the GPU. Pass --vms_per_sglang=1 for the historical one-VM-at-a-time
-# behaviour.
+# one shared sglang instance; each free slot takes the next indexed attempt.
+# Attempts have derived wall deadlines, and SLURM jobs fail preflight if their
+# remaining allocation cannot cover the selected suite. Pass
+# --vms_per_sglang=1 for one-VM-at-a-time behaviour.
 uv run --project . python cua_micro_eval.py \
     --model_path=/path/to/checkpoint --attempts=4 \
     --system_prompt_id=cua_ordered_typing_v1 \

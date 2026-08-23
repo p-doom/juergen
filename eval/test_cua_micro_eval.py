@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
+import queue
+import subprocess
 import sys
 import tempfile
 import threading
 import unittest
 from argparse import Namespace
+from contextlib import suppress
 from pathlib import Path
 from typing import ClassVar
 from unittest import mock
@@ -1186,6 +1190,211 @@ class ResultPersistenceTests(unittest.TestCase):
             loaded, tasks = micro.load_suite(copied)
         self.assertEqual(loaded["suite"], "cua_micro_tasks")
         self.assertEqual(len(tasks), len(raw["tasks"]))
+
+
+class SchedulerContractTests(unittest.TestCase):
+    @staticmethod
+    def _task(task_id: str, *, turns: int = 0) -> micro.Task:
+        turn_rows = tuple(
+            micro.Turn(
+                turn_id=f"turn_{index}",
+                target={},
+                cursor={},
+                expected={},
+                verifier={},
+            )
+            for index in range(turns)
+        )
+        return micro.Task(
+            task_id=task_id,
+            category="test",
+            instruction=task_id,
+            setup={"kind": "desktop"},
+            target={},
+            cursor={},
+            expected={},
+            verifier={},
+            turns=turn_rows,
+        )
+
+    def test_free_slot_takes_next_index_instead_of_static_round_robin(self) -> None:
+        tasks = [self._task(f"task.{index}") for index in range(5)]
+        work: queue.Queue[tuple[int, micro.Task, int]] = queue.Queue()
+        for task_index, task in enumerate(tasks):
+            work.put((task_index, task, 0))
+
+        slow_started = threading.Event()
+        fast_drained = threading.Event()
+        assignments: dict[int, list[int]] = {5000: [], 5001: []}
+
+        def run_one(
+            _ctx: object,
+            *,
+            task_index: int,
+            task: micro.Task,
+            attempt_index: int,
+            vm_port: int,
+            vnc_port: int,
+        ) -> None:
+            del task, attempt_index, vnc_port
+            assignments[vm_port].append(task_index)
+            if task_index == 0:
+                slow_started.set()
+                self.assertTrue(fast_drained.wait(timeout=2))
+            elif task_index == 4:
+                fast_drained.set()
+
+        with mock.patch.object(micro, "_run_one_task_attempt_isolated", side_effect=run_one):
+            slow = threading.Thread(
+                target=micro._run_vm_slot,
+                args=(0, work, mock.Mock()),
+                kwargs={"vm_port": 5000, "vnc_port": 5900},
+            )
+            fast = threading.Thread(
+                target=micro._run_vm_slot,
+                args=(1, work, mock.Mock()),
+                kwargs={"vm_port": 5001, "vnc_port": 5901},
+            )
+            slow.start()
+            self.assertTrue(slow_started.wait(timeout=2))
+            fast.start()
+            slow.join(timeout=2)
+            fast.join(timeout=2)
+
+        self.assertFalse(slow.is_alive())
+        self.assertFalse(fast.is_alive())
+        self.assertEqual(assignments[5000], [0])
+        self.assertEqual(assignments[5001], [1, 2, 3, 4])
+
+    def test_attempt_indices_and_seeds_do_not_depend_on_slot(self) -> None:
+        self.assertEqual(
+            micro._attempt_identity(
+                task_index=2,
+                attempt_index=3,
+                attempts_per_task=4,
+                seed_base=41000,
+            ),
+            (11, 41203),
+        )
+
+    def test_attempt_deadline_kills_process_and_records_typed_invalid_result(self) -> None:
+        task = self._task("task.timeout", turns=64)
+        process = mock.Mock(pid=81234, exitcode=None)
+        process.is_alive.return_value = True
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            attempt_dir = output_dir / "task_000_task.timeout"
+            attempt_dir.mkdir()
+            (attempt_dir / "prompt_034.json").write_text("partial")
+            ctx = micro._RunContext(
+                tasks=[task],
+                suite_raw={"suite": "test"},
+                output_dir=output_dir,
+                sglang_url="http://model.invalid/v1",
+                args=Namespace(
+                    attempts=1,
+                    seed_base=41000,
+                    qemu_bin="qemu",
+                    qcow2="vm.qcow2",
+                    sglang_api_key="key",
+                    model_path="model",
+                    no_frames=True,
+                    settle_s=0.0,
+                    n_history_frames=None,
+                    system_prompt_id="test",
+                ),
+                action_format=micro._REL_STEP_FORMAT,
+                system_prompt="prompt",
+                sampling=qwen_sampling("thinking"),
+                model_resolution=None,
+                total=1,
+                started=0.0,
+                state_lock=threading.Lock(),
+                attempts=[],
+                runs=[],
+            )
+            with (
+                mock.patch.object(micro, "_spawn_attempt_process", return_value=process),
+                mock.patch.object(micro, "_terminate_attempt_process_group") as terminate,
+                mock.patch.object(micro, "_attempt_wall_bound_s", return_value=123.0),
+            ):
+                micro._run_one_task_attempt_isolated(
+                    ctx,
+                    task_index=0,
+                    task=task,
+                    attempt_index=0,
+                    vm_port=5000,
+                    vnc_port=5900,
+                )
+
+            result = json.loads((attempt_dir / "result.json").read_text())
+            summary = json.loads((output_dir / "result.json").read_text())
+            partial_prompt = (attempt_dir / "prompt_034.json").read_text()
+
+        process.join.assert_called_once_with(timeout=123.0)
+        terminate.assert_called_once_with(process)
+        self.assertEqual(result["validity"], "infra_invalid")
+        self.assertEqual(result["infra_error"]["type"], "AttemptWallTimeout")
+        self.assertEqual(result["attempt_wall_bound_s"], 123.0)
+        self.assertEqual(summary["overall"]["n_attempts_valid"], 0)
+        self.assertEqual(partial_prompt, "partial")
+
+    def test_slurm_allocation_shorter_than_suite_bound_is_rejected(self) -> None:
+        tasks = [self._task("task.atomic")]
+        required = micro._suite_wall_bound_s(
+            tasks,
+            attempts=1,
+            n_vms=1,
+            local_sglang=True,
+        )
+        with (
+            mock.patch.dict(os.environ, {"SLURM_JOB_ID": "142074"}),
+            mock.patch.object(micro, "_slurm_remaining_wall_s", return_value=required - 1),
+            self.assertRaisesRegex(RuntimeError, "cannot cover declared suite"),
+        ):
+            micro._preflight_slurm_wall_budget(
+                tasks,
+                attempts=1,
+                n_vms=1,
+                local_sglang=True,
+            )
+
+    def test_timeout_cleanup_kills_the_attempt_process_group(self) -> None:
+        child = subprocess.Popen(
+            ["bash", "-c", "trap '' TERM; echo ready; sleep 60 & wait"],
+            start_new_session=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        assert child.stdout is not None
+        self.assertEqual(child.stdout.readline().strip(), "ready")
+
+        class ProcessHandle:
+            pid = child.pid
+
+            @staticmethod
+            def join(timeout: float | None = None) -> None:
+                with suppress(subprocess.TimeoutExpired):
+                    child.wait(timeout=timeout)
+
+            @staticmethod
+            def is_alive() -> bool:
+                return child.poll() is None
+
+        try:
+            with mock.patch.object(micro, "_QEMU_SHUTDOWN_TIMEOUT_S", 0.05):
+                micro._terminate_attempt_process_group(ProcessHandle())
+        finally:
+            if child.poll() is None:
+                os.killpg(child.pid, 9)
+                child.wait()
+            child.stdout.close()
+        self.assertIsNotNone(child.returncode)
+
+    def test_slurm_duration_parser_accepts_scheduler_formats(self) -> None:
+        self.assertEqual(micro._parse_slurm_duration_s("03:00:00"), 10_800)
+        self.assertEqual(micro._parse_slurm_duration_s("1-02:03:04"), 93_784)
+        self.assertEqual(micro._parse_slurm_duration_s("05:30"), 330)
 
 
 if __name__ == "__main__":

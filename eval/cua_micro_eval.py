@@ -18,7 +18,9 @@ import base64
 import json
 import logging
 import math
+import multiprocessing
 import os
+import queue
 import re
 import signal
 import socket
@@ -36,12 +38,20 @@ import requests
 from PIL import Image, ImageDraw
 
 import sampling as sampling_mod
-from action_parser import ComputerUseCall
-from action_parser import OrderedAction as NativeOrderedAction
-from action_parser import parse_ordered_action_tolerant
+from action_parser import (
+    ComputerUseCall,
+    parse_ordered_action_tolerant,
+)
+from action_parser import (
+    OrderedAction as NativeOrderedAction,
+)
 from cua_micro_action_parser import (
     RelStepAction as OrderedAction,
+)
+from cua_micro_action_parser import (
     RelStepPrimitive as OrderedPrimitive,
+)
+from cua_micro_action_parser import (
     parse_computer_use_rel_step_action,
     parse_qwen3vl_computer_use_action,
 )
@@ -61,6 +71,16 @@ from osworld_vm_client import OSWorldClient
 from sampling import SamplingParams
 
 _LOGGER = logging.getLogger(__name__)
+_VM_READY_TIMEOUT_S = 300.0
+_VM_REQUEST_TIMEOUT_S = 30.0
+_XCURSOR_READY_TIMEOUT_S = 120.0
+_XCURSOR_RESTART_GRACE_S = OSWorldClient._AGENT_RESTART_GRACE_S
+_MODEL_REQUEST_TIMEOUT_S = 120.0
+_SETUP_READY_TIMEOUT_S = 140.0
+_VERIFIER_TIMEOUT_S = 20.0
+_SCREENSHOT_STABILITY_TIMEOUT_S = 2.5
+_QEMU_SHUTDOWN_TIMEOUT_S = 15.0
+_SGLANG_READY_TIMEOUT_S = 1800.0
 
 # _call_model / _fresh_visual_messages are defined here rather than imported
 # from osworld_runtime: this branch's own shared _call_model (used by
@@ -109,7 +129,7 @@ def _call_model(
     fresh_visual_context: bool = False,
     sampling: SamplingParams,
     seed: int | None = None,
-    request_timeout_s: float = 120.0,
+    request_timeout_s: float = _MODEL_REQUEST_TIMEOUT_S,
 ) -> tuple[str, str | None]:
     """One chat-completion call for the micro-eval suite.
 
@@ -1537,7 +1557,7 @@ def verifier_passed(client: OSWorldClient, verifier: dict[str, Any]) -> tuple[bo
         # _launch_chrome, _launch_native_app) -- a cold LibreOffice launch can
         # take close to 8-10s in the VM, so the old 8s ceiling produced false
         # negatives on a correct click that was simply still loading.
-        matched = _wait_until(check, timeout_s=20)
+        matched = _wait_until(check, timeout_s=_VERIFIER_TIMEOUT_S)
     except TimeoutError:
         state = read_verifier_state(client, verifier)
         return False, state
@@ -1663,6 +1683,13 @@ def run_multiturn_attempt(
     )
 
     for turn_index, turn in enumerate(turns):
+        _LOGGER.info(
+            "turn start: task=%s seed=%d turn=%d/%d",
+            task.task_id,
+            seed,
+            turn_index + 1,
+            len(turns),
+        )
         turn_task = replace(
             task,
             target=turn.target,
@@ -1823,6 +1850,15 @@ def run_multiturn_attempt(
             "elapsed_s": time.time() - t0,
         }
         turn_results.append(turn_result)
+        _LOGGER.info(
+            "turn done: task=%s seed=%d turn=%d/%d success=%s elapsed=%.1fs",
+            task.task_id,
+            seed,
+            turn_index + 1,
+            len(turns),
+            success,
+            turn_result["elapsed_s"],
+        )
         traj_entries.append(
             {
                 "step_num": turn_index + 1,
@@ -1943,6 +1979,7 @@ def run_attempt(
             settle_s=settle_s,
             n_history_frames=n_history_frames,
         )
+    _LOGGER.info("turn start: task=%s seed=%d turn=1/1", task.task_id, seed)
     output_dir.mkdir(parents=True, exist_ok=True)
     setup_state = prepare_task(client, task)
     screen = client.screen_size()
@@ -2121,6 +2158,13 @@ def run_attempt(
             )
             + "\n"
         )
+    _LOGGER.info(
+        "turn done: task=%s seed=%d turn=1/1 success=%s elapsed=%.1fs",
+        task.task_id,
+        seed,
+        success,
+        result["elapsed_s"],
+    )
     return result
 
 
@@ -2688,7 +2732,7 @@ def _terminate(proc: subprocess.Popen, *, label: str) -> None:
     _LOGGER.info("terminating %s pid=%d", label, proc.pid)
     proc.terminate()
     try:
-        proc.wait(timeout=15)
+        proc.wait(timeout=_QEMU_SHUTDOWN_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
@@ -2710,18 +2754,128 @@ def _run_slug(index: int, task_id: str) -> str:
     return f"task_{index:03d}_{_task_slug(task_id)}"
 
 
+def _attempt_identity(
+    *, task_index: int, attempt_index: int, attempts_per_task: int, seed_base: int
+) -> tuple[int, int]:
+    return (
+        task_index * attempts_per_task + attempt_index,
+        seed_base + task_index * 100 + attempt_index,
+    )
+
+
+def _attempt_wall_bound_s(task: Task) -> float:
+    patch_bound = (
+        2 * _VM_REQUEST_TIMEOUT_S + _XCURSOR_RESTART_GRACE_S + _XCURSOR_READY_TIMEOUT_S
+    )
+    setup_bound = _SETUP_READY_TIMEOUT_S + _VM_REQUEST_TIMEOUT_S
+    turn_bound = (
+        _MODEL_REQUEST_TIMEOUT_S
+        + _VERIFIER_TIMEOUT_S
+        + max(_VM_REQUEST_TIMEOUT_S, _SCREENSHOT_STABILITY_TIMEOUT_S)
+    )
+    return (
+        20.0
+        + _VM_READY_TIMEOUT_S
+        + patch_bound
+        + setup_bound
+        + len(task_turns(task)) * turn_bound
+        + _QEMU_SHUTDOWN_TIMEOUT_S
+    )
+
+
+def _suite_wall_bound_s(
+    tasks: list[Task], *, attempts: int, n_vms: int, local_sglang: bool
+) -> float:
+    if n_vms < 1:
+        raise ValueError("n_vms must be >= 1")
+    slot_bounds = [0.0] * n_vms
+    for task in tasks:
+        for _attempt_index in range(attempts):
+            slot = min(range(n_vms), key=lambda index: (slot_bounds[index], index))
+            slot_bounds[slot] += _attempt_wall_bound_s(task)
+    return max(slot_bounds, default=0.0) + (_SGLANG_READY_TIMEOUT_S if local_sglang else 0.0)
+
+
+def _parse_slurm_duration_s(value: str) -> float:
+    if value == "UNLIMITED":
+        return math.inf
+    day_text, separator, clock_text = value.partition("-")
+    if separator:
+        days = int(day_text)
+    else:
+        days = 0
+        clock_text = day_text
+    fields = [int(field) for field in clock_text.split(":")]
+    if len(fields) == 3:
+        hours, minutes, seconds = fields
+    elif len(fields) == 2:
+        hours = 0
+        minutes, seconds = fields
+    elif len(fields) == 1:
+        hours = 0
+        minutes = fields[0]
+        seconds = 0
+    else:
+        raise ValueError(f"invalid SLURM duration {value!r}")
+    if minutes >= 60 or seconds >= 60:
+        raise ValueError(f"invalid SLURM duration {value!r}")
+    return float(((days * 24 + hours) * 60 + minutes) * 60 + seconds)
+
+
+def _slurm_remaining_wall_s(job_id: str) -> float:
+    completed = subprocess.run(
+        ["scontrol", "show", "job", job_id, "-o"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    fields = dict(
+        token.split("=", 1)
+        for token in completed.stdout.split()
+        if "=" in token
+    )
+    try:
+        limit = _parse_slurm_duration_s(fields["TimeLimit"])
+        runtime = _parse_slurm_duration_s(fields["RunTime"])
+    except KeyError as error:
+        raise RuntimeError(f"scontrol omitted {error.args[0]} for job {job_id}") from error
+    return max(0.0, limit - runtime)
+
+
+def _preflight_slurm_wall_budget(
+    tasks: list[Task], *, attempts: int, n_vms: int, local_sglang: bool
+) -> float:
+    required = _suite_wall_bound_s(
+        tasks,
+        attempts=attempts,
+        n_vms=n_vms,
+        local_sglang=local_sglang,
+    )
+    job_id = os.environ.get("SLURM_JOB_ID")
+    if not job_id:
+        _LOGGER.info("derived suite wall bound: %.0fs", required)
+        return required
+    remaining = _slurm_remaining_wall_s(job_id)
+    if remaining < required:
+        raise RuntimeError(
+            f"SLURM job {job_id} has {remaining:.0f}s remaining and cannot cover declared "
+            f"suite bound {required:.0f}s"
+        )
+    _LOGGER.info(
+        "SLURM wall preflight: job=%s remaining=%.0fs required=%.0fs",
+        job_id,
+        remaining,
+        required,
+    )
+    return required
+
+
 @dataclass
 class _RunContext:
     """Everything about a run that's the same for every (task, attempt) pair.
 
-    Bundled so _run_one_task_attempt/_run_vm_slot don't carry a dozen
-    individually-threaded parameters -- one object, passed by every VM slot
-    (see main()). ``state_lock`` guards ``attempts``/``runs``: every VM slot
-    appends to them and rewrites result.json after each of its own attempts,
-    and slots run concurrently (--vms_per_sglang), so without the lock two
-    slots finishing around the same moment could interleave list mutation
-    with aggregate_results()/json.dumps() reading it -- a data race, not just
-    a cosmetic log-ordering issue.
+    ``state_lock`` guards each concurrent VM slot's result append and aggregate
+    rewrite. Attempt execution itself runs in a killable child process.
     """
 
     tasks: list[Task]
@@ -2740,31 +2894,68 @@ class _RunContext:
     runs: list[dict[str, Any]]
 
 
-def _run_one_task_attempt(
-    ctx: _RunContext,
+@dataclass(frozen=True)
+class _AttemptRuntime:
+    output_dir: Path
+    sglang_url: str
+    attempts_per_task: int
+    total: int
+    seed_base: int
+    qemu_bin: str
+    qcow2: str
+    api_key: str
+    model: str
+    system_prompt: str
+    action_format: str
+    sampling: SamplingParams
+    model_resolution: tuple[int, int] | None
+    save_frames: bool
+    settle_s: float
+    n_history_frames: int | None
+
+
+def _attempt_runtime(ctx: _RunContext) -> _AttemptRuntime:
+    return _AttemptRuntime(
+        output_dir=ctx.output_dir,
+        sglang_url=ctx.sglang_url,
+        attempts_per_task=ctx.args.attempts,
+        total=ctx.total,
+        seed_base=ctx.args.seed_base,
+        qemu_bin=ctx.args.qemu_bin,
+        qcow2=ctx.args.qcow2,
+        api_key=ctx.args.sglang_api_key,
+        model=ctx.args.model_path,
+        system_prompt=ctx.system_prompt,
+        action_format=ctx.action_format,
+        sampling=ctx.sampling,
+        model_resolution=ctx.model_resolution,
+        save_frames=not ctx.args.no_frames,
+        settle_s=ctx.args.settle_s,
+        n_history_frames=ctx.args.n_history_frames,
+    )
+
+
+def _execute_one_task_attempt(
+    runtime: _AttemptRuntime,
     *,
     task_index: int,
     task: Task,
     attempt_index: int,
     vm_port: int,
     vnc_port: int,
-) -> None:
-    """Boot one VM, run one (task, attempt) against the shared sglang, tear
-    the VM down, then record the result under ``ctx.state_lock``.
-
-    Called sequentially within a VM slot (see ``_run_vm_slot``) and
-    concurrently *across* slots -- ``vm_port``/``vnc_port`` are that slot's
-    own, so concurrent qemu instances never collide.
-    """
-    args = ctx.args
-    ordinal = task_index * args.attempts + attempt_index + 1
-    seed = args.seed_base + task_index * 100 + attempt_index
-    attempt_dir = ctx.output_dir / _run_slug(ordinal - 1, task.task_id)
+) -> dict[str, Any]:
+    ordinal_index, seed = _attempt_identity(
+        task_index=task_index,
+        attempt_index=attempt_index,
+        attempts_per_task=runtime.attempts_per_task,
+        seed_base=runtime.seed_base,
+    )
+    attempt_dir = runtime.output_dir / _run_slug(ordinal_index, task.task_id)
     attempt_dir.mkdir(parents=True, exist_ok=True)
     _LOGGER.info(
         "[%d/%d] task=%s attempt=%d seed=%d",
-        ordinal,
-        ctx.total,
+        ordinal_index + 1,
+        runtime.total,
         task.task_id,
         attempt_index + 1,
         seed,
@@ -2776,32 +2967,35 @@ def _run_one_task_attempt(
         _LOGGER.warning("ports %s still bound before launch -- qemu may abort", busy)
     qemu_log = attempt_dir / "qemu.log"
     vm_proc = _launch_vm(
-        qemu_bin=args.qemu_bin,
-        qcow2=args.qcow2,
+        qemu_bin=runtime.qemu_bin,
+        qcow2=runtime.qcow2,
         vm_port=vm_port,
         vnc_port=vnc_port,
         log_path=qemu_log,
     )
     try:
         _assert_qemu_alive(vm_proc, qemu_log, what=f"task={task.task_id} seed={seed}")
-        client = OSWorldClient(f"http://localhost:{vm_port}")
-        client.wait_ready(timeout_s=300)
-        client.patch_xcursor_leak()
+        client = OSWorldClient(
+            f"http://localhost:{vm_port}",
+            request_timeout_s=_VM_REQUEST_TIMEOUT_S,
+        )
+        client.wait_ready(timeout_s=_VM_READY_TIMEOUT_S)
+        client.patch_xcursor_leak(ready_timeout_s=_XCURSOR_READY_TIMEOUT_S)
         result = run_attempt(
             client=client,
             task=task,
             output_dir=attempt_dir,
-            sglang_url=ctx.sglang_url,
-            api_key=args.sglang_api_key,
-            model=args.model_path,
-            system_prompt=ctx.system_prompt,
-            action_format=ctx.action_format,
-            sampling=ctx.sampling,
+            sglang_url=runtime.sglang_url,
+            api_key=runtime.api_key,
+            model=runtime.model,
+            system_prompt=runtime.system_prompt,
+            action_format=runtime.action_format,
+            sampling=runtime.sampling,
             seed=seed,
-            model_resolution=ctx.model_resolution,
-            save_frames=not args.no_frames,
-            settle_s=args.settle_s,
-            n_history_frames=args.n_history_frames,
+            model_resolution=runtime.model_resolution,
+            save_frames=runtime.save_frames,
+            settle_s=runtime.settle_s,
+            n_history_frames=runtime.n_history_frames,
         )
     except Exception as error:
         _LOGGER.exception("attempt failed: task=%s seed=%d", task.task_id, seed)
@@ -2824,9 +3018,27 @@ def _run_one_task_attempt(
         (attempt_dir / "result.json").write_text(json.dumps(result, indent=2))
     finally:
         _terminate(vm_proc, label=f"VM {task.task_id}/{attempt_index + 1}")
+    return result
 
+
+def _record_attempt_result(
+    ctx: _RunContext,
+    *,
+    task_index: int,
+    task: Task,
+    attempt_index: int,
+    result: dict[str, Any],
+) -> None:
+    args = ctx.args
+    ordinal_index, _seed = _attempt_identity(
+        task_index=task_index,
+        attempt_index=attempt_index,
+        attempts_per_task=args.attempts,
+        seed_base=args.seed_base,
+    )
+    attempt_dir = ctx.output_dir / _run_slug(ordinal_index, task.task_id)
     run_entry = {
-        "index": ordinal - 1,
+        "index": ordinal_index,
         "slug": attempt_dir.name,
         "task_id": task.task_id,
         "instruction": task.instruction,
@@ -2848,6 +3060,7 @@ def _run_one_task_attempt(
             "params": {
                 "model_path": args.model_path,
                 "attempts": args.attempts,
+                "suite_wall_bound_s": getattr(args, "suite_wall_bound_s", None),
                 "sampling": ctx.sampling.to_dict(),
                 "system_prompt_id": args.system_prompt_id,
                 "action_format": ctx.action_format,
@@ -2867,32 +3080,224 @@ def _run_one_task_attempt(
         (ctx.output_dir / "result.json").write_text(json.dumps(partial, indent=2))
 
 
+def _run_one_task_attempt(
+    ctx: _RunContext,
+    *,
+    task_index: int,
+    task: Task,
+    attempt_index: int,
+    vm_port: int,
+    vnc_port: int,
+) -> None:
+    result = _execute_one_task_attempt(
+        _attempt_runtime(ctx),
+        task_index=task_index,
+        task=task,
+        attempt_index=attempt_index,
+        vm_port=vm_port,
+        vnc_port=vnc_port,
+    )
+    _record_attempt_result(
+        ctx,
+        task_index=task_index,
+        task=task,
+        attempt_index=attempt_index,
+        result=result,
+    )
+
+
+def _attempt_process_main(
+    runtime: _AttemptRuntime,
+    *,
+    task_index: int,
+    task: Task,
+    attempt_index: int,
+    vm_port: int,
+    vnc_port: int,
+) -> None:
+    os.setsid()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(processName)s] %(levelname)s %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(runtime.output_dir / "cua_micro_eval.log"),
+        ],
+    )
+    _execute_one_task_attempt(
+        runtime,
+        task_index=task_index,
+        task=task,
+        attempt_index=attempt_index,
+        vm_port=vm_port,
+        vnc_port=vnc_port,
+    )
+
+
+def _spawn_attempt_process(
+    runtime: _AttemptRuntime,
+    *,
+    task_index: int,
+    task: Task,
+    attempt_index: int,
+    vm_port: int,
+    vnc_port: int,
+) -> multiprocessing.Process:
+    process = multiprocessing.get_context("spawn").Process(
+        target=_attempt_process_main,
+        kwargs={
+            "runtime": runtime,
+            "task_index": task_index,
+            "task": task,
+            "attempt_index": attempt_index,
+            "vm_port": vm_port,
+            "vnc_port": vnc_port,
+        },
+    )
+    process.start()
+    return process
+
+
+def _terminate_attempt_process_group(process: multiprocessing.Process) -> None:
+    if process.pid is None:
+        raise RuntimeError("attempt process has no pid")
+    try:
+        process_group = os.getpgid(process.pid)
+    except ProcessLookupError:
+        process.join()
+        return
+    if process_group != process.pid:
+        process.terminate()
+        process.join(timeout=_QEMU_SHUTDOWN_TIMEOUT_S)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=_QEMU_SHUTDOWN_TIMEOUT_S)
+        raise RuntimeError(f"attempt process {process.pid} did not establish its own process group")
+    os.killpg(process_group, signal.SIGTERM)
+    process.join(timeout=_QEMU_SHUTDOWN_TIMEOUT_S)
+    if process.is_alive():
+        os.killpg(process_group, signal.SIGKILL)
+        process.join(timeout=_QEMU_SHUTDOWN_TIMEOUT_S)
+    if process.is_alive():
+        raise RuntimeError(f"attempt process group {process_group} survived SIGKILL")
+
+
+def _infra_invalid_attempt_result(
+    *, task: Task, seed: int, error_type: str, message: str
+) -> dict[str, Any]:
+    return {
+        "schema_version": _RESULT_SCHEMA_VERSION,
+        "task_id": task.task_id,
+        "category": task.category,
+        "seed": seed,
+        "validity": "infra_invalid",
+        "infra_error": {"type": error_type, "message": message},
+        "success": None,
+        "progress": 0.0,
+        "parse_valid": False,
+        "expected_action_ok": False,
+        "stop_reason": f"{error_type}: {message}",
+    }
+
+
+def _run_one_task_attempt_isolated(
+    ctx: _RunContext,
+    *,
+    task_index: int,
+    task: Task,
+    attempt_index: int,
+    vm_port: int,
+    vnc_port: int,
+) -> None:
+    runtime = _attempt_runtime(ctx)
+    ordinal_index, seed = _attempt_identity(
+        task_index=task_index,
+        attempt_index=attempt_index,
+        attempts_per_task=runtime.attempts_per_task,
+        seed_base=runtime.seed_base,
+    )
+    attempt_dir = runtime.output_dir / _run_slug(ordinal_index, task.task_id)
+    attempt_dir.mkdir(parents=True, exist_ok=True)
+    process = _spawn_attempt_process(
+        runtime,
+        task_index=task_index,
+        task=task,
+        attempt_index=attempt_index,
+        vm_port=vm_port,
+        vnc_port=vnc_port,
+    )
+    wall_bound_s = _attempt_wall_bound_s(task)
+    process.join(timeout=wall_bound_s)
+    result_path = attempt_dir / "result.json"
+    if process.is_alive():
+        _LOGGER.error(
+            "attempt wall deadline exceeded: task=%s seed=%d bound=%.0fs",
+            task.task_id,
+            seed,
+            wall_bound_s,
+        )
+        _terminate_attempt_process_group(process)
+        result = _infra_invalid_attempt_result(
+            task=task,
+            seed=seed,
+            error_type="AttemptWallTimeout",
+            message=f"attempt exceeded derived wall bound of {wall_bound_s:.0f}s",
+        )
+        result["attempt_wall_bound_s"] = wall_bound_s
+        result_path.write_text(json.dumps(result, indent=2))
+    elif not result_path.exists():
+        result = _infra_invalid_attempt_result(
+            task=task,
+            seed=seed,
+            error_type="AttemptProcessExit",
+            message=f"attempt process exited with status {process.exitcode}",
+        )
+        result_path.write_text(json.dumps(result, indent=2))
+    else:
+        try:
+            result = json.loads(result_path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            result = _infra_invalid_attempt_result(
+                task=task,
+                seed=seed,
+                error_type="AttemptArtifactError",
+                message=str(error),
+            )
+            result_path.write_text(json.dumps(result, indent=2))
+    _record_attempt_result(
+        ctx,
+        task_index=task_index,
+        task=task,
+        attempt_index=attempt_index,
+        result=result,
+    )
+
+
 def _run_vm_slot(
     slot_id: int,
-    assigned: list[tuple[int, Task, int]],
+    work: queue.Queue[tuple[int, Task, int]],
     ctx: _RunContext,
     *,
     vm_port: int,
     vnc_port: int,
 ) -> None:
-    """Run this slot's assigned (task_index, task, attempt_index) triples
-    sequentially on its own dedicated vm_port/vnc_port; slots run
-    concurrently (see main()'s ThreadPoolExecutor). ``threading.
-    current_thread().name`` is set so every _LOGGER call made from here on
-    down picks up a ``vmN`` prefix via the ``%(threadName)s`` in the log
-    format -- needed once slots interleave, since the log otherwise gives no
-    way to tell which VM a given line came from.
-    """
     threading.current_thread().name = f"vm{slot_id}"
-    for task_index, task, attempt_index in assigned:
-        _run_one_task_attempt(
-            ctx,
-            task_index=task_index,
-            task=task,
-            attempt_index=attempt_index,
-            vm_port=vm_port,
-            vnc_port=vnc_port,
-        )
+    while True:
+        try:
+            task_index, task, attempt_index = work.get_nowait()
+        except queue.Empty:
+            return
+        try:
+            _run_one_task_attempt_isolated(
+                ctx,
+                task_index=task_index,
+                task=task,
+                attempt_index=attempt_index,
+                vm_port=vm_port,
+                vnc_port=vnc_port,
+            )
+        finally:
+            work.task_done()
 
 
 def main() -> int:
@@ -2944,9 +3349,8 @@ def main() -> int:
         type=int,
         default=4,
         help="Number of VMs to run concurrently against the single shared "
-        "sglang instance, round-robin over the (task, attempt) work list "
-        "(slot i gets work[i::vms_per_sglang], each attempt sequential on "
-        "that slot's own VM). A single VM's step time is dominated by "
+        "sglang instance. Each free VM slot takes the next indexed attempt "
+        "from the shared work queue. A single VM's step time is dominated by "
         "sglang prefill and the server sees only one in-flight request at a "
         "time (batch size 1), badly underusing the GPU. Running several VMs "
         "lets sglang batch their requests instead. Must be <= 10 to fit the "
@@ -2998,6 +3402,13 @@ def main() -> int:
     if args.limit > 0:
         tasks = tasks[: args.limit]
 
+    work = [
+        (task_index, task, attempt_index)
+        for task_index, task in enumerate(tasks)
+        for attempt_index in range(args.attempts)
+    ]
+    n_vms = min(args.vms_per_sglang, len(work)) if work else 1
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     completion_marker = output_dir / "completed.json"
@@ -3014,7 +3425,7 @@ def main() -> int:
     job_mod = (int(os.environ.get("SLURM_JOB_ID", "0")) % 200) * 10
     # Every port this job will ever bind, checked once up front so a window
     # collision costs 5s here instead of 300s per attempt in wait_ready().
-    _n_slots = 1 if args.validate_setups_only else args.vms_per_sglang
+    _n_slots = 1 if args.validate_setups_only else n_vms
     _preflight_ports(
         [5000 + job_mod + i for i in range(_n_slots)]
         + [5900 + job_mod + i for i in range(_n_slots)],
@@ -3045,9 +3456,12 @@ def main() -> int:
             )
             try:
                 _assert_qemu_alive(vm_proc, qemu_log, what=f"validate task={task.task_id}")
-                client = OSWorldClient(f"http://localhost:{vm_port}")
-                client.wait_ready(timeout_s=300)
-                client.patch_xcursor_leak()
+                client = OSWorldClient(
+                    f"http://localhost:{vm_port}",
+                    request_timeout_s=_VM_REQUEST_TIMEOUT_S,
+                )
+                client.wait_ready(timeout_s=_VM_READY_TIMEOUT_S)
+                client.patch_xcursor_leak(ready_timeout_s=_XCURSOR_READY_TIMEOUT_S)
                 result = validate_task_setup(
                     client=client,
                     task=task,
@@ -3086,6 +3500,13 @@ def main() -> int:
         if summary["success"]:
             completion_marker.write_text(json.dumps(summary, indent=2))
         return 0 if summary["success"] else 1
+
+    args.suite_wall_bound_s = _preflight_slurm_wall_budget(
+        tasks,
+        attempts=args.attempts,
+        n_vms=n_vms,
+        local_sglang=args.sglang_url is None,
+    )
 
     system_prompt = SYSTEM_PROMPTS[args.system_prompt_id]
     sampling = sampling_mod.from_cli(
@@ -3158,22 +3579,11 @@ def main() -> int:
     started = time.time()
     total = len(tasks) * args.attempts
 
-    # Round-robin (task, attempt) pairs across vms_per_sglang VM slots: slot i
-    # handles work[i::n_vms], sequentially on its own dedicated vm_port/
-    # vnc_port (offset by slot within the job's 10-wide port window -- see the
-    # --vms_per_sglang validation above). Slots run concurrently in a thread
-    # pool; every request they fire lands on the one sglang_proc started
-    # above, which is the whole point (batched serving instead of one VM --
-    # and one in-flight request -- at a time).
-    work = [
-        (task_index, task, attempt_index)
-        for task_index, task in enumerate(tasks)
-        for attempt_index in range(args.attempts)
-    ]
-    n_vms = min(args.vms_per_sglang, len(work)) if work else 1
-    slots: list[list[tuple[int, Task, int]]] = [[] for _ in range(n_vms)]
-    for i, item in enumerate(work):
-        slots[i % n_vms].append(item)
+    # Each free slot takes the next deterministic work item while keeping its
+    # own vm_port/vnc_port. Attempts run concurrently against one sglang server.
+    work_queue: queue.Queue[tuple[int, Task, int]] = queue.Queue()
+    for item in work:
+        work_queue.put(item)
     _LOGGER.info(
         "running %d (task, attempt) pair(s) across %d concurrent VM slot(s)",
         len(work),
@@ -3201,17 +3611,14 @@ def main() -> int:
             executor.submit(
                 _run_vm_slot,
                 slot_id,
-                assigned,
+                work_queue,
                 ctx,
                 vm_port=5000 + job_mod + slot_id,
                 vnc_port=5900 + job_mod + slot_id,
             )
-            for slot_id, assigned in enumerate(slots)
+            for slot_id in range(n_vms)
         ]
-        # .result() re-raises any exception that escaped a slot (there
-        # shouldn't be one -- _run_one_task_attempt already catches
-        # per-attempt failures -- but a bug there should still crash main()
-        # rather than being silently swallowed).
+        # A scheduler bug must crash main rather than disappear in a worker.
         for future in futures:
             future.result()
 
@@ -3223,6 +3630,7 @@ def main() -> int:
         "params": {
             "model_path": args.model_path,
             "attempts": args.attempts,
+            "suite_wall_bound_s": args.suite_wall_bound_s,
             "sampling": sampling.to_dict(),
             "system_prompt_id": args.system_prompt_id,
             "action_format": action_format,
