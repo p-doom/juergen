@@ -91,7 +91,7 @@ override-dependencies = [
 # Not editable: an editable path source makes this package's installed behaviour
 # change when a sibling directory is edited. Developers working on both do
 # `uv pip install -e ../desktop` explicitly, which overrides this.
-desktop = { git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git", rev = "5ed77a58b821be6dc02522f9fc1c998d230f5f59" }
+desktop = { git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git", rev = "ab37afcc9d62257afc0324176abb26b26beec5f7" }
 
 [build-system]
 requires = ["setuptools>=68"]
