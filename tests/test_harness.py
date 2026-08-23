@@ -707,6 +707,23 @@ def test_the_harness_provenance_metric_reports_the_calibration(tmp_path, prepare
     }
 
 
+def test_a_preparer_readiness_wait_refreshes_the_observation(tmp_path) -> None:
+    old, ready = png(colour=(1, 1, 1)), png(colour=(2, 2, 2))
+    session = FakeSession(frames=[old, ready])
+
+    class Readiness:
+        def wait_for_observation(self, observed_session, task):
+            assert observed_session is session
+            return True
+
+    frame = asyncio.run(
+        DesktopHarness(_config(tmp_path))._observe(
+            Readiness(), session, make_task_data(kind="harness_test")
+        )
+    )
+    assert frame == ready
+
+
 def test_the_per_kind_settle_is_2s_for_chrome_and_0_75s_elsewhere(monkeypatch) -> None:
     slept: list[float] = []
     monkeypatch.setattr("time.sleep", lambda s: slept.append(s))

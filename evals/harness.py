@@ -1198,6 +1198,11 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         frame = await _to_thread(
             _screenshot, session, self.config.settle, task.kind
         )
+        wait_for_observation = getattr(preparer, "wait_for_observation", None)
+        if callable(wait_for_observation) and await _to_thread(
+            wait_for_observation, session, task
+        ):
+            frame = await _to_thread(session.screenshot)
         observe = getattr(preparer, "observe", None)
         if callable(observe):
             frame = await _to_thread(observe, frame, task)

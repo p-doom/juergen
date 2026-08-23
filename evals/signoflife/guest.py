@@ -30,6 +30,7 @@ from __future__ import annotations
 import base64
 import json
 import shlex
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -47,6 +48,7 @@ __all__ = [
     "ROOT",
     "SCRIPT_RENDERERS",
     "STATE_PREFIX",
+    "ChromeWindowReadinessTimeout",
     "SignOfLifePreparer",
     "register_preparers",
     "render_step",
@@ -56,6 +58,12 @@ __all__ = [
 STATE_PREFIX = "SOLV2_STATE="
 ROOT = Path("/tmp/crowdcast_sign_of_life_v2")
 DOCK_CHROME_COORDINATE = (35, 60)
+CHROME_WINDOW_READY_TIMEOUT_S = 8.0
+CHROME_WINDOW_READY_POLL_S = 0.25
+
+
+class ChromeWindowReadinessTimeout(RuntimeError):
+    """Chrome launched but did not become the foreground mapped window in time."""
 
 
 def _stdout(result: dict[str, Any]) -> str:
@@ -178,6 +186,36 @@ print({STATE_PREFIX!r}+json.dumps(value,ensure_ascii=False,sort_keys=True))
     if not isinstance(value, dict):
         raise RuntimeError("guest state evidence is not an object")
     return value
+
+
+def _wait_for_chrome_window(session: Any, task: DesktopTaskData) -> bool:
+    """Wait only after Chrome exists, then require the oracle's exact condition.
+
+    No process means the action did not launch Chrome and remains a valid task miss.
+    A process with no foreground mapped window is the known guest-readiness race;
+    letting it time out as an ordinary miss would measure the instrument as policy.
+    """
+    state = probe_state(session, task)
+    if state.get("chrome_process") is not True:
+        return False
+    deadline = time.monotonic() + CHROME_WINDOW_READY_TIMEOUT_S
+    while True:
+        outcome = evaluate_postcondition(
+            task.name or "", task.kind, dict(task.expected), state
+        )
+        if outcome.status != "ok":
+            raise RuntimeError(f"Chrome readiness probe is unreadable: {outcome.reason}")
+        if outcome.success:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ChromeWindowReadinessTimeout(
+                "Chrome process was observed but the open_chrome postcondition "
+                f"did not become ready within {CHROME_WINDOW_READY_TIMEOUT_S:.1f}s: "
+                f"{json.dumps(outcome.evidence, sort_keys=True)}"
+            )
+        time.sleep(min(CHROME_WINDOW_READY_POLL_S, remaining))
+        state = probe_state(session, task)
 
 
 def _setup_terminal_command(session: Any, task: DesktopTaskData) -> dict[str, Any]:
@@ -791,6 +829,12 @@ class SignOfLifePreparer:
             "postcondition_reason": outcome.reason,
             "postcondition_evidence": outcome.evidence,
         }
+
+    def wait_for_observation(self, session: Any, task: DesktopTaskData) -> bool:
+        """Make a launched Chrome observable before its frame and probe are read."""
+        if self.kind != "open_chrome":
+            return False
+        return _wait_for_chrome_window(session, task)
 
     def script_plan(self, task: DesktopTaskData, *, negative: bool) -> list[Intent]:
         return script_plan(task, negative=negative)

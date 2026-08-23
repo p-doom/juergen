@@ -331,6 +331,59 @@ def test_the_per_kind_settle_is_2s_for_chrome_and_0_75s_elsewhere() -> None:
         assert config.settle.min_delay_s == 0.75
 
 
+def test_chrome_readiness_waits_past_the_stale_2s_frame(monkeypatch) -> None:
+    """A launched process without a mapped foreground window is not a task miss."""
+    import evals.signoflife.guest as guest
+    from evals.signoflife.oracle import evaluate_postcondition
+
+    task = make_task_data(
+        kind="open_chrome",
+        name="desktop_open_chrome",
+        expected={"active_window_class_any": ["chrome"]},
+    )
+    stale = {
+        "schema_version": 1,
+        "task_id": task.name,
+        "active_window": "xfdesktop",
+        "windows": "xfdesktop.Xfdesktop desktop",
+        "chrome_process": True,
+    }
+    ready = {
+        **stale,
+        "active_window": 'WM_CLASS(STRING) = "google-chrome", "Google-chrome"',
+        "windows": "google-chrome.Google-chrome Chrome",
+    }
+    states = iter([stale, ready])
+    monkeypatch.setattr(guest, "probe_state", lambda session, task: next(states))
+    monkeypatch.setattr(guest.time, "sleep", lambda seconds: None)
+
+    assert evaluate_postcondition(task.name, task.kind, dict(task.expected), stale).success is False
+    assert preparer_for("open_chrome").wait_for_observation(object(), task) is True
+
+
+def test_chrome_readiness_timeout_is_typed_infrastructure(monkeypatch) -> None:
+    import evals.signoflife.guest as guest
+
+    task = make_task_data(
+        kind="open_chrome",
+        name="desktop_open_chrome",
+        expected={"active_window_class_any": ["chrome"]},
+    )
+    stale = {
+        "schema_version": 1,
+        "task_id": task.name,
+        "active_window": "xfdesktop",
+        "windows": "xfdesktop.Xfdesktop desktop",
+        "chrome_process": True,
+    }
+    times = iter([0.0, guest.CHROME_WINDOW_READY_TIMEOUT_S])
+    monkeypatch.setattr(guest, "probe_state", lambda session, task: stale)
+    monkeypatch.setattr(guest.time, "monotonic", lambda: next(times))
+
+    with pytest.raises(guest.ChromeWindowReadinessTimeout, match="process was observed"):
+        preparer_for("open_chrome").wait_for_observation(object(), task)
+
+
 def test_an_unsupported_sign_of_life_kind_is_refused_at_construction() -> None:
     from evals.signoflife.guest import SignOfLifePreparer
 
