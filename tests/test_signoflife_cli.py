@@ -478,6 +478,81 @@ def test_the_tier_reaches_the_taskset_and_the_record(tmp_path) -> None:
     assert config.taskset.task_ids == ["panel_offset_button"]
 
 
+@pytest.mark.slow
+def test_an_unattended_model_arm_samples_at_its_own_temperature(tmp_path) -> None:
+    """The arm decides, the flag overrides, and the record says which ran.
+
+    `--temperature` used to default to 0.0, so every arm was scored greedy unless
+    an operator remembered the flag — and greedy is a measurement of the decoder on
+    the eov3 family, which confines 100% of its mouse deltas to
+    {0, ±1, ±10, ±100} at temperature 0. The dispatcher supplying its own default
+    is the defect; `sampling` in `result.json` is where a reader would have caught
+    it, so it has to carry what actually ran rather than what was typed.
+    """
+    from evals.signoflife.cells import ARMS
+
+    def _dispatch(*extra: str) -> dict:
+        _fresh_process()
+        output = tmp_path / f"run{len(extra)}"
+        main(
+            [
+                "--arm",
+                "ordered",
+                "--output",
+                str(output),
+                "--qcow",
+                str(tmp_path / "desktop.qcow2"),
+                "--scoring-grace-s",
+                "0",
+                "--cell",
+                CELL_IDS[0],
+                # Port 9 (discard) never answers: the sampling record is written
+                # before any model is contacted.
+                "--base-url",
+                "http://127.0.0.1:9/v1",
+                *extra,
+            ]
+        )
+        return json.loads((output / "result.json").read_text())
+
+    assert ARMS["ordered"].temperature == 0.7, "the arm is the source of truth"
+    assert _dispatch()["sampling"]["temperature"] == 0.7
+    assert _dispatch("--temperature", "0.0")["sampling"]["temperature"] == 0.0
+
+
+def test_a_model_arm_that_names_no_temperature_is_refused(tmp_path, monkeypatch) -> None:
+    """The other half of "no silent default": with the flag gone, an arm that names
+    nothing would sample at whatever the served engine happens to default to, and
+    the run would record that number as a choice this repo made."""
+    from evals.harness import DesktopHarnessConfig
+    from evals.signoflife.cells import ARMS, ORDERED_CODEC
+
+    monkeypatch.setitem(
+        ARMS, "unnamed", DesktopHarnessConfig(id="sol_unnamed", codec=ORDERED_CODEC)
+    )
+    with pytest.raises(SystemExit, match="names no temperature"):
+        main(
+            [
+                "--arm",
+                "unnamed",
+                "--output",
+                str(tmp_path / "run"),
+                "--qcow",
+                str(tmp_path / "desktop.qcow2"),
+                "--base-url",
+                "http://127.0.0.1:9/v1",
+            ]
+        )
+
+
+def test_a_scripted_arm_refuses_a_sampling_knob_it_would_never_send(tmp_path) -> None:
+    """A scripted arm renders its own action, so a temperature would be published
+    as the run's sampling and sent to nothing."""
+    for flag, value in (("--temperature", "0.7"), ("--top-p", "0.8")):
+        with pytest.raises(SystemExit, match="never calls a model"):
+            main(_argv(tmp_path / "run", tmp_path, flag, value))
+
+
 def test_a_cell_from_the_other_tier_is_refused_rather_than_quietly_mixed(tmp_path) -> None:
     """Averaging a calibrated cell with an unmeasured one is the uncalibrated
     number the controls exist to prevent, so the runner refuses the mix."""

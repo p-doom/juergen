@@ -233,8 +233,8 @@ def _eval_config(
     traces_dir: Path,
     pool: dict[str, Any],
     base_url: str,
-    temperature: float,
-    top_p: float,
+    temperature: float | None,
+    top_p: float | None,
     max_tokens: int,
 ) -> EvalConfig:
     return EvalConfig(
@@ -412,8 +412,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--sglang-mem-fraction", type=float, default=0.65)
     parser.add_argument("--sglang-ready-timeout-s", type=float, default=1500.0)
     parser.add_argument("--api-key", default="sign-of-life")
-    parser.add_argument("--temperature", type=float, default=0.0)
-    parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument(
+        "--temperature", type=float, default=None, help="override the arm's own value"
+    )
+    parser.add_argument("--top-p", type=float, default=None, help="override the arm's own value")
     parser.add_argument("--max-tokens", type=int, default=256)
     parser.add_argument(
         "--verify-phaseb",
@@ -458,8 +460,23 @@ def main(argv: list[str] | None = None) -> int:
             f"arm {args.arm} is scripted and never calls a model; --model-path / "
             "--base-url would be recorded in the run and ignored"
         )
+    if scripted and (args.temperature is not None or args.top_p is not None):
+        raise SystemExit(
+            f"arm {args.arm} is scripted and never calls a model; --temperature / "
+            "--top-p would be recorded in the run and ignored"
+        )
     if not scripted and args.model_path is None and args.base_url is None:
         raise SystemExit(f"arm {args.arm} is a model arm: pass --model-path or --base-url")
+    # The arm is the source of truth and the flag is the override, so an unattended
+    # run cannot silently be handed a temperature this repo never chose.
+    temperature = arm.temperature if args.temperature is None else args.temperature
+    top_p = arm.top_p if args.top_p is None else args.top_p
+    if not scripted and temperature is None:
+        raise SystemExit(
+            f"arm {args.arm} names no temperature: set one on the arm or pass "
+            "--temperature. An unnamed one is whatever the server defaults to, and "
+            "greedy scores the decoder rather than the checkpoint"
+        )
     if args.verify_phaseb:
         if args.model_path is None:
             raise SystemExit("--verify-phaseb checks a checkpoint: pass --model-path")
@@ -512,8 +529,8 @@ def main(argv: list[str] | None = None) -> int:
                 traces_dir=output / f"trial_{trial:02d}" / "traces",
                 pool=pool,
                 base_url=base_url,
-                temperature=args.temperature,
-                top_p=args.top_p,
+                temperature=temperature,
+                top_p=top_p,
                 max_tokens=args.max_tokens,
             )
             environment = vf.Environment(config)
@@ -566,8 +583,8 @@ def main(argv: list[str] | None = None) -> int:
         "aggregate": aggregate,
         "model": _model_provenance(args.model_path),
         "sampling": {
-            "temperature": args.temperature,
-            "top_p": args.top_p,
+            "temperature": temperature,
+            "top_p": top_p,
             "max_tokens": args.max_tokens,
         },
         "vm": {

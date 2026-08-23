@@ -246,9 +246,25 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     max_tokens: int = Field(default=256, ge=1)
     """Fallback only — used for a knob `ctx.sampling` leaves unset."""
     temperature: float | None = None
-    """Fallback only. `ctx.sampling.temperature` wins at the wire; see
-    `agent.agent.resolve_sampling`."""
+    """The arm's sampling temperature, which `evals/signoflife/__main__.py` promotes
+    into the eval's `sampling` block; `ctx.sampling` still wins at the wire
+    (`agent.agent.resolve_sampling`). `None` names no temperature, which is what a
+    scripted arm must do and what the validator below enforces: it renders its own
+    action and calls no model, so a number here would be recorded in the run and
+    never sent.
+
+    There is deliberately no default for a model arm, because greedy is not a
+    neutral choice. Measured on the eov3 relative family: temperature 0 confines
+    100% of mouse deltas to {0, ±1, ±10, ±100} and lands no click within 1000 px of
+    its target, which scores the decoder rather than the checkpoint; at 0.7 the
+    on-lattice share is 3.9%, clicks land 36-49 px out, and the target application
+    opens. So `evals/signoflife/__main__.py` refuses a model arm that names a
+    temperature neither here nor on the command line, rather than supplying one of
+    its own."""
     top_p: float | None = None
+    """`temperature`'s sibling, same contract. 1.0 is the no-op value, not the
+    absence: an arm names it so the wire body carries the arm's nucleus setting and
+    not the server's."""
     parse_error_notice: str = ""
     """What to tell the model after a turn it could not have executed, or `""` to
     tell it nothing.
@@ -270,6 +286,16 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     """Call the session's OSWorld `evaluate()` and publish it as `task_reward`."""
     prefer_context_transport: bool = False
     """Sample through `ctx.client` instead of posting to `endpoint`."""
+
+    @model_validator(mode="after")
+    def _a_scripted_arm_names_no_sampling(self) -> "DesktopHarnessConfig":
+        if self.scripted.enabled and (self.temperature is not None or self.top_p is not None):
+            raise ValueError(
+                "a scripted arm renders its own action and never calls a model, so a "
+                "temperature or top_p here would be published as the run's sampling "
+                "and never sent to anything"
+            )
+        return self
 
 
 @dataclass
