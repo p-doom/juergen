@@ -1798,6 +1798,20 @@ def test_the_config_validates_its_bounds(field, bad) -> None:
         DesktopHarnessConfig(**{"codec": "deltatype_v2", field: bad})
 
 
+def test_a_scripted_arm_cannot_name_sampling_it_never_uses() -> None:
+    """A scripted arm renders its own action, so a temperature on it would be
+    published as the run's sampling and never reach anything. `None` is what says
+    "this arm does not sample", and the six control arms depend on it meaning that.
+    """
+    from pydantic import ValidationError
+
+    for knob in ("temperature", "top_p"):
+        with pytest.raises(ValidationError, match="never calls a model"):
+            DesktopHarnessConfig(
+                codec="deltatype_v2", scripted=ScriptedConfig(enabled=True), **{knob: 0.7}
+            )
+
+
 def test_the_image_budget_config_validates_quality_and_pixels() -> None:
     from pydantic import ValidationError
 
