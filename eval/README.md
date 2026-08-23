@@ -15,7 +15,7 @@ ported, what was added, and why.
 | File | Role |
 | --- | --- |
 | `cua_micro_eval.py` | The runner: loads the suite, boots a fresh VM per attempt, calls the model, parses+dispatches the action, scores against the task's verifier. |
-| `cua_micro_tasks.json` | The 20-task suite: `native_launch` / `native_app` / `chrome_control` / `multi_turn` categories. |
+| `cua_micro_tasks.json` | The 18-task suite: `native_launch` / `native_app` / `chrome_control` / `multi_turn` categories. |
 | `cua_micro_fixture.py` | Standard-library Tk fixture copied into the guest for editor/terminal/calculator/files/settings tasks; writes exact widget bboxes + semantic state to guest JSON. |
 | `cua_micro_action_parser.py` | Strict parsers for `computer_use_rel_step_v1` and `qwen3vl_native_cua_v1` (yll's original two formats). Kept separate from `action_parser.py` because both files independently evolved a class named `OrderedPrimitive`/`OrderedAction` into incompatible shapes — see the module docstring. |
 | `action_parser.py` | This branch's own action-format library (`ordered_events_v2/v3`, aggregate, computer_use tool calls) — used here for the added `cua_ordered_typing_v1` support. |
