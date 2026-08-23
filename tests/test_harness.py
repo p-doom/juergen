@@ -37,7 +37,6 @@ from evals.harness import (
 from agent.agent import load_codec
 from desktop.geometry import DisplayGeometry
 from evals.tasks import (
-    FULL_SUCCESS_THRESHOLD,
     PREPARERS,
     RESULT_KEY,
     DesktopState,
@@ -1647,7 +1646,7 @@ def test_the_osworld_score_is_the_verdict_a_scored_arm_reports(tmp_path, prepare
     assert index["tasks"][index["primary"]] == 1.0
 
 
-@pytest.mark.parametrize("reward", [0.0, 0.5, 0.9989, 1.0])
+@pytest.mark.parametrize("reward", [0.0, 0.5, 0.9989, 0.999999, 1.0])
 def test_no_scored_episode_can_disagree_with_its_own_reward(
     tmp_path, preparer, reward
 ) -> None:
@@ -1659,7 +1658,23 @@ def test_no_scored_episode_can_disagree_with_its_own_reward(
     config = _config(tmp_path, evaluate_on_finish=True)
     _, result, _ = _run(config, _task(max_steps=1), replies=["0 0 0 ;"], session=session)
     assert result["task_reward"] == reward
-    assert result["success"] is (reward >= FULL_SUCCESS_THRESHOLD)
+    assert result["success"] is (reward == 1.0)
+
+
+@pytest.mark.parametrize(
+    "reward",
+    [True, "1.0", float("nan"), float("inf"), -0.1, 1.1],
+)
+def test_an_invalid_osworld_score_is_infrastructure_invalid(
+    tmp_path, preparer, reward
+) -> None:
+    session = FakeSession()
+    session.evaluate_value = reward
+    config = _config(tmp_path, evaluate_on_finish=True)
+    _, result, _ = _run(config, _task(max_steps=1), replies=["0 0 0 ;"], session=session)
+    assert result["task_reward"] is None
+    assert result["validity"] == "infra_invalid" and result["success"] is None
+    assert result["infra_error"]["stage"] == "evaluate"
 
 
 def test_a_session_without_evaluate_refuses_the_flag_it_cannot_honour(

@@ -254,10 +254,14 @@ def test_the_osworld_reward_is_the_evaluate_score_verbatim() -> None:
     assert trace.metrics["task_reward"] == 0.5
 
 
-def test_full_success_needs_essentially_one() -> None:
+def test_full_success_needs_exactly_one() -> None:
     data, trace = _osworld(task_reward=1.0)
     asyncio.run(OSWorld(data).score(trace, _Runtime()))
     assert trace.metrics["full_success"] == 1.0
+
+    data, trace = _osworld(task_reward=0.999999)
+    asyncio.run(OSWorld(data).score(trace, _Runtime()))
+    assert trace.metrics["full_success"] == 0.0
 
 
 @pytest.mark.parametrize(

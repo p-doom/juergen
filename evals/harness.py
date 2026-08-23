@@ -19,6 +19,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import math
 import os
 import socket
 import tempfile
@@ -1354,7 +1355,12 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         # declaration silently forfeits every `infeasible` task in it.
         session.declare_terminal(declared)
         try:
-            score = float(await _to_thread(evaluate))
+            raw = await _to_thread(evaluate)
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                raise TypeError(f"evaluate() returned a non-numeric score: {raw!r}")
+            score = float(raw)
+            if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+                raise ValueError(f"evaluate() returned an invalid score: {score!r}")
         except Exception as exc:  # noqa: BLE001 - recorded as missing, never as 0.0
             _LOGGER.warning("evaluate() failed: %r", exc)
             return None

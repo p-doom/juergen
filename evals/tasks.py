@@ -48,13 +48,12 @@ __all__ = [
 RESULT_KEY = "episode"
 RESULT_SCHEMA_VERSION = 1
 
-FULL_SUCCESS_THRESHOLD = 0.999
+FULL_SUCCESS_THRESHOLD = 1.0
 """The bar an OSWorld `evaluate()` score must clear to count the task as solved.
 
 `DesktopEnv.evaluate()` returns 1 only when every conjoined metric passed; a
 partly-failed list returns `sum(results) / len(results)`
-(`desktop_env/desktop_env.py:509`). The bar sits below 1 for that division's float
-error, not to admit partial credit.
+(`desktop_env/desktop_env.py:509`).
 """
 
 
