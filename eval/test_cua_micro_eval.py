@@ -40,12 +40,36 @@ class SuiteContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.raw, cls.tasks = micro.load_suite(_SUITE)
 
-    def test_suite_is_nonempty_unique_and_versioned(self) -> None:
+    def test_suite_identity_and_composition_are_pinned(self) -> None:
         self.assertEqual(self.raw["schema_version"], 1)
+        self.assertEqual(self.raw["suite"], "cua_micro_tasks")
         self.assertEqual(self.raw["coordinate_grid"], 1000)
-        ids = [task.task_id for task in self.tasks]
-        self.assertGreaterEqual(len(ids), 16)
-        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(
+            {
+                task.task_id: task.turn_mode if task.turns else "atomic"
+                for task in self.tasks
+            },
+            {
+                "click.desktop.libreoffice_writer": "atomic",
+                "click.desktop.libreoffice_impress": "atomic",
+                "key.desktop.open_terminal": "multiturn",
+                "type.terminal.native_exact": "multiturn",
+                "type.text_editor.native_exact": "multiturn",
+                "key.writer.open_save_as": "atomic",
+                "key.impress.open_save_as": "atomic",
+                "click.files.open_eval_target": "atomic",
+                "key.calculator.digit7": "atomic",
+                "click.chrome.back": "atomic",
+                "click.chrome.reload": "atomic",
+                "click.chrome.deterministic_button": "atomic",
+                "scroll.chrome.down": "atomic",
+                "multi.calculator.73_plus_19": "multiturn",
+                "multi.chrome.search_3blue1brown": "multiturn",
+                "multi.chrome.open_chrome_search_wikipedia": "multiturn",
+                "multi.terminal.vim_hello_world_script": "multiturn",
+                "multi.terminal.hello_world_script": "multiturn",
+            },
+        )
 
     def test_requested_families_are_present(self) -> None:
         ids = {task.task_id for task in self.tasks}
@@ -78,38 +102,82 @@ class SuiteContractTests(unittest.TestCase):
                 )
 
     def test_typing_checks_exact_action_and_exact_app_state(self) -> None:
-        typing = [task for task in self.tasks if not task.turns and task.expected["kind"] == "type"]
-        self.assertGreaterEqual(len(typing), 2)
-        for task in typing:
-            self.assertIn(task.verifier["kind"], {"guest_json_equals", "saved_file_equals"})
-            self.assertEqual(task.expected["text"], task.verifier["value"])
+        typing = {
+            task.task_id: task
+            for task in self.tasks
+            if task.task_id in {"type.terminal.native_exact", "type.text_editor.native_exact"}
+        }
+        self.assertEqual(
+            set(typing),
+            {"type.terminal.native_exact", "type.text_editor.native_exact"},
+        )
+        for task in typing.values():
+            self.assertEqual(task.turn_mode, "multiturn")
+            self.assertEqual(len(task.turns), 32)
+            expected = task.turns[0].expected
+            verifier = task.turns[0].verifier
+            self.assertTrue(all(turn.expected == expected for turn in task.turns))
+            self.assertTrue(all(turn.verifier == verifier for turn in task.turns))
+            self.assertEqual(expected["kind"], "type")
+            self.assertIn(verifier["kind"], {"guest_json_equals", "saved_file_equals"})
+            self.assertEqual(expected["text"], verifier["value"])
             parsed = parse_computer_use_rel_step_action(
-                _tool({"action": "type", "text": task.expected["text"]})
+                _tool({"action": "type", "text": expected["text"]})
             )
-            self.assertTrue(micro.action_matches_expected(parsed, task.expected))
+            self.assertTrue(micro.action_matches_expected(parsed, expected))
 
     def test_multiturn_tasks_have_semantically_verified_steps(self) -> None:
         tasks = [task for task in self.tasks if task.turns]
-        self.assertEqual(len(tasks), 6)
+        self.assertEqual(
+            {
+                task.task_id: (task.category, task.turn_mode, len(task.turns))
+                for task in tasks
+            },
+            {
+                "key.desktop.open_terminal": ("multi_turn", "multiturn", 4),
+                "type.terminal.native_exact": ("native_app", "multiturn", 32),
+                "type.text_editor.native_exact": ("native_app", "multiturn", 32),
+                "multi.calculator.73_plus_19": ("multi_turn", "multiturn", 64),
+                "multi.chrome.search_3blue1brown": ("multi_turn", "multiturn", 64),
+                "multi.chrome.open_chrome_search_wikipedia": (
+                    "multi_turn",
+                    "multiturn",
+                    64,
+                ),
+                "multi.terminal.vim_hello_world_script": (
+                    "multi_turn",
+                    "multiturn",
+                    64,
+                ),
+                "multi.terminal.hello_world_script": ("multi_turn", "multiturn", 64),
+            },
+        )
         for task in tasks:
             self.assertGreaterEqual(len(task.turns), 2)
-            self.assertEqual(task.category, "multi_turn")
-            self.assertIn(task.turn_mode, ("prefix", "multiturn"))
             for turn in task.turns:
                 self.assertTrue(turn.turn_id)
                 self.assertIn("kind", turn.verifier)
 
-    def test_multiturn_mode_tasks_are_outcome_only(self) -> None:
-        multiturn_tasks = [task for task in self.tasks if task.turn_mode == "multiturn"]
-        ids = {task.task_id for task in multiturn_tasks}
-        self.assertIn("multi.calculator.73_plus_19", ids)
-        self.assertIn("multi.terminal.hello_world_script", ids)
-        for task in multiturn_tasks:
+    def test_outcome_only_multiturn_tasks_are_explicitly_pinned(self) -> None:
+        outcome_only = {
+            task.task_id: task
+            for task in self.tasks
+            if task.turns and all(turn.expected == {"kind": "any"} for turn in task.turns)
+        }
+        self.assertEqual(
+            set(outcome_only),
+            {
+                "key.desktop.open_terminal",
+                "multi.calculator.73_plus_19",
+                "multi.chrome.search_3blue1brown",
+                "multi.chrome.open_chrome_search_wikipedia",
+                "multi.terminal.vim_hello_world_script",
+                "multi.terminal.hello_world_script",
+            },
+        )
+        for task in outcome_only.values():
+            self.assertEqual(task.turn_mode, "multiturn")
             self.assertGreaterEqual(len(task.turns), 2)
-            # Every turn shares the same goal: expected is a wildcard and
-            # the verifier is identical across turns (a fixed turn budget
-            # toward one outcome, not a chain of distinct sub-goals).
-            self.assertTrue(all(turn.expected == {"kind": "any"} for turn in task.turns))
             verifiers = {json.dumps(turn.verifier, sort_keys=True) for turn in task.turns}
             self.assertEqual(len(verifiers), 1)
 
