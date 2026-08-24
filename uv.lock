@@ -716,7 +716,7 @@ requires-dist = [
     { name = "av", specifier = ">=16.1.0" },
     { name = "desktop", git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git?rev=b1be21fadaeb624dd2f635257be42f7fc4602aa2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
-    { name = "verifiers", specifier = "==0.2.1" },
+    { name = "verifiers", git = "https://github.com/PrimeIntellect-ai/verifiers.git?rev=1eee8b8ab37f1f4a9469a8419c612d82971967b7" },
 ]
 provides-extras = ["dev"]
 
@@ -1791,8 +1791,8 @@ wheels = [
 
 [[package]]
 name = "verifiers"
-version = "0.2.1"
-source = { registry = "https://pypi.org/simple" }
+version = "0.2.2.dev1"
+source = { git = "https://github.com/PrimeIntellect-ai/verifiers.git?rev=1eee8b8ab37f1f4a9469a8419c612d82971967b7#1eee8b8ab37f1f4a9469a8419c612d82971967b7" }
 dependencies = [
     { name = "aiohttp" },
     { name = "aiolimiter" },
@@ -1820,10 +1820,6 @@ dependencies = [
     { name = "tomli-w" },
     { name = "typing-extensions" },
     { name = "uvloop", marker = "platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5d/50/66d6571470240006caec392361d9f20e863acf39361bda325e53e235dbed/verifiers-0.2.1.tar.gz", hash = "sha256:e68c2b22a7fdbc2590a7cb8f59db685295be7999b9a75b12fffc00b2ac7c5aa1", size = 739478, upload-time = "2026-07-20T20:15:52.117Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/8c/ce/1d17f06a311fb904a4032f417dc00ee0b855baa773efdfb694cfba3b7792/verifiers-0.2.1-py3-none-any.whl", hash = "sha256:6b31b20a0d2b42ec7dbcd6824124d085535aaaed2be36fe6b4fdf59ebf65a42f", size = 759473, upload-time = "2026-07-20T20:15:50.364Z" },
 ]
 
 [[package]]

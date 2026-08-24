@@ -14,14 +14,14 @@ dependencies = [
     # Config base comes from it, and `evals/signoflife` is a verifiers plugin
     # package (its `__all__` contract is verifiers').
     #
-    # Pinned exactly, not floored: `loaders._plugin_class`, `narrow_plugin_field`
-    # and the `Harness.launch(endpoint, secret, ...)` signature are unversioned
-    # internal API we call directly.
+    # Pinned exactly below, not floored: `loaders._plugin_class`,
+    # `narrow_plugin_field` and the `Harness.launch(endpoint, secret, ...)`
+    # signature are unversioned internal API we call directly.
     #
     # Bare, without the `harbor` extra: that extra pulls `harbor==0.14.0`, which
     # is excluded from this resolve (see project_harbor_migration -- audit-only,
     # opt-in).
-    "verifiers==0.2.1",
+    "verifiers",
 ]
 
 [project.optional-dependencies]
@@ -92,6 +92,7 @@ override-dependencies = [
 # change when a sibling directory is edited. Developers working on both do
 # `uv pip install -e ../desktop` explicitly, which overrides this.
 desktop = { git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git", rev = "b1be21fadaeb624dd2f635257be42f7fc4602aa2" }
+verifiers = { git = "https://github.com/PrimeIntellect-ai/verifiers.git", rev = "1eee8b8ab37f1f4a9469a8419c612d82971967b7" }
 
 [build-system]
 requires = ["setuptools>=68"]

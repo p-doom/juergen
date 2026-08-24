@@ -160,7 +160,7 @@ def test_only_the_unset_knobs_reach_the_wire_through_the_endpoint(endpoint) -> N
     async def body():
         try:
             return await agent.step(
-                make_ctx(model="m", temperature=0.9),
+                make_ctx(model="m", temperature=0.9, seed=1234567),
                 history=_history(),
                 instruction="do it",
                 step=1,
@@ -173,6 +173,7 @@ def test_only_the_unset_knobs_reach_the_wire_through_the_endpoint(endpoint) -> N
     decision = asyncio.run(body())
     request = server.requests[0]
     assert "temperature" not in request, "the eval set it, so the harness must not send it"
+    assert "seed" not in request, "the interception's EvalClient owns the final seed"
     assert request["max_tokens"] == 64, "the eval left this unset, so the harness fills in"
     assert decision.sampling.temperature == 0.9
     assert decision.sampling.temperature_source == "ctx.sampling"
