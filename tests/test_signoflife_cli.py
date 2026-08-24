@@ -17,9 +17,11 @@ is a calibration against a real VM, and a fixture that produced it would be fict
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -51,7 +53,8 @@ def _fake_desktop(monkeypatch):
     import desktop.vm.factory as factory
     import evals.signoflife.__main__ as dispatcher
 
-    monkeypatch.setenv("SIGN_OF_LIFE_API_KEY", "test-only-secret")
+    monkeypatch.delenv(dispatcher.API_KEY_VAR, raising=False)
+    monkeypatch.delenv(dispatcher._LOCAL_NO_AUTH_API_KEY_VAR, raising=False)
     juergen_fake_desktop.FakeDesktopPool.instances.clear()
     monkeypatch.setattr(
         factory, "build_desktop_pool", juergen_fake_desktop.build_desktop_pool
@@ -102,6 +105,35 @@ def _fresh_process() -> None:
     for pool in list(desktop._POOLS.values()):
         pool.close()
     desktop._POOLS.clear()
+
+
+def _fake_owned_sglang(monkeypatch) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    @contextlib.contextmanager
+    def launch(**kwargs):
+        yield dispatcher._LocalServer(
+            base_url="http://127.0.0.1:9/v1",
+            launch={"test_only_owned_process": True},
+        )
+
+    monkeypatch.setattr(dispatcher, "_sglang", launch)
+    monkeypatch.setattr(
+        dispatcher,
+        "_attest_local_server",
+        lambda base_url, artifact: {
+            "source": "local_verified_launch",
+            "artifact_sha256": artifact.artifact_sha256,
+            "config_sha256": artifact.config_sha256,
+            "served_model": artifact.served_model,
+            "server": {"test_only": True},
+        },
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "_probe_seeded_sampling",
+        lambda *args, **kwargs: {"test_only": True},
+    )
 
 
 def _run(output: Path, tmp_path: Path, *extra: str) -> tuple[int, dict]:
@@ -271,9 +303,6 @@ def test_a_scripted_arm_refuses_a_model_it_would_silently_ignore(tmp_path) -> No
         main(_argv(tmp_path / "run", tmp_path, "--model-path", str(tmp_path)))
     assert "scripted" in str(excinfo.value)
 
-    with pytest.raises(SystemExit):
-        main(_argv(tmp_path / "run", tmp_path, "--base-url", "http://127.0.0.1:9/v1"))
-
 
 def test_a_model_arm_without_a_model_is_refused_before_a_vm_is_booted(tmp_path) -> None:
     with pytest.raises(SystemExit) as excinfo:
@@ -301,9 +330,9 @@ def test_phaseb_always_fails_closed_on_a_checkpoint_that_is_not_the_one(
 
     monkeypatch.setattr(
         dispatcher,
-        "_attest_external_server",
-        lambda base_url, artifact: pytest.fail(
-            "Phase-B identity validation ran after server attestation"
+        "_sglang",
+        lambda **kwargs: pytest.fail(
+            "Phase-B identity validation ran after local server launch"
         ),
     )
     with pytest.raises((RuntimeError, FileNotFoundError, OSError)):
@@ -317,8 +346,8 @@ def test_phaseb_always_fails_closed_on_a_checkpoint_that_is_not_the_one(
                 str(tmp_path / "desktop.qcow2"),
                 "--model-path",
                 str(model),
-                "--base-url",
-                "http://127.0.0.1:9/v1",
+                "--sglang-python",
+                sys.executable,
             ]
         )
 
@@ -804,28 +833,16 @@ def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_se
 ) -> None:
     """Two properties in one run, because they are the same run.
 
-    Every byte is registered and verified before dispatch, and the external server
-    must attest that exact artifact identity. The same identity is retained on the
-    result and its attempt row.
+    Every byte is registered and verified before dispatch, and the owned local
+    launch must attest that exact artifact identity. The same identity is retained
+    on the result and its attempt row.
 
     A model arm that cannot reach its server is an infrastructure failure: exit 3
     and `pass_rate: null`, not 0/4, which would read as a model that tried and
     failed.
     """
     model, expected = _register_model(tmp_path)
-    import evals.signoflife.__main__ as dispatcher
-
-    monkeypatch.setattr(
-        dispatcher,
-        "_attest_external_server",
-        lambda base_url, artifact: {
-            "source": "external_endpoint",
-            "url": "http://127.0.0.1:9/model-attestation",
-            "artifact_sha256": artifact.artifact_sha256,
-            "config_sha256": artifact.config_sha256,
-            "served_model": artifact.served_model,
-        },
-    )
+    _fake_owned_sglang(monkeypatch)
 
     output = tmp_path / "run"
     _fresh_process()
@@ -845,9 +862,8 @@ def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_se
             CELL_IDS[0],
             "--model-path",
             str(model),
-            # Port 9 (discard) never answers, so no model is ever contacted.
-            "--base-url",
-            "http://127.0.0.1:9/v1",
+            "--sglang-python",
+            sys.executable,
         ]
     )
     result = read_committed_result(output)
@@ -859,12 +875,7 @@ def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_se
     assert result["model"]["artifact_sha256"] == expected["artifact_sha256"]
     assert result["model"]["served_model"].endswith(expected["artifact_sha256"])
     assert result["episodes"][0]["model"] == result["model"]
-    assert "test-only-secret" not in (output / "result.json").read_text()
-    assert not any(
-        "test-only-secret" in path.read_text(errors="replace")
-        for path in output.rglob("*")
-        if path.is_file() and path.suffix != ".png"
-    )
+    assert result["claim_scope"] == "local_causal_seeded"
     assert result["aggregate"]["controls_ok"] is None, "a model arm calibrates nothing"
     assert result["aggregate"]["per_cell"][CELL_IDS[0]]["pass_rate"] is None
 
@@ -910,16 +921,7 @@ def test_an_unattended_model_arm_samples_at_its_own_knobs(tmp_path, monkeypatch)
         ARMS["ordered"].model_copy(update={"top_p": 0.8, "max_tokens": 1024}),
     )
     model, _ = _register_model(tmp_path)
-    monkeypatch.setattr(
-        "evals.signoflife.__main__._attest_external_server",
-        lambda base_url, artifact: {
-            "source": "external_endpoint",
-            "url": "http://127.0.0.1:9/model-attestation",
-            "artifact_sha256": artifact.artifact_sha256,
-            "config_sha256": artifact.config_sha256,
-            "served_model": artifact.served_model,
-        },
-    )
+    _fake_owned_sglang(monkeypatch)
 
     def _dispatch(*extra: str) -> dict:
         _fresh_process()
@@ -936,12 +938,10 @@ def test_an_unattended_model_arm_samples_at_its_own_knobs(tmp_path, monkeypatch)
                 "0",
                 "--cell",
                 CELL_IDS[0],
-                # Port 9 (discard) never answers: the sampling record is written
-                # before any model is contacted.
-                "--base-url",
-                "http://127.0.0.1:9/v1",
                 "--model-path",
                 str(model),
+                "--sglang-python",
+                sys.executable,
                 *extra,
             ]
         )
@@ -1000,8 +1000,6 @@ def test_a_model_arm_that_names_incomplete_sampling_is_refused(
                 str(tmp_path / "run"),
                 "--qcow",
                 str(tmp_path / "desktop.qcow2"),
-                "--base-url",
-                "http://127.0.0.1:9/v1",
             ]
         )
 
@@ -1038,8 +1036,6 @@ def test_a_model_arm_refuses_invalid_sampling_before_resource_setup(
                 str(tmp_path / "run"),
                 "--qcow",
                 str(tmp_path / "desktop.qcow2"),
-                "--base-url",
-                "http://127.0.0.1:9/v1",
                 flag,
                 value,
             ]

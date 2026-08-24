@@ -50,7 +50,6 @@ import math
 import multiprocessing
 import os
 import re
-import secrets
 import shutil
 import signal
 import socket
@@ -59,7 +58,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -84,15 +82,16 @@ from signoflife import PLUGIN_ID  # noqa: E402
 _LOGGER = logging.getLogger("signoflife")
 
 _SERVED_MODEL_PREFIX = "sign-of-life-sha256-"
-_ATTESTATION_PATH = "/model-attestation"
 _ATTESTATION_TIMEOUT_S = 10.0
 _ATTESTATION_MAX_BYTES = 65536
 _SEED_PROBE_SEEDS = (19088743, 230973796, 427587855, 1985229328)
 _SEED_PROBE_REQUESTS = len(_SEED_PROBE_SEEDS) + 1
 
 API_KEY_VAR = "SIGN_OF_LIFE_API_KEY"
-"""`resolve_api_key` reads the key from an env var named by the client config
-(`clients/config.py:91-102`); it is never a CLI field, so we name our own."""
+"""Removed external-client credential. Its presence is a dispatch error."""
+
+_LOCAL_NO_AUTH_API_KEY_VAR = "JUERGEN_LOCAL_SGLANG_NO_AUTH_MUST_BE_UNSET"
+"""Verifiers maps an absent API-key variable to its fixed in-memory ``EMPTY`` value."""
 
 POOL_TARGET = "evals.vm:kvm_desktop_pool"
 """The production constructor. Tests replace the value before building workers."""
@@ -1013,75 +1012,6 @@ def _verify_model_artifact(model_path: Path) -> _ModelArtifact:
     )
 
 
-def _attestation_url(base_url: str) -> str:
-    parsed = urllib.parse.urlsplit(base_url)
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.netloc
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path.rstrip("/") != "/v1"
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise RuntimeError(f"invalid external model base URL {base_url!r}")
-    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, _ATTESTATION_PATH, "", ""))
-
-
-def _attest_external_server(
-    base_url: str, artifact: _ModelArtifact
-) -> dict[str, Any]:
-    """Require the external server to echo the exact registered artifact identity."""
-    endpoint = _attestation_url(base_url)
-    nonce = secrets.token_hex(32)
-    api_key = os.environ.get(API_KEY_VAR)
-    if not api_key:
-        raise RuntimeError(f"external model server requires {API_KEY_VAR}")
-    request = urllib.request.Request(
-        endpoint,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "X-Attestation-Nonce": nonce,
-        },
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=_ATTESTATION_TIMEOUT_S) as response:
-            raw = response.read(_ATTESTATION_MAX_BYTES + 1)
-        if len(raw) > _ATTESTATION_MAX_BYTES:
-            raise ValueError("attestation response exceeds 65536 bytes")
-        observed = json.loads(raw)
-    except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"external model attestation failed at {endpoint}: {error}") from error
-    expected = {
-        "schema_version": 1,
-        "nonce": nonce,
-        "served_model": artifact.served_model,
-        "artifact_id": artifact.artifact_id,
-        "artifact_sha256": artifact.artifact_sha256,
-        "manifest_sha256": artifact.manifest_sha256,
-        "config_sha256": artifact.config_sha256,
-    }
-    if not isinstance(observed, dict):
-        raise RuntimeError("model attestation mismatch: expected a JSON object")
-    if observed != expected:
-        mismatches = {
-            key: {"expected": value, "observed": observed.get(key)}
-            for key, value in expected.items()
-            if observed.get(key) != value
-        }
-        extra = sorted(set(observed) - set(expected))
-        if extra:
-            mismatches["extra_fields"] = {"expected": [], "observed": extra}
-        raise RuntimeError(f"model attestation mismatch: {mismatches}")
-    return {
-        "source": "external_endpoint",
-        "url": endpoint,
-        "artifact_sha256": artifact.artifact_sha256,
-        "config_sha256": artifact.config_sha256,
-        "served_model": artifact.served_model,
-    }
-
-
 def _server_json(
     request: str | urllib.request.Request, *, timeout_s: float
 ) -> dict[str, Any]:
@@ -1380,7 +1310,7 @@ def _eval_config(
         taskset={"id": PLUGIN_ID, "tier": tier, "task_ids": task_ids},
         harness=_harness_payload(arm, artifacts=artifacts, pool=pool),
         model=served_model,
-        client={"base_url": base_url, "api_key_var": API_KEY_VAR},
+        client={"base_url": base_url, "api_key_var": _LOCAL_NO_AUTH_API_KEY_VAR},
         sampling=sampling,
         num_rollouts=1,
         # One episode per supervised worker. Parallelism belongs to the dispatcher,
@@ -2006,7 +1936,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "cell, and until now it was pinned in code with no way to name it.",
     )
     parser.add_argument("--model-path", type=Path, default=None)
-    parser.add_argument("--base-url", default=None, help="serve externally instead")
     parser.add_argument("--sglang-python", default=None)
     parser.add_argument("--sglang-port", type=int, default=0)
     parser.add_argument("--sglang-mem-fraction", type=float, default=0.65)
@@ -2026,6 +1955,15 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s"
     )
     args = _parse_args(argv)
+    if API_KEY_VAR in os.environ:
+        raise SystemExit(
+            f"{API_KEY_VAR} is unsupported: canonical evaluation launches only the "
+            "owned local no-auth SGLang server"
+        )
+    if _LOCAL_NO_AUTH_API_KEY_VAR in os.environ:
+        raise SystemExit(
+            f"reserved variable {_LOCAL_NO_AUTH_API_KEY_VAR} must be absent"
+        )
     arm = ARMS[args.arm]
     scripted = arm.scripted.enabled
     negative = arm.scripted.negative
@@ -2071,10 +2009,10 @@ def main(argv: list[str] | None = None) -> int:
             args.arm,
             args.trials,
         )
-    if scripted and (args.model_path or args.base_url):
+    if scripted and args.model_path:
         raise SystemExit(
-            f"arm {args.arm} is scripted and never calls a model; --model-path / "
-            "--base-url would be recorded in the run and ignored"
+            f"arm {args.arm} is scripted and never calls a model; --model-path "
+            "would be recorded in the run and ignored"
         )
     if scripted and (args.temperature is not None or args.top_p is not None):
         raise SystemExit(
@@ -2107,17 +2045,12 @@ def main(argv: list[str] | None = None) -> int:
             f"arm {args.arm} is a model arm: pass --model-path for the registered "
             "bytes the server must attest"
         )
-    local_sglang = not scripted and args.base_url is None
     if scripted and args.sglang_python is not None:
         raise SystemExit(
             f"arm {args.arm} is scripted and never launches SGLang; "
             "--sglang-python would be ignored"
         )
-    if args.base_url is not None and args.sglang_python is not None:
-        raise SystemExit("--base-url and --sglang-python are mutually exclusive")
-    if args.base_url is not None:
-        _attestation_url(args.base_url)
-    if local_sglang:
+    if not scripted:
         if args.sglang_python is None:
             raise SystemExit("local causal evaluation requires explicit --sglang-python")
         sglang_python = Path(args.sglang_python)
@@ -2137,19 +2070,10 @@ def main(argv: list[str] | None = None) -> int:
     ):
         raise SystemExit("--sglang-mem-fraction must be finite and in (0, 1]")
     final_output = _validate_output_target(args.output)
-    supplied_api_key = os.environ.get(API_KEY_VAR)
-    forbidden_output_values = (supplied_api_key,) if supplied_api_key else ()
     artifact: _ModelArtifact | None = None
     model_record: dict[str, Any] | None = None
     served_model = "scripted-no-model"
     if not scripted:
-        if args.base_url is None:
-            os.environ[API_KEY_VAR] = "local-loopback-no-auth"
-        elif not supplied_api_key:
-            raise SystemExit(
-                f"external model server credentials must be supplied only through "
-                f"the {API_KEY_VAR} environment variable"
-            )
         artifact = _verify_model_artifact(args.model_path)
         served_model = artifact.served_model
         if args.arm == "phaseb_compact":
@@ -2162,7 +2086,7 @@ def main(argv: list[str] | None = None) -> int:
         arm=arm,
         trials=args.trials,
         vm_slots=args.vm_slots,
-        local_sglang=local_sglang,
+        local_sglang=not scripted,
         sglang_ready_timeout_s=args.sglang_ready_timeout_s,
     )
     _preflight_slurm_wall_budget(suite_wall_bound_s)
@@ -2220,12 +2144,8 @@ def main(argv: list[str] | None = None) -> int:
         rows.extend(_run_attempts(runtime, specs))
 
     try:
-        if scripted or args.base_url:
-            if args.base_url:
-                assert artifact is not None
-                attestation = _attest_external_server(args.base_url, artifact)
-                model_record = artifact.record(attestation=attestation)
-            _run_selected(args.base_url or "http://127.0.0.1:1/v1")
+        if scripted:
+            _run_selected("http://127.0.0.1:1/v1")
         else:
             assert artifact is not None
             with tempfile.TemporaryDirectory(prefix="juergen-sglang-") as temporary:
@@ -2291,13 +2211,7 @@ def main(argv: list[str] | None = None) -> int:
         "arm": args.arm,
         "arm_id": arm.id,
         "arm_kind": "scripted_negative" if negative else "scripted_oracle" if scripted else "model",
-        "claim_scope": (
-            "control_calibration"
-            if scripted
-            else "external_diagnostic_non_causal"
-            if args.base_url
-            else "local_causal_seeded"
-        ),
+        "claim_scope": "control_calibration" if scripted else "local_causal_seeded",
         "codec": arm.codec,
         "history_policy": arm.history.name,
         "trials": args.trials,
@@ -2372,7 +2286,7 @@ def main(argv: list[str] | None = None) -> int:
     }
     try:
         _atomic_json(output / "result.json", result)
-        publication.publish(forbidden_values=forbidden_output_values)
+        publication.publish(forbidden_values=())
         if read_committed_result(final_output) != result:
             raise RuntimeError("fresh committed-output readback changed result.json")
     except BaseException:

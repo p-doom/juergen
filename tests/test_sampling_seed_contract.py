@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -49,6 +50,36 @@ def test_eval_seed_reaches_the_wire_record_from_ctx_sampling(tmp_path) -> None:
     assert wire["seed"] == 1234567
     assert effective.as_dict()["seed"] == 1234567
     assert "seed" in effective.wire_body_keys
+
+
+def test_local_client_uses_only_the_fixed_unexported_no_auth_sentinel(
+    tmp_path, monkeypatch
+) -> None:
+    from verifiers.v1.clients.config import resolve_api_key
+
+    import evals.signoflife.__main__ as dispatcher
+
+    monkeypatch.delenv(dispatcher.API_KEY_VAR, raising=False)
+    monkeypatch.delenv(dispatcher._LOCAL_NO_AUTH_API_KEY_VAR, raising=False)
+    config = dispatcher._eval_config(
+        arm="ordered",
+        tier="candidate",
+        task_ids=["terminal_submit_only"],
+        artifacts=tmp_path / "artifacts",
+        traces_dir=tmp_path / "traces",
+        pool={},
+        base_url="http://127.0.0.1:19000/v1",
+        temperature=0.7,
+        top_p=1.0,
+        max_tokens=256,
+        served_model="sign-of-life-sha256-test",
+        seed=1234567,
+    )
+
+    assert config.client.api_key_var == dispatcher._LOCAL_NO_AUTH_API_KEY_VAR
+    assert resolve_api_key(config.client) == "EMPTY"
+    assert dispatcher.API_KEY_VAR not in os.environ
+    assert dispatcher._LOCAL_NO_AUTH_API_KEY_VAR not in os.environ
 
 
 def test_local_launch_enables_deterministic_sampling_without_an_api_key(
