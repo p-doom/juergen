@@ -1181,7 +1181,7 @@ def test_the_attempt_deadline_is_derived_from_the_selected_arm_and_cell() -> Non
         vm_slots=1,
         local_sglang=True,
         sglang_ready_timeout_s=1500.0,
-    ) == 7898.0
+    ) == 7958.0
 
 
 @pytest.mark.parametrize(
@@ -1198,6 +1198,28 @@ def test_slurm_duration_parsing_matches_scontrol(value, seconds) -> None:
     from evals.signoflife.__main__ import _parse_slurm_duration_s
 
     assert _parse_slurm_duration_s(value) == seconds
+
+
+def test_scontrol_query_has_a_hard_time_bound(monkeypatch) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    observed = {}
+
+    def run(argv, **kwargs):
+        observed.update(kwargs)
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout="JobId=123 TimeLimit=02:00:00 RunTime=00:01:00\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(dispatcher.subprocess, "run", run)
+
+    assert dispatcher._slurm_remaining_wall_s("123") == 7140.0
+    assert observed["timeout"] == dispatcher._SCONTROL_TIMEOUT_S
+    with pytest.raises(RuntimeError, match="invalid SLURM_JOB_ID"):
+        dispatcher._slurm_remaining_wall_s("--bad")
 
 
 def test_slurm_preflight_rejects_before_creating_the_output_or_starting_resources(

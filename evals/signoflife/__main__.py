@@ -87,6 +87,7 @@ _LOGGER = logging.getLogger("signoflife")
 
 _SERVED_MODEL_PREFIX = "sign-of-life-sha256-"
 _ATTESTATION_TIMEOUT_S = 10.0
+_ATTESTATION_REQUESTS = 2
 _ATTESTATION_MAX_BYTES = 65536
 _SEED_PROBE_SEEDS = (19088743, 230973796, 427587855, 1985229328)
 _SEED_PROBE_REQUESTS = len(_SEED_PROBE_SEEDS) + 1
@@ -105,6 +106,8 @@ _POOL_CHECKOUT_TIMEOUT_S = 1800.0
 _POOL_STARTUP_TIMEOUT_S = 1200.0
 _GUEST_REQUEST_TIMEOUT_S = 60.0
 _QEMU_SHUTDOWN_TIMEOUT_S = 15.0
+_SCONTROL_TIMEOUT_S = 10.0
+_SCONTROL_MAX_OUTPUT_BYTES = 64 * 1024
 _SUPERVISOR_REAP_TIMEOUT_S = 20.0
 _SUPERVISOR_KILL_TIMEOUT_S = 10.0
 _ATTEMPT_LAUNCH_MARGIN_S = 20.0
@@ -1495,12 +1498,16 @@ def _suite_wall_bound_s(
         for _trial in range(trials):
             slot = min(range(vm_slots), key=lambda index: (slot_bounds[index], index))
             slot_bounds[slot] += _attempt_wall_bound_s(task, arm)
-    return max(slot_bounds, default=0.0) + (
-        sglang_ready_timeout_s
-        + _SEED_PROBE_REQUESTS * arm.model_request_timeout_s
-        if local_sglang
-        else 0.0
-    )
+    local_server_bound_s = 0.0
+    if local_sglang:
+        local_server_bound_s = (
+            sglang_ready_timeout_s
+            + _ATTESTATION_REQUESTS * _ATTESTATION_TIMEOUT_S
+            + _SEED_PROBE_REQUESTS * arm.model_request_timeout_s
+            + _SGLANG_TERM_TIMEOUT_S
+            + _SGLANG_KILL_TIMEOUT_S
+        )
+    return max(slot_bounds, default=0.0) + local_server_bound_s
 
 
 def _parse_slurm_duration_s(value: str) -> float:
@@ -1528,12 +1535,20 @@ def _parse_slurm_duration_s(value: str) -> float:
 
 
 def _slurm_remaining_wall_s(job_id: str) -> float:
-    completed = subprocess.run(
-        ["scontrol", "show", "job", job_id, "-o"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    if not job_id.isascii() or not job_id.isdecimal() or len(job_id) > 20:
+        raise RuntimeError(f"invalid SLURM_JOB_ID {job_id!r}")
+    try:
+        completed = subprocess.run(
+            ["scontrol", "show", "job", job_id, "-o"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=_SCONTROL_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeError(f"bounded scontrol query failed for job {job_id}") from error
+    if len(completed.stdout.encode()) > _SCONTROL_MAX_OUTPUT_BYTES:
+        raise RuntimeError(f"scontrol output exceeds its bound for job {job_id}")
     fields = {
         key: value
         for token in completed.stdout.split()
