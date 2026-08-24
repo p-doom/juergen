@@ -83,6 +83,16 @@ def rdev_to_pyautogui(name: str) -> str:
     return name.lower()
 
 
+STEP_LIST_MAX_CHARS = 160
+
+
+def elide_step_line(line: str) -> str:
+    if len(line) <= STEP_LIST_MAX_CHARS:
+        return line
+    cut = STEP_LIST_MAX_CHARS - 10
+    return f"{line[:cut]}…[+{len(line) - cut} chars]"
+
+
 def strip_think(text: str) -> str:
     head, sep, tail = text.partition("</think>")
     if not sep:
@@ -166,7 +176,8 @@ class Oev3Agent:
     def _instruction_text(self, instruction: str, n_window: int) -> str:
         n_pre = len(self.action_lines) - n_window
         previous = [
-            f"Step {i + 1}: {self.action_lines[i]}" for i in range(max(0, n_pre))
+            f"Step {i + 1}: {elide_step_line(self.action_lines[i])}"
+            for i in range(max(0, n_pre))
         ]
         previous_str = "\n".join(previous) if previous else "None"
         return INSTRUCTION_TEMPLATE.format(

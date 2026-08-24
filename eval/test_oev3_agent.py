@@ -101,3 +101,16 @@ class MessageAssemblyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ElideTests(unittest.TestCase):
+    def test_short_line_unchanged(self):
+        from oev3_agent import elide_step_line
+        self.assertEqual(elide_step_line("move(1,2); down(LMB); up(LMB)"), "move(1,2); down(LMB); up(LMB)")
+
+    def test_long_line_elided(self):
+        from oev3_agent import elide_step_line
+        line = 'type("' + "x" * 5000 + '")'
+        out = elide_step_line(line)
+        self.assertLessEqual(len(out), 175)
+        self.assertIn("chars]", out)

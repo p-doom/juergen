@@ -68,6 +68,16 @@ class ImageIndex:
         return self._by_tar[tar][member]
 
 
+STEP_LIST_MAX_CHARS = 160
+
+
+def elide_step_line(line: str) -> str:
+    if len(line) <= STEP_LIST_MAX_CHARS:
+        return line
+    cut = STEP_LIST_MAX_CHARS - 10
+    return f"{line[:cut]}…[+{len(line) - cut} chars]"
+
+
 def strip_think(text: str) -> str:
     head, sep, tail = text.partition("</think>")
     if not sep:
@@ -131,7 +141,7 @@ def build_step_record(
 ) -> dict:
     window_start = max(0, t - history_n)
     previous = [
-        f"Step {i + 1}: {steps[i]['line']}"
+        f"Step {i + 1}: {elide_step_line(steps[i]['line'])}"
         for i in range(window_start)
         if steps[i]["line"] is not None
     ]
@@ -200,6 +210,7 @@ def main(argv):
                 )
                 row = {
                     "conversation_id": f"{rec['task_id']}__s{entry['step']:03d}",
+                    "recording_id": rec["task_id"],
                     "task_id": rec["task_id"],
                     "app": rec.get("app"),
                     "reward": reward,
