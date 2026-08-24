@@ -45,6 +45,21 @@ CANDIDATE_IDS = [task.id for task in load_suite().for_tier("candidate")]
 
 
 @pytest.mark.parametrize("value", ["", "1"])
+def test_main_refuses_disabled_cudnn_validation_before_argument_parsing(
+    monkeypatch, value: str
+) -> None:
+    monkeypatch.setenv("SGLANG_DISABLE_CUDNN_CHECK", value)
+    monkeypatch.setattr(
+        dispatcher,
+        "_parse_args",
+        lambda *_args, **_kwargs: pytest.fail("arguments parsed before cuDNN rejection"),
+    )
+
+    with pytest.raises(RuntimeError, match="cuDNN compatibility validation"):
+        dispatcher.main([])
+
+
+@pytest.mark.parametrize("value", ["", "1"])
 def test_sglang_refuses_disabled_cudnn_validation_before_acquisition(
     monkeypatch, tmp_path: Path, value: str
 ) -> None:

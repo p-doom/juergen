@@ -1009,6 +1009,11 @@ def _restore_sglang_signal_handlers(guard: _SglangSignalGuard) -> None:
         signal.signal(signum, handler)
 
 
+def _reject_disabled_cudnn_check() -> None:
+    if "SGLANG_DISABLE_CUDNN_CHECK" in os.environ:
+        raise RuntimeError("refusing disabled SGLang cuDNN compatibility validation")
+
+
 @contextlib.contextmanager
 def _sglang(
     *,
@@ -1026,8 +1031,7 @@ def _sglang(
     `verifiers`, sglang needs a 14 GB CUDA stack, and the two do not have to be the
     same venv.
     """
-    if "SGLANG_DISABLE_CUDNN_CHECK" in os.environ:
-        raise RuntimeError("refusing disabled SGLang cuDNN compatibility validation")
+    _reject_disabled_cudnn_check()
     if not 1 <= port <= 55535:
         raise RuntimeError("SGLang requires an explicit port in [1, 55535]")
     _preflight_pidfd_getfd()
@@ -2403,6 +2407,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _reject_disabled_cudnn_check()
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s"
     )
