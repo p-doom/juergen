@@ -173,7 +173,7 @@ def test_changed_artifact_bytes_are_refused_before_output_or_resources(
     assert not output.exists()
 
 
-def test_external_attestation_is_required_before_output_or_resources(
+def test_external_attestation_failure_leaves_only_an_uncommitted_run_id(
     tmp_path, monkeypatch
 ) -> None:
     import evals.signoflife.__main__ as dispatcher
@@ -209,7 +209,8 @@ def test_external_attestation_is_required_before_output_or_resources(
                 "http://127.0.0.1:9000/v1",
             ]
         )
-    assert not output.exists()
+    assert output.is_dir()
+    assert not (output / "RESULT_COMMITTED.json").exists()
 
 
 class _AttestationResponse:

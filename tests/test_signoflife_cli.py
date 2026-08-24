@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -27,7 +28,7 @@ import juergen_fake_desktop
 import pytest
 from test_model_attestation import _register_model
 
-from evals.signoflife.__main__ import main
+from evals.signoflife.__main__ import _read_committed_result, main
 from evals.signoflife.suite import load_suite
 
 # The scored tier: what an unqualified run of this dispatcher is. `CANDIDATE_IDS`
@@ -106,7 +107,7 @@ def _fresh_process() -> None:
 def _run(output: Path, tmp_path: Path, *extra: str) -> tuple[int, dict]:
     _fresh_process()
     code = main(_argv(output, tmp_path, *extra))
-    return code, json.loads((output / "result.json").read_text())
+    return code, _read_committed_result(output)
 
 
 @pytest.mark.slow
@@ -117,7 +118,7 @@ def test_the_dispatcher_runs_the_whole_scored_tier_and_writes_the_readers_shape(
     code, result = _run(output, tmp_path)
 
     assert code == 0, result["infrastructure_errors"]
-    assert not list(tmp_path.glob(".run.staging-*"))
+    assert (output / "RESULT_COMMITTED.json").is_file()
     assert result["status"] == "complete"
     assert result["schema_version"] == 3
     assert result["arm"] == "native_negative"
@@ -432,7 +433,9 @@ def test_output_must_be_absent_before_any_desktop_resource(tmp_path) -> None:
     assert not juergen_fake_desktop.FakeDesktopPool.instances
 
 
-def test_attempt_exception_removes_unpublished_staging_output(tmp_path, monkeypatch) -> None:
+def test_attempt_exception_leaves_an_uncommitted_nonreusable_run_id(
+    tmp_path, monkeypatch
+) -> None:
     import evals.signoflife.__main__ as dispatcher
 
     output = tmp_path / "crashed"
@@ -444,28 +447,238 @@ def test_attempt_exception_removes_unpublished_staging_output(tmp_path, monkeypa
     with pytest.raises(RuntimeError, match="synthetic dispatcher crash"):
         main(_argv(output, tmp_path, "--cell", CELL_IDS[0]))
 
-    assert not output.exists()
-    assert not list(tmp_path.glob(".crashed.staging-*"))
+    assert output.is_dir()
+    assert not (output / "RESULT_COMMITTED.json").exists()
+    with pytest.raises(RuntimeError, match="must not already exist"):
+        main(_argv(output, tmp_path, "--cell", CELL_IDS[0]))
 
 
-def test_atomic_publication_never_replaces_a_competing_run(tmp_path) -> None:
+def test_atomic_run_id_creation_never_reuses_a_competing_run(tmp_path) -> None:
     from evals.signoflife.__main__ import _stage_output
 
     final = tmp_path / "one-run-id"
     first = _stage_output(final)
-    second = _stage_output(final)
     try:
-        (first.staging / "result.json").write_text("first\n")
-        (second.staging / "result.json").write_text("second\n")
-        first.publish(forbidden_values=())
-        with pytest.raises(FileExistsError, match="appeared before atomic publication"):
-            second.publish(forbidden_values=())
+        with pytest.raises(RuntimeError, match="must not already exist"):
+            _stage_output(final)
     finally:
         first.cleanup()
-        second.cleanup()
 
-    assert (final / "result.json").read_text() == "first\n"
-    assert not list(tmp_path.glob(".one-run-id.staging-*"))
+    assert final.is_dir()
+    assert not (final / "RESULT_COMMITTED.json").exists()
+
+
+def test_commit_marker_is_linked_last_and_the_strict_reader_accepts_it(tmp_path) -> None:
+    from evals.signoflife.__main__ import _read_committed_result, _stage_output
+
+    final = tmp_path / "complete"
+    publication = _stage_output(final)
+    (publication.staging / "result.json").write_text('{"status":"complete"}\n')
+    publication.publish(forbidden_values=())
+
+    assert publication.published is True
+    assert publication.durable is True
+    assert oct((final / "RESULT_COMMITTED.json").stat().st_mode)[-3:] == "400"
+    assert _read_committed_result(final) == {"status": "complete"}
+
+
+def test_strict_reader_rejects_missing_marker_mutation_and_extra_files(tmp_path) -> None:
+    from evals.signoflife.__main__ import _read_committed_result, _stage_output
+
+    orphan = _stage_output(tmp_path / "orphan")
+    (orphan.staging / "result.json").write_text("{}\n")
+    orphan.cleanup()
+    with pytest.raises(FileNotFoundError):
+        _read_committed_result(orphan.final)
+
+    mutated = _stage_output(tmp_path / "mutated-after-commit")
+    (mutated.staging / "result.json").write_text("{}\n")
+    mutated.publish(forbidden_values=())
+    (mutated.final / "result.json").write_text('{"changed":true}\n')
+    with pytest.raises(RuntimeError, match="does not match generation bytes"):
+        _read_committed_result(mutated.final)
+
+    extra = _stage_output(tmp_path / "extra-after-commit")
+    (extra.staging / "result.json").write_text("{}\n")
+    extra.publish(forbidden_values=())
+    (extra.final / "unexpected").write_text("late")
+    with pytest.raises(RuntimeError, match="does not match generation bytes"):
+        _read_committed_result(extra.final)
+
+
+def test_group_write_on_generation_refuses_commit(tmp_path) -> None:
+    from evals.signoflife.__main__ import _stage_output
+
+    publication = _stage_output(tmp_path / "group-writable")
+    (publication.staging / "result.json").write_text("{}\n")
+    publication.staging.chmod(0o770)
+    try:
+        with pytest.raises(RuntimeError, match="private 0700"):
+            publication.publish(forbidden_values=())
+    finally:
+        publication.cleanup()
+
+    assert not (publication.final / "RESULT_COMMITTED.json").exists()
+
+
+def test_concurrent_content_mutation_refuses_commit(tmp_path, monkeypatch) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    publication = dispatcher._stage_output(tmp_path / "mutated")
+    (publication.staging / "payload.bin").write_bytes(b"a" * (1024 * 1024 + 1))
+    (publication.staging / "result.json").write_text("{}\n")
+    mutate = threading.Event()
+    mutated = threading.Event()
+
+    def writer() -> None:
+        assert mutate.wait(timeout=10)
+        with (publication.staging / "payload.bin").open("r+b") as handle:
+            handle.write(b"b")
+            handle.flush()
+            os.fsync(handle.fileno())
+        mutated.set()
+
+    thread = threading.Thread(target=writer)
+    thread.start()
+    original_read = dispatcher.os.read
+
+    def racing_read(descriptor, size):
+        chunk = original_read(descriptor, size)
+        if (
+            not chunk
+            and os.readlink(f"/proc/self/fd/{descriptor}").endswith("/payload.bin")
+        ):
+            mutate.set()
+            assert mutated.wait(timeout=10)
+        return chunk
+
+    monkeypatch.setattr(dispatcher.os, "read", racing_read)
+    try:
+        with pytest.raises(RuntimeError, match="changed while sealing"):
+            publication.publish(forbidden_values=())
+    finally:
+        thread.join(timeout=10)
+        publication.cleanup()
+
+    assert not (publication.final / "RESULT_COMMITTED.json").exists()
+
+
+def test_concurrent_symlink_swap_refuses_commit(tmp_path, monkeypatch) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    publication = dispatcher._stage_output(tmp_path / "symlink-swap")
+    payload = publication.staging / "payload.bin"
+    payload.write_text("original")
+    (publication.staging / "result.json").write_text("{}\n")
+    replacement = tmp_path / "replacement"
+    replacement.write_text("replacement")
+    swap = threading.Event()
+    swapped = threading.Event()
+
+    def attacker() -> None:
+        assert swap.wait(timeout=10)
+        payload.unlink()
+        payload.symlink_to(replacement)
+        swapped.set()
+
+    thread = threading.Thread(target=attacker)
+    thread.start()
+    original_stat = dispatcher.os.stat
+    triggered = False
+
+    def racing_stat(path, *args, **kwargs):
+        nonlocal triggered
+        observed = original_stat(path, *args, **kwargs)
+        if path == "payload.bin" and kwargs.get("follow_symlinks") is False and not triggered:
+            triggered = True
+            swap.set()
+            assert swapped.wait(timeout=10)
+        return observed
+
+    monkeypatch.setattr(dispatcher.os, "stat", racing_stat)
+    try:
+        with pytest.raises(OSError):
+            publication.publish(forbidden_values=())
+    finally:
+        thread.join(timeout=10)
+        publication.cleanup()
+
+    assert not (publication.final / "RESULT_COMMITTED.json").exists()
+
+
+def test_concurrent_directory_swap_refuses_commit(tmp_path, monkeypatch) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    publication = dispatcher._stage_output(tmp_path / "directory-swap")
+    child = publication.staging / "child"
+    child.mkdir()
+    (child / "payload.bin").write_text("original")
+    (publication.staging / "result.json").write_text("{}\n")
+    swap = threading.Event()
+    swapped = threading.Event()
+
+    def attacker() -> None:
+        assert swap.wait(timeout=10)
+        child.rename(publication.staging / "moved-child")
+        child.mkdir()
+        (child / "payload.bin").write_text("replacement")
+        swapped.set()
+
+    thread = threading.Thread(target=attacker)
+    thread.start()
+    original_open = dispatcher.os.open
+    triggered = False
+
+    def racing_open(path, flags, *args, **kwargs):
+        nonlocal triggered
+        descriptor = original_open(path, flags, *args, **kwargs)
+        if path == "child" and flags & os.O_DIRECTORY and not triggered:
+            triggered = True
+            swap.set()
+            assert swapped.wait(timeout=10)
+        return descriptor
+
+    monkeypatch.setattr(dispatcher.os, "open", racing_open)
+    try:
+        with pytest.raises(RuntimeError, match="changed while sealing"):
+            publication.publish(forbidden_values=())
+    finally:
+        thread.join(timeout=10)
+        publication.cleanup()
+
+    assert not (publication.final / "RESULT_COMMITTED.json").exists()
+
+
+def test_post_link_directory_fsync_failure_is_visible_quarantine(
+    tmp_path, monkeypatch
+) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    publication = dispatcher._stage_output(tmp_path / "fsync-failed")
+    (publication.staging / "result.json").write_text("{}\n")
+    original_fsync = dispatcher.os.fsync
+    directory_fsyncs = 0
+
+    def failing_fsync(descriptor):
+        nonlocal directory_fsyncs
+        if descriptor == publication.staging_fd:
+            directory_fsyncs += 1
+            if directory_fsyncs == 2:
+                raise OSError("synthetic directory fsync failure")
+        return original_fsync(descriptor)
+
+    monkeypatch.setattr(dispatcher.os, "fsync", failing_fsync)
+    try:
+        with pytest.raises(RuntimeError, match="marker is visible"):
+            publication.publish(forbidden_values=())
+    finally:
+        publication.cleanup()
+
+    assert publication.published is True
+    assert publication.durable is False
+    assert (publication.final / "RESULT_COMMITTED.json").exists()
+    with pytest.raises(RuntimeError, match="unsafe metadata"):
+        dispatcher._read_committed_result(publication.final)
 
 
 def test_credential_in_staging_refuses_publication_and_is_cleaned(tmp_path) -> None:
@@ -480,8 +693,8 @@ def test_credential_in_staging_refuses_publication_and_is_cleaned(tmp_path) -> N
     finally:
         publication.cleanup()
 
-    assert not final.exists()
-    assert not list(tmp_path.glob(".redacted-run.staging-*"))
+    assert final.is_dir()
+    assert not (final / "RESULT_COMMITTED.json").exists()
 
 
 def test_an_episode_that_publishes_nothing_still_records_why(tmp_path, monkeypatch) -> None:
@@ -497,7 +710,7 @@ def test_an_episode_that_publishes_nothing_still_records_why(tmp_path, monkeypat
     output = tmp_path / "run"
     monkeypatch.setattr(dispatcher, "POOL_TARGET", "evals.vm:no_such_constructor")
     assert main(_argv(output, tmp_path, "--cell", CELL_IDS[0])) == 3
-    result = json.loads((output / "result.json").read_text())
+    result = _read_committed_result(output)
     assert result["status"] == "infrastructure_failure"
     error = result["episodes"][0]["infra_error"]
     assert error["stage"] == "harness"
@@ -559,7 +772,7 @@ def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_se
             "http://127.0.0.1:9/v1",
         ]
     )
-    result = json.loads((output / "result.json").read_text())
+    result = _read_committed_result(output)
     assert code == 3, result["aggregate"]
     assert result["arm_kind"] == "model"
     assert result["status"] == "infrastructure_failure"
@@ -654,7 +867,7 @@ def test_an_unattended_model_arm_samples_at_its_own_knobs(tmp_path, monkeypatch)
                 *extra,
             ]
         )
-        return json.loads((output / "result.json").read_text())
+        return _read_committed_result(output)
 
     first = _dispatch()["sampling"]
     assert {key: first[key] for key in ("temperature", "top_p", "max_tokens")} == {
@@ -793,7 +1006,7 @@ def test_the_candidate_tier_dispatches_too_and_reads_its_negative(tmp_path) -> N
     output = tmp_path / "candidate"
     _fresh_process()
     code = main(_argv(output, tmp_path, "--tier", "candidate"))
-    result = json.loads((output / "result.json").read_text())
+    result = _read_committed_result(output)
     assert code == 0, result["infrastructure_errors"]
     assert result["tier"] == "candidate"
     assert sorted(result["aggregate"]["per_cell"]) == sorted(CANDIDATE_IDS)
@@ -993,7 +1206,7 @@ def test_a_spawn_worker_runs_the_owned_pool_and_publishes_its_attempt(
         )
         == 0
     )
-    result = json.loads((output / "result.json").read_text())
+    result = _read_committed_result(output)
     assert result["episodes"][0]["index"] == 0
     assert result["episodes"][0]["validity"] == "valid"
     attempt = output / result["episodes"][0]["artifact_subdir"]
