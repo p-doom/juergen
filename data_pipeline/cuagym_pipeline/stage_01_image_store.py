@@ -222,10 +222,14 @@ def main(argv: list[str]) -> None:
     del argv
     output_root = Path(FLAGS.output_root)
     output_root.mkdir(parents=True, exist_ok=True)
-    if not FLAGS.finalize_only:
-        process_tar(resolve_tar_path(), output_root, FLAGS.jpeg_quality, FLAGS.num_workers)
-    if FLAGS.finalize_expected > 0 or FLAGS.finalize_only:
-        maybe_finalize(output_root, max(FLAGS.finalize_expected, 1))
+    if FLAGS.finalize_only:
+        if FLAGS.finalize_expected <= 0:
+            raise SystemExit("--finalize_only requires --finalize_expected > 0")
+        maybe_finalize(output_root, FLAGS.finalize_expected)
+        return
+    process_tar(resolve_tar_path(), output_root, FLAGS.jpeg_quality, FLAGS.num_workers)
+    if FLAGS.finalize_expected > 0:
+        maybe_finalize(output_root, FLAGS.finalize_expected)
 
 
 if __name__ == "__main__":
