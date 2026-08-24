@@ -239,7 +239,7 @@ def rewrite_assistant(assistant_raw: str, action_line: str) -> str:
         raise DropStep("no <tool_call> in assistant_raw")
     if _THINK_CLOSE not in head:
         raise DropStep("no </think> in assistant_raw")
-    return f"<think>{head.rstrip()}\n{action_line}"
+    return f"<think>{head.rstrip()}\n\n{action_line}"
 
 
 def reconstruct_target_px(

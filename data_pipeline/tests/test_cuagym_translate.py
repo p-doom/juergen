@@ -211,7 +211,7 @@ class RewriteAssistantTests(unittest.TestCase):
         self.assertEqual(
             out,
             "<think>I should click the cell.</think>\n\n"
-            "Action: Click the header cell.\n"
+            "Action: Click the header cell.\n\n"
             "move(-511,-592); down(LMB); up(LMB)",
         )
 
