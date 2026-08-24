@@ -33,6 +33,36 @@ def _lease_vm_ports() -> None:
             s.close()
 
 
+def _patch_agent_sampling() -> None:
+    import openai
+    from mm_agents import qwen3vl_agent
+
+    def _call_llm_openai(self, messages, model):
+        base_url = os.environ.get("OPENAI_BASE_URL", "")
+        api_key = os.environ.get("OPENAI_API_KEY", "sk-123")
+        client = openai.OpenAI(base_url=base_url, api_key=api_key)
+        for attempt in range(1, qwen3vl_agent.MAX_RETRY_TIMES + 1):
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                )
+                return response.choices[0].message.content
+            except Exception:
+                if attempt < qwen3vl_agent.MAX_RETRY_TIMES:
+                    import time as _time
+
+                    _time.sleep(5)
+                    continue
+                break
+        return ""
+
+    qwen3vl_agent.Qwen3VLAgent._call_llm_openai = _call_llm_openai
+
+
 def main() -> None:
     _lease_vm_ports()
 
@@ -40,6 +70,7 @@ def main() -> None:
     import qemu_kvm_provider
 
     qemu_kvm_provider.install()
+    _patch_agent_sampling()
 
     warm_url = os.environ.get("SGLANG_URL", "").rstrip("/")
     if warm_url:
