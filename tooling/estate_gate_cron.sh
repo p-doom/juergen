@@ -122,14 +122,32 @@ else
 fi
 chmod g+r "$log"
 
-verdict="$(sed 's/\x1b\[[0-9;]*m//g' "$log" | grep '^ESTATE GATE:' | tail -1)"
-: "${verdict:=NO VERDICT -- the gate did not reach one}"
+mapfile -t verdict_lines < <(
+  sed 's/\x1b\[[0-9;]*m//g' "$log" | grep '^ESTATE GATE:' || true
+)
+verdict="${verdict_lines[0]:-NO VERDICT -- the gate did not reach one}"
 printf '%s  rc=%d  %s  (%s)\n' \
   "$(date -Is)" "$rc" "$verdict" "$(basename "$log")" >> "$verdicts"
-if [ "$rc" -ne 0 ]; then
-  printf '%s  ALERT  rc=%d  %s\n' "$(date -Is)" "$rc" "$log" >> "$verdicts"
+if [ "${#verdict_lines[@]}" -ne 1 ]; then
+  printf '%s  ALERT  gate produced %d authoritative verdicts; successor not queued\n' \
+    "$(date -Is)" "${#verdict_lines[@]}" >> "$verdicts"
+  echo "gate did not produce exactly one authoritative verdict" >&2
   chmod g+r "$verdicts"
-  exit "$rc"
+  exit 2
+fi
+case "$rc:$verdict" in
+  "0:ESTATE GATE: GREEN"*) gate_rc=0 ;;
+  "1:ESTATE GATE: RED"*) gate_rc=1 ;;
+  *)
+    printf '%s  ALERT  rc=%d disagrees with authoritative verdict; successor not queued\n' \
+      "$(date -Is)" "$rc" >> "$verdicts"
+    echo "gate exit status disagrees with authoritative verdict" >&2
+    chmod g+r "$verdicts"
+    exit 2
+    ;;
+esac
+if [ "$gate_rc" -eq 1 ]; then
+  printf '%s  ALERT  rc=%d  %s\n' "$(date -Is)" "$rc" "$log" >> "$verdicts"
 fi
 
 exec 9>"$ESTATE_GATE_LOG_DIR/schedule.lock"
@@ -221,4 +239,4 @@ if [ "${#PENDING_IDS[@]}" -eq 0 ]; then
     "$(date -Is)" "$submitted" "$EXPECTED_HEAD" "$REMOTE_REF" >> "$verdicts"
 fi
 chmod g+r "$verdicts"
-exit 0
+exit "$gate_rc"

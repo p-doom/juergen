@@ -42,6 +42,7 @@ def _checkout(tmp_path: Path) -> tuple[Path, str, Path]:
         "case \"${FAKE_GATE_MODE:-green}\" in\n"
         "  green) printf 'ESTATE GATE: GREEN\\n'; exit 0 ;;\n"
         "  red) printf 'ESTATE GATE: RED\\n'; exit 1 ;;\n"
+        "  broken) printf 'gate crashed before its verdict\\n'; exit 1 ;;\n"
         "  moved) git commit --allow-empty -qm moved; printf 'ESTATE GATE: GREEN\\n'; exit 0 ;;\n"
         "  *) exit 99 ;;\n"
         "esac\n"
@@ -137,7 +138,7 @@ def test_a_spool_copy_runs_the_tracked_gate_from_the_bound_root_and_rearms_the_t
     assert scheduler["state"].read_text() == "12345\n"
 
 
-def test_a_failed_gate_does_not_rearm(tmp_path: Path) -> None:
+def test_an_authoritative_red_gate_alerts_and_rearms(tmp_path: Path) -> None:
     root, head, spool = _checkout(tmp_path)
     scheduler = _scheduler(tmp_path)
     env = _env(tmp_path, scheduler)
@@ -146,6 +147,25 @@ def test_a_failed_gate_does_not_rearm(tmp_path: Path) -> None:
     done = _run(spool, root, head, env)
 
     assert done.returncode == 1, done.stdout + done.stderr
+    assert scheduler["calls"].read_text().count("CALL\n") == 1
+    assert scheduler["state"].read_text() == "12345\n"
+    verdicts = (tmp_path / "logs" / "verdicts.log").read_text()
+    assert "ESTATE GATE: RED" in verdicts
+    assert "ALERT" in verdicts
+
+
+def test_a_failed_wrapper_without_an_authoritative_verdict_does_not_rearm(
+    tmp_path: Path,
+) -> None:
+    root, head, spool = _checkout(tmp_path)
+    scheduler = _scheduler(tmp_path)
+    env = _env(tmp_path, scheduler)
+    env["FAKE_GATE_MODE"] = "broken"
+
+    done = _run(spool, root, head, env)
+
+    assert done.returncode == 2, done.stdout + done.stderr
+    assert "authoritative verdict" in done.stderr
     assert not scheduler["calls"].exists()
     assert not scheduler["state"].exists()
 
