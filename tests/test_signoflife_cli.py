@@ -408,6 +408,8 @@ def test_phaseb_always_fails_closed_on_a_checkpoint_that_is_not_the_one(
                 str(model),
                 "--sglang-python",
                 sys.executable,
+                "--sglang-port",
+                "29500",
             ]
         )
 
@@ -924,6 +926,8 @@ def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_se
             str(model),
             "--sglang-python",
             sys.executable,
+            "--sglang-port",
+            "29500",
         ]
     )
     result = read_committed_result(output)
@@ -1002,6 +1006,8 @@ def test_an_unattended_model_arm_samples_at_its_own_knobs(tmp_path, monkeypatch)
                 str(model),
                 "--sglang-python",
                 sys.executable,
+                "--sglang-port",
+                "29500",
                 *extra,
             ]
         )

@@ -186,6 +186,8 @@ def test_changed_artifact_bytes_are_refused_before_output_or_resources(
                 str(model),
                 "--sglang-python",
                 sys.executable,
+                "--sglang-port",
+                "29500",
             ]
         )
     assert not output.exists()
@@ -207,6 +209,37 @@ def test_missing_local_runtime_prerequisite_does_not_consume_run_id(tmp_path) ->
                 str(tmp_path / "desktop.qcow2"),
                 "--model-path",
                 str(model),
+            ]
+        )
+
+    assert not output.exists()
+
+
+def test_missing_listener_port_is_refused_before_artifact_or_output(
+    tmp_path, monkeypatch
+) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    output = tmp_path / "never-created"
+    monkeypatch.setattr(
+        dispatcher,
+        "_verify_model_artifact",
+        lambda *_args, **_kwargs: pytest.fail("artifact verification acquired resources"),
+    )
+
+    with pytest.raises(SystemExit, match="--sglang-port in \\[1, 55535\\]"):
+        dispatcher.main(
+            [
+                "--arm",
+                "ordered",
+                "--output",
+                str(output),
+                "--qcow",
+                str(tmp_path / "desktop.qcow2"),
+                "--model-path",
+                str(tmp_path / "model"),
+                "--sglang-python",
+                sys.executable,
             ]
         )
 

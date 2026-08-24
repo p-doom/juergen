@@ -980,20 +980,9 @@ def _sglang(
     """
     if "SGLANG_DISABLE_CUDNN_CHECK" in os.environ:
         raise RuntimeError("refusing disabled SGLang cuDNN compatibility validation")
+    if not 1 <= port <= 55535:
+        raise RuntimeError("SGLang requires an explicit port in [1, 55535]")
     _preflight_pidfd_getfd()
-    if port == 0:
-        # sglang derives grpc_port = port + 10000 and rejects > 65535, and its own
-        # warmup probes the *requested* port, so `--port 0` cannot be handed
-        # through: pick a real free port in the safe sub-range.
-        for _ in range(64):
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.bind(("127.0.0.1", 0))
-                candidate = sock.getsockname()[1]
-            if candidate + 10000 <= 65535:
-                port = candidate
-                break
-        else:
-            raise RuntimeError("no sglang-safe free port (port + 10000 <= 65535)")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     command = _sglang_command(
         python=python,
@@ -2371,8 +2360,12 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(
                 "--sglang-python must be an absolute executable regular file"
             )
-    if not 0 <= args.sglang_port <= 55535:
-        raise SystemExit("--sglang-port must be 0 or in [1, 55535]")
+    if not scripted and not 1 <= args.sglang_port <= 55535:
+        raise SystemExit("model arms require --sglang-port in [1, 55535]")
+    if scripted and args.sglang_port != 0:
+        raise SystemExit(
+            f"arm {args.arm} never launches SGLang; --sglang-port would be ignored"
+        )
     if (
         not math.isfinite(args.sglang_mem_fraction)
         or not 0.0 < args.sglang_mem_fraction <= 1.0

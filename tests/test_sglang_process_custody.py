@@ -232,12 +232,39 @@ def test_pidfd_getfd_failure_precedes_process_and_log_acquisition(
             python=sys.executable,
             model_path=tmp_path / "model",
             log_path=log_path,
-            port=0,
+            port=29500,
             mem_fraction_static=0.5,
             ready_timeout_s=1.0,
             served_model="test-model",
         ):
             pytest.fail("unavailable pidfd_getfd was accepted")
+
+    assert not log_path.parent.exists()
+
+
+def test_automatic_port_selection_is_refused_before_custody_acquisition(
+    tmp_path, monkeypatch
+) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_preflight_pidfd_getfd",
+        lambda: pytest.fail("pidfd preflight ran for an unowned port"),
+    )
+    log_path = tmp_path / "logs" / "sglang.log"
+
+    with pytest.raises(RuntimeError, match="explicit port"):
+        with dispatcher._sglang(
+            python=sys.executable,
+            model_path=tmp_path / "model",
+            log_path=log_path,
+            port=0,
+            mem_fraction_static=0.5,
+            ready_timeout_s=1.0,
+            served_model="test-model",
+        ):
+            pytest.fail("automatic port selection was accepted")
 
     assert not log_path.parent.exists()
 
