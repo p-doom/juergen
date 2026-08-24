@@ -46,6 +46,7 @@ __all__ = [
     "Intent",
     "ROOT",
     "SCRIPT_RENDERERS",
+    "SETUP_GUEST_REQUESTS",
     "STATE_PREFIX",
     "SignOfLifePreparer",
     "register_preparers",
@@ -509,6 +510,26 @@ _SETUPS: dict[str, Callable[[Any, DesktopTaskData], dict[str, Any]]] = {
     "tk_target_click": _setup_tk_target_click,
     "tk_no_submit_entry": _setup_tk_no_submit_entry,
 }
+
+SETUP_GUEST_REQUESTS = {
+    "terminal_command": 2,
+    "terminal_exact_text": 2,
+    "open_chrome": 2,
+    "focus_terminal_and_type": 3,
+    "submit_only": 2,
+    "staged_confirm": 2,
+    "tk_target_click": 1,
+    "tk_no_submit_entry": 1,
+}
+"""Maximum transport calls made by each setup before the harness initial probe.
+
+Declared beside `_SETUPS` so adding a guest call cannot be mistaken for a
+dispatcher concern. Each call is bounded by the session transport timeout and is
+charged by the sign-of-life attempt deadline.
+"""
+
+if SETUP_GUEST_REQUESTS.keys() != _SETUPS.keys():
+    raise RuntimeError("every sign-of-life setup needs one guest-request bound")
 
 
 @dataclass(frozen=True)

@@ -247,6 +247,13 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     """Overrides the task's own `max_steps` when > 0."""
     max_tokens: int = Field(default=256, ge=1, strict=True)
     """Fallback only — used for a knob `ctx.sampling` leaves unset."""
+    model_request_timeout_s: float = Field(default=180.0, gt=0.0, allow_inf_nan=False)
+    """One model request's inactivity timeout.
+
+    The sign-of-life supervisor also uses this declared value when deriving the
+    outer attempt deadline. A server that keeps yielding bytes can outlive an
+    inactivity timeout, so this is not itself the attempt deadline.
+    """
     temperature: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
     """The arm's sampling temperature, which `evals/signoflife/__main__.py` promotes
     into the eval's `sampling` block; `ctx.sampling` still wins at the wire
@@ -806,6 +813,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 endpoint=endpoint,
                 secret=secret,
                 prefer_context=self.config.prefer_context_transport,
+                timeout_s=self.config.model_request_timeout_s,
             ),
             system_prompt=self.config.system_prompt_override,
             max_tokens=self.config.max_tokens,
@@ -857,6 +865,13 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                     outcome = f"framework_stop_{trace.stop_condition}"
                     break
                 cursor = tuple(await _to_thread(session.cursor_position))
+                _LOGGER.info(
+                    "turn start: trace=%s cell=%s turn=%d/%d",
+                    trace.id,
+                    task.name,
+                    step,
+                    max_steps,
+                )
                 decision, step_sampling = await self._decide(
                     agent,
                     ctx,
@@ -871,6 +886,14 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                     session=session,
                     codec=codec,
                     artifacts=artifacts,
+                )
+                _LOGGER.info(
+                    "turn done: trace=%s cell=%s turn=%d/%d response=%s",
+                    trace.id,
+                    task.name,
+                    step,
+                    max_steps,
+                    decision is not None,
                 )
                 # Only a real turn updates the provenance. Assigning unconditionally
                 # erased it on the terminal non-turn: a scripted arm exhausting its

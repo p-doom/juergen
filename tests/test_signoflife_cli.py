@@ -18,6 +18,9 @@ is a calibration against a real VM, and a fixture that produced it would be fict
 from __future__ import annotations
 
 import json
+import math
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -44,11 +47,16 @@ def _fake_desktop(monkeypatch):
     """
     import agent.desktop as desktop
     import desktop.vm.factory as factory
+    import evals.signoflife.__main__ as dispatcher
 
     juergen_fake_desktop.FakeDesktopPool.instances.clear()
     monkeypatch.setattr(
         factory, "build_desktop_pool", juergen_fake_desktop.build_desktop_pool
     )
+    # Production uses spawn. The fake factory is an in-process test substitution,
+    # so fork is the exact way for a worker to inherit it without adding a
+    # production CLI escape hatch for pool ownership.
+    monkeypatch.setattr(dispatcher, "_WORKER_START_METHOD", "fork")
     yield
     for pool in list(desktop._POOLS.values()):
         pool.close()
@@ -134,18 +142,12 @@ def test_the_pool_adapter_is_the_production_one(tmp_path) -> None:
     the JSON-able arguments become a `DesktopPoolConfig`, and every checkout comes
     back as a `DesktopFacade`, the merged surface an episode needs."""
     output = tmp_path / "run"
-    code, _ = _run(output, tmp_path, "--vm-smp", "4", "--vm-mem", "8G")
+    code, result = _run(output, tmp_path, "--vm-smp", "4", "--vm-mem", "8G")
     assert code == 0
-
-    pools = juergen_fake_desktop.FakeDesktopPool.instances
-    assert pools, "kvm_desktop_pool never reached build_desktop_pool"
-    kwargs = pools[0].kwargs
-    assert kwargs["smp"] == 4 and kwargs["memory"] == "8G"
-    assert kwargs["accelerator"] == "kvm"
-    assert kwargs["image"] == Path(tmp_path / "desktop.qcow2")
-    config = kwargs["config"]
-    assert config.max_rollouts_per_session == 1, "a reused VM is a wrong measurement"
-    assert config.max_sessions == 4, "--vm-slots"
+    assert result["vm"]["smp"] == 4 and result["vm"]["memory"] == "8G"
+    assert result["vm"]["sessions_per_worker"] == 1
+    assert result["vm"]["slots"] == 4
+    assert all(row["validity"] == "valid" for row in result["episodes"])
 
 
 @pytest.mark.slow
@@ -381,26 +383,25 @@ def test_a_cell_with_no_valid_draw_has_a_null_pass_rate_not_a_zero() -> None:
     assert aggregate["controls_ok"] is False, "an invalid draw cannot certify a control"
 
 
-def test_an_episode_that_publishes_nothing_still_records_why(tmp_path) -> None:
+def test_an_episode_that_publishes_nothing_still_records_why(tmp_path, monkeypatch) -> None:
     """A raise before `DesktopHarness._run` — a bad pool spec, an unknown grammar,
     an unregistered kind — never reaches the code that publishes `infra_error`, so
     the row must not read `validity: null, infra_error: null`.
 
-    Provoked here the way it actually happens: the same arm dispatched twice in
-    one process, whose `pool_for` guard refuses the second spec.
+    Provoked at the production pool-constructor seam: launch fails before
+    `DesktopHarness._run`, so the worker boundary must explain the row.
     """
-    first = tmp_path / "first"
-    code, _ = _run(first, tmp_path, "--cell", CELL_IDS[0])
-    assert code == 0
+    import evals.signoflife.__main__ as dispatcher
 
-    second = tmp_path / "second"
-    # Deliberately not `_fresh_process()`: keep the first run's pool registered.
-    assert main(_argv(second, tmp_path, "--cell", CELL_IDS[0])) == 3
-    result = json.loads((second / "result.json").read_text())
+    output = tmp_path / "run"
+    monkeypatch.setattr(dispatcher, "POOL_TARGET", "evals.vm:no_such_constructor")
+    assert main(_argv(output, tmp_path, "--cell", CELL_IDS[0])) == 3
+    result = json.loads((output / "result.json").read_text())
     assert result["status"] == "infrastructure_failure"
     error = result["episodes"][0]["infra_error"]
     assert error["stage"] == "harness"
-    assert "already exists with a different spec" in error["message"]
+    assert error["type"] == "HarnessError"
+    assert "no_such_constructor" in error["message"]
     assert result["aggregate"]["per_cell"][CELL_IDS[0]]["valid_trials"] == 0
     assert result["aggregate"]["per_cell"][CELL_IDS[0]]["pass_rate"] is None
 
@@ -664,3 +665,236 @@ def test_the_candidate_tier_dispatches_too_and_reads_its_negative(tmp_path) -> N
     assert {row["cell"]: row["success"] for row in result["episodes"]} == {
         cell: False for cell in CANDIDATE_IDS
     }, "a negative control must fail every cell of the tier it runs"
+
+
+def test_the_attempt_deadline_is_derived_from_the_selected_arm_and_cell() -> None:
+    from evals.signoflife.__main__ import _attempt_wall_bound_s, _suite_wall_bound_s
+    from evals.signoflife.cells import ARMS
+
+    task = load_suite().by_id("terminal_submit_only")
+    arm = ARMS["ordered"]
+
+    assert _attempt_wall_bound_s(task, arm) == 5498.0
+    assert _suite_wall_bound_s(
+        [task, task, task],
+        arm=arm,
+        trials=1,
+        vm_slots=2,
+        local_sglang=False,
+        sglang_ready_timeout_s=1500.0,
+    ) == 10996.0
+    assert _suite_wall_bound_s(
+        [task],
+        arm=arm,
+        trials=1,
+        vm_slots=1,
+        local_sglang=True,
+        sglang_ready_timeout_s=1500.0,
+    ) == 6998.0
+
+
+@pytest.mark.parametrize(
+    ("value", "seconds"),
+    [
+        ("UNLIMITED", math.inf),
+        ("2-03:04:05", 183845.0),
+        ("03:04:05", 11045.0),
+        ("04:05", 245.0),
+        ("5", 300.0),
+    ],
+)
+def test_slurm_duration_parsing_matches_scontrol(value, seconds) -> None:
+    from evals.signoflife.__main__ import _parse_slurm_duration_s
+
+    assert _parse_slurm_duration_s(value) == seconds
+
+
+def test_slurm_preflight_rejects_before_creating_the_output_or_starting_resources(
+    tmp_path, monkeypatch
+) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    output = tmp_path / "run"
+    monkeypatch.setenv("SLURM_JOB_ID", "123")
+    monkeypatch.setattr(dispatcher, "_slurm_remaining_wall_s", lambda job_id: 300.0)
+    monkeypatch.setattr(
+        dispatcher,
+        "_sglang",
+        lambda **kwargs: pytest.fail("sglang started before the allocation preflight"),
+    )
+    with pytest.raises(RuntimeError, match="cannot cover declared suite bound"):
+        main(_argv(output, tmp_path, "--tier", "candidate", "--cell", "terminal_submit_only"))
+    assert not output.exists()
+    assert not juergen_fake_desktop.FakeDesktopPool.instances
+
+
+def _idle_in_own_process_group() -> None:
+    os.setsid()
+    time.sleep(60)
+
+
+def test_attempt_process_group_termination_reaps_the_owned_worker() -> None:
+    import multiprocessing
+
+    from evals.signoflife.__main__ import _terminate_attempt_process_group
+
+    process = multiprocessing.get_context("fork").Process(target=_idle_in_own_process_group)
+    process.start()
+    assert process.pid is not None
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and os.getpgid(process.pid) != process.pid:
+        time.sleep(0.01)
+    try:
+        assert os.getpgid(process.pid) == process.pid
+        _terminate_attempt_process_group(process)
+        assert not process.is_alive()
+    finally:
+        if process.is_alive():
+            process.kill()
+            process.join()
+
+
+def _scheduler_runtime(tmp_path):
+    from evals.signoflife.__main__ import _WorkerRuntime
+
+    return _WorkerRuntime(
+        arm="ordered",
+        tier="candidate",
+        output=tmp_path,
+        base_url="http://127.0.0.1:9/v1",
+        api_key="test",
+        temperature=0.7,
+        top_p=1.0,
+        max_tokens=256,
+        qcow=tmp_path / "desktop.qcow2",
+        qemu=None,
+        qemu_img=None,
+        vm_smp=None,
+        vm_mem=None,
+        vm_slots=2,
+        scoring_grace_s=0.0,
+        pool_target="evals.vm:kvm_desktop_pool",
+    )
+
+
+def test_the_dynamic_scheduler_refills_a_free_slot_and_returns_canonical_order(
+    tmp_path, monkeypatch
+) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    runtime = _scheduler_runtime(tmp_path)
+    task = load_suite().by_id("terminal_submit_only")
+    specs = [
+        dispatcher._AttemptSpec(
+            index=index, cell_ordinal=index, trial=1, task=task, wall_bound_s=10.0
+        )
+        for index in range(3)
+    ]
+    events = []
+
+    class Process:
+        pid = 1000
+        exitcode = 0
+
+        def __init__(self, index):
+            self.index = index
+            self.polls = 0
+            self.finished = False
+
+        def is_alive(self):
+            self.polls += 1
+            alive = self.index == 0 and self.polls < 3
+            if not alive and not self.finished:
+                events.append(("finish", self.index))
+                self.finished = True
+            return alive
+
+        def join(self, timeout=None):
+            del timeout
+
+    def spawn(worker_runtime, spec):
+        events.append(("start", spec.index))
+        row = {
+            **dispatcher._attempt_row_identity(worker_runtime, spec),
+            "validity": "valid",
+            "success": False,
+        }
+        dispatcher._atomic_json(
+            dispatcher._attempt_result_path(worker_runtime, spec), row
+        )
+        return Process(spec.index)
+
+    monkeypatch.setattr(dispatcher, "_spawn_attempt_process", spawn)
+    monkeypatch.setattr(dispatcher.time, "sleep", lambda seconds: None)
+
+    rows = dispatcher._run_attempts(runtime, specs)
+    assert [row["index"] for row in rows] == [0, 1, 2]
+    assert events.index(("start", 2)) < events.index(("finish", 0))
+
+
+def test_a_spawn_worker_runs_the_owned_pool_and_publishes_its_attempt(
+    tmp_path, monkeypatch
+) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    output = tmp_path / "run"
+    monkeypatch.setattr(dispatcher, "_WORKER_START_METHOD", "spawn")
+    monkeypatch.setattr(
+        dispatcher, "POOL_TARGET", "juergen_fake_desktop:kvm_desktop_pool"
+    )
+
+    assert (
+        main(
+            _argv(
+                output,
+                tmp_path,
+                "--tier",
+                "candidate",
+                "--cell",
+                "terminal_submit_only",
+            )
+        )
+        == 0
+    )
+    result = json.loads((output / "result.json").read_text())
+    assert result["episodes"][0]["index"] == 0
+    assert result["episodes"][0]["validity"] == "valid"
+    attempt = output / result["episodes"][0]["artifact_subdir"]
+    assert (attempt / "attempt.json").is_file()
+    assert (
+        attempt / "artifacts" / "terminal_submit_only" / "steps" / "step_000.png"
+    ).is_file()
+
+
+def test_the_scheduler_types_a_wall_timeout_and_preserves_null_success(
+    tmp_path, monkeypatch
+) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    runtime = _scheduler_runtime(tmp_path)
+    runtime = dispatcher._WorkerRuntime(**{**runtime.__dict__, "vm_slots": 1})
+    task = load_suite().by_id("terminal_submit_only")
+    spec = dispatcher._AttemptSpec(
+        index=0, cell_ordinal=0, trial=1, task=task, wall_bound_s=0.0
+    )
+
+    class Process:
+        pid = 1000
+        exitcode = None
+
+        def is_alive(self):
+            return True
+
+    monkeypatch.setattr(
+        dispatcher, "_spawn_attempt_process", lambda runtime, spec: Process()
+    )
+    monkeypatch.setattr(
+        dispatcher, "_terminate_attempt_process_group", lambda process: None
+    )
+
+    rows = dispatcher._run_attempts(runtime, [spec])
+    assert rows[0]["index"] == 0 and rows[0]["trial"] == 1
+    assert rows[0]["validity"] == "infra_invalid"
+    assert rows[0]["success"] is None
+    assert rows[0]["infra_error"]["type"] == "AttemptWallTimeout"
+    assert rows[0]["attempt_wall_bound_s"] == 0.0

@@ -681,12 +681,18 @@ class Agent:
 
 
 def build_transport(
-    *, endpoint: str | None, secret: str | None, prefer_context: bool = False
+    *,
+    endpoint: str | None,
+    secret: str | None,
+    prefer_context: bool = False,
+    timeout_s: float = 180.0,
 ) -> Transport:
     """`ContextTransport` when asked, or when there is no endpoint to post to."""
     if prefer_context or not endpoint:
         return ContextTransport()
-    return EndpointTransport(endpoint=endpoint, secret=secret or "")
+    return EndpointTransport(
+        endpoint=endpoint, secret=secret or "", timeout_s=timeout_s
+    )
 
 
 def dump_prompt(body: dict[str, Any]) -> str:

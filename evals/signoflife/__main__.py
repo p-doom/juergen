@@ -17,12 +17,13 @@ needs are not expressible as CLI flags —
 Everything else is verifiers': task loading, the episode, interception, the
 client, `traces.jsonl`.
 
-Trials are separate `run_eval` passes, not `num_rollouts`. Both give N draws per
-cell, but `DesktopHarness._artifact_dir` keys on the task name alone, so N
-rollouts of one task overwrite each other's frames, prompts, GIF and
-`result.json` and the run keeps only the last. A pass per trial with its own
-`artifacts.output_dir` keeps all N. The sglang server and the desktop pool are
-process-global and survive across passes, so the extra passes cost nothing.
+Each `(cell ordinal, trial)` is a separate `run_eval` pass in a supervised spawn
+worker, not a `num_rollouts` fan-out. The worker creates, uses and closes its own
+single-session desktop pool, so its QEMU descendants share the worker's process
+group and the dispatcher can enforce a derived outer deadline without abandoning
+a thread or killing a parent-owned VM. Unique attempt roots keep every frame,
+prompt, trace and result; the parent dynamically refills up to `--vm-slots` and
+sorts completed rows back into canonical cell/trial order before publishing.
 
 `--tier` picks the cell set, and one run is one tier: `scored` is the calibrated
 cells, `candidate` is the ones whose own oracle has not been measured on hardware
@@ -46,12 +47,16 @@ import hashlib
 import json
 import logging
 import math
+import multiprocessing
 import os
+import re
+import signal
 import socket
 import subprocess
 import sys
 import time
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -66,7 +71,8 @@ from verifiers.v1.cli.eval.runner import run_eval  # noqa: E402
 from verifiers.v1.configs.eval import EvalConfig  # noqa: E402
 
 from evals.signoflife.cells import ARMS, verify_phaseb_provenance  # noqa: E402
-from evals.signoflife.suite import TIERS, load_suite  # noqa: E402
+from evals.signoflife.guest import SETUP_GUEST_REQUESTS  # noqa: E402
+from evals.signoflife.suite import DevelopmentTask, TIERS, load_suite  # noqa: E402
 from evals.tasks import RESULT_KEY  # noqa: E402
 from signoflife import PLUGIN_ID  # noqa: E402
 
@@ -78,6 +84,19 @@ SERVED_MODEL = "sign-of-life"
 API_KEY_VAR = "SIGN_OF_LIFE_API_KEY"
 """`resolve_api_key` reads the key from an env var named by the client config
 (`clients/config.py:91-102`); it is never a CLI field, so we name our own."""
+
+POOL_TARGET = "evals.vm:kvm_desktop_pool"
+"""The production constructor. Tests replace the value before building workers."""
+
+_POOL_ACQUIRE_TIMEOUT_S = 1800.0
+_POOL_CHECKOUT_TIMEOUT_S = 1800.0
+_POOL_STARTUP_TIMEOUT_S = 1200.0
+_GUEST_REQUEST_TIMEOUT_S = 60.0
+_QEMU_SHUTDOWN_TIMEOUT_S = 15.0
+_SUPERVISOR_REAP_TIMEOUT_S = 20.0
+_ATTEMPT_LAUNCH_MARGIN_S = 20.0
+_SCHEDULER_POLL_S = 0.1
+_WORKER_START_METHOD = "spawn"
 
 
 @contextlib.contextmanager
@@ -209,6 +228,126 @@ def _model_provenance(model_path: Path | None) -> dict[str, Any] | None:
     return record
 
 
+def _attempt_wall_bound_s(task: DevelopmentTask, arm: Any) -> float:
+    """Hard outer bound from the exact blocking phases one worker can enter."""
+    try:
+        setup_requests = SETUP_GUEST_REQUESTS[task.kind]
+    except KeyError as error:
+        raise ValueError(f"no setup request bound for task kind {task.kind!r}") from error
+    max_steps = arm.max_steps or task.max_steps
+    settle_s = arm.settle.per_kind.get(task.kind, arm.settle.min_delay_s)
+    observation_bound_s = settle_s + arm.settle.stability_timeout_s
+    scripted_render_requests = 2 if arm.scripted.enabled else 0
+    per_turn_guest_requests = 5 + scripted_render_requests
+    per_turn_model_s = 0.0 if arm.scripted.enabled else arm.model_request_timeout_s
+    return float(
+        _POOL_ACQUIRE_TIMEOUT_S
+        + _POOL_CHECKOUT_TIMEOUT_S
+        + _ATTEMPT_LAUNCH_MARGIN_S
+        + setup_requests * _GUEST_REQUEST_TIMEOUT_S
+        # Geometry, the initial state probe and the initial screenshot.
+        + 3 * _GUEST_REQUEST_TIMEOUT_S
+        + observation_bound_s
+        + max_steps
+        * (
+            per_turn_guest_requests * _GUEST_REQUEST_TIMEOUT_S
+            + per_turn_model_s
+            + observation_bound_s
+        )
+        # One batched held-input release and the runtime-backed reward probe.
+        + 2 * _GUEST_REQUEST_TIMEOUT_S
+        + _QEMU_SHUTDOWN_TIMEOUT_S
+    )
+
+
+def _suite_wall_bound_s(
+    tasks: list[DevelopmentTask],
+    *,
+    arm: Any,
+    trials: int,
+    vm_slots: int,
+    local_sglang: bool,
+    sglang_ready_timeout_s: float,
+) -> float:
+    if trials < 1:
+        raise ValueError("trials must be >= 1")
+    if vm_slots < 1:
+        raise ValueError("vm_slots must be >= 1")
+    slot_bounds = [0.0] * vm_slots
+    for task in tasks:
+        for _trial in range(trials):
+            slot = min(range(vm_slots), key=lambda index: (slot_bounds[index], index))
+            slot_bounds[slot] += _attempt_wall_bound_s(task, arm)
+    return max(slot_bounds, default=0.0) + (
+        sglang_ready_timeout_s if local_sglang else 0.0
+    )
+
+
+def _parse_slurm_duration_s(value: str) -> float:
+    if value == "UNLIMITED":
+        return math.inf
+    day_text, separator, clock_text = value.partition("-")
+    days = int(day_text) if separator else 0
+    if not separator:
+        clock_text = day_text
+    fields = [int(field) for field in clock_text.split(":")]
+    if len(fields) == 3:
+        hours, minutes, seconds = fields
+    elif len(fields) == 2:
+        hours = 0
+        minutes, seconds = fields
+    elif len(fields) == 1:
+        hours = 0
+        minutes = fields[0]
+        seconds = 0
+    else:
+        raise ValueError(f"invalid SLURM duration {value!r}")
+    if days < 0 or hours < 0 or not 0 <= minutes < 60 or not 0 <= seconds < 60:
+        raise ValueError(f"invalid SLURM duration {value!r}")
+    return float(((days * 24 + hours) * 60 + minutes) * 60 + seconds)
+
+
+def _slurm_remaining_wall_s(job_id: str) -> float:
+    completed = subprocess.run(
+        ["scontrol", "show", "job", job_id, "-o"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    fields = {
+        key: value
+        for token in completed.stdout.split()
+        if "=" in token
+        for key, value in [token.split("=", 1)]
+    }
+    try:
+        limit = _parse_slurm_duration_s(fields["TimeLimit"])
+        runtime = _parse_slurm_duration_s(fields["RunTime"])
+    except KeyError as error:
+        raise RuntimeError(f"scontrol omitted {error.args[0]} for job {job_id}") from error
+    return max(0.0, limit - runtime)
+
+
+def _preflight_slurm_wall_budget(required_s: float) -> float:
+    job_id = os.environ.get("SLURM_JOB_ID")
+    if not job_id:
+        _LOGGER.info("derived suite wall bound: %.0fs", required_s)
+        return required_s
+    remaining_s = _slurm_remaining_wall_s(job_id)
+    if remaining_s < required_s:
+        raise RuntimeError(
+            f"SLURM job {job_id} has {remaining_s:.0f}s remaining and cannot cover "
+            f"declared suite bound {required_s:.0f}s"
+        )
+    _LOGGER.info(
+        "SLURM wall preflight: job=%s remaining=%.0fs required=%.0fs",
+        job_id,
+        remaining_s,
+        required_s,
+    )
+    return required_s
+
+
 def _harness_payload(arm: str, *, artifacts: Path, pool: dict[str, Any]) -> dict[str, Any]:
     """One arm's `DesktopHarnessConfig` as verifiers wants it.
 
@@ -245,8 +384,8 @@ def _eval_config(
         client={"base_url": base_url, "api_key_var": API_KEY_VAR},
         sampling={"temperature": temperature, "top_p": top_p, "max_tokens": max_tokens},
         num_rollouts=1,
-        # One episode at a time: concurrency here would put N desktops on the node
-        # at once, and the node budget is a slot count, not a promise of memory.
+        # One episode per supervised worker. Parallelism belongs to the dispatcher,
+        # where every process owns the one desktop its deadline may reap.
         max_concurrent=1,
         output_dir=traces_dir,
         rich=False,  # a live dashboard in a batch job is a log full of escape codes
@@ -286,14 +425,20 @@ def _harness_error(trace: Any) -> dict[str, Any] | None:
 def _episode_row(trace: Any, trial: int) -> dict[str, Any]:
     episode = dict(trace.info.get(RESULT_KEY) or {})
     prompt = dict(trace.info.get("prompt") or {})
+    infra_error = episode.get("infra_error") or _harness_error(trace)
+    validity = episode.get("validity")
+    if validity is None and infra_error is not None:
+        validity = "infra_invalid"
     return {
         "trial": trial,
         "cell": trace.task.data.name,
         "kind": trace.task.data.kind,
         "trace_id": trace.id,
-        "success": episode.get("success"),
-        "validity": episode.get("validity"),
-        "outcome": episode.get("outcome"),
+        "success": None if validity == "infra_invalid" else episode.get("success"),
+        "validity": validity,
+        "outcome": episode.get("outcome") or (
+            "infrastructure_error" if validity == "infra_invalid" else None
+        ),
         "steps": episode.get("steps"),
         "parse_errors": episode.get("parse_errors"),
         "action_errors": episode.get("action_errors"),
@@ -301,7 +446,7 @@ def _episode_row(trace: Any, trial: int) -> dict[str, Any]:
         "control_terminate": episode.get("control_terminate"),
         "terminate_step": episode.get("terminate_step"),
         "control_ok": episode.get("control_ok"),
-        "infra_error": episode.get("infra_error") or _harness_error(trace),
+        "infra_error": infra_error,
         "final_probe": episode.get("final_probe"),
         "sampling": episode.get("sampling"),
         "host": episode.get("host"),
@@ -362,6 +507,385 @@ def _atomic_json(path: Path, value: Any) -> None:
     temporary.replace(path)
 
 
+@dataclass(frozen=True)
+class _AttemptSpec:
+    index: int
+    cell_ordinal: int
+    trial: int
+    task: DevelopmentTask
+    wall_bound_s: float
+
+
+@dataclass(frozen=True)
+class _WorkerRuntime:
+    arm: str
+    tier: str
+    output: Path
+    base_url: str
+    api_key: str
+    temperature: float | None
+    top_p: float | None
+    max_tokens: int
+    qcow: Path
+    qemu: Path | None
+    qemu_img: Path | None
+    vm_smp: int | None
+    vm_mem: str | None
+    vm_slots: int
+    scoring_grace_s: float
+    pool_target: str
+
+
+@dataclass
+class _ActiveAttempt:
+    spec: _AttemptSpec
+    process: multiprocessing.Process
+    started_at: float
+
+
+def _attempt_identity(*, cell_ordinal: int, trial: int, trials: int) -> int:
+    if cell_ordinal < 0 or not 1 <= trial <= trials:
+        raise ValueError(
+            f"invalid attempt identity: cell_ordinal={cell_ordinal}, "
+            f"trial={trial}, trials={trials}"
+        )
+    return cell_ordinal * trials + trial - 1
+
+
+def _task_slug(task_id: str) -> str:
+    return re.sub(r"[^a-z0-9._-]+", "-", task_id.lower()).strip("-")
+
+
+def _attempt_root(runtime: _WorkerRuntime, spec: _AttemptSpec) -> Path:
+    return (
+        runtime.output
+        / f"trial_{spec.trial:02d}"
+        / f"attempt_{spec.index:03d}_{_task_slug(spec.task.id)}"
+    )
+
+
+def _attempt_result_path(runtime: _WorkerRuntime, spec: _AttemptSpec) -> Path:
+    return _attempt_root(runtime, spec) / "attempt.json"
+
+
+def _attempt_row_identity(
+    runtime: _WorkerRuntime, spec: _AttemptSpec
+) -> dict[str, Any]:
+    return {
+        "index": spec.index,
+        "cell_ordinal": spec.cell_ordinal,
+        "trial": spec.trial,
+        "cell": spec.task.id,
+        "kind": spec.task.kind,
+        "attempt_wall_bound_s": spec.wall_bound_s,
+        "artifact_subdir": str(_attempt_root(runtime, spec).relative_to(runtime.output)),
+    }
+
+
+def _infra_invalid_attempt_row(
+    runtime: _WorkerRuntime,
+    spec: _AttemptSpec,
+    *,
+    error_type: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        **_attempt_row_identity(runtime, spec),
+        "trace_id": None,
+        "success": None,
+        "validity": "infra_invalid",
+        "outcome": "attempt_wall_timeout"
+        if error_type == "AttemptWallTimeout"
+        else "attempt_process_error",
+        "steps": None,
+        "parse_errors": None,
+        "action_errors": None,
+        "executor_errors": None,
+        "control_terminate": None,
+        "terminate_step": None,
+        "control_ok": None,
+        "infra_error": {"stage": "attempt", "type": error_type, "message": message},
+        "final_probe": None,
+        "sampling": {
+            "temperature": runtime.temperature,
+            "top_p": runtime.top_p,
+            "max_tokens": runtime.max_tokens,
+        },
+        "host": socket.gethostname(),
+        "prompt_sha256": None,
+        "comparable_to_sealed_baseline": None,
+        "steps_detail": None,
+    }
+
+
+def _worker_pool(runtime: _WorkerRuntime, spec: _AttemptSpec) -> dict[str, Any]:
+    arm = ARMS[runtime.arm]
+    attempt_root = _attempt_root(runtime, spec)
+    session_kwargs: dict[str, Any] = {
+        "image": str(runtime.qcow),
+        "root_dir": str(attempt_root / "vm"),
+        "accelerator": "kvm",
+        "transport_timeout_s": _GUEST_REQUEST_TIMEOUT_S,
+        "min_ready_sessions": 1,
+        "max_sessions": 1,
+        "max_rollouts_per_session": 1,
+        "checkout_timeout_s": _POOL_CHECKOUT_TIMEOUT_S,
+        "lease_timeout_s": arm.pool.episode_ttl_s,
+        "startup_timeout_s": _POOL_STARTUP_TIMEOUT_S,
+    }
+    for key, value in (
+        ("qemu_binary", runtime.qemu),
+        ("qemu_img_binary", runtime.qemu_img),
+        ("smp", runtime.vm_smp),
+        ("memory", runtime.vm_mem),
+    ):
+        if value is not None:
+            session_kwargs[key] = str(value) if isinstance(value, Path) else value
+    return {
+        "key": f"signoflife-{runtime.arm}-attempt-{spec.index}",
+        "max_node_slots": runtime.vm_slots,
+        "slot_dir": str(runtime.output / "vm_slots"),
+        "episode_ttl_s": arm.pool.episode_ttl_s,
+        "scoring_grace_s": runtime.scoring_grace_s,
+        "pool_idle_ttl_s": arm.pool.pool_idle_ttl_s,
+        "acquire_timeout_s": _POOL_ACQUIRE_TIMEOUT_S,
+        "reap_interval_s": arm.pool.reap_interval_s,
+        "pool_target": runtime.pool_target,
+        "session_kwargs": session_kwargs,
+    }
+
+
+def _attempt_process_main(runtime: _WorkerRuntime, spec: _AttemptSpec) -> None:
+    os.setsid()
+    attempt_root = _attempt_root(runtime, spec)
+    attempt_root.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(processName)s] %(levelname)s %(name)s | %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(attempt_root / "worker.log", encoding="utf-8"),
+        ],
+        force=True,
+    )
+    os.environ[API_KEY_VAR] = runtime.api_key
+    row: dict[str, Any]
+    try:
+        config = _eval_config(
+            arm=runtime.arm,
+            tier=runtime.tier,
+            task_ids=[spec.task.id],
+            artifacts=attempt_root / "artifacts",
+            traces_dir=attempt_root / "traces",
+            pool=_worker_pool(runtime, spec),
+            base_url=runtime.base_url,
+            temperature=runtime.temperature,
+            top_p=runtime.top_p,
+            max_tokens=runtime.max_tokens,
+        )
+        environment = vf.Environment(config)
+        traces = asyncio.run(run_eval(environment, config))
+        if len(traces) != 1:
+            raise RuntimeError(
+                f"attempt {spec.index} selected one cell but produced {len(traces)} traces"
+            )
+        row = {
+            **_episode_row(traces[0], spec.trial),
+            **_attempt_row_identity(runtime, spec),
+        }
+    except Exception as error:
+        _LOGGER.exception(
+            "attempt worker failed: index=%d cell=%s trial=%d",
+            spec.index,
+            spec.task.id,
+            spec.trial,
+        )
+        row = _infra_invalid_attempt_row(
+            runtime,
+            spec,
+            error_type=type(error).__name__,
+            message=str(error),
+        )
+    try:
+        _atomic_json(_attempt_result_path(runtime, spec), row)
+    finally:
+        from agent.desktop import close_all_pools
+
+        close_all_pools()
+
+
+def _spawn_attempt_process(
+    runtime: _WorkerRuntime, spec: _AttemptSpec
+) -> multiprocessing.Process:
+    process = multiprocessing.get_context(_WORKER_START_METHOD).Process(
+        target=_attempt_process_main,
+        args=(runtime, spec),
+        name=f"signoflife-{spec.index:03d}",
+    )
+    process.start()
+    return process
+
+
+def _terminate_attempt_process_group(process: multiprocessing.Process) -> None:
+    if process.pid is None:
+        raise RuntimeError("attempt process has no pid")
+    try:
+        process_group = os.getpgid(process.pid)
+    except ProcessLookupError:
+        process.join()
+        return
+    if process_group != process.pid:
+        process.terminate()
+        process.join(timeout=_SUPERVISOR_REAP_TIMEOUT_S)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=_SUPERVISOR_REAP_TIMEOUT_S)
+        raise RuntimeError(
+            f"attempt process {process.pid} did not establish its own process group"
+        )
+    os.killpg(process_group, signal.SIGTERM)
+    process.join(timeout=_SUPERVISOR_REAP_TIMEOUT_S)
+    if process.is_alive():
+        os.killpg(process_group, signal.SIGKILL)
+        process.join(timeout=_SUPERVISOR_REAP_TIMEOUT_S)
+    if process.is_alive():
+        raise RuntimeError(f"attempt process group {process_group} survived SIGKILL")
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return
+    raise RuntimeError(f"attempt process group {process_group} still exists after reap")
+
+
+def _read_attempt_row(runtime: _WorkerRuntime, spec: _AttemptSpec) -> dict[str, Any]:
+    path = _attempt_result_path(runtime, spec)
+    try:
+        row = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(row, dict):
+            raise TypeError("attempt result is not an object")
+        expected = _attempt_row_identity(runtime, spec)
+        mismatches = {
+            key: {"expected": value, "observed": row.get(key)}
+            for key, value in expected.items()
+            if row.get(key) != value
+        }
+        if mismatches:
+            raise ValueError(f"attempt identity mismatch: {mismatches}")
+        if row.get("validity") not in {"valid", "infra_invalid"}:
+            raise ValueError(f"invalid validity {row.get('validity')!r}")
+        if row["validity"] == "infra_invalid" and row.get("success") is not None:
+            raise ValueError("an infrastructure-invalid attempt must have success=null")
+        return row
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
+        return _infra_invalid_attempt_row(
+            runtime,
+            spec,
+            error_type="AttemptArtifactError",
+            message=str(error),
+        )
+
+
+def _run_attempts(
+    runtime: _WorkerRuntime, specs: list[_AttemptSpec]
+) -> list[dict[str, Any]]:
+    pending = iter(specs)
+    active: dict[int, _ActiveAttempt] = {}
+    rows: list[dict[str, Any]] = []
+    exhausted = False
+    while active or not exhausted:
+        while len(active) < runtime.vm_slots and not exhausted:
+            try:
+                spec = next(pending)
+            except StopIteration:
+                exhausted = True
+                break
+            _attempt_root(runtime, spec).mkdir(parents=True, exist_ok=True)
+            started_at = time.monotonic()
+            try:
+                process = _spawn_attempt_process(runtime, spec)
+            except (OSError, RuntimeError) as error:
+                row = _infra_invalid_attempt_row(
+                    runtime,
+                    spec,
+                    error_type="AttemptSpawnError",
+                    message=str(error),
+                )
+                _atomic_json(_attempt_result_path(runtime, spec), row)
+                rows.append(row)
+                _LOGGER.exception(
+                    "attempt spawn failed: index=%d cell=%s trial=%d",
+                    spec.index,
+                    spec.task.id,
+                    spec.trial,
+                )
+                continue
+            active[spec.index] = _ActiveAttempt(
+                spec=spec,
+                process=process,
+                started_at=started_at,
+            )
+            _LOGGER.info(
+                "attempt start: index=%d cell=%s trial=%d pid=%s bound=%.0fs",
+                spec.index,
+                spec.task.id,
+                spec.trial,
+                process.pid,
+                spec.wall_bound_s,
+            )
+        finished: list[int] = []
+        now = time.monotonic()
+        for index, attempt in active.items():
+            process = attempt.process
+            spec = attempt.spec
+            if not process.is_alive():
+                process.join()
+                row = (
+                    _read_attempt_row(runtime, spec)
+                    if process.exitcode == 0
+                    else _infra_invalid_attempt_row(
+                        runtime,
+                        spec,
+                        error_type="AttemptProcessExit",
+                        message=f"attempt process exited with status {process.exitcode}",
+                    )
+                )
+            elif now - attempt.started_at >= spec.wall_bound_s:
+                _LOGGER.error(
+                    "attempt wall deadline exceeded: index=%d cell=%s trial=%d "
+                    "pid=%s bound=%.0fs",
+                    spec.index,
+                    spec.task.id,
+                    spec.trial,
+                    process.pid,
+                    spec.wall_bound_s,
+                )
+                _terminate_attempt_process_group(process)
+                row = _infra_invalid_attempt_row(
+                    runtime,
+                    spec,
+                    error_type="AttemptWallTimeout",
+                    message=f"attempt exceeded derived wall bound of {spec.wall_bound_s:.0f}s",
+                )
+                _atomic_json(_attempt_result_path(runtime, spec), row)
+            else:
+                continue
+            rows.append(row)
+            finished.append(index)
+            _LOGGER.info(
+                "attempt done: index=%d cell=%s trial=%d validity=%s success=%s",
+                spec.index,
+                spec.task.id,
+                spec.trial,
+                row["validity"],
+                row["success"],
+            )
+        for index in finished:
+            del active[index]
+        if active and not finished:
+            time.sleep(_SCHEDULER_POLL_S)
+    return sorted(rows, key=lambda row: int(row["index"]))
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="python -m evals.signoflife")
     parser.add_argument("--arm", required=True, choices=sorted(ARMS))
@@ -397,7 +921,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--vm-smp", type=int, default=None)
     parser.add_argument("--vm-mem", default=None)
     parser.add_argument("--vm-slots", type=int, default=1)
-    parser.add_argument("--vm-rollouts-per-session", type=int, default=1)
+    parser.add_argument(
+        "--vm-rollouts-per-session",
+        type=int,
+        choices=[1],
+        default=1,
+        help="fixed at 1: each supervised attempt owns and tears down its VM pool",
+    )
     parser.add_argument(
         "--scoring-grace-s",
         type=float,
@@ -440,9 +970,15 @@ def main(argv: list[str] | None = None) -> int:
 
     tier_cells = suite.for_tier(args.tier)
     selected = list(tier_cells)
-    if args.task_index:
+    if args.task_index is not None:
+        invalid = [index for index in args.task_index if not 0 <= index < len(tier_cells)]
+        if invalid:
+            raise SystemExit(
+                f"--task-index {invalid} outside the {args.tier!r} tier's "
+                f"0..{len(tier_cells) - 1} range"
+            )
         selected = [tier_cells[index] for index in args.task_index]
-    if args.cell:
+    if args.cell is not None:
         selected = [suite.by_id(cell) for cell in args.cell]
     off_tier = [task.id for task in selected if task.tier != args.tier]
     if off_tier:
@@ -450,6 +986,20 @@ def main(argv: list[str] | None = None) -> int:
             f"--cell {off_tier} is not in the {args.tier!r} tier; a run is one tier"
         )
     cell_ids = [task.id for task in selected]
+    duplicates = sorted({cell for cell in cell_ids if cell_ids.count(cell) > 1})
+    if duplicates:
+        raise SystemExit(f"duplicate cells are not independent attempts: {duplicates}")
+    if args.trials < 1:
+        raise SystemExit("--trials must be >= 1")
+    if args.vm_slots < 1:
+        raise SystemExit("--vm-slots must be >= 1")
+    if not math.isfinite(args.scoring_grace_s) or args.scoring_grace_s < 0.0:
+        raise SystemExit("--scoring-grace-s must be a finite value >= 0")
+    if (
+        not math.isfinite(args.sglang_ready_timeout_s)
+        or args.sglang_ready_timeout_s <= 0.0
+    ):
+        raise SystemExit("--sglang-ready-timeout-s must be a finite value > 0")
 
     if not scripted and args.trials < 3:
         _LOGGER.warning(
@@ -496,75 +1046,62 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("--verify-phaseb checks a checkpoint: pass --model-path")
         verify_phaseb_provenance(args.model_path)
 
+    local_sglang = not scripted and args.base_url is None
+    suite_wall_bound_s = _suite_wall_bound_s(
+        selected,
+        arm=arm,
+        trials=args.trials,
+        vm_slots=args.vm_slots,
+        local_sglang=local_sglang,
+        sglang_ready_timeout_s=args.sglang_ready_timeout_s,
+    )
+    _preflight_slurm_wall_budget(suite_wall_bound_s)
+
     output: Path = args.output
     output.mkdir(parents=True, exist_ok=True)
     os.environ[API_KEY_VAR] = args.api_key
 
-    # Omit unset knobs rather than passing None. `session_kwargs` is a plain
-    # `dict[str, Any]`, and pydantic's `exclude_none` does not recurse into one, so
-    # a None inside it reaches `tomli_w.dumps` when verifiers saves the run's
-    # config.toml and kills the run before the first episode with
-    # "Object of type 'NoneType' is not TOML serializable". `kvm_desktop_pool`
-    # treats absent and None identically, so this loses nothing.
-    session_kwargs: dict[str, Any] = {
-        "image": str(args.qcow),
-        "root_dir": str(output / "vm"),
-        "accelerator": "kvm",
-        "max_rollouts_per_session": args.vm_rollouts_per_session,
-        "max_sessions": args.vm_slots,
-    }
-    for key, value in (
-        ("qemu_binary", args.qemu),
-        ("qemu_img_binary", args.qemu_img),
-        ("smp", args.vm_smp),
-        ("memory", args.vm_mem),
-    ):
-        if value is not None:
-            session_kwargs[key] = str(value) if isinstance(value, Path) else value
-    pool = {
-        "key": f"signoflife-{args.arm}",
-        "max_node_slots": args.vm_slots,
-        "slot_dir": str(output / "vm_slots"),
-        "scoring_grace_s": args.scoring_grace_s,
-        "pool_target": "evals.vm:kvm_desktop_pool",
-        "session_kwargs": session_kwargs,
-    }
-
     rows: list[dict[str, Any]] = []
-    infrastructure_errors: list[dict[str, Any]] = []
 
-    def _run_trials(base_url: str) -> None:
-        for trial in range(1, args.trials + 1):
-            config = _eval_config(
-                arm=args.arm,
-                tier=args.tier,
-                task_ids=cell_ids,
-                artifacts=output / f"trial_{trial:02d}",
-                traces_dir=output / f"trial_{trial:02d}" / "traces",
-                pool=pool,
-                base_url=base_url,
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-            )
-            environment = vf.Environment(config)
-            traces = asyncio.run(run_eval(environment, config))
-            for trace in traces:
-                row = _episode_row(trace, trial)
-                rows.append(row)
-                if row["validity"] != "valid":
-                    infrastructure_errors.append(
-                        {"trial": trial, "cell": row["cell"], "error": row["infra_error"]}
-                    )
-            _LOGGER.info(
-                "trial %d/%d: %s",
-                trial,
-                args.trials,
-                {row["cell"]: row["success"] for row in rows if row["trial"] == trial},
-            )
+    specs = [
+        _AttemptSpec(
+            index=_attempt_identity(
+                cell_ordinal=cell_ordinal,
+                trial=trial,
+                trials=args.trials,
+            ),
+            cell_ordinal=cell_ordinal,
+            trial=trial,
+            task=task,
+            wall_bound_s=_attempt_wall_bound_s(task, arm),
+        )
+        for cell_ordinal, task in enumerate(selected)
+        for trial in range(1, args.trials + 1)
+    ]
+
+    def _run_selected(base_url: str) -> None:
+        runtime = _WorkerRuntime(
+            arm=args.arm,
+            tier=args.tier,
+            output=output,
+            base_url=base_url,
+            api_key=args.api_key,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            qcow=args.qcow,
+            qemu=args.qemu,
+            qemu_img=args.qemu_img,
+            vm_smp=args.vm_smp,
+            vm_mem=args.vm_mem,
+            vm_slots=args.vm_slots,
+            scoring_grace_s=args.scoring_grace_s,
+            pool_target=POOL_TARGET,
+        )
+        rows.extend(_run_attempts(runtime, specs))
 
     if scripted or args.base_url:
-        _run_trials(args.base_url or "http://127.0.0.1:1/v1")
+        _run_selected(args.base_url or "http://127.0.0.1:1/v1")
     else:
         with _sglang(
             python=args.sglang_python or sys.executable,
@@ -575,7 +1112,18 @@ def main(argv: list[str] | None = None) -> int:
             mem_fraction_static=args.sglang_mem_fraction,
             ready_timeout_s=args.sglang_ready_timeout_s,
         ) as base_url:
-            _run_trials(base_url)
+            _run_selected(base_url)
+
+    infrastructure_errors = [
+        {
+            "index": row["index"],
+            "trial": row["trial"],
+            "cell": row["cell"],
+            "error": row["infra_error"],
+        }
+        for row in rows
+        if row["validity"] != "valid"
+    ]
 
     aggregate = _aggregate(rows, cell_ids=cell_ids, scripted=scripted, negative=negative)
     result = {
@@ -593,6 +1141,7 @@ def main(argv: list[str] | None = None) -> int:
         "suite_scored_sha256": suite.scored_sha256,
         "tier": args.tier,
         "selection": {"task_ids": cell_ids, "full_tier_task_count": len(tier_cells)},
+        "suite_wall_bound_s": suite_wall_bound_s,
         "status": "complete" if not infrastructure_errors else "infrastructure_failure",
         "aggregate": aggregate,
         "model": _model_provenance(args.model_path),
@@ -604,7 +1153,13 @@ def main(argv: list[str] | None = None) -> int:
         "vm": {
             "qcow": str(args.qcow),
             "qemu": str(args.qemu) if args.qemu else None,
+            "smp": args.vm_smp,
+            "memory": args.vm_mem,
+            "slots": args.vm_slots,
+            "sessions_per_worker": 1,
             "rollouts_per_session": args.vm_rollouts_per_session,
+            "worker_start_method": _WORKER_START_METHOD,
+            "attempt_workers": args.vm_slots,
             "hostname": socket.gethostname(),
             "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
             "slurm_nodelist": os.environ.get("SLURM_JOB_NODELIST"),
