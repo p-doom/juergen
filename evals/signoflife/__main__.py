@@ -1550,7 +1550,11 @@ def _suite_wall_bound_s(
     for task in tasks:
         for _trial in range(trials):
             slot = min(range(vm_slots), key=lambda index: (slot_bounds[index], index))
-            slot_bounds[slot] += _attempt_wall_bound_s(task, arm)
+            slot_bounds[slot] += (
+                _attempt_wall_bound_s(task, arm)
+                + _SUPERVISOR_REAP_TIMEOUT_S
+                + _SUPERVISOR_KILL_TIMEOUT_S
+            )
     local_server_bound_s = 0.0
     if local_sglang:
         local_server_bound_s = (

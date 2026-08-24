@@ -1188,7 +1188,7 @@ def test_the_attempt_deadline_is_derived_from_the_selected_arm_and_cell() -> Non
         vm_slots=2,
         local_sglang=False,
         sglang_ready_timeout_s=1500.0,
-    ) == 10996.0
+    ) == 11056.0
     assert _suite_wall_bound_s(
         [task],
         arm=arm,
@@ -1196,7 +1196,7 @@ def test_the_attempt_deadline_is_derived_from_the_selected_arm_and_cell() -> Non
         vm_slots=1,
         local_sglang=True,
         sglang_ready_timeout_s=1500.0,
-    ) == 7958.0
+    ) == 7988.0
 
 
 @pytest.mark.parametrize(
