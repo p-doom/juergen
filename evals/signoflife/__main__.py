@@ -43,6 +43,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import ctypes
+import errno
+import fcntl
 import hashlib
 import json
 import logging
@@ -50,6 +53,7 @@ import math
 import multiprocessing
 import os
 import re
+import select
 import shutil
 import signal
 import socket
@@ -75,7 +79,7 @@ from verifiers.v1.configs.eval import EvalConfig  # noqa: E402
 
 from evals.signoflife.cells import ARMS, verify_phaseb_provenance  # noqa: E402
 from evals.signoflife.guest import SETUP_GUEST_REQUESTS  # noqa: E402
-from evals.signoflife.suite import DevelopmentTask, TIERS, load_suite  # noqa: E402
+from evals.signoflife.suite import TIERS, DevelopmentTask, load_suite  # noqa: E402
 from evals.tasks import RESULT_KEY  # noqa: E402
 from signoflife import PLUGIN_ID  # noqa: E402
 
@@ -118,6 +122,16 @@ _OUTPUT_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _SAMPLING_SEED_DOMAIN = b"juergen-signoflife-sampling-seed-v1\0"
 _DETERMINISTIC_ATTENTION_BACKENDS = frozenset({"fa3", "flashinfer", "triton"})
 _SGLANG_VERSION = "0.5.10.post1"
+_SGLANG_PIDFD_OPEN_SYSCALL_X86_64 = 434
+_SGLANG_PIDFD_GETFD_SYSCALL_X86_64 = 438
+_SGLANG_MAX_FDS = 4096
+_SGLANG_MAX_FD_COMPONENT_BYTES = 10
+_SGLANG_MAX_PROC_ENTRIES = 32768
+_SGLANG_MAX_PROC_STAT_BYTES = 4096
+_SGLANG_TERM_TIMEOUT_S = 30.0
+_SGLANG_KILL_TIMEOUT_S = 10.0
+_SGLANG_GROUP_POLL_S = 0.05
+_SGLANG_READY_POLL_S = 2.0
 _SGLANG_INHERITED_ENV = frozenset(
     {
         "CUDA_DEVICE_ORDER",
@@ -673,6 +687,280 @@ def _read_output_marker(output_fd: int) -> bytes:
         os.close(marker_fd)
 
 
+def _linux_syscall(number: int, *arguments: int) -> int:
+    if sys.platform != "linux" or os.uname().machine != "x86_64":
+        raise RuntimeError("SGLang custody requires Linux x86_64 pidfds")
+    syscall = ctypes.CDLL(None, use_errno=True).syscall
+    syscall.restype = ctypes.c_long
+    result = syscall(ctypes.c_long(number), *(ctypes.c_long(arg) for arg in arguments))
+    if result < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    return int(result)
+
+
+def _pidfd_open(pid: int) -> int:
+    pidfd = _linux_syscall(_SGLANG_PIDFD_OPEN_SYSCALL_X86_64, pid, 0)
+    fcntl.fcntl(pidfd, fcntl.F_SETFD, fcntl.FD_CLOEXEC)
+    return pidfd
+
+
+def _pidfd_getfd(pidfd: int, target_fd: int) -> int:
+    duplicated = _linux_syscall(
+        _SGLANG_PIDFD_GETFD_SYSCALL_X86_64, pidfd, target_fd, 0
+    )
+    fcntl.fcntl(duplicated, fcntl.F_SETFD, fcntl.FD_CLOEXEC)
+    return duplicated
+
+
+def _preflight_pidfd_getfd() -> None:
+    read_fd, write_fd = os.pipe2(os.O_CLOEXEC)
+    pidfd = -1
+    duplicated = -1
+    try:
+        pidfd = _pidfd_open(os.getpid())
+        duplicated = _pidfd_getfd(pidfd, read_fd)
+        before = os.fstat(read_fd)
+        after = os.fstat(duplicated)
+        if (before.st_dev, before.st_ino, stat.S_IFMT(before.st_mode)) != (
+            after.st_dev,
+            after.st_ino,
+            stat.S_IFMT(after.st_mode),
+        ):
+            raise RuntimeError("pidfd_getfd preflight duplicated the wrong object")
+    except OSError as error:
+        raise RuntimeError(
+            f"SGLang custody pidfd_getfd preflight failed: {error}"
+        ) from error
+    finally:
+        if duplicated >= 0:
+            os.close(duplicated)
+        if pidfd >= 0:
+            os.close(pidfd)
+        os.close(read_fd)
+        os.close(write_fd)
+
+
+def _bounded_process_fds(pid: int) -> list[int]:
+    descriptor_numbers: list[int] = []
+    try:
+        entries = os.scandir(f"/proc/{pid}/fd")
+    except OSError as error:
+        raise RuntimeError(f"cannot enumerate SGLang leader {pid} descriptors") from error
+    with entries:
+        for count, entry in enumerate(entries, start=1):
+            if count > _SGLANG_MAX_FDS:
+                raise RuntimeError(
+                    f"SGLang leader exceeds {_SGLANG_MAX_FDS} open descriptors"
+                )
+            name = entry.name
+            if (
+                not name.isascii()
+                or not name.isdecimal()
+                or len(name.encode()) > _SGLANG_MAX_FD_COMPONENT_BYTES
+                or name != str(int(name))
+            ):
+                raise RuntimeError(f"noncanonical SGLang descriptor name: {name!r}")
+            descriptor_numbers.append(int(name))
+    return sorted(descriptor_numbers)
+
+
+def _leader_listener_lease(
+    *, pidfd: int, leader_pid: int, port: int
+) -> tuple[socket.socket, dict[str, Any]]:
+    retained: socket.socket | None = None
+    retained_identity: tuple[int, int] | None = None
+    retained_fd_number: int | None = None
+    try:
+        for target_fd in _bounded_process_fds(leader_pid):
+            try:
+                duplicated = _pidfd_getfd(pidfd, target_fd)
+            except OSError as error:
+                if error.errno in {errno.EBADF, errno.ESRCH}:
+                    continue
+                raise RuntimeError(
+                    f"cannot attest SGLang leader descriptor {target_fd}: {error}"
+                ) from error
+            try:
+                candidate = socket.socket(fileno=duplicated)
+            except OSError:
+                os.close(duplicated)
+                continue
+            try:
+                if (
+                    candidate.family != socket.AF_INET
+                    or candidate.type & socket.SOCK_STREAM != socket.SOCK_STREAM
+                    or candidate.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) != 1
+                    or candidate.getsockname() != ("127.0.0.1", port)
+                    or candidate.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT) != 0
+                ):
+                    continue
+                metadata = os.fstat(candidate.fileno())
+                if not stat.S_ISSOCK(metadata.st_mode):
+                    raise RuntimeError("attested SGLang listener is not a socket")
+                identity = (metadata.st_dev, metadata.st_ino)
+                if retained is None:
+                    retained = candidate
+                    retained_identity = identity
+                    retained_fd_number = target_fd
+                    candidate = None
+                elif identity != retained_identity:
+                    raise RuntimeError(
+                        "SGLang leader owns multiple matching loopback listeners"
+                    )
+            finally:
+                if candidate is not None:
+                    candidate.close()
+        if retained is None or retained_identity is None or retained_fd_number is None:
+            raise RuntimeError(
+                "SGLang readiness endpoint is not owned by the launched process-group leader"
+            )
+        return retained, {
+            "leader_fd": retained_fd_number,
+            "socket_device": retained_identity[0],
+            "socket_inode": retained_identity[1],
+            "host": "127.0.0.1",
+            "port": port,
+        }
+    except BaseException:
+        if retained is not None:
+            retained.close()
+        raise
+
+
+def _pidfd_exited(pidfd: int) -> bool:
+    poller = select.poll()
+    poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+    return bool(poller.poll(0))
+
+
+def _process_group_members(pgid: int) -> dict[int, str]:
+    members: dict[int, str] = {}
+    with os.scandir("/proc") as entries:
+        for count, entry in enumerate(entries, start=1):
+            if count > _SGLANG_MAX_PROC_ENTRIES:
+                raise RuntimeError(
+                    f"/proc exceeds {_SGLANG_MAX_PROC_ENTRIES} entries during SGLang teardown"
+                )
+            if not entry.name.isascii() or not entry.name.isdecimal():
+                continue
+            stat_fd = -1
+            try:
+                stat_fd = os.open(
+                    f"/proc/{entry.name}/stat",
+                    os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                )
+                raw = os.read(stat_fd, _SGLANG_MAX_PROC_STAT_BYTES + 1)
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            finally:
+                if stat_fd >= 0:
+                    os.close(stat_fd)
+            if len(raw) > _SGLANG_MAX_PROC_STAT_BYTES:
+                raise RuntimeError("oversized /proc process stat during SGLang teardown")
+            closing = raw.rfind(b") ")
+            fields = raw[closing + 2 :].split() if closing >= 0 else []
+            if len(fields) < 3:
+                raise RuntimeError("malformed /proc process stat during SGLang teardown")
+            try:
+                process_group = int(fields[2])
+            except ValueError as error:
+                raise RuntimeError(
+                    "non-numeric /proc process group during SGLang teardown"
+                ) from error
+            if process_group == pgid:
+                members[int(entry.name)] = fields[0].decode("ascii", errors="strict")
+    return members
+
+
+def _wait_for_reserved_leader_only(
+    *, pgid: int, leader_pid: int, timeout_s: float
+) -> dict[int, str]:
+    deadline = time.monotonic() + timeout_s
+    while True:
+        members = _process_group_members(pgid)
+        if not {
+            pid: state
+            for pid, state in members.items()
+            if pid != leader_pid or state != "Z"
+        }:
+            return members
+        if time.monotonic() >= deadline:
+            return members
+        time.sleep(_SGLANG_GROUP_POLL_S)
+
+
+def _wait_for_empty_process_group(pgid: int, timeout_s: float) -> dict[int, str]:
+    deadline = time.monotonic() + timeout_s
+    while True:
+        members = _process_group_members(pgid)
+        if not members:
+            return members
+        if time.monotonic() >= deadline:
+            return members
+        time.sleep(_SGLANG_GROUP_POLL_S)
+
+
+def _signal_process_group(pgid: int, signal_number: int) -> None:
+    try:
+        os.killpg(pgid, signal_number)
+    except ProcessLookupError:
+        return
+    except PermissionError as error:
+        raise RuntimeError(f"cannot signal SGLang process group {pgid}") from error
+
+
+def _terminate_process_group(process: subprocess.Popen[Any], *, pgid: int) -> None:
+    if pgid != process.pid or pgid == os.getpgrp():
+        raise RuntimeError("refusing to signal an unowned SGLang process group")
+    cleanup_error: RuntimeError | None = None
+    _signal_process_group(pgid, signal.SIGTERM)
+    try:
+        members = _wait_for_reserved_leader_only(
+            pgid=pgid,
+            leader_pid=process.pid,
+            timeout_s=_SGLANG_TERM_TIMEOUT_S,
+        )
+    except RuntimeError as error:
+        members = {pgid: "unknown"}
+        cleanup_error = error
+    if members and members != {process.pid: "Z"}:
+        _signal_process_group(pgid, signal.SIGKILL)
+        try:
+            members = _wait_for_reserved_leader_only(
+                pgid=pgid,
+                leader_pid=process.pid,
+                timeout_s=_SGLANG_KILL_TIMEOUT_S,
+            )
+        except RuntimeError as error:
+            members = {pgid: "unknown"}
+            cleanup_error = cleanup_error or error
+    if members and members != {process.pid: "Z"}:
+        cleanup_error = cleanup_error or RuntimeError(
+            f"SGLang process group {pgid} survived SIGKILL: {members}"
+        )
+    try:
+        process.wait(timeout=_SGLANG_KILL_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        _signal_process_group(pgid, signal.SIGKILL)
+        process.kill()
+        process.wait(timeout=_SGLANG_KILL_TIMEOUT_S)
+        cleanup_error = cleanup_error or RuntimeError(
+            f"SGLang leader {process.pid} did not become reapable"
+        )
+    try:
+        remaining = _wait_for_empty_process_group(pgid, _SGLANG_KILL_TIMEOUT_S)
+    except RuntimeError as error:
+        remaining = {pgid: "unknown"}
+        cleanup_error = cleanup_error or error
+    if remaining:
+        cleanup_error = cleanup_error or RuntimeError(
+            f"SGLang process group {pgid} remains after leader reap: {remaining}"
+        )
+    if cleanup_error is not None:
+        raise cleanup_error
+
+
 @contextlib.contextmanager
 def _sglang(
     *,
@@ -690,6 +978,7 @@ def _sglang(
     `verifiers`, sglang needs a 14 GB CUDA stack, and the two do not have to be the
     same venv.
     """
+    _preflight_pidfd_getfd()
     if port == 0:
         # sglang derives grpc_port = port + 10000 and rejects > 65535, and its own
         # warmup probes the *requested* port, so `--port 0` cannot be handed
@@ -731,39 +1020,61 @@ def _sglang(
             env=environment,
             stdout=handle,
             stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
     except BaseException:
         handle.close()
         raise
+    pidfd = -1
+    listener: socket.socket | None = None
+    pgid = process.pid
     try:
+        try:
+            observed_pgid = os.getpgid(process.pid)
+            if observed_pgid != process.pid:
+                raise RuntimeError(
+                    "SGLang child is not the leader of its private process group"
+                )
+            pidfd = _pidfd_open(process.pid)
+        except OSError as error:
+            raise RuntimeError("cannot establish SGLang process custody") from error
         deadline = time.monotonic() + ready_timeout_s
         probe = f"http://127.0.0.1:{port}/health_generate"
         while time.monotonic() < deadline:
-            if process.poll() is not None:
+            if _pidfd_exited(pidfd):
                 tail = "\n".join(log_path.read_text().splitlines()[-40:])
-                raise RuntimeError(
-                    f"sglang exited before ready (rc={process.returncode}):\n{tail}"
-                )
+                raise RuntimeError(f"sglang exited before ready:\n{tail}")
             try:
                 with urllib.request.urlopen(probe, timeout=5) as response:
                     if response.status == 200:
                         break
             except Exception:  # noqa: BLE001 - not up yet is the normal case
                 pass
-            time.sleep(2.0)
+            time.sleep(_SGLANG_READY_POLL_S)
         else:
             raise TimeoutError(f"sglang not ready after {ready_timeout_s}s")
+        listener, listener_record = _leader_listener_lease(
+            pidfd=pidfd,
+            leader_pid=process.pid,
+            port=port,
+        )
+        launch["process"] = {
+            "pid": process.pid,
+            "pgid": pgid,
+            "listener": listener_record,
+        }
         url = f"http://127.0.0.1:{port}/v1"
         _LOGGER.info("sglang ready at %s", url)
         yield _LocalServer(base_url=url, launch=launch)
     finally:
-        process.terminate()
         try:
-            process.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=10)
-        handle.close()
+            _terminate_process_group(process, pgid=pgid)
+        finally:
+            if listener is not None:
+                listener.close()
+            if pidfd >= 0:
+                os.close(pidfd)
+            handle.close()
 
 
 def _sglang_command(
