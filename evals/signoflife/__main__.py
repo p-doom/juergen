@@ -172,6 +172,18 @@ class _LocalServer:
     launch: dict[str, Any]
 
 
+class _SglangTermination(BaseException):
+    pass
+
+
+@dataclass
+class _SglangSignalGuard:
+    previous: dict[int, Any]
+    signal_number: int | None = None
+    armed: bool = False
+    teardown_started: bool = False
+
+
 @dataclass
 class _RunOutput:
     final: Path
@@ -966,6 +978,37 @@ def _terminate_process_group(process: subprocess.Popen[Any], *, pgid: int) -> No
         raise cleanup_error
 
 
+def _install_sglang_signal_guard() -> _SglangSignalGuard:
+    guard = _SglangSignalGuard(previous={})
+
+    def terminate(signum: int, _frame: Any) -> None:
+        guard.signal_number = signum
+        if not guard.armed or guard.teardown_started:
+            return
+        guard.teardown_started = True
+        raise _SglangTermination(f"received signal {signum}")
+
+    try:
+        for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            guard.previous[signum] = signal.signal(signum, terminate)
+    except BaseException:
+        _restore_sglang_signal_handlers(guard)
+        raise
+    return guard
+
+
+def _arm_sglang_signal_guard(guard: _SglangSignalGuard) -> None:
+    guard.armed = True
+    if guard.signal_number is not None and not guard.teardown_started:
+        guard.teardown_started = True
+        raise _SglangTermination(f"received signal {guard.signal_number}")
+
+
+def _restore_sglang_signal_handlers(guard: _SglangSignalGuard) -> None:
+    for signum, handler in guard.previous.items():
+        signal.signal(signum, handler)
+
+
 @contextlib.contextmanager
 def _sglang(
     *,
@@ -1009,8 +1052,13 @@ def _sglang(
         ],
     }
     _LOGGER.info("sglang launch command sha256: %s", launch["argv_sha256"])
-    handle = log_path.open("w", encoding="utf-8")
+    guard = _install_sglang_signal_guard()
+    handle: Any | None = None
+    process: subprocess.Popen[Any] | None = None
+    pidfd = -1
+    listener: socket.socket | None = None
     try:
+        handle = log_path.open("w", encoding="utf-8")
         process = subprocess.Popen(
             command,
             env=environment,
@@ -1018,18 +1066,14 @@ def _sglang(
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-    except BaseException:
-        handle.close()
-        raise
-    pidfd = -1
-    listener: socket.socket | None = None
-    pgid = process.pid
-    try:
+        _arm_sglang_signal_guard(guard)
+        pgid = process.pid
         try:
+            observed_sid = os.getsid(process.pid)
             observed_pgid = os.getpgid(process.pid)
-            if observed_pgid != process.pid:
+            if (observed_sid, observed_pgid) != (process.pid, process.pid):
                 raise RuntimeError(
-                    "SGLang child is not the leader of its private process group"
+                    "SGLang child is not the leader of its private session"
                 )
             pidfd = _pidfd_open(process.pid)
         except OSError as error:
@@ -1056,6 +1100,7 @@ def _sglang(
         )
         launch["process"] = {
             "pid": process.pid,
+            "sid": observed_sid,
             "pgid": pgid,
             "listener": listener_record,
         }
@@ -1063,14 +1108,18 @@ def _sglang(
         _LOGGER.info("sglang ready at %s", url)
         yield _LocalServer(base_url=url, launch=launch)
     finally:
+        guard.teardown_started = True
         try:
-            _terminate_process_group(process, pgid=pgid)
+            if process is not None:
+                _terminate_process_group(process, pgid=process.pid)
         finally:
             if listener is not None:
                 listener.close()
             if pidfd >= 0:
                 os.close(pidfd)
-            handle.close()
+            if handle is not None:
+                handle.close()
+            _restore_sglang_signal_handlers(guard)
 
 
 def _sglang_command(
