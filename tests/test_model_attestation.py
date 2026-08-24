@@ -10,6 +10,11 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _external_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("SIGN_OF_LIFE_API_KEY", "test-only-secret")
+
+
 def _canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
@@ -241,15 +246,28 @@ def test_exact_external_attestation_is_bound_to_the_artifact(tmp_path, monkeypat
     seen = []
 
     def urlopen(request, timeout):
-        seen.append((request.full_url, timeout))
+        seen.append(
+            (
+                request.full_url,
+                timeout,
+                request.get_header("Authorization"),
+            )
+        )
         return _AttestationResponse(request, artifact)
 
     monkeypatch.setattr(dispatcher.urllib.request, "urlopen", urlopen)
     record = dispatcher._attest_external_server("http://127.0.0.1:9000/v1", artifact)
 
-    assert seen == [("http://127.0.0.1:9000/model-attestation", 10.0)]
+    assert seen == [
+        (
+            "http://127.0.0.1:9000/model-attestation",
+            10.0,
+            "Bearer test-only-secret",
+        )
+    ]
     assert record["source"] == "external_endpoint"
     assert record["artifact_sha256"] == artifact.artifact_sha256
+    assert "test-only-secret" not in json.dumps(record)
 
 
 @pytest.mark.parametrize(

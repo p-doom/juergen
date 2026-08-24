@@ -51,11 +51,13 @@ import multiprocessing
 import os
 import re
 import secrets
+import shutil
 import signal
 import socket
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -85,6 +87,8 @@ _SERVED_MODEL_PREFIX = "sign-of-life-sha256-"
 _ATTESTATION_PATH = "/model-attestation"
 _ATTESTATION_TIMEOUT_S = 10.0
 _ATTESTATION_MAX_BYTES = 65536
+_SEED_PROBE_SEEDS = (19088743, 230973796, 427587855, 1985229328)
+_SEED_PROBE_REQUESTS = len(_SEED_PROBE_SEEDS) + 1
 
 API_KEY_VAR = "SIGN_OF_LIFE_API_KEY"
 """`resolve_api_key` reads the key from an env var named by the client config
@@ -102,6 +106,42 @@ _SUPERVISOR_REAP_TIMEOUT_S = 20.0
 _ATTEMPT_LAUNCH_MARGIN_S = 20.0
 _SCHEDULER_POLL_S = 0.1
 _WORKER_START_METHOD = "spawn"
+_SAMPLING_SEED_DOMAIN = b"juergen-signoflife-sampling-seed-v1\0"
+_DETERMINISTIC_ATTENTION_BACKENDS = frozenset({"fa3", "flashinfer", "triton"})
+_SGLANG_VERSION = "0.5.10.post1"
+_SGLANG_INHERITED_ENV = frozenset(
+    {
+        "CUDA_DEVICE_ORDER",
+        "CUDA_VISIBLE_DEVICES",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LD_LIBRARY_PATH",
+        "PATH",
+        "TMPDIR",
+    }
+)
+_SGLANG_SEMANTIC_ENV_PREFIXES = (
+    "CUDA_",
+    "FLASHINFER_",
+    "HF_",
+    "NCCL_",
+    "NVIDIA_",
+    "PYTORCH_",
+    "SGLANG_",
+    "TORCH_",
+    "TRANSFORMERS_",
+    "TRITON_",
+    "VLLM_",
+)
+_SGLANG_SEMANTIC_ENV_NAMES = frozenset({"PYTHONHOME", "PYTHONPATH"})
+
+
+@dataclass(frozen=True)
+class _LocalServer:
+    base_url: str
+    launch: dict[str, Any]
 
 
 @contextlib.contextmanager
@@ -109,13 +149,12 @@ def _sglang(
     *,
     python: str,
     model_path: Path,
-    api_key: str,
     log_path: Path,
     port: int,
     mem_fraction_static: float,
     ready_timeout_s: float,
     served_model: str,
-) -> Iterator[str]:
+) -> Iterator[_LocalServer]:
     """Serve `model_path` and yield its OpenAI base URL.
 
     `python` is an explicit interpreter, not `sys.executable`: the harness needs
@@ -136,31 +175,31 @@ def _sglang(
         else:
             raise RuntimeError("no sglang-safe free port (port + 10000 <= 65535)")
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        python,
-        "-m",
-        "sglang.launch_server",
-        "--model-path",
-        str(model_path),
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
-        "--api-key",
-        api_key,
-        "--served-model-name",
-        served_model,
-        "--mem-fraction-static",
-        str(mem_fraction_static),
-        "--chunked-prefill-size",
-        "2048",
-    ]
-    _LOGGER.info("sglang: %s", " ".join(command))
+    command = _sglang_command(
+        python=python,
+        model_path=model_path,
+        port=port,
+        mem_fraction_static=mem_fraction_static,
+        served_model=served_model,
+    )
+    environment = _sglang_environment()
+    launch = {
+        "argv": command,
+        "argv_sha256": hashlib.sha256(_canonical_json(command)).hexdigest(),
+        "environment": [
+            {
+                "key": key,
+                "value_sha256": hashlib.sha256(value.encode()).hexdigest(),
+            }
+            for key, value in sorted(environment.items())
+        ],
+    }
+    _LOGGER.info("sglang launch command sha256: %s", launch["argv_sha256"])
     handle = log_path.open("w", encoding="utf-8")
     try:
         process = subprocess.Popen(
             command,
-            env={**os.environ, "SGLANG_DISABLE_CUDNN_CHECK": "1"},
+            env=environment,
             stdout=handle,
             stderr=subprocess.STDOUT,
         )
@@ -177,11 +216,8 @@ def _sglang(
                     f"sglang exited before ready (rc={process.returncode}):\n{tail}"
                 )
             try:
-                request = urllib.request.Request(
-                    probe, headers={"Authorization": f"Bearer {api_key}"}
-                )
-                with urllib.request.urlopen(request, timeout=5) as response:
-                    if response.status < 500:
+                with urllib.request.urlopen(probe, timeout=5) as response:
+                    if response.status == 200:
                         break
             except Exception:  # noqa: BLE001 - not up yet is the normal case
                 pass
@@ -190,7 +226,7 @@ def _sglang(
             raise TimeoutError(f"sglang not ready after {ready_timeout_s}s")
         url = f"http://127.0.0.1:{port}/v1"
         _LOGGER.info("sglang ready at %s", url)
-        yield url
+        yield _LocalServer(base_url=url, launch=launch)
     finally:
         process.terminate()
         try:
@@ -199,6 +235,58 @@ def _sglang(
             process.kill()
             process.wait(timeout=10)
         handle.close()
+
+
+def _sglang_command(
+    *,
+    python: str,
+    model_path: Path,
+    port: int,
+    mem_fraction_static: float,
+    served_model: str,
+) -> list[str]:
+    return [
+        python,
+        "-m",
+        "sglang.launch_server",
+        "--model-path",
+        str(model_path),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--served-model-name",
+        served_model,
+        "--enable-deterministic-inference",
+        "--mem-fraction-static",
+        str(mem_fraction_static),
+        "--chunked-prefill-size",
+        "2048",
+    ]
+
+
+def _sglang_environment() -> dict[str, str]:
+    rejected = sorted(
+        key
+        for key, value in os.environ.items()
+        if value
+        and key not in _SGLANG_INHERITED_ENV
+        and key != "SGLANG_DISABLE_CUDNN_CHECK"
+        and (
+            key in _SGLANG_SEMANTIC_ENV_NAMES
+            or key.startswith(_SGLANG_SEMANTIC_ENV_PREFIXES)
+        )
+    )
+    if rejected:
+        raise RuntimeError(
+            "refusing unbound semantic variables in local SGLang environment: "
+            + ", ".join(rejected)
+        )
+    environment = {
+        key: os.environ[key] for key in sorted(_SGLANG_INHERITED_ENV) if key in os.environ
+    }
+    environment["SGLANG_DISABLE_CUDNN_CHECK"] = "1"
+    return environment
 
 
 def _sha256_file(path: Path) -> str:
@@ -416,9 +504,15 @@ def _attest_external_server(
     """Require the external server to echo the exact registered artifact identity."""
     endpoint = _attestation_url(base_url)
     nonce = secrets.token_hex(32)
+    api_key = os.environ.get(API_KEY_VAR)
+    if not api_key:
+        raise RuntimeError(f"external model server requires {API_KEY_VAR}")
     request = urllib.request.Request(
         endpoint,
-        headers={"X-Attestation-Nonce": nonce},
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "X-Attestation-Nonce": nonce,
+        },
     )
     try:
         with urllib.request.urlopen(request, timeout=_ATTESTATION_TIMEOUT_S) as response:
@@ -455,6 +549,139 @@ def _attest_external_server(
         "artifact_sha256": artifact.artifact_sha256,
         "config_sha256": artifact.config_sha256,
         "served_model": artifact.served_model,
+    }
+
+
+def _server_json(
+    request: str | urllib.request.Request, *, timeout_s: float
+) -> dict[str, Any]:
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            if response.status != 200:
+                raise ValueError(f"HTTP status {response.status}")
+            raw = response.read(_ATTESTATION_MAX_BYTES + 1)
+        if len(raw) > _ATTESTATION_MAX_BYTES:
+            raise ValueError("server response exceeds 65536 bytes")
+        value = json.loads(raw)
+    except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"local SGLang attestation request failed: {error}") from error
+    if not isinstance(value, dict):
+        raise RuntimeError("local SGLang attestation response is not a JSON object")
+    return value
+
+
+def _attest_local_server(
+    base_url: str, *, artifact: _ModelArtifact
+) -> dict[str, Any]:
+    root = base_url.removesuffix("/v1")
+    models = _server_json(f"{base_url}/models", timeout_s=_ATTESTATION_TIMEOUT_S)
+    data = models.get("data")
+    model_ids = (
+        [row.get("id") for row in data if isinstance(row, dict)]
+        if isinstance(data, list)
+        else []
+    )
+    if model_ids != [artifact.served_model]:
+        raise RuntimeError(
+            f"local SGLang model identity mismatch: expected {[artifact.served_model]!r}, "
+            f"observed {model_ids!r}"
+        )
+    info = _server_json(f"{root}/server_info", timeout_s=_ATTESTATION_TIMEOUT_S)
+    attested = {
+        "version": info.get("version"),
+        "enable_deterministic_inference": info.get("enable_deterministic_inference"),
+        "sampling_backend": info.get("sampling_backend"),
+        "attention_backend": info.get("attention_backend"),
+    }
+    if (
+        attested["version"] != _SGLANG_VERSION
+        or attested["enable_deterministic_inference"] is not True
+        or attested["sampling_backend"] != "pytorch"
+        or attested["attention_backend"] not in _DETERMINISTIC_ATTENTION_BACKENDS
+    ):
+        raise RuntimeError(f"local SGLang deterministic server mismatch: {attested}")
+    return {
+        "source": "local_verified_launch",
+        "artifact_sha256": artifact.artifact_sha256,
+        "config_sha256": artifact.config_sha256,
+        "served_model": artifact.served_model,
+        "server": attested,
+    }
+
+
+def _seed_probe_completion(
+    base_url: str, *, served_model: str, seed: int, timeout_s: float
+) -> tuple[str, str | None]:
+    payload = {
+        "model": served_model,
+        "messages": [
+            {
+                "role": "user",
+                "content": "Produce exactly 16 random lowercase ASCII letters.",
+            }
+        ],
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "max_tokens": 32,
+        "seed": seed,
+    }
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=_canonical_json(payload),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    response = _server_json(request, timeout_s=timeout_s)
+    try:
+        choice = response["choices"][0]
+        content = choice["message"]["content"]
+        finish_reason = choice.get("finish_reason")
+    except (KeyError, IndexError, TypeError) as error:
+        raise RuntimeError(f"invalid SGLang seed-probe response: {response}") from error
+    if not isinstance(content, str):
+        raise RuntimeError("invalid SGLang seed-probe content")
+    return content, finish_reason
+
+
+def _probe_seeded_sampling(
+    base_url: str, *, served_model: str, timeout_s: float
+) -> dict[str, Any]:
+    first_seed = _SEED_PROBE_SEEDS[0]
+    repeated = [
+        _seed_probe_completion(
+            base_url,
+            served_model=served_model,
+            seed=first_seed,
+            timeout_s=timeout_s,
+        )
+        for _ in range(2)
+    ]
+    if repeated[0] != repeated[1]:
+        raise RuntimeError("SGLang repeated same-seed probe was not byte-identical")
+    controls = [
+        _seed_probe_completion(
+            base_url,
+            served_model=served_model,
+            seed=seed,
+            timeout_s=timeout_s,
+        )
+        for seed in _SEED_PROBE_SEEDS[1:]
+    ]
+    if len(set(controls)) == 1:
+        raise RuntimeError("SGLang different-seed controls were all identical")
+    return {
+        "schema_version": 1,
+        "scope": "repeatability_and_variation_preflight",
+        "individual_seed_consumption_proven": False,
+        "bitwise_cross_hardware_determinism": False,
+        "request_count": _SEED_PROBE_REQUESTS,
+        "seeds": list(_SEED_PROBE_SEEDS),
+        "same_seed_output_sha256": hashlib.sha256(
+            _canonical_json(repeated[0])
+        ).hexdigest(),
+        "different_seed_output_sha256": [
+            hashlib.sha256(_canonical_json(output)).hexdigest() for output in controls
+        ],
     }
 
 
@@ -509,7 +736,10 @@ def _suite_wall_bound_s(
             slot = min(range(vm_slots), key=lambda index: (slot_bounds[index], index))
             slot_bounds[slot] += _attempt_wall_bound_s(task, arm)
     return max(slot_bounds, default=0.0) + (
-        sglang_ready_timeout_s if local_sglang else 0.0
+        sglang_ready_timeout_s
+        + _SEED_PROBE_REQUESTS * arm.model_request_timeout_s
+        if local_sglang
+        else 0.0
     )
 
 
@@ -607,13 +837,21 @@ def _eval_config(
     top_p: float | None,
     max_tokens: int,
     served_model: str,
+    seed: int | None,
 ) -> EvalConfig:
+    sampling = {
+        "temperature": temperature,
+        "top_p": top_p,
+        "max_tokens": max_tokens,
+    }
+    if seed is not None:
+        sampling["seed"] = seed
     return EvalConfig(
         taskset={"id": PLUGIN_ID, "tier": tier, "task_ids": task_ids},
         harness=_harness_payload(arm, artifacts=artifacts, pool=pool),
         model=served_model,
         client={"base_url": base_url, "api_key_var": API_KEY_VAR},
-        sampling={"temperature": temperature, "top_p": top_p, "max_tokens": max_tokens},
+        sampling=sampling,
         num_rollouts=1,
         # One episode per supervised worker. Parallelism belongs to the dispatcher,
         # where every process owns the one desktop its deadline may reap.
@@ -745,6 +983,7 @@ class _AttemptSpec:
     trial: int
     task: DevelopmentTask
     wall_bound_s: float
+    sampling_seed: int | None = None
 
 
 @dataclass(frozen=True)
@@ -753,7 +992,6 @@ class _WorkerRuntime:
     tier: str
     output: Path
     base_url: str
-    api_key: str
     temperature: float | None
     top_p: float | None
     max_tokens: int
@@ -785,6 +1023,23 @@ def _attempt_identity(*, cell_ordinal: int, trial: int, trials: int) -> int:
     return cell_ordinal * trials + trial - 1
 
 
+def _sampling_seed(*, suite_manifest_sha256: str, cell_id: str, trial: int) -> int:
+    if re.fullmatch(r"[0-9a-f]{64}", suite_manifest_sha256) is None:
+        raise ValueError("suite manifest digest must be 64 lowercase hexadecimal characters")
+    if not cell_id or trial < 1:
+        raise ValueError(f"invalid sampling seed identity: cell={cell_id!r}, trial={trial}")
+    material = (
+        _SAMPLING_SEED_DOMAIN
+        + suite_manifest_sha256.encode()
+        + b"\0"
+        + cell_id.encode()
+        + b"\0"
+        + str(trial).encode()
+    )
+    seed = int.from_bytes(hashlib.sha256(material).digest()[:4], "big") & 0x7FFFFFFF
+    return seed or 1
+
+
 def _task_slug(task_id: str) -> str:
     return re.sub(r"[^a-z0-9._-]+", "-", task_id.lower()).strip("-")
 
@@ -811,6 +1066,7 @@ def _attempt_row_identity(
         "cell": spec.task.id,
         "kind": spec.task.kind,
         "attempt_wall_bound_s": spec.wall_bound_s,
+        "sampling_seed": spec.sampling_seed,
         "artifact_subdir": str(_attempt_root(runtime, spec).relative_to(runtime.output)),
     }
 
@@ -843,6 +1099,7 @@ def _infra_invalid_attempt_row(
             "temperature": runtime.temperature,
             "top_p": runtime.top_p,
             "max_tokens": runtime.max_tokens,
+            "seed": spec.sampling_seed,
         },
         "host": socket.gethostname(),
         "prompt_sha256": None,
@@ -902,7 +1159,6 @@ def _attempt_process_main(runtime: _WorkerRuntime, spec: _AttemptSpec) -> None:
         ],
         force=True,
     )
-    os.environ[API_KEY_VAR] = runtime.api_key
     row: dict[str, Any]
     try:
         config = _eval_config(
@@ -917,6 +1173,7 @@ def _attempt_process_main(runtime: _WorkerRuntime, spec: _AttemptSpec) -> None:
             top_p=runtime.top_p,
             max_tokens=runtime.max_tokens,
             served_model=runtime.served_model,
+            seed=spec.sampling_seed,
         )
         environment = vf.Environment(config)
         traces = asyncio.run(run_eval(environment, config))
@@ -1178,7 +1435,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--sglang-port", type=int, default=0)
     parser.add_argument("--sglang-mem-fraction", type=float, default=0.65)
     parser.add_argument("--sglang-ready-timeout-s", type=float, default=1500.0)
-    parser.add_argument("--api-key", default="sign-of-life")
     parser.add_argument(
         "--temperature", type=float, default=None, help="override the arm's own value"
     )
@@ -1279,6 +1535,13 @@ def main(argv: list[str] | None = None) -> int:
     model_record: dict[str, Any] | None = None
     served_model = "scripted-no-model"
     if not scripted:
+        if args.base_url is None:
+            os.environ[API_KEY_VAR] = "local-loopback-no-auth"
+        elif not os.environ.get(API_KEY_VAR):
+            raise SystemExit(
+                f"external model server credentials must be supplied only through "
+                f"the {API_KEY_VAR} environment variable"
+            )
         artifact = _verify_model_artifact(args.model_path)
         served_model = artifact.served_model
         if args.arm == "phaseb_compact":
@@ -1301,8 +1564,6 @@ def main(argv: list[str] | None = None) -> int:
     _preflight_slurm_wall_budget(suite_wall_bound_s)
 
     output: Path = args.output
-    output.mkdir(parents=True, exist_ok=True)
-    os.environ[API_KEY_VAR] = args.api_key
 
     rows: list[dict[str, Any]] = []
 
@@ -1317,6 +1578,15 @@ def main(argv: list[str] | None = None) -> int:
             trial=trial,
             task=task,
             wall_bound_s=_attempt_wall_bound_s(task, arm),
+            sampling_seed=(
+                None
+                if scripted
+                else _sampling_seed(
+                    suite_manifest_sha256=suite.manifest_sha256,
+                    cell_id=task.id,
+                    trial=trial,
+                )
+            ),
         )
         for cell_ordinal, task in enumerate(selected)
         for trial in range(1, args.trials + 1)
@@ -1328,7 +1598,6 @@ def main(argv: list[str] | None = None) -> int:
             tier=args.tier,
             output=output,
             base_url=base_url,
-            api_key=args.api_key,
             temperature=temperature,
             top_p=top_p,
             max_tokens=max_tokens,
@@ -1346,30 +1615,42 @@ def main(argv: list[str] | None = None) -> int:
         rows.extend(_run_attempts(runtime, specs))
 
     if scripted or args.base_url:
+        output.mkdir(parents=True, exist_ok=True)
         _run_selected(args.base_url or "http://127.0.0.1:1/v1")
     else:
         assert artifact is not None
-        with _sglang(
-            python=args.sglang_python or sys.executable,
-            model_path=args.model_path,
-            api_key=args.api_key,
-            log_path=output / "sglang.log",
-            port=args.sglang_port,
-            mem_fraction_static=args.sglang_mem_fraction,
-            ready_timeout_s=args.sglang_ready_timeout_s,
-            served_model=served_model,
-        ) as base_url:
-            reverified = _verify_model_artifact(args.model_path)
-            if reverified != artifact:
-                raise RuntimeError("model artifact changed while sglang was loading it")
-            attestation = {
-                "source": "local_verified_launch",
-                "artifact_sha256": artifact.artifact_sha256,
-                "config_sha256": artifact.config_sha256,
-                "served_model": artifact.served_model,
-            }
-            model_record = artifact.record(attestation=attestation)
-            _run_selected(base_url)
+        if args.sglang_python is None:
+            raise SystemExit("local causal evaluation requires explicit --sglang-python")
+        with tempfile.TemporaryDirectory(prefix="juergen-sglang-") as temporary:
+            log_path = Path(temporary) / "sglang.log"
+            try:
+                with _sglang(
+                    python=args.sglang_python,
+                    model_path=args.model_path,
+                    log_path=log_path,
+                    port=args.sglang_port,
+                    mem_fraction_static=args.sglang_mem_fraction,
+                    ready_timeout_s=args.sglang_ready_timeout_s,
+                    served_model=served_model,
+                ) as server:
+                    reverified = _verify_model_artifact(args.model_path)
+                    if reverified != artifact:
+                        raise RuntimeError("model artifact changed while sglang was loading it")
+                    attestation = _attest_local_server(
+                        server.base_url, artifact=artifact
+                    )
+                    attestation["launch"] = server.launch
+                    attestation["seeded_sampling_probe"] = _probe_seeded_sampling(
+                        server.base_url,
+                        served_model=artifact.served_model,
+                        timeout_s=arm.model_request_timeout_s,
+                    )
+                    model_record = artifact.record(attestation=attestation)
+                    output.mkdir(parents=True, exist_ok=True)
+                    _run_selected(server.base_url)
+            finally:
+                if output.is_dir() and log_path.is_file():
+                    shutil.copy2(log_path, output / "sglang.log")
 
     infrastructure_errors = [
         {
@@ -1388,6 +1669,13 @@ def main(argv: list[str] | None = None) -> int:
         "arm": args.arm,
         "arm_id": arm.id,
         "arm_kind": "scripted_negative" if negative else "scripted_oracle" if scripted else "model",
+        "claim_scope": (
+            "control_calibration"
+            if scripted
+            else "external_diagnostic_non_causal"
+            if args.base_url
+            else "local_causal_seeded"
+        ),
         "codec": arm.codec,
         "history_policy": arm.history.name,
         "trials": args.trials,
@@ -1406,6 +1694,17 @@ def main(argv: list[str] | None = None) -> int:
             "temperature": temperature,
             "top_p": top_p,
             "max_tokens": max_tokens,
+            "seed_contract": (
+                None
+                if scripted
+                else {
+                    "schema_version": 1,
+                    "domain": _SAMPLING_SEED_DOMAIN.decode().rstrip("\0"),
+                    "identity": ["suite_manifest_sha256", "cell", "trial"],
+                    "arm_independent": True,
+                    "bitwise_cross_hardware_determinism": False,
+                }
+            ),
         },
         "vm": {
             "qcow": str(args.qcow),

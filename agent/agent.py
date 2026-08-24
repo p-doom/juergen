@@ -150,6 +150,7 @@ class EffectiveSampling:
     stop: tuple[str, ...]
     temperature_source: str
     wire_body_keys: tuple[str, ...]
+    seed: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -160,6 +161,7 @@ class EffectiveSampling:
             "stop": list(self.stop),
             "temperature_source": self.temperature_source,
             "wire_body_keys": list(self.wire_body_keys),
+            "seed": self.seed,
         }
 
 
@@ -220,6 +222,7 @@ def resolve_sampling(
             "ctx.sampling" if _eval_set(ctx.sampling, "temperature") else "harness_default"
         ),
         wire_body_keys=tuple(sorted(k for k in wire if k != "messages")),
+        seed=wire.get("seed"),
     )
     return wire, effective
 

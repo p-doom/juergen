@@ -50,6 +50,7 @@ def _fake_desktop(monkeypatch):
     import desktop.vm.factory as factory
     import evals.signoflife.__main__ as dispatcher
 
+    monkeypatch.setenv("SIGN_OF_LIFE_API_KEY", "test-only-secret")
     juergen_fake_desktop.FakeDesktopPool.instances.clear()
     monkeypatch.setattr(
         factory, "build_desktop_pool", juergen_fake_desktop.build_desktop_pool
@@ -459,6 +460,12 @@ def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_se
     assert result["model"]["artifact_sha256"] == expected["artifact_sha256"]
     assert result["model"]["served_model"].endswith(expected["artifact_sha256"])
     assert result["episodes"][0]["model"] == result["model"]
+    assert "test-only-secret" not in (output / "result.json").read_text()
+    assert not any(
+        "test-only-secret" in path.read_text(errors="replace")
+        for path in output.rglob("*")
+        if path.is_file() and path.suffix != ".png"
+    )
     assert result["aggregate"]["controls_ok"] is None, "a model arm calibrates nothing"
     assert result["aggregate"]["per_cell"][CELL_IDS[0]]["pass_rate"] is None
 
@@ -479,6 +486,7 @@ def test_the_tier_reaches_the_taskset_and_the_record(tmp_path) -> None:
         top_p=1.0,
         max_tokens=256,
         served_model="scripted-no-model",
+        seed=None,
     )
     assert config.taskset.tier == "candidate"
     assert config.taskset.task_ids == ["panel_offset_button"]
@@ -540,19 +548,24 @@ def test_an_unattended_model_arm_samples_at_its_own_knobs(tmp_path, monkeypatch)
         )
         return json.loads((output / "result.json").read_text())
 
-    assert _dispatch()["sampling"] == {
+    first = _dispatch()["sampling"]
+    assert {key: first[key] for key in ("temperature", "top_p", "max_tokens")} == {
         "temperature": 0.7,
         "top_p": 0.8,
         "max_tokens": 1024,
     }
-    assert _dispatch(
+    assert first["seed_contract"]["arm_independent"] is True
+    overridden = _dispatch(
         "--temperature",
         "0.0",
         "--top-p",
         "0.9",
         "--max-tokens",
         "64",
-    )["sampling"] == {"temperature": 0.0, "top_p": 0.9, "max_tokens": 64}
+    )["sampling"]
+    assert {
+        key: overridden[key] for key in ("temperature", "top_p", "max_tokens")
+    } == {"temperature": 0.0, "top_p": 0.9, "max_tokens": 64}
 
 
 @pytest.mark.parametrize(
@@ -705,7 +718,7 @@ def test_the_attempt_deadline_is_derived_from_the_selected_arm_and_cell() -> Non
         vm_slots=1,
         local_sglang=True,
         sglang_ready_timeout_s=1500.0,
-    ) == 6998.0
+    ) == 7898.0
 
 
 @pytest.mark.parametrize(
@@ -777,7 +790,6 @@ def _scheduler_runtime(tmp_path):
         tier="candidate",
         output=tmp_path,
         base_url="http://127.0.0.1:9/v1",
-        api_key="test",
         temperature=0.7,
         top_p=1.0,
         max_tokens=256,
