@@ -213,6 +213,28 @@ def test_external_attestation_failure_leaves_only_an_uncommitted_run_id(
     assert not (output / "RESULT_COMMITTED.json").exists()
 
 
+def test_missing_local_runtime_prerequisite_does_not_consume_run_id(tmp_path) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    model, _ = _register_model(tmp_path)
+    output = tmp_path / "never-created"
+    with pytest.raises(SystemExit, match="explicit --sglang-python"):
+        dispatcher.main(
+            [
+                "--arm",
+                "ordered",
+                "--output",
+                str(output),
+                "--qcow",
+                str(tmp_path / "desktop.qcow2"),
+                "--model-path",
+                str(model),
+            ]
+        )
+
+    assert not output.exists()
+
+
 class _AttestationResponse:
     def __init__(self, request, artifact, *, change=None):
         nonce = request.get_header("X-attestation-nonce")

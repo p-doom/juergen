@@ -28,7 +28,7 @@ import juergen_fake_desktop
 import pytest
 from test_model_attestation import _register_model
 
-from evals.signoflife.__main__ import _read_committed_result, main
+from evals.signoflife.__main__ import main, read_committed_result
 from evals.signoflife.suite import load_suite
 
 # The scored tier: what an unqualified run of this dispatcher is. `CANDIDATE_IDS`
@@ -107,7 +107,7 @@ def _fresh_process() -> None:
 def _run(output: Path, tmp_path: Path, *extra: str) -> tuple[int, dict]:
     _fresh_process()
     code = main(_argv(output, tmp_path, *extra))
-    return code, _read_committed_result(output)
+    return code, read_committed_result(output)
 
 
 @pytest.mark.slow
@@ -123,6 +123,16 @@ def test_the_dispatcher_runs_the_whole_scored_tier_and_writes_the_readers_shape(
     assert result["schema_version"] == 3
     assert result["arm"] == "native_negative"
     assert result["arm_kind"] == "scripted_negative"
+    assert result["promotion_evidence"] == {
+        "status": "unregistered",
+        "eligible": False,
+        "required_receipt": "labctl_db_bound_exhaustive_result_receipt_v1",
+        "note": (
+            "RESULT_COMMITTED.json proves atomic transport completion only. "
+            "Promotion requires a separately authorized Labctl DB record that "
+            "binds this exhaustive generation inventory."
+        ),
+    }
 
     aggregate = result["aggregate"]
     assert sorted(aggregate["per_cell"]) == sorted(CELL_IDS), "the gate is the whole scored tier"
@@ -454,13 +464,13 @@ def test_attempt_exception_leaves_an_uncommitted_nonreusable_run_id(
 
 
 def test_atomic_run_id_creation_never_reuses_a_competing_run(tmp_path) -> None:
-    from evals.signoflife.__main__ import _stage_output
+    from evals.signoflife.__main__ import _create_uncommitted_output
 
     final = tmp_path / "one-run-id"
-    first = _stage_output(final)
+    first = _create_uncommitted_output(final)
     try:
         with pytest.raises(RuntimeError, match="must not already exist"):
-            _stage_output(final)
+            _create_uncommitted_output(final)
     finally:
         first.cleanup()
 
@@ -469,49 +479,118 @@ def test_atomic_run_id_creation_never_reuses_a_competing_run(tmp_path) -> None:
 
 
 def test_commit_marker_is_linked_last_and_the_strict_reader_accepts_it(tmp_path) -> None:
-    from evals.signoflife.__main__ import _read_committed_result, _stage_output
+    from evals.signoflife.__main__ import _create_uncommitted_output, read_committed_result
 
     final = tmp_path / "complete"
-    publication = _stage_output(final)
-    (publication.staging / "result.json").write_text('{"status":"complete"}\n')
+    publication = _create_uncommitted_output(final)
+    (publication.path / "result.json").write_text('{"status":"complete"}\n')
     publication.publish(forbidden_values=())
 
     assert publication.published is True
     assert publication.durable is True
     assert oct((final / "RESULT_COMMITTED.json").stat().st_mode)[-3:] == "400"
-    assert _read_committed_result(final) == {"status": "complete"}
+    assert (final / ".RESULT_COMMITTED.source").stat().st_ino == (
+        final / "RESULT_COMMITTED.json"
+    ).stat().st_ino
+    assert read_committed_result(final) == {"status": "complete"}
 
 
 def test_strict_reader_rejects_missing_marker_mutation_and_extra_files(tmp_path) -> None:
-    from evals.signoflife.__main__ import _read_committed_result, _stage_output
+    from evals.signoflife.__main__ import _create_uncommitted_output, read_committed_result
 
-    orphan = _stage_output(tmp_path / "orphan")
-    (orphan.staging / "result.json").write_text("{}\n")
+    orphan = _create_uncommitted_output(tmp_path / "orphan")
+    (orphan.path / "result.json").write_text("{}\n")
     orphan.cleanup()
     with pytest.raises(FileNotFoundError):
-        _read_committed_result(orphan.final)
+        read_committed_result(orphan.final)
 
-    mutated = _stage_output(tmp_path / "mutated-after-commit")
-    (mutated.staging / "result.json").write_text("{}\n")
+    mutated = _create_uncommitted_output(tmp_path / "mutated-after-commit")
+    (mutated.path / "result.json").write_text("{}\n")
     mutated.publish(forbidden_values=())
     (mutated.final / "result.json").write_text('{"changed":true}\n')
     with pytest.raises(RuntimeError, match="does not match generation bytes"):
-        _read_committed_result(mutated.final)
+        read_committed_result(mutated.final)
 
-    extra = _stage_output(tmp_path / "extra-after-commit")
-    (extra.staging / "result.json").write_text("{}\n")
+    extra = _create_uncommitted_output(tmp_path / "extra-after-commit")
+    (extra.path / "result.json").write_text("{}\n")
     extra.publish(forbidden_values=())
     (extra.final / "unexpected").write_text("late")
     with pytest.raises(RuntimeError, match="does not match generation bytes"):
-        _read_committed_result(extra.final)
+        read_committed_result(extra.final)
+
+
+def test_output_verifier_bounds_marker_result_count_depth_names_paths_and_bytes(
+    tmp_path, monkeypatch
+) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    cases = [
+        ("result", "_OUTPUT_MAX_RESULT_BYTES", 1, "result.json exceeds"),
+        ("files", "_OUTPUT_MAX_FILES", 1, "file count exceeds"),
+        ("depth", "_OUTPUT_MAX_DEPTH", 0, "directory depth exceeds"),
+        ("path", "_OUTPUT_MAX_PATH_BYTES", 8, "path exceeds"),
+        ("bytes", "_OUTPUT_MAX_TOTAL_BYTES", 1, "output bytes exceed"),
+    ]
+    for name, constant, limit, message in cases:
+        publication = dispatcher._create_uncommitted_output(tmp_path / f"bounded-{name}")
+        (publication.path / "result.json").write_text("{}\n")
+        if name == "files":
+            (publication.path / "payload").write_text("x")
+        if name == "depth":
+            (publication.path / "child").mkdir()
+        if name == "path":
+            (publication.path / "longname").write_text("x")
+        with monkeypatch.context() as patch:
+            patch.setattr(dispatcher, constant, limit)
+            try:
+                with pytest.raises(RuntimeError, match=message):
+                    publication.publish(forbidden_values=())
+            finally:
+                publication.cleanup()
+
+    noncanonical = dispatcher._create_uncommitted_output(tmp_path / "noncanonical")
+    (noncanonical.path / "result.json").write_text("{}\n")
+    (noncanonical.path / "space in name").write_text("x")
+    try:
+        with pytest.raises(RuntimeError, match="noncanonical component"):
+            noncanonical.publish(forbidden_values=())
+    finally:
+        noncanonical.cleanup()
+
+    committed = dispatcher._create_uncommitted_output(tmp_path / "bounded-marker")
+    (committed.path / "result.json").write_text("{}\n")
+    committed.publish(forbidden_values=())
+    monkeypatch.setattr(dispatcher, "_OUTPUT_MAX_MARKER_BYTES", 1)
+    with pytest.raises(RuntimeError, match="commit marker exceeds"):
+        dispatcher.read_committed_result(committed.final)
+
+
+def test_output_verifier_rejects_a_short_fd_read(tmp_path, monkeypatch) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    publication = dispatcher._create_uncommitted_output(tmp_path / "short-read")
+    (publication.path / "result.json").write_text("{}\n")
+    original_read = dispatcher.os.read
+
+    def short_read(descriptor, size):
+        if os.readlink(f"/proc/self/fd/{descriptor}").endswith("/result.json"):
+            return b""
+        return original_read(descriptor, size)
+
+    monkeypatch.setattr(dispatcher.os, "read", short_read)
+    try:
+        with pytest.raises(RuntimeError, match="byte count changed"):
+            publication.publish(forbidden_values=())
+    finally:
+        publication.cleanup()
 
 
 def test_group_write_on_generation_refuses_commit(tmp_path) -> None:
-    from evals.signoflife.__main__ import _stage_output
+    from evals.signoflife.__main__ import _create_uncommitted_output
 
-    publication = _stage_output(tmp_path / "group-writable")
-    (publication.staging / "result.json").write_text("{}\n")
-    publication.staging.chmod(0o770)
+    publication = _create_uncommitted_output(tmp_path / "group-writable")
+    (publication.path / "result.json").write_text("{}\n")
+    publication.path.chmod(0o770)
     try:
         with pytest.raises(RuntimeError, match="private 0700"):
             publication.publish(forbidden_values=())
@@ -524,15 +603,15 @@ def test_group_write_on_generation_refuses_commit(tmp_path) -> None:
 def test_concurrent_content_mutation_refuses_commit(tmp_path, monkeypatch) -> None:
     import evals.signoflife.__main__ as dispatcher
 
-    publication = dispatcher._stage_output(tmp_path / "mutated")
-    (publication.staging / "payload.bin").write_bytes(b"a" * (1024 * 1024 + 1))
-    (publication.staging / "result.json").write_text("{}\n")
+    publication = dispatcher._create_uncommitted_output(tmp_path / "mutated")
+    (publication.path / "payload.bin").write_bytes(b"a" * (1024 * 1024 + 1))
+    (publication.path / "result.json").write_text("{}\n")
     mutate = threading.Event()
     mutated = threading.Event()
 
     def writer() -> None:
         assert mutate.wait(timeout=10)
-        with (publication.staging / "payload.bin").open("r+b") as handle:
+        with (publication.path / "payload.bin").open("r+b") as handle:
             handle.write(b"b")
             handle.flush()
             os.fsync(handle.fileno())
@@ -566,10 +645,10 @@ def test_concurrent_content_mutation_refuses_commit(tmp_path, monkeypatch) -> No
 def test_concurrent_symlink_swap_refuses_commit(tmp_path, monkeypatch) -> None:
     import evals.signoflife.__main__ as dispatcher
 
-    publication = dispatcher._stage_output(tmp_path / "symlink-swap")
-    payload = publication.staging / "payload.bin"
+    publication = dispatcher._create_uncommitted_output(tmp_path / "symlink-swap")
+    payload = publication.path / "payload.bin"
     payload.write_text("original")
-    (publication.staging / "result.json").write_text("{}\n")
+    (publication.path / "result.json").write_text("{}\n")
     replacement = tmp_path / "replacement"
     replacement.write_text("replacement")
     swap = threading.Event()
@@ -609,17 +688,17 @@ def test_concurrent_symlink_swap_refuses_commit(tmp_path, monkeypatch) -> None:
 def test_concurrent_directory_swap_refuses_commit(tmp_path, monkeypatch) -> None:
     import evals.signoflife.__main__ as dispatcher
 
-    publication = dispatcher._stage_output(tmp_path / "directory-swap")
-    child = publication.staging / "child"
+    publication = dispatcher._create_uncommitted_output(tmp_path / "directory-swap")
+    child = publication.path / "child"
     child.mkdir()
     (child / "payload.bin").write_text("original")
-    (publication.staging / "result.json").write_text("{}\n")
+    (publication.path / "result.json").write_text("{}\n")
     swap = threading.Event()
     swapped = threading.Event()
 
     def attacker() -> None:
         assert swap.wait(timeout=10)
-        child.rename(publication.staging / "moved-child")
+        child.rename(publication.path / "moved-child")
         child.mkdir()
         (child / "payload.bin").write_text("replacement")
         swapped.set()
@@ -654,8 +733,8 @@ def test_post_link_directory_fsync_failure_is_visible_quarantine(
 ) -> None:
     import evals.signoflife.__main__ as dispatcher
 
-    publication = dispatcher._stage_output(tmp_path / "fsync-failed")
-    (publication.staging / "result.json").write_text("{}\n")
+    publication = dispatcher._create_uncommitted_output(tmp_path / "fsync-failed")
+    (publication.path / "result.json").write_text("{}\n")
     original_fsync = dispatcher.os.fsync
     directory_fsyncs = 0
 
@@ -677,16 +756,15 @@ def test_post_link_directory_fsync_failure_is_visible_quarantine(
     assert publication.published is True
     assert publication.durable is False
     assert (publication.final / "RESULT_COMMITTED.json").exists()
-    with pytest.raises(RuntimeError, match="unsafe metadata"):
-        dispatcher._read_committed_result(publication.final)
+    assert dispatcher.read_committed_result(publication.final) == {}
 
 
 def test_credential_in_staging_refuses_publication_and_is_cleaned(tmp_path) -> None:
-    from evals.signoflife.__main__ import _stage_output
+    from evals.signoflife.__main__ import _create_uncommitted_output
 
     final = tmp_path / "redacted-run"
-    publication = _stage_output(final)
-    (publication.staging / "trace.log").write_text("prefix evaluation-secret suffix")
+    publication = _create_uncommitted_output(final)
+    (publication.path / "trace.log").write_text("prefix evaluation-secret suffix")
     try:
         with pytest.raises(RuntimeError, match="credential value found"):
             publication.publish(forbidden_values=("evaluation-secret",))
@@ -710,7 +788,7 @@ def test_an_episode_that_publishes_nothing_still_records_why(tmp_path, monkeypat
     output = tmp_path / "run"
     monkeypatch.setattr(dispatcher, "POOL_TARGET", "evals.vm:no_such_constructor")
     assert main(_argv(output, tmp_path, "--cell", CELL_IDS[0])) == 3
-    result = _read_committed_result(output)
+    result = read_committed_result(output)
     assert result["status"] == "infrastructure_failure"
     error = result["episodes"][0]["infra_error"]
     assert error["stage"] == "harness"
@@ -772,7 +850,7 @@ def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_se
             "http://127.0.0.1:9/v1",
         ]
     )
-    result = _read_committed_result(output)
+    result = read_committed_result(output)
     assert code == 3, result["aggregate"]
     assert result["arm_kind"] == "model"
     assert result["status"] == "infrastructure_failure"
@@ -867,7 +945,7 @@ def test_an_unattended_model_arm_samples_at_its_own_knobs(tmp_path, monkeypatch)
                 *extra,
             ]
         )
-        return _read_committed_result(output)
+        return read_committed_result(output)
 
     first = _dispatch()["sampling"]
     assert {key: first[key] for key in ("temperature", "top_p", "max_tokens")} == {
@@ -1006,7 +1084,7 @@ def test_the_candidate_tier_dispatches_too_and_reads_its_negative(tmp_path) -> N
     output = tmp_path / "candidate"
     _fresh_process()
     code = main(_argv(output, tmp_path, "--tier", "candidate"))
-    result = _read_committed_result(output)
+    result = read_committed_result(output)
     assert code == 0, result["infrastructure_errors"]
     assert result["tier"] == "candidate"
     assert sorted(result["aggregate"]["per_cell"]) == sorted(CANDIDATE_IDS)
@@ -1206,7 +1284,7 @@ def test_a_spawn_worker_runs_the_owned_pool_and_publishes_its_attempt(
         )
         == 0
     )
-    result = _read_committed_result(output)
+    result = read_committed_result(output)
     assert result["episodes"][0]["index"] == 0
     assert result["episodes"][0]["validity"] == "valid"
     attempt = output / result["episodes"][0]["artifact_subdir"]

@@ -107,6 +107,15 @@ _ATTEMPT_LAUNCH_MARGIN_S = 20.0
 _SCHEDULER_POLL_S = 0.1
 _WORKER_START_METHOD = "spawn"
 _RESULT_COMMITTED = "RESULT_COMMITTED.json"
+_RESULT_COMMIT_SOURCE = ".RESULT_COMMITTED.source"
+_OUTPUT_MAX_MARKER_BYTES = 64 * 1024
+_OUTPUT_MAX_RESULT_BYTES = 64 * 1024 * 1024
+_OUTPUT_MAX_FILES = 65536
+_OUTPUT_MAX_DEPTH = 32
+_OUTPUT_MAX_COMPONENT_BYTES = 255
+_OUTPUT_MAX_PATH_BYTES = 4096
+_OUTPUT_MAX_TOTAL_BYTES = 64 * 1024 * 1024 * 1024
+_OUTPUT_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _SAMPLING_SEED_DOMAIN = b"juergen-signoflife-sampling-seed-v1\0"
 _DETERMINISTIC_ATTENTION_BACKENDS = frozenset({"fa3", "flashinfer", "triton"})
 _SGLANG_VERSION = "0.5.10.post1"
@@ -146,9 +155,9 @@ class _LocalServer:
 
 
 @dataclass
-class _StagedOutput:
+class _RunOutput:
     final: Path
-    staging: Path
+    path: Path
     parent_fd: int
     staging_fd: int
     published: bool = False
@@ -160,9 +169,8 @@ class _StagedOutput:
         )
         _require_private_output_root(self.staging_fd)
         marker = _commit_marker(inventory)
-        source_name = f".{_RESULT_COMMITTED}.source-{secrets.token_hex(12)}"
         source_fd = os.open(
-            source_name,
+            _RESULT_COMMIT_SOURCE,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
             0o600,
             dir_fd=self.staging_fd,
@@ -175,13 +183,15 @@ class _StagedOutput:
             os.fsync(source_fd)
             source_metadata = os.fstat(source_fd)
             source_path_metadata = os.stat(
-                source_name, dir_fd=self.staging_fd, follow_symlinks=False
+                _RESULT_COMMIT_SOURCE,
+                dir_fd=self.staging_fd,
+                follow_symlinks=False,
             )
             _require_same_object(
                 source_metadata, source_path_metadata, label="output commit-marker source"
             )
             os.link(
-                source_name,
+                _RESULT_COMMIT_SOURCE,
                 _RESULT_COMMITTED,
                 src_dir_fd=self.staging_fd,
                 dst_dir_fd=self.staging_fd,
@@ -197,12 +207,10 @@ class _StagedOutput:
                 linked_source_metadata, marker_metadata, label="output commit marker"
             )
             os.fsync(self.staging_fd)
-            os.unlink(source_name, dir_fd=self.staging_fd)
-            os.fsync(self.staging_fd)
         except BaseException as error:
             if not linked:
                 try:
-                    os.unlink(source_name, dir_fd=self.staging_fd)
+                    os.unlink(_RESULT_COMMIT_SOURCE, dir_fd=self.staging_fd)
                 except FileNotFoundError:
                     pass
             if linked:
@@ -216,10 +224,10 @@ class _StagedOutput:
         marker_metadata = os.stat(
             _RESULT_COMMITTED, dir_fd=self.staging_fd, follow_symlinks=False
         )
-        if marker_metadata.st_nlink != 1:
-            raise RuntimeError(
-                "output commit marker source link was not removed after publication"
-            )
+        source_metadata = os.stat(
+            _RESULT_COMMIT_SOURCE, dir_fd=self.staging_fd, follow_symlinks=False
+        )
+        _require_same_object(source_metadata, marker_metadata, label="output commit link")
         _require_private_output_root(self.staging_fd)
         self.durable = True
         self._close_fds()
@@ -249,7 +257,7 @@ def _validate_output_target(final: Path) -> Path:
     return final
 
 
-def _stage_output(final: Path) -> _StagedOutput:
+def _create_uncommitted_output(final: Path) -> _RunOutput:
     final = _validate_output_target(final)
     parent_before = final.parent.stat()
     parent_fd = os.open(
@@ -267,8 +275,9 @@ def _stage_output(final: Path) -> _StagedOutput:
                 dir_fd=parent_fd,
             )
         except BaseException:
-            os.rmdir(final.name, dir_fd=parent_fd)
-            raise
+                os.rmdir(final.name, dir_fd=parent_fd)
+                raise
+        os.fchmod(staging_fd, 0o700)
         staging_metadata = os.fstat(staging_fd)
         if (
             staging_metadata.st_uid != os.geteuid()
@@ -277,12 +286,12 @@ def _stage_output(final: Path) -> _StagedOutput:
             os.close(staging_fd)
             staging_fd = -1
             os.rmdir(final.name, dir_fd=parent_fd)
-            raise RuntimeError("staging generation is not private to the evaluator identity")
+            raise RuntimeError("uncommitted output is not private to the evaluator identity")
         os.fsync(staging_fd)
         os.fsync(parent_fd)
-        return _StagedOutput(
+        return _RunOutput(
             final=final,
-            staging=final,
+            path=final,
             parent_fd=parent_fd,
             staging_fd=staging_fd,
         )
@@ -317,20 +326,26 @@ def _seal_output_tree(
     needles = tuple(value.encode() for value in forbidden_values if value)
     root_before = _require_private_output_root(root_fd)
     names = os.listdir(root_fd)
-    if _RESULT_COMMITTED in names:
-        raise RuntimeError("output commit marker already exists before publication")
+    reserved = sorted({_RESULT_COMMITTED, _RESULT_COMMIT_SOURCE} & set(names))
+    if reserved:
+        raise RuntimeError(
+            f"output commit entries already exist before publication: {reserved}"
+        )
     entries: list[dict[str, Any]] = []
+    state = {"file_count": 0, "total_bytes": 0}
     _seal_output_directory(
         root_fd,
         relative=".",
+        depth=0,
         needles=needles,
         entries=entries,
         capture=None,
         sync=True,
         excluded_root_names=frozenset(),
+        state=state,
     )
     root_after = os.fstat(root_fd)
-    _require_same_object(root_before, root_after, label="staging generation")
+    _require_same_object(root_before, root_after, label="uncommitted output")
     if "result.json" not in os.listdir(root_fd):
         raise RuntimeError("uncommitted output has no result.json payload")
     return entries
@@ -339,7 +354,7 @@ def _seal_output_tree(
 def _require_private_output_root(root_fd: int) -> os.stat_result:
     metadata = os.fstat(root_fd)
     if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
-        raise RuntimeError("staging generation lost its private 0700 ownership")
+        raise RuntimeError("uncommitted output lost its private 0700 ownership")
     return metadata
 
 
@@ -347,12 +362,16 @@ def _seal_output_directory(
     directory_fd: int,
     *,
     relative: str,
+    depth: int,
     needles: tuple[bytes, ...],
     entries: list[dict[str, Any]],
     capture: dict[str, bytes] | None,
     sync: bool,
     excluded_root_names: frozenset[str],
+    state: dict[str, int],
 ) -> None:
+    if depth > _OUTPUT_MAX_DEPTH:
+        raise RuntimeError(f"output directory depth exceeds {_OUTPUT_MAX_DEPTH}: {relative}")
     directory_before = os.fstat(directory_fd)
     if not stat.S_ISDIR(directory_before.st_mode):
         raise RuntimeError(f"output entry is not a directory: {relative}")
@@ -360,7 +379,16 @@ def _seal_output_directory(
     for name in names_before:
         if relative == "." and name in excluded_root_names:
             continue
+        if (
+            _OUTPUT_COMPONENT.fullmatch(name) is None
+            or len(name.encode()) > _OUTPUT_MAX_COMPONENT_BYTES
+        ):
+            raise RuntimeError(f"output contains a noncanonical component: {name!r}")
         child_relative = name if relative == "." else f"{relative}/{name}"
+        if len(child_relative.encode()) > _OUTPUT_MAX_PATH_BYTES:
+            raise RuntimeError(
+                f"output path exceeds {_OUTPUT_MAX_PATH_BYTES} bytes: {child_relative}"
+            )
         before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
         if stat.S_ISREG(before.st_mode):
             descriptor = os.open(
@@ -375,13 +403,39 @@ def _seal_output_directory(
                     raise RuntimeError(
                         f"output regular file has unsafe owner/link count: {child_relative}"
                     )
-                digest, contents = _scan_and_fsync_file(
+                if (
+                    child_relative == "result.json"
+                    and opened.st_size > _OUTPUT_MAX_RESULT_BYTES
+                ):
+                    raise RuntimeError(
+                        f"result.json exceeds {_OUTPUT_MAX_RESULT_BYTES} bytes"
+                    )
+                state["file_count"] += 1
+                state["total_bytes"] += opened.st_size
+                if state["file_count"] > _OUTPUT_MAX_FILES:
+                    raise RuntimeError(
+                        f"output file count exceeds {_OUTPUT_MAX_FILES}"
+                    )
+                if state["total_bytes"] > _OUTPUT_MAX_TOTAL_BYTES:
+                    raise RuntimeError(
+                        f"output bytes exceed {_OUTPUT_MAX_TOTAL_BYTES}"
+                    )
+                digest, contents, byte_count = _scan_and_fsync_file(
                     descriptor,
                     relative=child_relative,
                     needles=needles,
                     capture=capture is not None and child_relative == "result.json",
+                    capture_limit=(
+                        _OUTPUT_MAX_RESULT_BYTES
+                        if child_relative == "result.json"
+                        else 0
+                    ),
                     sync=sync,
                 )
+                if byte_count != opened.st_size:
+                    raise RuntimeError(
+                        f"output byte count changed while sealing: {child_relative}"
+                    )
                 entries.append(
                     {
                         "path": child_relative,
@@ -414,11 +468,13 @@ def _seal_output_directory(
                 _seal_output_directory(
                     child_fd,
                     relative=child_relative,
+                    depth=depth + 1,
                     needles=needles,
                     entries=entries,
                     capture=capture,
                     sync=sync,
                     excluded_root_names=frozenset(),
+                    state=state,
                 )
                 after = os.fstat(child_fd)
                 _require_same_object(opened, after, label=child_relative)
@@ -442,14 +498,19 @@ def _scan_and_fsync_file(
     relative: str,
     needles: tuple[bytes, ...],
     capture: bool,
+    capture_limit: int,
     sync: bool,
-) -> tuple[str, bytes | None]:
+) -> tuple[str, bytes | None, int]:
     overlap = max((len(needle) for needle in needles), default=1) - 1
     previous = b""
     digest = hashlib.sha256()
     captured: list[bytes] | None = [] if capture else None
+    byte_count = 0
     os.lseek(descriptor, 0, os.SEEK_SET)
     while chunk := os.read(descriptor, 1024 * 1024):
+        byte_count += len(chunk)
+        if capture and byte_count > capture_limit:
+            raise RuntimeError(f"output capture exceeds {capture_limit} bytes: {relative}")
         digest.update(chunk)
         if captured is not None:
             captured.append(chunk)
@@ -459,7 +520,11 @@ def _scan_and_fsync_file(
         previous = contents[-overlap:] if overlap else b""
     if sync:
         os.fsync(descriptor)
-    return digest.hexdigest(), b"".join(captured) if captured is not None else None
+    return (
+        digest.hexdigest(),
+        b"".join(captured) if captured is not None else None,
+        byte_count,
+    )
 
 
 def _commit_marker(entries: list[dict[str, Any]]) -> dict[str, Any]:
@@ -470,6 +535,8 @@ def _commit_marker(entries: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "status": "committed",
+        "authority": "transport_completion_only",
+        "promotion_evidence": False,
         "inventory": {
             "file_count": len(ordered),
             "total_bytes": sum(entry["size"] for entry in ordered),
@@ -491,7 +558,12 @@ def _write_all(descriptor: int, value: bytes) -> None:
         offset += written
 
 
-def _read_committed_result(output: Path) -> dict[str, Any]:
+def read_committed_result(output: Path) -> dict[str, Any]:
+    """Read a complete transport generation through its exhaustive marker.
+
+    This does not authorize promotion. Promotion additionally requires the
+    Labctl DB-bound receipt named by ``result["promotion_evidence"]``.
+    """
     if not output.is_absolute():
         raise RuntimeError(f"committed output path must be absolute: {output}")
     parent = output.parent
@@ -517,16 +589,23 @@ def _read_committed_result(output: Path) -> dict[str, Any]:
                 marker = json.loads(marker_bytes)
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
                 raise RuntimeError("invalid output commit marker JSON") from error
+            if marker_bytes != _canonical_json(marker) + b"\n":
+                raise RuntimeError("output commit marker is not canonical JSON")
             entries: list[dict[str, Any]] = []
             captured: dict[str, bytes] = {}
+            state = {"file_count": 0, "total_bytes": 0}
             _seal_output_directory(
                 output_fd,
                 relative=".",
+                depth=0,
                 needles=(),
                 entries=entries,
                 capture=captured,
                 sync=False,
-                excluded_root_names=frozenset({_RESULT_COMMITTED}),
+                excluded_root_names=frozenset(
+                    {_RESULT_COMMITTED, _RESULT_COMMIT_SOURCE}
+                ),
+                state=state,
             )
             expected_marker = _commit_marker(entries)
             if marker != expected_marker:
@@ -551,6 +630,10 @@ def _read_committed_result(output: Path) -> dict[str, Any]:
 
 def _read_output_marker(output_fd: int) -> bytes:
     before = os.stat(_RESULT_COMMITTED, dir_fd=output_fd, follow_symlinks=False)
+    source = os.stat(
+        _RESULT_COMMIT_SOURCE, dir_fd=output_fd, follow_symlinks=False
+    )
+    _require_same_object(source, before, label="output commit source/marker")
     marker_fd = os.open(
         _RESULT_COMMITTED,
         os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -562,17 +645,23 @@ def _read_output_marker(output_fd: int) -> bytes:
         if (
             not stat.S_ISREG(opened.st_mode)
             or opened.st_uid != os.geteuid()
-            or opened.st_nlink != 1
             or stat.S_IMODE(opened.st_mode) != 0o400
         ):
             raise RuntimeError("output commit marker has unsafe metadata")
-        _, contents = _scan_and_fsync_file(
+        if opened.st_size > _OUTPUT_MAX_MARKER_BYTES:
+            raise RuntimeError(
+                f"output commit marker exceeds {_OUTPUT_MAX_MARKER_BYTES} bytes"
+            )
+        _, contents, byte_count = _scan_and_fsync_file(
             marker_fd,
             relative=_RESULT_COMMITTED,
             needles=(),
             capture=True,
+            capture_limit=_OUTPUT_MAX_MARKER_BYTES,
             sync=False,
         )
+        if byte_count != opened.st_size:
+            raise RuntimeError("output commit marker byte count changed while reading")
         after = os.fstat(marker_fd)
         _require_same_object(opened, after, label=_RESULT_COMMITTED)
         path_after = os.stat(
@@ -2018,6 +2107,35 @@ def main(argv: list[str] | None = None) -> int:
             f"arm {args.arm} is a model arm: pass --model-path for the registered "
             "bytes the server must attest"
         )
+    local_sglang = not scripted and args.base_url is None
+    if scripted and args.sglang_python is not None:
+        raise SystemExit(
+            f"arm {args.arm} is scripted and never launches SGLang; "
+            "--sglang-python would be ignored"
+        )
+    if args.base_url is not None and args.sglang_python is not None:
+        raise SystemExit("--base-url and --sglang-python are mutually exclusive")
+    if args.base_url is not None:
+        _attestation_url(args.base_url)
+    if local_sglang:
+        if args.sglang_python is None:
+            raise SystemExit("local causal evaluation requires explicit --sglang-python")
+        sglang_python = Path(args.sglang_python)
+        if (
+            not sglang_python.is_absolute()
+            or not sglang_python.is_file()
+            or not os.access(sglang_python, os.X_OK)
+        ):
+            raise SystemExit(
+                "--sglang-python must be an absolute executable regular file"
+            )
+    if not 0 <= args.sglang_port <= 55535:
+        raise SystemExit("--sglang-port must be 0 or in [1, 55535]")
+    if (
+        not math.isfinite(args.sglang_mem_fraction)
+        or not 0.0 < args.sglang_mem_fraction <= 1.0
+    ):
+        raise SystemExit("--sglang-mem-fraction must be finite and in (0, 1]")
     final_output = _validate_output_target(args.output)
     supplied_api_key = os.environ.get(API_KEY_VAR)
     forbidden_output_values = (supplied_api_key,) if supplied_api_key else ()
@@ -2039,7 +2157,6 @@ def main(argv: list[str] | None = None) -> int:
             # architectures. Its registration is therefore always part of dispatch.
             verify_phaseb_provenance(args.model_path)
 
-    local_sglang = not scripted and args.base_url is None
     suite_wall_bound_s = _suite_wall_bound_s(
         selected,
         arm=arm,
@@ -2077,8 +2194,8 @@ def main(argv: list[str] | None = None) -> int:
         for trial in range(1, args.trials + 1)
     ]
 
-    publication = _stage_output(final_output)
-    output = publication.staging
+    publication = _create_uncommitted_output(final_output)
+    output = publication.path
 
     def _run_selected(base_url: str) -> None:
         runtime = _WorkerRuntime(
@@ -2111,8 +2228,6 @@ def main(argv: list[str] | None = None) -> int:
             _run_selected(args.base_url or "http://127.0.0.1:1/v1")
         else:
             assert artifact is not None
-            if args.sglang_python is None:
-                raise SystemExit("local causal evaluation requires explicit --sglang-python")
             with tempfile.TemporaryDirectory(prefix="juergen-sglang-") as temporary:
                 log_path = Path(temporary) / "sglang.log"
                 try:
@@ -2195,6 +2310,16 @@ def main(argv: list[str] | None = None) -> int:
         "selection": {"task_ids": cell_ids, "full_tier_task_count": len(tier_cells)},
         "suite_wall_bound_s": suite_wall_bound_s,
         "status": "complete" if not infrastructure_errors else "infrastructure_failure",
+        "promotion_evidence": {
+            "status": "unregistered",
+            "eligible": False,
+            "required_receipt": "labctl_db_bound_exhaustive_result_receipt_v1",
+            "note": (
+                "RESULT_COMMITTED.json proves atomic transport completion only. "
+                "Promotion requires a separately authorized Labctl DB record that "
+                "binds this exhaustive generation inventory."
+            ),
+        },
         "aggregate": aggregate,
         "model": model_record,
         "sampling": {
@@ -2248,7 +2373,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         _atomic_json(output / "result.json", result)
         publication.publish(forbidden_values=forbidden_output_values)
-        if _read_committed_result(final_output) != result:
+        if read_committed_result(final_output) != result:
             raise RuntimeError("fresh committed-output readback changed result.json")
     except BaseException:
         publication.cleanup()
