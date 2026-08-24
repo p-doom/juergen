@@ -23,9 +23,10 @@ import os
 import time
 from pathlib import Path
 
-import pytest
-
 import juergen_fake_desktop
+import pytest
+from test_model_attestation import _register_model
+
 from evals.signoflife.__main__ import main
 from evals.signoflife.suite import load_suite
 
@@ -277,29 +278,21 @@ def test_a_model_arm_without_a_model_is_refused_before_a_vm_is_booted(tmp_path) 
     assert not juergen_fake_desktop.FakeDesktopPool.instances, "no VM may be spent"
 
 
-def test_verify_phaseb_needs_a_checkpoint_to_verify(tmp_path) -> None:
-    with pytest.raises(SystemExit) as excinfo:
-        main(
-            [
-                "--arm",
-                "offshelf_native",
-                "--output",
-                str(tmp_path / "run"),
-                "--qcow",
-                str(tmp_path / "desktop.qcow2"),
-                "--base-url",
-                "http://127.0.0.1:9/v1",
-                "--verify-phaseb",
-            ]
-        )
-    assert "--model-path" in str(excinfo.value)
-
-
-def test_verify_phaseb_fails_closed_on_a_checkpoint_that_is_not_the_one(tmp_path) -> None:
+def test_phaseb_always_fails_closed_on_a_checkpoint_that_is_not_the_one(
+    tmp_path, monkeypatch
+) -> None:
     """`verify_phaseb_provenance` is the strict check for the step-900 export and
     must not be satisfiable by any directory that happens to exist."""
-    model = tmp_path / "not-phaseb"
-    model.mkdir()
+    model, _ = _register_model(tmp_path)
+    import evals.signoflife.__main__ as dispatcher
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_attest_external_server",
+        lambda base_url, artifact: pytest.fail(
+            "Phase-B identity validation ran after server attestation"
+        ),
+    )
     with pytest.raises((RuntimeError, FileNotFoundError, OSError)):
         main(
             [
@@ -313,7 +306,6 @@ def test_verify_phaseb_fails_closed_on_a_checkpoint_that_is_not_the_one(tmp_path
                 str(model),
                 "--base-url",
                 "http://127.0.0.1:9/v1",
-                "--verify-phaseb",
             ]
         )
 
@@ -408,24 +400,32 @@ def test_an_episode_that_publishes_nothing_still_records_why(tmp_path, monkeypat
 
 @pytest.mark.slow
 def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_server(
-    tmp_path,
+    tmp_path, monkeypatch
 ) -> None:
     """Two properties in one run, because they are the same run.
 
-    Provenance is recorded, never enforced: `--verify-phaseb` is the fail-closed
-    check for one arm, and hard-coding an expected manifest per arm would make every
-    new arm a code change. What must not be lost is which bytes answered, so the
-    checkpoint's `config.json` and both registration files are hashed into the
-    result.
+    Every byte is registered and verified before dispatch, and the external server
+    must attest that exact artifact identity. The same identity is retained on the
+    result and its attempt row.
 
     A model arm that cannot reach its server is an infrastructure failure: exit 3
     and `pass_rate: null`, not 0/4, which would read as a model that tried and
     failed.
     """
-    model = tmp_path / "ckpt"
-    model.mkdir()
-    (model / "config.json").write_text(json.dumps({"model_type": "qwen3_vl"}))
-    (tmp_path / ".meta.json").write_text(json.dumps({"id": "artifact_test", "step": 900}))
+    model, expected = _register_model(tmp_path)
+    import evals.signoflife.__main__ as dispatcher
+
+    monkeypatch.setattr(
+        dispatcher,
+        "_attest_external_server",
+        lambda base_url, artifact: {
+            "source": "external_endpoint",
+            "url": "http://127.0.0.1:9/model-attestation",
+            "artifact_sha256": artifact.artifact_sha256,
+            "config_sha256": artifact.config_sha256,
+            "served_model": artifact.served_model,
+        },
+    )
 
     output = tmp_path / "run"
     _fresh_process()
@@ -455,9 +455,10 @@ def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_se
     assert result["arm_kind"] == "model"
     assert result["status"] == "infrastructure_failure"
     assert result["model"]["path"] == str(model)
-    assert len(result["model"]["config_sha256"]) == 64
-    assert result["model"]["meta"] == {"id": "artifact_test", "step": 900}
-    assert len(result["model"]["meta_sha256"]) == 64
+    assert result["model"]["artifact_id"] == expected["id"]
+    assert result["model"]["artifact_sha256"] == expected["artifact_sha256"]
+    assert result["model"]["served_model"].endswith(expected["artifact_sha256"])
+    assert result["episodes"][0]["model"] == result["model"]
     assert result["aggregate"]["controls_ok"] is None, "a model arm calibrates nothing"
     assert result["aggregate"]["per_cell"][CELL_IDS[0]]["pass_rate"] is None
 
@@ -477,6 +478,7 @@ def test_the_tier_reaches_the_taskset_and_the_record(tmp_path) -> None:
         temperature=0.0,
         top_p=1.0,
         max_tokens=256,
+        served_model="scripted-no-model",
     )
     assert config.taskset.tier == "candidate"
     assert config.taskset.task_ids == ["panel_offset_button"]
@@ -500,6 +502,17 @@ def test_an_unattended_model_arm_samples_at_its_own_knobs(tmp_path, monkeypatch)
         "ordered",
         ARMS["ordered"].model_copy(update={"top_p": 0.8, "max_tokens": 1024}),
     )
+    model, _ = _register_model(tmp_path)
+    monkeypatch.setattr(
+        "evals.signoflife.__main__._attest_external_server",
+        lambda base_url, artifact: {
+            "source": "external_endpoint",
+            "url": "http://127.0.0.1:9/model-attestation",
+            "artifact_sha256": artifact.artifact_sha256,
+            "config_sha256": artifact.config_sha256,
+            "served_model": artifact.served_model,
+        },
+    )
 
     def _dispatch(*extra: str) -> dict:
         _fresh_process()
@@ -520,6 +533,8 @@ def test_an_unattended_model_arm_samples_at_its_own_knobs(tmp_path, monkeypatch)
                 # before any model is contacted.
                 "--base-url",
                 "http://127.0.0.1:9/v1",
+                "--model-path",
+                str(model),
                 *extra,
             ]
         )
@@ -766,6 +781,8 @@ def _scheduler_runtime(tmp_path):
         temperature=0.7,
         top_p=1.0,
         max_tokens=256,
+        served_model="sign-of-life-sha256-test",
+        model={"artifact_sha256": "test"},
         qcow=tmp_path / "desktop.qcow2",
         qemu=None,
         qemu_img=None,

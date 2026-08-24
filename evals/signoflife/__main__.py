@@ -50,14 +50,17 @@ import math
 import multiprocessing
 import os
 import re
+import secrets
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -78,8 +81,10 @@ from signoflife import PLUGIN_ID  # noqa: E402
 
 _LOGGER = logging.getLogger("signoflife")
 
-SERVED_MODEL = "sign-of-life"
-"""The alias sglang serves under, so the wire model id does not encode a path."""
+_SERVED_MODEL_PREFIX = "sign-of-life-sha256-"
+_ATTESTATION_PATH = "/model-attestation"
+_ATTESTATION_TIMEOUT_S = 10.0
+_ATTESTATION_MAX_BYTES = 65536
 
 API_KEY_VAR = "SIGN_OF_LIFE_API_KEY"
 """`resolve_api_key` reads the key from an env var named by the client config
@@ -109,6 +114,7 @@ def _sglang(
     port: int,
     mem_fraction_static: float,
     ready_timeout_s: float,
+    served_model: str,
 ) -> Iterator[str]:
     """Serve `model_path` and yield its OpenAI base URL.
 
@@ -143,7 +149,7 @@ def _sglang(
         "--api-key",
         api_key,
         "--served-model-name",
-        SERVED_MODEL,
+        served_model,
         "--mem-fraction-static",
         str(mem_fraction_static),
         "--chunked-prefill-size",
@@ -203,29 +209,253 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _model_provenance(model_path: Path | None) -> dict[str, Any] | None:
-    """Record which checkpoint served the arm — recorded, not enforced.
+@dataclass(frozen=True)
+class _ModelArtifact:
+    model_path: Path
+    artifact_id: str
+    producer_run_id: str
+    registration_path: Path
+    registration_sha256: str
+    manifest_path: Path
+    manifest_sha256: str
+    artifact_sha256: str
+    config_sha256: str
+    config_identity: dict[str, Any]
+    file_count: int
+    total_bytes: int
+    served_model: str
 
-    `cells.verify_phaseb_provenance` fails closed against the step-900 export and is
-    the right check for that one arm; hard-coding an expected manifest per arm here
-    would make every new arm a code change. Both registration files are hashed and
-    embedded so which bytes answered is never lost, and `--verify-phaseb` opts into
-    the strict check when the arm is the one it describes.
-    """
-    if model_path is None:
-        return None
+    def record(self, *, attestation: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "path": str(self.model_path),
+            "artifact_id": self.artifact_id,
+            "producer_run_id": self.producer_run_id,
+            "registration": str(self.registration_path),
+            "registration_sha256": self.registration_sha256,
+            "artifact_manifest": str(self.manifest_path),
+            "manifest_sha256": self.manifest_sha256,
+            "artifact_sha256": self.artifact_sha256,
+            "config_sha256": self.config_sha256,
+            "config_identity": self.config_identity,
+            "file_count": self.file_count,
+            "total_bytes": self.total_bytes,
+            "served_model": self.served_model,
+            "attestation": attestation,
+        }
+
+
+def _canonical_json(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _json_object(path: Path, *, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"invalid {label} {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise RuntimeError(f"invalid {label} {path}: expected a JSON object")
+    return value
+
+
+def _manifest_file_row(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {"path", "size", "sha256"}:
+        raise RuntimeError("invalid artifact manifest file inventory row")
+    relative = value["path"]
+    parsed = PurePosixPath(relative) if isinstance(relative, str) else None
+    if (
+        parsed is None
+        or not relative
+        or parsed.is_absolute()
+        or parsed.as_posix() != relative
+        or any(part in {"", ".", ".."} for part in parsed.parts)
+    ):
+        raise RuntimeError(f"invalid artifact manifest path {relative!r}")
+    size = value["size"]
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise RuntimeError(f"invalid artifact manifest size for {relative!r}")
+    digest = value["sha256"]
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise RuntimeError(f"invalid artifact manifest sha256 for {relative!r}")
+    return {"path": relative, "size": size, "sha256": digest}
+
+
+def _model_inventory(model_path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    def _raise_walk_error(error: OSError) -> None:
+        raise error
+
+    for directory, directories, filenames in os.walk(
+        model_path, followlinks=False, onerror=_raise_walk_error
+    ):
+        directory_path = Path(directory)
+        for name in directories:
+            candidate = directory_path / name
+            mode = candidate.lstat().st_mode
+            if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+                raise RuntimeError(f"model artifact contains a non-directory: {candidate}")
+        for name in filenames:
+            candidate = directory_path / name
+            mode = candidate.lstat().st_mode
+            if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+                raise RuntimeError(f"model artifact contains a non-regular file: {candidate}")
+            rows.append(
+                {
+                    "path": candidate.relative_to(model_path).as_posix(),
+                    "size": candidate.stat().st_size,
+                    "sha256": _sha256_file(candidate),
+                }
+            )
+    return sorted(rows, key=lambda row: row["path"])
+
+
+def _verify_model_artifact(model_path: Path) -> _ModelArtifact:
+    """Verify the registered exhaustive byte inventory before allocating a VM."""
+    if not model_path.is_absolute():
+        raise RuntimeError(f"model artifact path must be absolute: {model_path}")
+    if model_path.is_symlink() or not model_path.is_dir():
+        raise RuntimeError(f"model artifact is not a regular directory: {model_path}")
     root = model_path.parent
-    record: dict[str, Any] = {"path": str(model_path)}
-    config = model_path / "config.json"
-    if config.is_file():
-        record["config_sha256"] = _sha256_file(config)
-    for name in (".meta.json", "export_manifest.json"):
-        candidate = root / name
-        if not candidate.is_file():
-            continue
-        record[name.strip(".").replace(".json", "")] = json.loads(candidate.read_text())
-        record[f"{name.strip('.').replace('.json', '')}_sha256"] = _sha256_file(candidate)
-    return record
+    metadata_path = root / ".meta.json"
+    manifest_path = root / "artifact_manifest.json"
+    for path, label in (
+        (metadata_path, "artifact registration"),
+        (manifest_path, "artifact manifest"),
+    ):
+        try:
+            mode = path.lstat().st_mode
+        except OSError as error:
+            raise RuntimeError(f"missing {label}: {path}") from error
+        if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+            raise RuntimeError(f"{label} is not a regular file: {path}")
+
+    metadata = _json_object(metadata_path, label="artifact registration")
+    manifest_sha256 = _sha256_file(manifest_path)
+    if metadata.get("artifact_manifest_sha256") != manifest_sha256:
+        raise RuntimeError(
+            "artifact manifest registration mismatch: "
+            f"expected {metadata.get('artifact_manifest_sha256')!r}, "
+            f"observed {manifest_sha256!r}"
+        )
+    artifact_id = metadata.get("id")
+    producer_run_id = metadata.get("producer_run_id")
+    if not isinstance(artifact_id, str) or not artifact_id:
+        raise RuntimeError("artifact registration requires a non-empty id")
+    if not isinstance(producer_run_id, str) or not producer_run_id:
+        raise RuntimeError("artifact registration requires a non-empty producer_run_id")
+
+    manifest = _json_object(manifest_path, label="artifact manifest")
+    if set(manifest) != {
+        "schema_version",
+        "status",
+        "artifact_sha256",
+        "config_sha256",
+        "files",
+    }:
+        raise RuntimeError("invalid artifact manifest fields")
+    if manifest["schema_version"] != 1 or manifest["status"] != "complete":
+        raise RuntimeError("artifact manifest is not schema 1 complete")
+    if not isinstance(manifest["files"], list) or not manifest["files"]:
+        raise RuntimeError("artifact manifest requires a non-empty file inventory")
+    expected = [_manifest_file_row(row) for row in manifest["files"]]
+    expected_paths = [row["path"] for row in expected]
+    if expected_paths != sorted(set(expected_paths)):
+        raise RuntimeError("artifact manifest inventory must be sorted and unique")
+    expected_artifact_sha256 = hashlib.sha256(_canonical_json(expected)).hexdigest()
+    if manifest["artifact_sha256"] != expected_artifact_sha256:
+        raise RuntimeError("artifact manifest has an invalid artifact_sha256")
+
+    observed = _model_inventory(model_path)
+    if observed != expected:
+        raise RuntimeError(
+            f"artifact inventory mismatch: expected {expected!r}, observed {observed!r}"
+        )
+    config_rows = [row for row in observed if row["path"] == "config.json"]
+    if len(config_rows) != 1 or manifest["config_sha256"] != config_rows[0]["sha256"]:
+        raise RuntimeError("artifact manifest has an invalid config_sha256")
+    config = _json_object(model_path / "config.json", label="model config")
+    config_identity = {
+        key: config.get(key) for key in ("model_type", "architectures")
+    }
+    return _ModelArtifact(
+        model_path=model_path,
+        artifact_id=artifact_id,
+        producer_run_id=producer_run_id,
+        registration_path=metadata_path,
+        registration_sha256=_sha256_file(metadata_path),
+        manifest_path=manifest_path,
+        manifest_sha256=manifest_sha256,
+        artifact_sha256=expected_artifact_sha256,
+        config_sha256=config_rows[0]["sha256"],
+        config_identity=config_identity,
+        file_count=len(observed),
+        total_bytes=sum(row["size"] for row in observed),
+        served_model=f"{_SERVED_MODEL_PREFIX}{expected_artifact_sha256}",
+    )
+
+
+def _attestation_url(base_url: str) -> str:
+    parsed = urllib.parse.urlsplit(base_url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path.rstrip("/") != "/v1"
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError(f"invalid external model base URL {base_url!r}")
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, _ATTESTATION_PATH, "", ""))
+
+
+def _attest_external_server(
+    base_url: str, artifact: _ModelArtifact
+) -> dict[str, Any]:
+    """Require the external server to echo the exact registered artifact identity."""
+    endpoint = _attestation_url(base_url)
+    nonce = secrets.token_hex(32)
+    request = urllib.request.Request(
+        endpoint,
+        headers={"X-Attestation-Nonce": nonce},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_ATTESTATION_TIMEOUT_S) as response:
+            raw = response.read(_ATTESTATION_MAX_BYTES + 1)
+        if len(raw) > _ATTESTATION_MAX_BYTES:
+            raise ValueError("attestation response exceeds 65536 bytes")
+        observed = json.loads(raw)
+    except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"external model attestation failed at {endpoint}: {error}") from error
+    expected = {
+        "schema_version": 1,
+        "nonce": nonce,
+        "served_model": artifact.served_model,
+        "artifact_id": artifact.artifact_id,
+        "artifact_sha256": artifact.artifact_sha256,
+        "manifest_sha256": artifact.manifest_sha256,
+        "config_sha256": artifact.config_sha256,
+    }
+    if not isinstance(observed, dict):
+        raise RuntimeError("model attestation mismatch: expected a JSON object")
+    if observed != expected:
+        mismatches = {
+            key: {"expected": value, "observed": observed.get(key)}
+            for key, value in expected.items()
+            if observed.get(key) != value
+        }
+        extra = sorted(set(observed) - set(expected))
+        if extra:
+            mismatches["extra_fields"] = {"expected": [], "observed": extra}
+        raise RuntimeError(f"model attestation mismatch: {mismatches}")
+    return {
+        "source": "external_endpoint",
+        "url": endpoint,
+        "artifact_sha256": artifact.artifact_sha256,
+        "config_sha256": artifact.config_sha256,
+        "served_model": artifact.served_model,
+    }
 
 
 def _attempt_wall_bound_s(task: DevelopmentTask, arm: Any) -> float:
@@ -376,11 +606,12 @@ def _eval_config(
     temperature: float | None,
     top_p: float | None,
     max_tokens: int,
+    served_model: str,
 ) -> EvalConfig:
     return EvalConfig(
         taskset={"id": PLUGIN_ID, "tier": tier, "task_ids": task_ids},
         harness=_harness_payload(arm, artifacts=artifacts, pool=pool),
-        model=SERVED_MODEL,
+        model=served_model,
         client={"base_url": base_url, "api_key_var": API_KEY_VAR},
         sampling={"temperature": temperature, "top_p": top_p, "max_tokens": max_tokens},
         num_rollouts=1,
@@ -526,6 +757,8 @@ class _WorkerRuntime:
     temperature: float | None
     top_p: float | None
     max_tokens: int
+    served_model: str
+    model: dict[str, Any] | None
     qcow: Path
     qemu: Path | None
     qemu_img: Path | None
@@ -615,6 +848,7 @@ def _infra_invalid_attempt_row(
         "prompt_sha256": None,
         "comparable_to_sealed_baseline": None,
         "steps_detail": None,
+        "model": runtime.model,
     }
 
 
@@ -682,6 +916,7 @@ def _attempt_process_main(runtime: _WorkerRuntime, spec: _AttemptSpec) -> None:
             temperature=runtime.temperature,
             top_p=runtime.top_p,
             max_tokens=runtime.max_tokens,
+            served_model=runtime.served_model,
         )
         environment = vf.Environment(config)
         traces = asyncio.run(run_eval(environment, config))
@@ -692,6 +927,7 @@ def _attempt_process_main(runtime: _WorkerRuntime, spec: _AttemptSpec) -> None:
         row = {
             **_episode_row(traces[0], spec.trial),
             **_attempt_row_identity(runtime, spec),
+            "model": runtime.model,
         }
     except Exception as error:
         _LOGGER.exception(
@@ -950,11 +1186,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--max-tokens", type=int, default=None, help="override the arm's own value"
     )
-    parser.add_argument(
-        "--verify-phaseb",
-        action="store_true",
-        help="fail closed unless --model-path is the registered step-900 export",
-    )
     return parser.parse_args(argv)
 
 
@@ -1018,8 +1249,6 @@ def main(argv: list[str] | None = None) -> int:
             f"arm {args.arm} is scripted and never calls a model; --temperature / "
             "--top-p would be recorded in the run and ignored"
         )
-    if not scripted and args.model_path is None and args.base_url is None:
-        raise SystemExit(f"arm {args.arm} is a model arm: pass --model-path or --base-url")
     temperature = arm.temperature if args.temperature is None else args.temperature
     top_p = arm.top_p if args.top_p is None else args.top_p
     max_tokens = arm.max_tokens if args.max_tokens is None else args.max_tokens
@@ -1041,10 +1270,24 @@ def main(argv: list[str] | None = None) -> int:
         isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1
     ):
         raise SystemExit(f"invalid max_tokens {max_tokens!r}: expected a positive integer")
-    if args.verify_phaseb:
-        if args.model_path is None:
-            raise SystemExit("--verify-phaseb checks a checkpoint: pass --model-path")
-        verify_phaseb_provenance(args.model_path)
+    if not scripted and args.model_path is None:
+        raise SystemExit(
+            f"arm {args.arm} is a model arm: pass --model-path for the registered "
+            "bytes the server must attest"
+        )
+    artifact: _ModelArtifact | None = None
+    model_record: dict[str, Any] | None = None
+    served_model = "scripted-no-model"
+    if not scripted:
+        artifact = _verify_model_artifact(args.model_path)
+        served_model = artifact.served_model
+        if args.arm == "phaseb_compact":
+            # This arm names one historical checkpoint, not a family of compatible
+            # architectures. Its registration is therefore always part of dispatch.
+            verify_phaseb_provenance(args.model_path)
+        if args.base_url is not None:
+            attestation = _attest_external_server(args.base_url, artifact)
+            model_record = artifact.record(attestation=attestation)
 
     local_sglang = not scripted and args.base_url is None
     suite_wall_bound_s = _suite_wall_bound_s(
@@ -1089,6 +1332,8 @@ def main(argv: list[str] | None = None) -> int:
             temperature=temperature,
             top_p=top_p,
             max_tokens=max_tokens,
+            served_model=served_model,
+            model=model_record,
             qcow=args.qcow,
             qemu=args.qemu,
             qemu_img=args.qemu_img,
@@ -1103,6 +1348,7 @@ def main(argv: list[str] | None = None) -> int:
     if scripted or args.base_url:
         _run_selected(args.base_url or "http://127.0.0.1:1/v1")
     else:
+        assert artifact is not None
         with _sglang(
             python=args.sglang_python or sys.executable,
             model_path=args.model_path,
@@ -1111,7 +1357,18 @@ def main(argv: list[str] | None = None) -> int:
             port=args.sglang_port,
             mem_fraction_static=args.sglang_mem_fraction,
             ready_timeout_s=args.sglang_ready_timeout_s,
+            served_model=served_model,
         ) as base_url:
+            reverified = _verify_model_artifact(args.model_path)
+            if reverified != artifact:
+                raise RuntimeError("model artifact changed while sglang was loading it")
+            attestation = {
+                "source": "local_verified_launch",
+                "artifact_sha256": artifact.artifact_sha256,
+                "config_sha256": artifact.config_sha256,
+                "served_model": artifact.served_model,
+            }
+            model_record = artifact.record(attestation=attestation)
             _run_selected(base_url)
 
     infrastructure_errors = [
@@ -1144,7 +1401,7 @@ def main(argv: list[str] | None = None) -> int:
         "suite_wall_bound_s": suite_wall_bound_s,
         "status": "complete" if not infrastructure_errors else "infrastructure_failure",
         "aggregate": aggregate,
-        "model": _model_provenance(args.model_path),
+        "model": model_record,
         "sampling": {
             "temperature": temperature,
             "top_p": top_p,
