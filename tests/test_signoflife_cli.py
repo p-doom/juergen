@@ -117,6 +117,7 @@ def test_the_dispatcher_runs_the_whole_scored_tier_and_writes_the_readers_shape(
     code, result = _run(output, tmp_path)
 
     assert code == 0, result["infrastructure_errors"]
+    assert not list(tmp_path.glob(".run.staging-*"))
     assert result["status"] == "complete"
     assert result["schema_version"] == 3
     assert result["arm"] == "native_negative"
@@ -347,9 +348,18 @@ def test_controls_ok_is_null_for_a_model_arm_by_construction() -> None:
     from evals.signoflife.__main__ import _aggregate
 
     rows = [
-        {"cell": "c", "validity": "valid", "success": True, "outcome": "ok", "control_ok": 1.0}
+        {
+            "trial": 1,
+            "cell": "c",
+            "validity": "valid",
+            "success": True,
+            "outcome": "ok",
+            "control_ok": 1.0,
+        }
     ]
-    model = _aggregate(rows, cell_ids=["c"], scripted=False, negative=False)
+    model = _aggregate(
+        rows, cell_ids=["c"], expected_trials=1, scripted=False, negative=False
+    )
     assert model["controls_ok"] is None
     assert model["expected_per_cell_pass_rate"] is None
     assert model["per_cell"]["c"]["pass_rate"] == 1.0
@@ -370,10 +380,108 @@ def test_a_cell_with_no_valid_draw_has_a_null_pass_rate_not_a_zero() -> None:
             "control_ok": None,
         }
     ]
-    aggregate = _aggregate(rows, cell_ids=["c"], scripted=True, negative=True)
+    aggregate = _aggregate(
+        rows, cell_ids=["c"], expected_trials=1, scripted=True, negative=True
+    )
     assert aggregate["per_cell"]["c"]["pass_rate"] is None
     assert aggregate["per_cell"]["c"]["valid_trials"] == 0
     assert aggregate["controls_ok"] is False, "an invalid draw cannot certify a control"
+
+
+def test_missing_valid_trial_is_a_hard_run_error(tmp_path, monkeypatch) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    row = {
+        "index": 0,
+        "trial": 1,
+        "cell": CELL_IDS[0],
+        "validity": "valid",
+        "success": False,
+        "outcome": "model_failure",
+        "control_ok": 1.0,
+    }
+    monkeypatch.setattr(dispatcher, "_run_attempts", lambda runtime, specs: [row])
+    output = tmp_path / "incomplete"
+
+    code, result = _run(
+        output,
+        tmp_path,
+        "--cell",
+        CELL_IDS[0],
+        "--trials",
+        "2",
+    )
+
+    assert code == 3
+    assert result["status"] == "infrastructure_failure"
+    assert result["aggregate"]["valid_trial_contract_complete"] is False
+    assert result["aggregate"]["per_cell"][CELL_IDS[0]]["pass_rate"] is None
+    assert any(
+        error["type"] == "ValidTrialCountError"
+        for error in result["infrastructure_errors"]
+    )
+
+
+def test_output_must_be_absent_before_any_desktop_resource(tmp_path) -> None:
+    output = tmp_path / "already-exists"
+    output.mkdir()
+
+    with pytest.raises(RuntimeError, match="must not already exist"):
+        main(_argv(output, tmp_path, "--cell", CELL_IDS[0]))
+
+    assert not juergen_fake_desktop.FakeDesktopPool.instances
+
+
+def test_attempt_exception_removes_unpublished_staging_output(tmp_path, monkeypatch) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    output = tmp_path / "crashed"
+
+    def crash(runtime, specs):
+        raise RuntimeError("synthetic dispatcher crash")
+
+    monkeypatch.setattr(dispatcher, "_run_attempts", crash)
+    with pytest.raises(RuntimeError, match="synthetic dispatcher crash"):
+        main(_argv(output, tmp_path, "--cell", CELL_IDS[0]))
+
+    assert not output.exists()
+    assert not list(tmp_path.glob(".crashed.staging-*"))
+
+
+def test_atomic_publication_never_replaces_a_competing_run(tmp_path) -> None:
+    from evals.signoflife.__main__ import _stage_output
+
+    final = tmp_path / "one-run-id"
+    first = _stage_output(final)
+    second = _stage_output(final)
+    try:
+        (first.staging / "result.json").write_text("first\n")
+        (second.staging / "result.json").write_text("second\n")
+        first.publish(forbidden_values=())
+        with pytest.raises(FileExistsError, match="appeared before atomic publication"):
+            second.publish(forbidden_values=())
+    finally:
+        first.cleanup()
+        second.cleanup()
+
+    assert (final / "result.json").read_text() == "first\n"
+    assert not list(tmp_path.glob(".one-run-id.staging-*"))
+
+
+def test_credential_in_staging_refuses_publication_and_is_cleaned(tmp_path) -> None:
+    from evals.signoflife.__main__ import _stage_output
+
+    final = tmp_path / "redacted-run"
+    publication = _stage_output(final)
+    (publication.staging / "trace.log").write_text("prefix evaluation-secret suffix")
+    try:
+        with pytest.raises(RuntimeError, match="credential value found"):
+            publication.publish(forbidden_values=("evaluation-secret",))
+    finally:
+        publication.cleanup()
+
+    assert not final.exists()
+    assert not list(tmp_path.glob(".redacted-run.staging-*"))
 
 
 def test_an_episode_that_publishes_nothing_still_records_why(tmp_path, monkeypatch) -> None:

@@ -43,6 +43,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import ctypes
+import errno
 import hashlib
 import json
 import logging
@@ -106,6 +108,8 @@ _SUPERVISOR_REAP_TIMEOUT_S = 20.0
 _ATTEMPT_LAUNCH_MARGIN_S = 20.0
 _SCHEDULER_POLL_S = 0.1
 _WORKER_START_METHOD = "spawn"
+_AT_FDCWD = -100
+_RENAME_NOREPLACE = 1
 _SAMPLING_SEED_DOMAIN = b"juergen-signoflife-sampling-seed-v1\0"
 _DETERMINISTIC_ATTENTION_BACKENDS = frozenset({"fa3", "flashinfer", "triton"})
 _SGLANG_VERSION = "0.5.10.post1"
@@ -142,6 +146,128 @@ _SGLANG_SEMANTIC_ENV_NAMES = frozenset({"PYTHONHOME", "PYTHONPATH"})
 class _LocalServer:
     base_url: str
     launch: dict[str, Any]
+
+
+@dataclass
+class _StagedOutput:
+    final: Path
+    staging: Path
+    temporary: tempfile.TemporaryDirectory[str]
+    published: bool = False
+
+    def publish(self, *, forbidden_values: tuple[str, ...]) -> None:
+        _reject_forbidden_output(self.staging, forbidden_values=forbidden_values)
+        _fsync_output_tree(self.staging)
+        _rename_noreplace(self.staging, self.final)
+        _fsync_directory(self.final.parent)
+        self.published = True
+
+    def cleanup(self) -> None:
+        if not self.published:
+            self.temporary.cleanup()
+
+
+def _validate_output_target(final: Path) -> Path:
+    if not final.is_absolute():
+        raise RuntimeError(f"--output must be an absolute run-unique path: {final}")
+    if final.exists() or final.is_symlink():
+        raise RuntimeError(f"--output must not already exist: {final}")
+    parent = final.parent
+    if not parent.is_dir() or parent.is_symlink() or parent.resolve(strict=True) != parent:
+        raise RuntimeError(
+            f"output parent must be an existing canonical directory without symlinks: {parent}"
+        )
+    return final
+
+
+def _stage_output(final: Path) -> _StagedOutput:
+    final = _validate_output_target(final)
+    temporary = tempfile.TemporaryDirectory(
+        prefix=f".{final.name}.staging-", dir=final.parent
+    )
+    staging = Path(temporary.name)
+    staging.chmod(0o770)
+    return _StagedOutput(final=final, staging=staging, temporary=temporary)
+
+
+def _rename_noreplace(source: Path, destination: Path) -> None:
+    renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+    if renameat2 is None:
+        raise RuntimeError("atomic output publication requires Linux renameat2")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    if (
+        renameat2(
+            _AT_FDCWD,
+            os.fsencode(source),
+            _AT_FDCWD,
+            os.fsencode(destination),
+            _RENAME_NOREPLACE,
+        )
+        != 0
+    ):
+        error_number = ctypes.get_errno()
+        if error_number == errno.EEXIST:
+            raise FileExistsError(
+                error_number,
+                f"output appeared before atomic publication: {destination}",
+                destination,
+            )
+        raise OSError(error_number, os.strerror(error_number), destination)
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_output_tree(root: Path) -> None:
+    for current, directories, files in os.walk(root, topdown=False, followlinks=False):
+        current_path = Path(current)
+        for name in files:
+            path = current_path / name
+            metadata = path.lstat()
+            if not stat.S_ISREG(metadata.st_mode):
+                raise RuntimeError(f"output contains a non-regular file: {path}")
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        for name in directories:
+            path = current_path / name
+            if path.is_symlink():
+                raise RuntimeError(f"output contains a symlink: {path}")
+            _fsync_directory(path)
+        _fsync_directory(current_path)
+
+
+def _reject_forbidden_output(root: Path, *, forbidden_values: tuple[str, ...]) -> None:
+    needles = tuple(value.encode() for value in forbidden_values if value)
+    if not needles:
+        return
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise RuntimeError(f"output contains a symlink: {path}")
+        if not path.is_file():
+            continue
+        overlap = max(len(needle) for needle in needles) - 1
+        previous = b""
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                contents = previous + chunk
+                if any(needle in contents for needle in needles):
+                    raise RuntimeError(f"credential value found in staged output: {path}")
+                previous = contents[-overlap:] if overlap else b""
 
 
 @contextlib.contextmanager
@@ -926,7 +1052,12 @@ def _episode_row(trace: Any, trial: int) -> dict[str, Any]:
 
 
 def _aggregate(
-    rows: list[dict[str, Any]], *, cell_ids: list[str], scripted: bool, negative: bool
+    rows: list[dict[str, Any]],
+    *,
+    cell_ids: list[str],
+    expected_trials: int,
+    scripted: bool,
+    negative: bool,
 ) -> dict[str, Any]:
     """pass_rate per cell over trials.
 
@@ -940,11 +1071,16 @@ def _aggregate(
         draws = [row for row in rows if row["cell"] == cell]
         valid = [row for row in draws if row["validity"] == "valid"]
         passed = sum(1 for row in valid if row["success"] is True)
+        complete = (
+            sorted(row.get("trial") for row in draws) == list(range(1, expected_trials + 1))
+            and len(valid) == expected_trials
+        )
         per_cell[cell] = {
             "trials": len(draws),
             "valid_trials": len(valid),
             "passed": passed,
-            "pass_rate": (passed / len(valid)) if valid else None,
+            "pass_rate": (passed / expected_trials) if complete else None,
+            "trial_contract_complete": complete,
             "outcomes": [row["outcome"] for row in draws],
         }
     valid_rows = [row for row in rows if row["validity"] == "valid"]
@@ -957,6 +1093,9 @@ def _aggregate(
         "per_cell": per_cell,
         "episodes": len(rows),
         "valid_episodes": len(valid_rows),
+        "valid_trial_contract_complete": all(
+            cell["trial_contract_complete"] for cell in per_cell.values()
+        ),
         "expected_per_cell_pass_rate": (0.0 if negative else 1.0) if scripted else None,
         "controls_ok": conformant,
         "controls_ok_note": (
@@ -965,6 +1104,39 @@ def _aggregate(
             "count; calibration comes from the separate scripted oracle/negative runs."
         ),
     }
+
+
+def _trial_contract_errors(
+    rows: list[dict[str, Any]], *, cell_ids: list[str], expected_trials: int
+) -> list[dict[str, Any]]:
+    expected = list(range(1, expected_trials + 1))
+    errors: list[dict[str, Any]] = []
+    unknown = sorted({row.get("cell") for row in rows} - set(cell_ids), key=str)
+    if unknown:
+        errors.append(
+            {
+                "type": "ValidTrialCountError",
+                "message": f"rows contain cells outside the sealed selection: {unknown}",
+            }
+        )
+    for cell in cell_ids:
+        draws = [row for row in rows if row.get("cell") == cell]
+        observed = sorted(row.get("trial") for row in draws)
+        valid = sorted(
+            row.get("trial") for row in draws if row.get("validity") == "valid"
+        )
+        if observed != expected or valid != expected:
+            errors.append(
+                {
+                    "cell": cell,
+                    "type": "ValidTrialCountError",
+                    "message": (
+                        f"expected exact trial identities {expected}; "
+                        f"observed={observed}, valid={valid}"
+                    ),
+                }
+            )
+    return errors
 
 
 def _atomic_json(path: Path, value: Any) -> None:
@@ -1531,13 +1703,16 @@ def main(argv: list[str] | None = None) -> int:
             f"arm {args.arm} is a model arm: pass --model-path for the registered "
             "bytes the server must attest"
         )
+    final_output = _validate_output_target(args.output)
+    supplied_api_key = os.environ.get(API_KEY_VAR)
+    forbidden_output_values = (supplied_api_key,) if supplied_api_key else ()
     artifact: _ModelArtifact | None = None
     model_record: dict[str, Any] | None = None
     served_model = "scripted-no-model"
     if not scripted:
         if args.base_url is None:
             os.environ[API_KEY_VAR] = "local-loopback-no-auth"
-        elif not os.environ.get(API_KEY_VAR):
+        elif not supplied_api_key:
             raise SystemExit(
                 f"external model server credentials must be supplied only through "
                 f"the {API_KEY_VAR} environment variable"
@@ -1562,8 +1737,6 @@ def main(argv: list[str] | None = None) -> int:
         sglang_ready_timeout_s=args.sglang_ready_timeout_s,
     )
     _preflight_slurm_wall_budget(suite_wall_bound_s)
-
-    output: Path = args.output
 
     rows: list[dict[str, Any]] = []
 
@@ -1592,6 +1765,9 @@ def main(argv: list[str] | None = None) -> int:
         for trial in range(1, args.trials + 1)
     ]
 
+    publication = _stage_output(final_output)
+    output = publication.staging
+
     def _run_selected(base_url: str) -> None:
         runtime = _WorkerRuntime(
             arm=args.arm,
@@ -1614,43 +1790,47 @@ def main(argv: list[str] | None = None) -> int:
         )
         rows.extend(_run_attempts(runtime, specs))
 
-    if scripted or args.base_url:
-        output.mkdir(parents=True, exist_ok=True)
-        _run_selected(args.base_url or "http://127.0.0.1:1/v1")
-    else:
-        assert artifact is not None
-        if args.sglang_python is None:
-            raise SystemExit("local causal evaluation requires explicit --sglang-python")
-        with tempfile.TemporaryDirectory(prefix="juergen-sglang-") as temporary:
-            log_path = Path(temporary) / "sglang.log"
-            try:
-                with _sglang(
-                    python=args.sglang_python,
-                    model_path=args.model_path,
-                    log_path=log_path,
-                    port=args.sglang_port,
-                    mem_fraction_static=args.sglang_mem_fraction,
-                    ready_timeout_s=args.sglang_ready_timeout_s,
-                    served_model=served_model,
-                ) as server:
-                    reverified = _verify_model_artifact(args.model_path)
-                    if reverified != artifact:
-                        raise RuntimeError("model artifact changed while sglang was loading it")
-                    attestation = _attest_local_server(
-                        server.base_url, artifact=artifact
-                    )
-                    attestation["launch"] = server.launch
-                    attestation["seeded_sampling_probe"] = _probe_seeded_sampling(
-                        server.base_url,
-                        served_model=artifact.served_model,
-                        timeout_s=arm.model_request_timeout_s,
-                    )
-                    model_record = artifact.record(attestation=attestation)
-                    output.mkdir(parents=True, exist_ok=True)
-                    _run_selected(server.base_url)
-            finally:
-                if output.is_dir() and log_path.is_file():
-                    shutil.copy2(log_path, output / "sglang.log")
+    try:
+        if scripted or args.base_url:
+            _run_selected(args.base_url or "http://127.0.0.1:1/v1")
+        else:
+            assert artifact is not None
+            if args.sglang_python is None:
+                raise SystemExit("local causal evaluation requires explicit --sglang-python")
+            with tempfile.TemporaryDirectory(prefix="juergen-sglang-") as temporary:
+                log_path = Path(temporary) / "sglang.log"
+                try:
+                    with _sglang(
+                        python=args.sglang_python,
+                        model_path=args.model_path,
+                        log_path=log_path,
+                        port=args.sglang_port,
+                        mem_fraction_static=args.sglang_mem_fraction,
+                        ready_timeout_s=args.sglang_ready_timeout_s,
+                        served_model=served_model,
+                    ) as server:
+                        reverified = _verify_model_artifact(args.model_path)
+                        if reverified != artifact:
+                            raise RuntimeError(
+                                "model artifact changed while sglang was loading it"
+                            )
+                        attestation = _attest_local_server(
+                            server.base_url, artifact=artifact
+                        )
+                        attestation["launch"] = server.launch
+                        attestation["seeded_sampling_probe"] = _probe_seeded_sampling(
+                            server.base_url,
+                            served_model=artifact.served_model,
+                            timeout_s=arm.model_request_timeout_s,
+                        )
+                        model_record = artifact.record(attestation=attestation)
+                        _run_selected(server.base_url)
+                finally:
+                    if log_path.is_file():
+                        shutil.copy2(log_path, output / "sglang.log")
+    except BaseException:
+        publication.cleanup()
+        raise
 
     infrastructure_errors = [
         {
@@ -1662,8 +1842,19 @@ def main(argv: list[str] | None = None) -> int:
         for row in rows
         if row["validity"] != "valid"
     ]
+    infrastructure_errors.extend(
+        _trial_contract_errors(
+            rows, cell_ids=cell_ids, expected_trials=args.trials
+        )
+    )
 
-    aggregate = _aggregate(rows, cell_ids=cell_ids, scripted=scripted, negative=negative)
+    aggregate = _aggregate(
+        rows,
+        cell_ids=cell_ids,
+        expected_trials=args.trials,
+        scripted=scripted,
+        negative=negative,
+    )
     result = {
         "schema_version": 3,
         "arm": args.arm,
@@ -1738,7 +1929,12 @@ def main(argv: list[str] | None = None) -> int:
         "infrastructure_errors": infrastructure_errors,
         "episodes": rows,
     }
-    _atomic_json(output / "result.json", result)
+    try:
+        _atomic_json(output / "result.json", result)
+        publication.publish(forbidden_values=forbidden_output_values)
+    except BaseException:
+        publication.cleanup()
+        raise
     print(
         json.dumps(
             {
