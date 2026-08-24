@@ -106,7 +106,9 @@ _POOL_STARTUP_TIMEOUT_S = 1200.0
 _GUEST_REQUEST_TIMEOUT_S = 60.0
 _QEMU_SHUTDOWN_TIMEOUT_S = 15.0
 _SUPERVISOR_REAP_TIMEOUT_S = 20.0
+_SUPERVISOR_KILL_TIMEOUT_S = 10.0
 _ATTEMPT_LAUNCH_MARGIN_S = 20.0
+_ATTEMPT_SESSION_READY_TIMEOUT_S = _ATTEMPT_LAUNCH_MARGIN_S
 _SCHEDULER_POLL_S = 0.1
 _WORKER_START_METHOD = "spawn"
 _RESULT_COMMITTED = "RESULT_COMMITTED.json"
@@ -1950,8 +1952,17 @@ def _worker_pool(runtime: _WorkerRuntime, spec: _AttemptSpec) -> dict[str, Any]:
     }
 
 
-def _attempt_process_main(runtime: _WorkerRuntime, spec: _AttemptSpec) -> None:
+def _attempt_process_main(
+    runtime: _WorkerRuntime,
+    spec: _AttemptSpec,
+    session_ready: Any | None = None,
+) -> None:
     os.setsid()
+    if os.getpid() != os.getpgrp():
+        raise RuntimeError("attempt worker did not establish its own process group")
+    if session_ready is not None:
+        session_ready.send(os.getpid())
+        session_ready.close()
     attempt_root = _attempt_root(runtime, spec)
     attempt_root.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
@@ -1963,95 +1974,156 @@ def _attempt_process_main(runtime: _WorkerRuntime, spec: _AttemptSpec) -> None:
         ],
         force=True,
     )
-    row: dict[str, Any]
+    from agent.desktop import close_all_pools
+
     try:
-        config = _eval_config(
-            arm=runtime.arm,
-            tier=runtime.tier,
-            task_ids=[spec.task.id],
-            artifacts=attempt_root / "artifacts",
-            traces_dir=attempt_root / "traces",
-            pool=_worker_pool(runtime, spec),
-            base_url=runtime.base_url,
-            temperature=runtime.temperature,
-            top_p=runtime.top_p,
-            max_tokens=runtime.max_tokens,
-            served_model=runtime.served_model,
-            seed=spec.sampling_seed,
-        )
-        environment = vf.Environment(config)
-        traces = asyncio.run(run_eval(environment, config))
-        if len(traces) != 1:
-            raise RuntimeError(
-                f"attempt {spec.index} selected one cell but produced {len(traces)} traces"
+        row: dict[str, Any]
+        try:
+            config = _eval_config(
+                arm=runtime.arm,
+                tier=runtime.tier,
+                task_ids=[spec.task.id],
+                artifacts=attempt_root / "artifacts",
+                traces_dir=attempt_root / "traces",
+                pool=_worker_pool(runtime, spec),
+                base_url=runtime.base_url,
+                temperature=runtime.temperature,
+                top_p=runtime.top_p,
+                max_tokens=runtime.max_tokens,
+                served_model=runtime.served_model,
+                seed=spec.sampling_seed,
             )
-        row = {
-            **_episode_row(traces[0], spec.trial),
-            **_attempt_row_identity(runtime, spec),
-            "model": runtime.model,
-        }
-    except Exception as error:
-        _LOGGER.exception(
-            "attempt worker failed: index=%d cell=%s trial=%d",
-            spec.index,
-            spec.task.id,
-            spec.trial,
-        )
-        row = _infra_invalid_attempt_row(
-            runtime,
-            spec,
-            error_type=type(error).__name__,
-            message=str(error),
-        )
-    try:
+            environment = vf.Environment(config)
+            traces = asyncio.run(run_eval(environment, config))
+            if len(traces) != 1:
+                raise RuntimeError(
+                    f"attempt {spec.index} selected one cell but produced {len(traces)} traces"
+                )
+            row = {
+                **_episode_row(traces[0], spec.trial),
+                **_attempt_row_identity(runtime, spec),
+                "model": runtime.model,
+            }
+        except Exception as error:
+            _LOGGER.exception(
+                "attempt worker failed: index=%d cell=%s trial=%d",
+                spec.index,
+                spec.task.id,
+                spec.trial,
+            )
+            row = _infra_invalid_attempt_row(
+                runtime,
+                spec,
+                error_type=type(error).__name__,
+                message=str(error),
+            )
         _atomic_json(_attempt_result_path(runtime, spec), row)
     finally:
-        from agent.desktop import close_all_pools
-
         close_all_pools()
 
 
 def _spawn_attempt_process(
     runtime: _WorkerRuntime, spec: _AttemptSpec
 ) -> multiprocessing.Process:
-    process = multiprocessing.get_context(_WORKER_START_METHOD).Process(
+    context = multiprocessing.get_context(_WORKER_START_METHOD)
+    receiver, sender = context.Pipe(duplex=False)
+    process = context.Process(
         target=_attempt_process_main,
-        args=(runtime, spec),
+        args=(runtime, spec, sender),
         name=f"signoflife-{spec.index:03d}",
     )
     process.start()
+    sender.close()
+    poller = select.poll()
+    poller.register(receiver.fileno(), select.POLLIN | select.POLLHUP | select.POLLERR)
+    poller.register(process.sentinel, select.POLLIN | select.POLLHUP | select.POLLERR)
+    events = poller.poll(int(_ATTEMPT_SESSION_READY_TIMEOUT_S * 1000))
+    try:
+        if not events or not receiver.poll():
+            raise RuntimeError("attempt worker did not establish its session in time")
+        leader_pid = receiver.recv()
+        if type(leader_pid) is not int or leader_pid != process.pid:
+            raise RuntimeError(
+                f"attempt worker reported invalid session leader {leader_pid!r}"
+            )
+        if os.getpgid(process.pid) != process.pid:
+            raise RuntimeError("attempt worker session identity changed after readiness")
+    except BaseException:
+        try:
+            if process.pid is not None and os.getpgid(process.pid) == process.pid:
+                _terminate_attempt_process_group(process)
+            else:
+                process.terminate()
+                if not _wait_for_attempt_exit(process, _SUPERVISOR_KILL_TIMEOUT_S):
+                    process.kill()
+                process.join()
+        except ProcessLookupError:
+            process.join()
+        raise
+    finally:
+        receiver.close()
     return process
 
 
-def _terminate_attempt_process_group(process: multiprocessing.Process) -> None:
+def _attempt_process_exited(process: multiprocessing.Process) -> bool:
+    poller = select.poll()
+    poller.register(process.sentinel, select.POLLIN | select.POLLHUP | select.POLLERR)
+    return bool(poller.poll(0))
+
+
+def _wait_for_attempt_exit(
+    process: multiprocessing.Process, timeout_s: float
+) -> bool:
+    poller = select.poll()
+    poller.register(process.sentinel, select.POLLIN | select.POLLHUP | select.POLLERR)
+    return bool(poller.poll(max(0, int(timeout_s * 1000))))
+
+
+def _terminate_attempt_process_group(
+    process: multiprocessing.Process, *, terminate: bool = True
+) -> bool:
     if process.pid is None:
         raise RuntimeError("attempt process has no pid")
-    try:
-        process_group = os.getpgid(process.pid)
-    except ProcessLookupError:
-        process.join()
-        return
-    if process_group != process.pid:
-        process.terminate()
-        process.join(timeout=_SUPERVISOR_REAP_TIMEOUT_S)
-        if process.is_alive():
-            process.kill()
-            process.join(timeout=_SUPERVISOR_REAP_TIMEOUT_S)
+    process_group = os.getpgid(process.pid)
+    if process_group != process.pid or process_group == os.getpgrp():
         raise RuntimeError(
-            f"attempt process {process.pid} did not establish its own process group"
+            f"attempt process {process.pid} is not in its owned process group"
         )
-    os.killpg(process_group, signal.SIGTERM)
-    process.join(timeout=_SUPERVISOR_REAP_TIMEOUT_S)
-    if process.is_alive():
-        os.killpg(process_group, signal.SIGKILL)
-        process.join(timeout=_SUPERVISOR_REAP_TIMEOUT_S)
-    if process.is_alive():
-        raise RuntimeError(f"attempt process group {process_group} survived SIGKILL")
-    try:
-        os.killpg(process_group, 0)
-    except ProcessLookupError:
-        return
-    raise RuntimeError(f"attempt process group {process_group} still exists after reap")
+    members = _process_group_members(process_group)
+    leaked_descendants = any(pid != process.pid for pid in members)
+    if terminate or leaked_descendants:
+        _signal_process_group(process_group, signal.SIGTERM)
+        members = _wait_for_reserved_leader_only(
+            pgid=process_group,
+            leader_pid=process.pid,
+            timeout_s=_SUPERVISOR_REAP_TIMEOUT_S,
+        )
+    if members and members != {process.pid: "Z"}:
+        _signal_process_group(process_group, signal.SIGKILL)
+        members = _wait_for_reserved_leader_only(
+            pgid=process_group,
+            leader_pid=process.pid,
+            timeout_s=_SUPERVISOR_KILL_TIMEOUT_S,
+        )
+    if members and members != {process.pid: "Z"}:
+        raise RuntimeError(
+            f"attempt process group {process_group} survived SIGKILL: {members}"
+        )
+    if not _attempt_process_exited(process):
+        _signal_process_group(process_group, signal.SIGKILL)
+        if not _wait_for_attempt_exit(process, _SUPERVISOR_KILL_TIMEOUT_S):
+            raise RuntimeError(
+                f"attempt process leader {process.pid} did not become reapable"
+            )
+    process.join()
+    remaining = _wait_for_empty_process_group(
+        process_group, _SUPERVISOR_KILL_TIMEOUT_S
+    )
+    if remaining:
+        raise RuntimeError(
+            f"attempt process group {process_group} remains after leader reap: {remaining}"
+        )
+    return leaked_descendants
 
 
 def _read_attempt_row(runtime: _WorkerRuntime, spec: _AttemptSpec) -> dict[str, Any]:
@@ -2087,99 +2159,117 @@ def _run_attempts(
 ) -> list[dict[str, Any]]:
     pending = iter(specs)
     active: dict[int, _ActiveAttempt] = {}
+    reaped: set[int] = set()
     rows: list[dict[str, Any]] = []
     exhausted = False
-    while active or not exhausted:
-        while len(active) < runtime.vm_slots and not exhausted:
-            try:
-                spec = next(pending)
-            except StopIteration:
-                exhausted = True
-                break
-            _attempt_root(runtime, spec).mkdir(parents=True, exist_ok=True)
-            started_at = time.monotonic()
-            try:
-                process = _spawn_attempt_process(runtime, spec)
-            except (OSError, RuntimeError) as error:
-                row = _infra_invalid_attempt_row(
-                    runtime,
-                    spec,
-                    error_type="AttemptSpawnError",
-                    message=str(error),
-                )
-                _atomic_json(_attempt_result_path(runtime, spec), row)
-                rows.append(row)
-                _LOGGER.exception(
-                    "attempt spawn failed: index=%d cell=%s trial=%d",
-                    spec.index,
-                    spec.task.id,
-                    spec.trial,
-                )
-                continue
-            active[spec.index] = _ActiveAttempt(
-                spec=spec,
-                process=process,
-                started_at=started_at,
-            )
-            _LOGGER.info(
-                "attempt start: index=%d cell=%s trial=%d pid=%s bound=%.0fs",
-                spec.index,
-                spec.task.id,
-                spec.trial,
-                process.pid,
-                spec.wall_bound_s,
-            )
-        finished: list[int] = []
-        now = time.monotonic()
-        for index, attempt in active.items():
-            process = attempt.process
-            spec = attempt.spec
-            if not process.is_alive():
-                process.join()
-                row = (
-                    _read_attempt_row(runtime, spec)
-                    if process.exitcode == 0
-                    else _infra_invalid_attempt_row(
+    try:
+        while active or not exhausted:
+            while len(active) < runtime.vm_slots and not exhausted:
+                try:
+                    spec = next(pending)
+                except StopIteration:
+                    exhausted = True
+                    break
+                _attempt_root(runtime, spec).mkdir(parents=True, exist_ok=True)
+                started_at = time.monotonic()
+                try:
+                    process = _spawn_attempt_process(runtime, spec)
+                except (OSError, RuntimeError) as error:
+                    row = _infra_invalid_attempt_row(
                         runtime,
                         spec,
-                        error_type="AttemptProcessExit",
-                        message=f"attempt process exited with status {process.exitcode}",
+                        error_type="AttemptSpawnError",
+                        message=str(error),
                     )
+                    _atomic_json(_attempt_result_path(runtime, spec), row)
+                    rows.append(row)
+                    _LOGGER.exception(
+                        "attempt spawn failed: index=%d cell=%s trial=%d",
+                        spec.index,
+                        spec.task.id,
+                        spec.trial,
+                    )
+                    continue
+                active[spec.index] = _ActiveAttempt(
+                    spec=spec,
+                    process=process,
+                    started_at=started_at,
                 )
-            elif now - attempt.started_at >= spec.wall_bound_s:
-                _LOGGER.error(
-                    "attempt wall deadline exceeded: index=%d cell=%s trial=%d "
-                    "pid=%s bound=%.0fs",
+                _LOGGER.info(
+                    "attempt start: index=%d cell=%s trial=%d pid=%s bound=%.0fs",
                     spec.index,
                     spec.task.id,
                     spec.trial,
                     process.pid,
                     spec.wall_bound_s,
                 )
-                _terminate_attempt_process_group(process)
-                row = _infra_invalid_attempt_row(
-                    runtime,
-                    spec,
-                    error_type="AttemptWallTimeout",
-                    message=f"attempt exceeded derived wall bound of {spec.wall_bound_s:.0f}s",
+            finished: list[int] = []
+            now = time.monotonic()
+            for index, attempt in active.items():
+                process = attempt.process
+                spec = attempt.spec
+                if _attempt_process_exited(process):
+                    leaked_descendants = _terminate_attempt_process_group(
+                        process, terminate=False
+                    )
+                    reaped.add(index)
+                    if leaked_descendants:
+                        row = _infra_invalid_attempt_row(
+                            runtime,
+                            spec,
+                            error_type="AttemptDescendantLeak",
+                            message="attempt process exited with live descendants",
+                        )
+                        _atomic_json(_attempt_result_path(runtime, spec), row)
+                    elif process.exitcode == 0:
+                        row = _read_attempt_row(runtime, spec)
+                    else:
+                        row = _infra_invalid_attempt_row(
+                            runtime,
+                            spec,
+                            error_type="AttemptProcessExit",
+                            message=f"attempt process exited with status {process.exitcode}",
+                        )
+                        _atomic_json(_attempt_result_path(runtime, spec), row)
+                elif now - attempt.started_at >= spec.wall_bound_s:
+                    _LOGGER.error(
+                        "attempt wall deadline exceeded: index=%d cell=%s trial=%d "
+                        "pid=%s bound=%.0fs",
+                        spec.index,
+                        spec.task.id,
+                        spec.trial,
+                        process.pid,
+                        spec.wall_bound_s,
+                    )
+                    _terminate_attempt_process_group(process)
+                    reaped.add(index)
+                    row = _infra_invalid_attempt_row(
+                        runtime,
+                        spec,
+                        error_type="AttemptWallTimeout",
+                        message=f"attempt exceeded derived wall bound of {spec.wall_bound_s:.0f}s",
+                    )
+                    _atomic_json(_attempt_result_path(runtime, spec), row)
+                else:
+                    continue
+                rows.append(row)
+                finished.append(index)
+                _LOGGER.info(
+                    "attempt done: index=%d cell=%s trial=%d validity=%s success=%s",
+                    spec.index,
+                    spec.task.id,
+                    spec.trial,
+                    row["validity"],
+                    row["success"],
                 )
-                _atomic_json(_attempt_result_path(runtime, spec), row)
-            else:
-                continue
-            rows.append(row)
-            finished.append(index)
-            _LOGGER.info(
-                "attempt done: index=%d cell=%s trial=%d validity=%s success=%s",
-                spec.index,
-                spec.task.id,
-                spec.trial,
-                row["validity"],
-                row["success"],
-            )
-        for index in finished:
-            del active[index]
-        if active and not finished:
-            time.sleep(_SCHEDULER_POLL_S)
+            for index in finished:
+                del active[index]
+            if active and not finished:
+                time.sleep(_SCHEDULER_POLL_S)
+    finally:
+        for index, attempt in active.items():
+            if index not in reaped:
+                _terminate_attempt_process_group(attempt.process)
     return sorted(rows, key=lambda row: int(row["index"]))
 
 

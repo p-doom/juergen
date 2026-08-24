@@ -21,6 +21,8 @@ import contextlib
 import json
 import math
 import os
+import signal
+import subprocess
 import sys
 import threading
 import time
@@ -1267,6 +1269,159 @@ def _scheduler_runtime(tmp_path):
     )
 
 
+def _crash_with_stubborn_descendant(pid_path: str) -> None:
+    os.setsid()
+    descendant = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)",
+        ]
+    )
+    Path(pid_path).write_text(str(descendant.pid), encoding="utf-8")
+    os._exit(7)
+
+
+def _wait_with_stubborn_descendant(pid_path: str) -> None:
+    os.setsid()
+    descendant = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)",
+        ]
+    )
+    Path(pid_path).write_text(str(descendant.pid), encoding="utf-8")
+    time.sleep(300)
+
+
+def test_natural_worker_crash_reaps_its_stubborn_descendant(
+    tmp_path, monkeypatch
+) -> None:
+    import multiprocessing
+
+    import evals.signoflife.__main__ as dispatcher
+
+    runtime = _scheduler_runtime(tmp_path)
+    spec = dispatcher._AttemptSpec(
+        index=0,
+        cell_ordinal=0,
+        trial=1,
+        task=load_suite().by_id("terminal_submit_only"),
+        wall_bound_s=10.0,
+    )
+    descendant_path = tmp_path / "descendant.pid"
+    launched = []
+
+    def spawn(_runtime, _spec):
+        process = multiprocessing.get_context("fork").Process(
+            target=_crash_with_stubborn_descendant,
+            args=(str(descendant_path),),
+        )
+        process.start()
+        launched.append(process)
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            try:
+                if os.getpgid(process.pid) == process.pid and descendant_path.exists():
+                    break
+            except ProcessLookupError:
+                pass
+            time.sleep(0.01)
+        assert descendant_path.exists()
+        assert os.getpgid(process.pid) == process.pid
+        return process
+
+    monkeypatch.setattr(dispatcher, "_spawn_attempt_process", spawn)
+    monkeypatch.setattr(dispatcher, "_SCHEDULER_POLL_S", 0.01)
+    monkeypatch.setattr(dispatcher, "_SUPERVISOR_REAP_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(dispatcher, "_SUPERVISOR_KILL_TIMEOUT_S", 3.0)
+    monkeypatch.setattr(dispatcher, "_SGLANG_GROUP_POLL_S", 0.01)
+    try:
+        rows = dispatcher._run_attempts(runtime, [spec])
+        descendant = int(descendant_path.read_text(encoding="utf-8"))
+        with pytest.raises(ProcessLookupError):
+            os.killpg(launched[0].pid, 0)
+        assert not Path(f"/proc/{descendant}").exists()
+        assert rows[0]["infra_error"]["type"] == "AttemptDescendantLeak"
+    finally:
+        if launched and launched[0].pid is not None:
+            try:
+                os.killpg(launched[0].pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            launched[0].join(timeout=5)
+
+
+def test_supervisor_baseexception_reaps_its_stubborn_descendant(
+    tmp_path, monkeypatch
+) -> None:
+    import multiprocessing
+
+    import evals.signoflife.__main__ as dispatcher
+
+    runtime = _scheduler_runtime(tmp_path)
+    spec = dispatcher._AttemptSpec(
+        index=0,
+        cell_ordinal=0,
+        trial=1,
+        task=load_suite().by_id("terminal_submit_only"),
+        wall_bound_s=10.0,
+    )
+    descendant_path = tmp_path / "descendant.pid"
+    launched = []
+
+    def spawn(_runtime, _spec):
+        process = multiprocessing.get_context("fork").Process(
+            target=_wait_with_stubborn_descendant,
+            args=(str(descendant_path),),
+        )
+        process.start()
+        launched.append(process)
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if os.getpgid(process.pid) == process.pid and descendant_path.exists():
+                break
+            time.sleep(0.01)
+        assert descendant_path.exists()
+        assert os.getpgid(process.pid) == process.pid
+        return process
+
+    original_exited = dispatcher._attempt_process_exited
+    interrupted = False
+
+    def interrupt(process):
+        nonlocal interrupted
+        if interrupted:
+            return original_exited(process)
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not descendant_path.exists():
+            time.sleep(0.01)
+        assert descendant_path.exists()
+        interrupted = True
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(dispatcher, "_spawn_attempt_process", spawn)
+    monkeypatch.setattr(dispatcher, "_attempt_process_exited", interrupt)
+    monkeypatch.setattr(dispatcher, "_SUPERVISOR_REAP_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(dispatcher, "_SUPERVISOR_KILL_TIMEOUT_S", 3.0)
+    monkeypatch.setattr(dispatcher, "_SGLANG_GROUP_POLL_S", 0.01)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            dispatcher._run_attempts(runtime, [spec])
+        descendant = int(descendant_path.read_text(encoding="utf-8"))
+        with pytest.raises(ProcessLookupError):
+            os.killpg(launched[0].pid, 0)
+        assert not Path(f"/proc/{descendant}").exists()
+    finally:
+        if launched and launched[0].pid is not None:
+            try:
+                os.killpg(launched[0].pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            launched[0].join(timeout=5)
+
+
 def test_the_dynamic_scheduler_refills_a_free_slot_and_returns_canonical_order(
     tmp_path, monkeypatch
 ) -> None:
@@ -1315,6 +1470,14 @@ def test_the_dynamic_scheduler_refills_a_free_slot_and_returns_canonical_order(
         return Process(spec.index)
 
     monkeypatch.setattr(dispatcher, "_spawn_attempt_process", spawn)
+    monkeypatch.setattr(
+        dispatcher, "_attempt_process_exited", lambda process: not process.is_alive()
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "_terminate_attempt_process_group",
+        lambda process, *, terminate=False: False,
+    )
     monkeypatch.setattr(dispatcher.time, "sleep", lambda seconds: None)
 
     rows = dispatcher._run_attempts(runtime, specs)
@@ -1379,7 +1542,12 @@ def test_the_scheduler_types_a_wall_timeout_and_preserves_null_success(
         dispatcher, "_spawn_attempt_process", lambda runtime, spec: Process()
     )
     monkeypatch.setattr(
-        dispatcher, "_terminate_attempt_process_group", lambda process: None
+        dispatcher, "_attempt_process_exited", lambda process: False
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "_terminate_attempt_process_group",
+        lambda process, *, terminate=True: False,
     )
 
     rows = dispatcher._run_attempts(runtime, [spec])
