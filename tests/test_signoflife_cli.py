@@ -30,6 +30,7 @@ import juergen_fake_desktop
 import pytest
 from test_model_attestation import _register_model
 
+import evals.signoflife.__main__ as dispatcher
 from evals.signoflife.__main__ import main, read_committed_result
 from evals.signoflife.suite import load_suite
 
@@ -39,6 +40,65 @@ from evals.signoflife.suite import load_suite
 # here without a VM.
 CELL_IDS = [task.id for task in load_suite().for_tier("scored")]
 CANDIDATE_IDS = [task.id for task in load_suite().for_tier("candidate")]
+
+
+@pytest.mark.parametrize("value", ["", "1"])
+def test_sglang_refuses_disabled_cudnn_validation_before_acquisition(
+    monkeypatch, tmp_path: Path, value: str
+) -> None:
+    monkeypatch.setenv("SGLANG_DISABLE_CUDNN_CHECK", value)
+    monkeypatch.setattr(
+        dispatcher.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: pytest.fail("SGLang process was acquired"),
+    )
+    log_path = tmp_path / "output" / "sglang.log"
+
+    with pytest.raises(RuntimeError, match="cuDNN compatibility validation"):
+        with dispatcher._sglang(
+            python="/runtime/bin/python",
+            model_path=tmp_path / "model",
+            log_path=log_path,
+            port=29500,
+            mem_fraction_static=0.65,
+            ready_timeout_s=1.0,
+            served_model="test-model",
+        ):
+            pytest.fail("SGLang became ready")
+
+    assert not log_path.parent.exists()
+
+
+def test_sglang_child_does_not_receive_cudnn_check_bypass(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("SGLANG_DISABLE_CUDNN_CHECK", raising=False)
+    child_environment = None
+
+    class ExpectedPopen(Exception):
+        pass
+
+    def capture_environment(*_args, **kwargs):
+        nonlocal child_environment
+        child_environment = kwargs["env"]
+        raise ExpectedPopen
+
+    monkeypatch.setattr(dispatcher.subprocess, "Popen", capture_environment)
+
+    with pytest.raises(ExpectedPopen):
+        with dispatcher._sglang(
+            python="/runtime/bin/python",
+            model_path=tmp_path / "model",
+            log_path=tmp_path / "output" / "sglang.log",
+            port=29500,
+            mem_fraction_static=0.65,
+            ready_timeout_s=1.0,
+            served_model="test-model",
+        ):
+            pytest.fail("SGLang became ready")
+
+    assert child_environment is not None
+    assert "SGLANG_DISABLE_CUDNN_CHECK" not in child_environment
 
 
 @pytest.fixture(autouse=True)

@@ -978,6 +978,8 @@ def _sglang(
     `verifiers`, sglang needs a 14 GB CUDA stack, and the two do not have to be the
     same venv.
     """
+    if "SGLANG_DISABLE_CUDNN_CHECK" in os.environ:
+        raise RuntimeError("refusing disabled SGLang cuDNN compatibility validation")
     _preflight_pidfd_getfd()
     if port == 0:
         # sglang derives grpc_port = port + 10000 and rejects > 65535, and its own
@@ -1103,15 +1105,12 @@ def _sglang_command(
         "--chunked-prefill-size",
         "2048",
     ]
-
-
 def _sglang_environment() -> dict[str, str]:
     rejected = sorted(
         key
         for key, value in os.environ.items()
         if value
         and key not in _SGLANG_INHERITED_ENV
-        and key != "SGLANG_DISABLE_CUDNN_CHECK"
         and (
             key in _SGLANG_SEMANTIC_ENV_NAMES
             or key.startswith(_SGLANG_SEMANTIC_ENV_PREFIXES)
@@ -1125,7 +1124,6 @@ def _sglang_environment() -> dict[str, str]:
     environment = {
         key: os.environ[key] for key in sorted(_SGLANG_INHERITED_ENV) if key in os.environ
     }
-    environment["SGLANG_DISABLE_CUDNN_CHECK"] = "1"
     return environment
 
 
