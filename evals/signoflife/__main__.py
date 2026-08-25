@@ -106,7 +106,9 @@ _POOL_CHECKOUT_TIMEOUT_S = 1800.0
 _POOL_STARTUP_TIMEOUT_S = 1200.0
 _GUEST_REQUEST_TIMEOUT_S = 60.0
 _QEMU_SHUTDOWN_TIMEOUT_S = 15.0
+_SCONTROL_PATH = Path("/usr/bin/scontrol")
 _SCONTROL_TIMEOUT_S = 10.0
+_SCONTROL_KILL_TIMEOUT_S = 1.0
 _SCONTROL_MAX_OUTPUT_BYTES = 64 * 1024
 _SUPERVISOR_REAP_TIMEOUT_S = 20.0
 _SUPERVISOR_KILL_TIMEOUT_S = 10.0
@@ -1613,24 +1615,89 @@ def _parse_slurm_duration_s(value: str) -> float:
     return float(((days * 24 + hours) * 60 + minutes) * 60 + seconds)
 
 
+def _bounded_scontrol(job_id: str) -> str:
+    try:
+        process = subprocess.Popen(
+            [str(_SCONTROL_PATH), "show", "job", job_id, "-o"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except OSError as error:
+        raise RuntimeError(f"cannot start scontrol for job {job_id}") from error
+    streams: dict[int, str] = {}
+    captured = {"stdout": bytearray(), "stderr": bytearray()}
+    try:
+        if process.pid is None:
+            raise RuntimeError("scontrol process has no pid")
+        if process.stdout is None or process.stderr is None:
+            raise RuntimeError("scontrol output pipes were not created")
+        poller = select.poll()
+        for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+            descriptor = stream.fileno()
+            os.set_blocking(descriptor, False)
+            poller.register(
+                descriptor,
+                select.POLLIN | select.POLLHUP | select.POLLERR,
+            )
+            streams[descriptor] = name
+        deadline = time.monotonic() + _SCONTROL_TIMEOUT_S
+        while streams or process.poll() is None:
+            remaining_s = deadline - time.monotonic()
+            if remaining_s <= 0.0:
+                raise RuntimeError(f"scontrol query timed out for job {job_id}")
+            for descriptor, _event in poller.poll(
+                max(1, min(100, math.ceil(remaining_s * 1000)))
+            ):
+                name = streams[descriptor]
+                while True:
+                    try:
+                        chunk = os.read(descriptor, 8192)
+                    except BlockingIOError:
+                        break
+                    if not chunk:
+                        poller.unregister(descriptor)
+                        del streams[descriptor]
+                        break
+                    captured[name].extend(chunk)
+                    if len(captured[name]) > _SCONTROL_MAX_OUTPUT_BYTES:
+                        raise RuntimeError(
+                            f"scontrol {name} exceeds its bound for job {job_id}"
+                        )
+        return_code = process.wait()
+        if return_code != 0:
+            raise RuntimeError(f"scontrol query failed for job {job_id}")
+        return captured["stdout"].decode("utf-8", errors="strict")
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as error:
+        raise RuntimeError(f"bounded scontrol query failed for job {job_id}") from error
+    finally:
+        if process.stdout is not None:
+            process.stdout.close()
+        if process.stderr is not None:
+            process.stderr.close()
+        if process.poll() is None:
+            try:
+                if process.pid is not None and process.pid != os.getpgrp():
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=_SCONTROL_KILL_TIMEOUT_S)
+            except subprocess.TimeoutExpired as error:
+                raise RuntimeError(
+                    f"scontrol process did not reap for job {job_id}"
+                ) from error
+
+
 def _slurm_remaining_wall_s(job_id: str) -> float:
     if not job_id.isascii() or not job_id.isdecimal() or len(job_id) > 20:
         raise RuntimeError(f"invalid SLURM_JOB_ID {job_id!r}")
-    try:
-        completed = subprocess.run(
-            ["scontrol", "show", "job", job_id, "-o"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=_SCONTROL_TIMEOUT_S,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise RuntimeError(f"bounded scontrol query failed for job {job_id}") from error
-    if len(completed.stdout.encode()) > _SCONTROL_MAX_OUTPUT_BYTES:
-        raise RuntimeError(f"scontrol output exceeds its bound for job {job_id}")
+    stdout = _bounded_scontrol(job_id)
     fields = {
         key: value
-        for token in completed.stdout.split()
+        for token in stdout.split()
         if "=" in token
         for key, value in [token.split("=", 1)]
     }

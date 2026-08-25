@@ -1215,26 +1215,66 @@ def test_slurm_duration_parsing_matches_scontrol(value, seconds) -> None:
     assert _parse_slurm_duration_s(value) == seconds
 
 
-def test_scontrol_query_has_a_hard_time_bound(monkeypatch) -> None:
+def _scontrol_command(path: Path, source: str) -> Path:
+    path.write_text(f"#!{sys.executable}\n{source}", encoding="utf-8")
+    path.chmod(0o700)
+    return path
+
+
+def test_scontrol_query_uses_the_absolute_owned_command(tmp_path, monkeypatch) -> None:
     import evals.signoflife.__main__ as dispatcher
 
-    observed = {}
-
-    def run(argv, **kwargs):
-        observed.update(kwargs)
-        return subprocess.CompletedProcess(
-            argv,
-            0,
-            stdout="JobId=123 TimeLimit=02:00:00 RunTime=00:01:00\n",
-            stderr="",
-        )
-
-    monkeypatch.setattr(dispatcher.subprocess, "run", run)
+    command = _scontrol_command(
+        tmp_path / "scontrol",
+        "import sys\n"
+        "if sys.argv[1:] != ['show', 'job', '123', '-o']:\n"
+        "    raise SystemExit(2)\n"
+        "print('JobId=123 TimeLimit=02:00:00 RunTime=00:01:00')\n",
+    )
+    monkeypatch.setattr(dispatcher, "_SCONTROL_PATH", command)
 
     assert dispatcher._slurm_remaining_wall_s("123") == 7140.0
-    assert observed["timeout"] == dispatcher._SCONTROL_TIMEOUT_S
     with pytest.raises(RuntimeError, match="invalid SLURM_JOB_ID"):
         dispatcher._slurm_remaining_wall_s("--bad")
+
+
+@pytest.mark.parametrize("descriptor", [1, 2])
+def test_scontrol_stdout_and_stderr_are_online_bounded(
+    tmp_path, monkeypatch, descriptor
+) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    command = _scontrol_command(
+        tmp_path / "scontrol",
+        f"import os\nos.write({descriptor}, b'x' * 70000)\n",
+    )
+    monkeypatch.setattr(dispatcher, "_SCONTROL_PATH", command)
+
+    label = "stdout" if descriptor == 1 else "stderr"
+    with pytest.raises(RuntimeError, match=rf"scontrol {label} exceeds"):
+        dispatcher._slurm_remaining_wall_s("123")
+
+
+def test_scontrol_timeout_kills_and_reaps_its_process_session(
+    tmp_path, monkeypatch
+) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    pid_path = tmp_path / "pid"
+    command = _scontrol_command(
+        tmp_path / "scontrol",
+        "import os,pathlib,time\n"
+        f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))\n"
+        "time.sleep(60)\n",
+    )
+    monkeypatch.setattr(dispatcher, "_SCONTROL_PATH", command)
+    monkeypatch.setattr(dispatcher, "_SCONTROL_TIMEOUT_S", 0.5)
+
+    with pytest.raises(RuntimeError, match="scontrol query timed out"):
+        dispatcher._slurm_remaining_wall_s("123")
+
+    pid = int(pid_path.read_text(encoding="utf-8"))
+    assert not Path(f"/proc/{pid}").exists()
 
 
 def test_slurm_preflight_rejects_before_creating_the_output_or_starting_resources(
