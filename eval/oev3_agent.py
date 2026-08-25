@@ -225,12 +225,17 @@ class Oev3Agent:
         client = openai.OpenAI(base_url=base_url, api_key=api_key)
         for attempt in range(1, MAX_RETRY_TIMES + 1):
             try:
+                extra = {}
+                pp = os.environ.get("OEV3_PRESENCE_PENALTY")
+                if pp:
+                    extra["presence_penalty"] = float(pp)
                 response = client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     max_tokens=self.max_tokens,
                     temperature=self.temperature,
                     top_p=self.top_p,
+                    **extra,
                 )
                 return response.choices[0].message.content or ""
             except Exception as exc:
