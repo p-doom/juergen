@@ -85,6 +85,14 @@ from pipeline.crowdcast.lib.action_format import (  # noqa: E402
     FORMATTERS,
     get_formatter,
 )
+from pipeline.crowdcast.lib.app_filter import (  # noqa: E402
+    APP_UNKNOWN_MODES,
+    AppFilter,
+    AppSpan,
+    app_stats,
+    label_view_frames,
+    plan_app_spans,
+)
 from pipeline.crowdcast.lib.common import (  # noqa: E402
     ensure_dir,
     normalize_dashed_argv,
@@ -219,6 +227,11 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
             events, view.windows(), view.dead_zones, master_fps=view.master_fps
         )
         counters = result.counters
+        # Resolved once per segment: the filter config is plain data on the task
+        # (a frozen dataclass does not survive the pool's pickling as itself), and
+        # the per-frame app labels are derived only when something reads them.
+        app_cfg = AppFilter(**task["app_filter"])
+        app_frames = label_view_frames(view) if app_cfg.active else []
         n_events = len(events)
         n_discarded = (
             counters.n_discarded_black
@@ -241,32 +254,52 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
         if task["goals_by_segment"] is None:
             if len(view.frames) < task["min_frames"]:
                 return {**base, "status": "below_min_frames", "rows": []}
-            turns = [(str(f.image), result.labels[f.view_idx]) for f in view.frames]
+            all_turns = [(str(f.image), result.labels[f.view_idx]) for f in view.frames]
             instruction = _resolve_instruction(
                 task["index_row"],
                 filter_seg,
                 instruction=task["instruction"],
                 instruction_field=task["instruction_field"],
             )
-            messages = build_messages(
-                turns,
-                instruction=instruction,
-                system_prompt=task["system_prompt"],
-                terminal_token=task["terminal_token"],
-            )
-            rows.append({
-                "conversation_id": seg,
-                **common,
-                "instruction": instruction,
-                "goal_conditioned": instruction is not None,
-                "n_frames": len(turns),
-                "n_turns": len(turns),
-                "n_non_noop": sum(1 for _, a in turns if a != "NO_OP"),
-                "messages": messages,
-            })
+            spans = [AppSpan(None, 0, len(all_turns))]
+            if app_cfg.active:
+                spans = [
+                    sp
+                    for sp in plan_app_spans(
+                        app_frames, app_cfg, min_frames=task["min_frames"]
+                    )
+                ]
+                if not spans:
+                    return {**base, "status": "app_filtered", "rows": []}
+            for span_idx, span in enumerate(spans):
+                turns = all_turns[span.lo : span.hi]
+                if len(turns) < task["min_frames"]:
+                    continue
+                messages = build_messages(
+                    turns,
+                    instruction=instruction,
+                    system_prompt=task["system_prompt"],
+                    terminal_token=task["terminal_token"],
+                )
+                # A split segment yields several conversations, so the id has to
+                # carry the span. An unsplit run keeps the bare segment id, so
+                # every existing artifact's ids are unchanged.
+                conv_id = seg if len(spans) == 1 and span.lo == 0 else f"{seg}#a{span_idx}"
+                rows.append({
+                    "conversation_id": conv_id,
+                    **common,
+                    "instruction": instruction,
+                    "goal_conditioned": instruction is not None,
+                    "app": span.app,
+                    "app_seam_trimmed": span.seam_trimmed,
+                    "n_frames": len(turns),
+                    "n_turns": len(turns),
+                    "n_non_noop": sum(1 for _, a in turns if a != "NO_OP"),
+                    "messages": messages,
+                })
             return {
                 **base,
-                "status": "ok",
+                "status": "ok" if rows else "app_filtered",
                 "rows": rows,
                 "primitive_counts": result.primitive_counts,
                 "parse_counters": asdict(event_stats),
@@ -278,8 +311,18 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
         projections, proj_stats = project_goals(
             seg_goals, view, snap_start=task["snap_start"], min_frames=task["min_frames"]
         )
+        n_app_rejected = 0
         for proj in projections:
             goal = proj.goal
+            # The gate reads the goal's OWN frames, not the segment's: a goal is
+            # the unit being trained here, and a segment-wide verdict would admit
+            # a terminal goal inside a mostly-browser recording.
+            if app_cfg.active:
+                goal_apps = [app_frames[f.view_idx] for f in proj.frames]
+                stats = app_stats(goal_apps)
+                if not app_cfg.accepts(stats["app"], float(stats["app_frac"])):
+                    n_app_rejected += 1
+                    continue
             plan = usable_plan(goal) if task["use_plans"] else ""
             turns = [(str(f.image), result.labels[f.view_idx]) for f in proj.frames]
             for variant_idx, phrasing in enumerate(
@@ -322,6 +365,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
                 "n_empty_projection": proj_stats.n_empty_projection,
                 "n_too_few_frames": proj_stats.n_too_few_frames,
                 "n_snapped": proj_stats.n_snapped,
+                "n_app_rejected": n_app_rejected,
                 "rejected": proj_stats.rejected,
             },
         }
@@ -458,6 +502,38 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dead-zone-flag-frac", type=float, default=0.05,
                    help="Flag a segment when more than this fraction of its keylog events "
                         "were discarded by the dead-zone policy (realignment health).")
+    g = p.add_argument_group(
+        "foreground app",
+        "Filter or split conversations by the application that had focus "
+        "(lib/app_context, from the recorder's ContextChanged events).",
+    )
+    g.add_argument("--include-app", action="append", default=None, metavar="APP",
+                   help="Keep only conversations whose dominant app is one of these. "
+                        "Repeatable AND comma-separated (labctl renders every recipe "
+                        "arg as one --key=value, so it cannot repeat a flag). An "
+                        "unresolved app NEVER satisfies an include list.")
+    g.add_argument("--exclude-app", action="append", default=None, metavar="APP",
+                   help="Drop conversations whose dominant app is one of these.")
+    g.add_argument("--app-min-frac", type=float, default=0.0,
+                   help="Require the dominant app to hold at least this fraction of a "
+                        "conversation's labelled frames (0 = no requirement).")
+    g.add_argument("--app-unknown", choices=APP_UNKNOWN_MODES, default="keep",
+                   help="'keep' (default) or 'drop' conversations with no resolvable "
+                        "app — UNCAPTURED (the recorder's privacy blackout) or UNKNOWN.")
+    g.add_argument("--split-by-app", nargs="?", const=True, type=str2bool, default=False,
+                   metavar="BOOL",
+                   help="Cut each segment at every app switch: one conversation per "
+                        "application. Without it a conversation can teach the model to "
+                        "switch apps mid-episode for a reason that was the "
+                        "demonstrator's, not the screen's.")
+    g.add_argument("--app-min-run-frames", type=int, default=1,
+                   help="--split-by-app: drop a same-app run shorter than this.")
+    g.add_argument("--app-drop-seam-turns", nargs="?", const=True, type=str2bool,
+                   default=True, metavar="BOOL",
+                   help="--split-by-app: drop the boundary turn whose action window "
+                        "straddles the switch (default true). Its keystrokes belong "
+                        "partly to each app, so kept it is the one turn in a split "
+                        "conversation guaranteed to be mislabelled.")
     p.add_argument("--num-workers", type=int, default=0,
                    help="0 (default) = SLURM_CPUS_PER_TASK, else the CPU affinity "
                         f"mask capped at {AUTO_WORKER_CAP}. Never cpu_count(), which "
@@ -501,6 +577,19 @@ def main() -> None:
     )
     system_prompt_sha256 = hashlib.sha256(system_prompt.encode()).hexdigest()
 
+    app_filter = AppFilter.from_args(args)
+    # frozenset is not JSON-able and the pool pickles the task dicts; sorted
+    # tuples also make the manifest's record of the policy readable.
+    app_filter_payload = {
+        "include": frozenset(app_filter.include),
+        "exclude": frozenset(app_filter.exclude),
+        "min_frac": app_filter.min_frac,
+        "unknown": app_filter.unknown,
+        "split": app_filter.split,
+        "min_run_frames": app_filter.min_run_frames,
+        "drop_seam_turns": app_filter.drop_seam_turns,
+    }
+
     goal_mode = goals_map is not None
     rows_in = art.usable_rows()
     if args.limit is not None:
@@ -517,6 +606,7 @@ def main() -> None:
             "action_format": args.action_format,
             "continuous_action_hz": args.continuous_action_hz,
             "jitter_deadband_px": args.jitter_deadband_px,
+            "app_filter": app_filter_payload,
             "goals_by_segment": goals_map,
             "instruction": args.instruction,
             "instruction_field": args.instruction_field,
@@ -587,6 +677,15 @@ def main() -> None:
         "grammar": formatter.grammar,
         "continuous_action_hz": continuous_action_hz,
         "jitter_deadband_px": args.jitter_deadband_px,
+        "app_filter": {
+            "include": sorted(app_filter.include),
+            "exclude": sorted(app_filter.exclude),
+            "min_frac": app_filter.min_frac,
+            "unknown": app_filter.unknown,
+            "split": app_filter.split,
+            "min_run_frames": app_filter.min_run_frames,
+            "drop_seam_turns": app_filter.drop_seam_turns,
+        } if app_filter.active else None,
         "primitive_counts": dict(prim_totals) if prim_totals else None,
         "n_noop_turns": sum(r["n_turns"] - r["n_non_noop"] for r in records),
         "instruction": args.instruction,
