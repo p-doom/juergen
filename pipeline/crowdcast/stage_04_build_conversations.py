@@ -788,13 +788,45 @@ def main() -> None:
         if not goals_manifest_path.is_file():
             raise SystemExit(f"no manifest.json under {args.goals_dir} (not a goals artifact?)")
         goals_manifest = json.loads(goals_manifest_path.read_text())
-        assert_same_artifact(
-            str(goals_manifest.get("master_store_id")), art.master_store_id, what="master_store_id"
+        # Assert only what the producer actually recorded. A goals artifact built
+        # by this pipeline stamps both ids and both are checked; one built
+        # elsewhere (an external annotation run) stamps neither, and comparing
+        # against the string "None" would fail every such join for the wrong
+        # reason. Not silent: what could not be checked is named, because an
+        # unverifiable join is a weaker claim than a verified one and the run's
+        # log should say which it was.
+        unchecked = []
+        for key, current, what in (
+            ("master_store_id", art.master_store_id, "master_store_id"),
+            ("filter_id", art.filter_id, "filter_id"),
+        ):
+            recorded = goals_manifest.get(key)
+            if recorded is None:
+                unchecked.append(what)
+            else:
+                assert_same_artifact(str(recorded), current, what=what)
+        if unchecked:
+            print(
+                f"[conversations] WARNING: {args.goals_dir} records no "
+                f"{', '.join(unchecked)} — cannot verify these goals were built "
+                "against this run's inputs. Goals whose segments or master ticks "
+                "do not line up will show up as projection rejections, not as an "
+                "error.",
+                flush=True,
+            )
+        # `goals.jsonl` is what this pipeline's stage 03b writes; an external
+        # producer may name the same schema differently. The rows are validated
+        # either way, so the filename is the only thing being accommodated.
+        goals_file = next(
+            (args.goals_dir / n for n in ("goals.jsonl", "goal_frame_index.jsonl")
+             if (args.goals_dir / n).is_file()),
+            None,
         )
-        assert_same_artifact(
-            str(goals_manifest.get("filter_id")), art.filter_id, what="filter_id"
-        )
-        goals_map = goals_by_segment(load_goals(args.goals_dir / "goals.jsonl"))
+        if goals_file is None:
+            raise SystemExit(
+                f"no goals.jsonl or goal_frame_index.jsonl under {args.goals_dir}"
+            )
+        goals_map = goals_by_segment(load_goals(goals_file))
         goals_id = make_artifact_id(args.goals_dir)
 
     # Fails fast on an unknown format / invalid hz / negative deadband, and
