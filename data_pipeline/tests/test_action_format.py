@@ -546,3 +546,210 @@ class FormatterRegistryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JitterDeadbandTest(unittest.TestCase):
+    """``jitter_deadband_px``: drop incidental single-axis noise, keep intent.
+
+    The knob exists because a demonstrator's hand rests on the mouse while
+    clicking, scrolling and typing, and the recorder faithfully captures the
+    resulting 1-2 px tremor. Trained on, it teaches the model that every click
+    is preceded by a nudge. Suppression is deliberately narrow: one axis only,
+    within the deadband, and never at the cost of a window's last primitive.
+    """
+
+    def labels(
+        self,
+        events: list[RawEvent],
+        windows: list[Window] | None = None,
+        *,
+        grammar: str = "ordered_events_v2",
+        hz: float = 10.0,
+        jitter_px: int = 0,
+    ) -> list[str]:
+        return get_formatter(
+            grammar, continuous_action_hz=hz, jitter_deadband_px=jitter_px
+        ).format_segment(
+            events,
+            windows or [Window(master_idx=0, start=0, end=30)],
+            [],
+            master_fps=MASTER_FPS,
+        ).labels
+
+    def one(self, events: list[RawEvent], **kw: object) -> str:
+        return self.labels(events, **kw)[0]  # type: ignore[arg-type]
+
+    # ---------------------------------------------------------------- off
+
+    def test_off_by_default(self) -> None:
+        """Threshold 0 matches only an exact (0,0), which never renders — so
+        the default cannot change any existing dataset's labels."""
+        events = [
+            _scroll(0, 0.01, 0.0, -1.0),
+            _move(1, 0.02, -1.0, 0.0),
+            _scroll(2, 0.03, 0.0, -4.0),
+        ]
+        self.assertEqual(self.one(events), "scroll(0,-1); move(-1,0); scroll(0,-4)")
+
+    # ------------------------------------------------------------ dropping
+
+    def test_drops_sandwiched_move_and_merges_the_flanks(self) -> None:
+        """The two scrolls the noise move separated merge exactly as if it had
+        never occurred — not `scroll(0,-1); scroll(0,-4)`."""
+        events = [
+            _scroll(0, 0.01, 0.0, -1.0),
+            _move(1, 0.02, -1.0, 0.0),
+            _scroll(2, 0.03, 0.0, -4.0),
+        ]
+        self.assertEqual(self.one(events, jitter_px=1), "scroll(0,-5)")
+
+    def test_run_dropped_when_the_window_has_other_content(self) -> None:
+        events = [
+            _key(0, 0.01, "press", "LMB"),
+            _key(1, 0.02, "release", "LMB"),
+            _scroll(2, 0.03, 0.0, -1.0),
+            _move(3, 0.04, 0.0, 1.0),
+        ]
+        self.assertEqual(self.one(events, jitter_px=1), "down(LMB); up(LMB)")
+
+    def test_between_a_clicks_down_and_up(self) -> None:
+        """down and up are different kinds; the move between them goes, and
+        they never merge into each other."""
+        events = [
+            _key(0, 0.01, "press", "LMB"),
+            _move(1, 0.02, -1.0, 0.0),
+            _key(2, 0.03, "release", "LMB"),
+        ]
+        self.assertEqual(self.one(events, jitter_px=1), "down(LMB); up(LMB)")
+
+    # -------------------------------------------------------------- keeping
+
+    def test_never_empties_a_window(self) -> None:
+        """Both primitives are individually jitter, but they are the window's
+        entire content: emptying it would train an idle turn where the
+        demonstrator acted. Order is preserved either way."""
+        self.assertEqual(
+            self.one(
+                [_move(0, 0.01, 1.0, 0.0), _scroll(1, 0.02, 0.0, -1.0)], jitter_px=1
+            ),
+            "move(1,0); scroll(0,-1)",
+        )
+        self.assertEqual(
+            self.one(
+                [_scroll(0, 0.01, 0.0, -1.0), _move(1, 0.02, 1.0, 0.0)], jitter_px=1
+            ),
+            "scroll(0,-1); move(1,0)",
+        )
+
+    def test_a_diagonal_is_never_jitter(self) -> None:
+        """Two axes at once takes intent hand tremor does not produce, however
+        small each axis is."""
+        self.assertEqual(
+            self.one(
+                [_move(0, 0.01, 1.0, 0.0), _move(1, 0.02, 0.0, -1.0)], jitter_px=1
+            ),
+            "move(1,-1)",
+        )
+        self.assertEqual(
+            self.one(
+                [
+                    _key(0, 0.01, "press", "LMB"),
+                    _move(1, 0.02, 1.0, 0.0),
+                    _move(2, 0.03, 0.0, -1.0),
+                    _key(3, 0.04, "release", "LMB"),
+                ],
+                jitter_px=1,
+            ),
+            "down(LMB); move(1,-1); up(LMB)",
+        )
+
+    def test_the_threshold_is_on_the_merged_result_not_its_parts(self) -> None:
+        events = [
+            _scroll(0, 0.01, 0.0, -1.0),
+            _move(1, 0.02, 2.0, 0.0),
+            _scroll(2, 0.03, 0.0, -1.0),
+        ]
+        self.assertEqual(self.one(events, jitter_px=1), "scroll(0,-2); move(2,0)")
+
+    # -------------------------------------------------------------- merging
+
+    def test_merges_across_a_motor_tick_boundary(self) -> None:
+        """Still one contiguous move-only run, so it merges to ONE primitive
+        whose sum clears the threshold and is kept."""
+        self.assertEqual(
+            self.one(
+                [_move(0, 0.01, 1.0, 0.0), _move(1, 0.10, 1.0, 0.0)], jitter_px=1
+            ),
+            "move(2,0)",
+        )
+
+    def test_interleaved_scroll_and_move_sum_independently(self) -> None:
+        """Each kind sums across the whole run; the output leads with whichever
+        kind opened it."""
+        self.assertEqual(
+            self.one(
+                [
+                    _scroll(0, 0.01, 0.0, -1.0),
+                    _move(1, 0.02, 0.0, 1.0),
+                    _scroll(2, 0.03, 0.0, -2.0),
+                    _move(3, 0.04, 1.0, 0.0),
+                    _scroll(4, 0.05, 0.0, -11.0),
+                ],
+                jitter_px=1,
+            ),
+            "scroll(0,-14); move(1,1)",
+        )
+        self.assertEqual(
+            self.one(
+                [
+                    _move(0, 0.01, 1.0, 0.0),
+                    _scroll(1, 0.02, 0.0, -1.0),
+                    _move(2, 0.03, 2.0, 0.0),
+                    _scroll(3, 0.04, 0.0, -3.0),
+                ],
+                jitter_px=1,
+            ),
+            "move(3,0); scroll(0,-4)",
+        )
+
+    def test_a_run_summing_to_zero_is_omitted(self) -> None:
+        """Not suppression emptying real content — there was genuinely no net
+        motion, same as `move(0,0)` never rendering anywhere else."""
+        self.assertEqual(
+            self.one(
+                [_move(0, 0.01, 1.0, 0.0), _move(1, 0.02, -1.0, 0.0)], jitter_px=1
+            ),
+            "NO_OP",
+        )
+
+    # ------------------------------------------------- v3: after the collapse
+
+    def test_v3_sandwiched_between_typing_runs_reunites_them(self) -> None:
+        """Applied AFTER the typing collapse, so it sees `type()` rather than
+        the down/up pairs underneath — and dropping the move yields ONE
+        `type("hi")`, not two adjacent `type("h"); type("i")`."""
+        events = [
+            *_type(0, 0.01, "KeyH"),
+            _move(2, 0.03, 1.0, 0.0),
+            *_type(3, 0.05, "KeyI"),
+        ]
+        self.assertEqual(
+            self.one(events, grammar="ordered_events_v3", jitter_px=1), 'type("hi")'
+        )
+
+    def test_v3_reunion_needs_the_whole_separator_dropped(self) -> None:
+        events = [
+            *_type(0, 0.01, "KeyH"),
+            _move(2, 0.03, 5.0, 0.0),
+            *_type(3, 0.05, "KeyI"),
+        ]
+        self.assertEqual(
+            self.one(events, grammar="ordered_events_v3", jitter_px=1),
+            'type("h"); move(5,0); type("i")',
+        )
+
+    # ------------------------------------------------------------ validation
+
+    def test_a_negative_deadband_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            get_formatter("ordered_events_v3", jitter_deadband_px=-1)

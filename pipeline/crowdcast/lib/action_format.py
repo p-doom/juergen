@@ -38,6 +38,17 @@ policy's ``PolicyCounters``.
 ``OrderedTypingFormatter`` (``ordered_events_v3``) is that same extraction with
 balanced typing runs collapsed into one ``type("...")`` primitive. Both emit the
 ``ordered_events_v3`` grammar, whose ``type()`` production only this one reaches.
+
+``jitter_deadband_px`` (default 0 == off) additionally sums every maximal
+move/scroll-only run into at most one move + one scroll, then drops whichever of
+those is pure axis noise: a SINGLE-axis delta within the deadband, which is hand
+tension while operating a button, wheel or keyboard rather than pointer control.
+A diagonal is never jitter however small, because moving two axes at once takes
+intent that noise does not produce. It runs after the typing collapse in v3, so
+a move sandwiched between two typed runs is eligible and dropping it reunites
+them; and it never empties a window that had content (see ``_suppress_jitter``),
+because turning a turn's only primitive into a bare NO_OP would teach the model
+to idle where the demonstrator acted.
 """
 
 from __future__ import annotations
@@ -350,6 +361,87 @@ def _collapse_typing(
     return out
 
 
+def _is_axis_jitter(p: Primitive, threshold_px: int) -> bool:
+    """True iff ``p`` is a move/scroll that is purely horizontal or purely
+    vertical (exactly one axis nonzero) AND that axis's magnitude is within
+    ``threshold_px``. A DIAGONAL move/scroll (both axes nonzero) is never
+    jitter, however small each axis is — moving on two axes at once takes
+    deliberate intent that hand-tension noise does not produce."""
+    if p.kind not in ("move", "scroll"):
+        return False
+    if p.dx != 0 and p.dy != 0:
+        return False
+    mag = abs(p.dx) if p.dx != 0 else abs(p.dy)
+    return mag <= threshold_px
+
+
+def _merge_move_scroll_run(run: Sequence[Primitive]) -> list[Primitive]:
+    """Sum a maximal move/scroll-only run into at most one move + one scroll
+    primitive, ordered by whichever kind appeared FIRST in the run. A kind
+    absent from the run, or whose sum is (0,0), is omitted — ``move(0,0)`` and
+    ``scroll(0,0)`` are never emitted, same as everywhere else in this module."""
+    sums = {"move": [0, 0], "scroll": [0, 0]}
+    order: list[str] = []
+    for p in run:
+        if p.kind not in order:
+            order.append(p.kind)
+        sums[p.kind][0] += p.dx
+        sums[p.kind][1] += p.dy
+    out: list[Primitive] = []
+    for kind in order:
+        dx, dy = sums[kind]
+        if dx != 0 or dy != 0:
+            out.append(Primitive(kind, dx=dx, dy=dy))
+    return out
+
+
+def _merge_adjacent_typing(prims: Sequence[Primitive]) -> list[Primitive]:
+    """Concatenate adjacent ``type()`` primitives. ``_collapse_typing`` never
+    produces these itself (a typing run always abuts either a boundary or the
+    non-typing primitive that broke it) — they only arise here, when dropping an
+    axis-jitter move/scroll between two typing runs reunites them, e.g.
+    ``type("h"); move(1,0); type("i")`` -> ``type("h"); type("i")`` -> this pass
+    -> ``type("hi")``."""
+    out: list[Primitive] = []
+    for p in prims:
+        if p.kind == "type" and out and out[-1].kind == "type":
+            out[-1] = Primitive("type", text=out[-1].text + p.text)
+        else:
+            out.append(p)
+    return out
+
+
+def _suppress_jitter(prims: Sequence[Primitive], threshold_px: int) -> list[Primitive]:
+    """Sum every maximal move/scroll-only run (a click or typed text always
+    breaks one) into at most one move + one scroll primitive — ordered by
+    whichever kind appeared first in the run — then drop any resulting primitive
+    that is pure axis noise (``_is_axis_jitter``): incidental cursor/wheel jitter
+    from hand tension while operating a button, wheel or keyboard, not
+    intentional pointer control. Dropping one can reunite two typing runs it had
+    separated (``_merge_adjacent_typing``).
+
+    If dropping every eligible primitive would leave the window with NOTHING at
+    all, none of them are dropped — jitter suppression must never turn a turn's
+    only content into a bare NO_OP. A window with real content elsewhere (even
+    one surviving primitive) has no such floor."""
+    merged: list[Primitive] = []
+    i, n = 0, len(prims)
+    while i < n:
+        if prims[i].kind in ("move", "scroll"):
+            j = i
+            while j < n and prims[j].kind in ("move", "scroll"):
+                j += 1
+            merged.extend(_merge_move_scroll_run(prims[i:j]))
+            i = j
+        else:
+            merged.append(prims[i])
+            i += 1
+
+    filtered = [p for p in merged if not _is_axis_jitter(p, threshold_px)]
+    result = filtered if filtered or not merged else merged
+    return _merge_adjacent_typing(result)
+
+
 class OrderedFormatter:
     """Per-window ordered mini-program: ``primitive(; primitive)*`` / ``NO_OP``
     with primitives ``move(dx,dy)``, ``scroll(dx,dy)``, ``down(NAME)``,
@@ -364,10 +456,18 @@ class OrderedFormatter:
     name = "ordered_events_v2"
     grammar = "ordered_events_v3"
 
-    def __init__(self, continuous_action_hz: float = DEFAULT_CONTINUOUS_ACTION_HZ):
+    def __init__(
+        self,
+        continuous_action_hz: float = DEFAULT_CONTINUOUS_ACTION_HZ,
+        *,
+        jitter_deadband_px: int = 0,
+    ):
         if not math.isfinite(continuous_action_hz) or continuous_action_hz <= 0:
             raise ValueError("continuous_action_hz must be finite and positive")
+        if jitter_deadband_px < 0:
+            raise ValueError("jitter_deadband_px must be >= 0")
         self.continuous_action_hz = continuous_action_hz
+        self.jitter_deadband_px = jitter_deadband_px
 
     def format_segment(
         self,
@@ -380,6 +480,11 @@ class OrderedFormatter:
         primitives, counters = self._window_primitives(
             events, windows, dead_zones, master_fps=master_fps
         )
+        if self.jitter_deadband_px > 0:
+            primitives = [
+                _suppress_jitter(window, self.jitter_deadband_px)
+                for window in primitives
+            ]
         return _ordered_result(primitives, counters, ("move", "scroll", "down", "up"))
 
     def _window_primitives(
@@ -459,20 +564,39 @@ class OrderedTypingFormatter(OrderedFormatter):
         # nets it to zero, so only explicitly-rendered modifier events move it.
         held_mods: set[str] = set()
         collapsed = [_collapse_typing(window, held_mods) for window in primitives]
+        if self.jitter_deadband_px > 0:
+            # After the typing collapse, so a move sandwiched next to a
+            # `type("...")` — not just a bare down/up — is eligible too, and so
+            # dropping it can reunite the two runs it separated.
+            collapsed = [
+                _suppress_jitter(window, self.jitter_deadband_px)
+                for window in collapsed
+            ]
         return _ordered_result(
             collapsed, counters, ("move", "scroll", "down", "up", "type")
         )
 
 
-FORMATTERS: dict[str, Callable[[float], ActionFormatter]] = {
-    CanonicalFormatter.name: lambda hz: CanonicalFormatter(),
-    OrderedFormatter.name: OrderedFormatter,
-    OrderedTypingFormatter.name: OrderedTypingFormatter,
+#: ``(continuous_action_hz, jitter_deadband_px) -> ActionFormatter``. Both knobs
+#: reach every factory even where one is inert (`canonical` renders aggregate
+#: deltas, which have no primitive run to sum), so adding a formatter never means
+#: touching the call site.
+FORMATTERS: dict[str, Callable[[float, int], ActionFormatter]] = {
+    CanonicalFormatter.name: lambda hz, jitter: CanonicalFormatter(),
+    OrderedFormatter.name: lambda hz, jitter: OrderedFormatter(
+        hz, jitter_deadband_px=jitter
+    ),
+    OrderedTypingFormatter.name: lambda hz, jitter: OrderedTypingFormatter(
+        hz, jitter_deadband_px=jitter
+    ),
 }
 
 
 def get_formatter(
-    name: str, *, continuous_action_hz: float = DEFAULT_CONTINUOUS_ACTION_HZ
+    name: str,
+    *,
+    continuous_action_hz: float = DEFAULT_CONTINUOUS_ACTION_HZ,
+    jitter_deadband_px: int = 0,
 ) -> ActionFormatter:
     try:
         factory = FORMATTERS[name]
@@ -480,4 +604,4 @@ def get_formatter(
         raise KeyError(
             f"unknown action format {name!r} (available: {sorted(FORMATTERS)})"
         ) from None
-    return factory(continuous_action_hz)
+    return factory(continuous_action_hz, jitter_deadband_px)
