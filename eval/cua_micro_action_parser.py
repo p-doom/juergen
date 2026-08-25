@@ -141,6 +141,19 @@ _QWEN3VL_CUA_ARGUMENTS = frozenset(
 )
 
 
+def _validate_qwen3vl_grid_coordinate(coordinate: object, *, where: str) -> None:
+    """A cookbook ``coordinate`` argument: two numbers on the 0..1000 grid."""
+    if (
+        not isinstance(coordinate, list)
+        or len(coordinate) != 2
+        or any(
+            isinstance(value, bool) or not isinstance(value, (int, float)) for value in coordinate
+        )
+        or any(not 0 <= float(value) <= 1000 for value in coordinate)
+    ):
+        raise ValueError(f"{where}: coordinate must be two numbers on the 0..1000 grid")
+
+
 def _validate_qwen3vl_cua_arguments(arguments: dict, *, where: str) -> None:
     """Validate the executable portion of Qwen3-VL's cookbook schema."""
     unknown = set(arguments) - _QWEN3VL_CUA_ARGUMENTS
@@ -161,17 +174,16 @@ def _validate_qwen3vl_cua_arguments(arguments: dict, *, where: str) -> None:
     if action in {"type", "answer"} and not isinstance(arguments.get("text"), str):
         raise ValueError(f"{where}: text must be a string for action {action!r}")
     if action in {"mouse_move", "left_click_drag"}:
-        coordinate = arguments.get("coordinate")
-        if (
-            not isinstance(coordinate, list)
-            or len(coordinate) != 2
-            or any(
-                isinstance(value, bool) or not isinstance(value, (int, float))
-                for value in coordinate
-            )
-            or any(not 0 <= float(value) <= 1000 for value in coordinate)
-        ):
-            raise ValueError(f"{where}: coordinate must be two numbers on the 0..1000 grid")
+        _validate_qwen3vl_grid_coordinate(arguments.get("coordinate"), where=where)
+    elif action in _CUA_V4_CLICKS and arguments.get("coordinate") is not None:
+        # The cookbook schema documents every click as happening "at a
+        # specified (x, y) pixel coordinate", and off-the-shelf Qwen3-VL
+        # overwhelmingly emits the click that way -- one call carrying the
+        # target -- rather than a separate mouse_move first. The coordinate is
+        # not *required* (a bare click at the current cursor is also legal, and
+        # is what computer_use_rel_step_v1-style replies look like), but when
+        # present it is executed, so it has to be validated like any other.
+        _validate_qwen3vl_grid_coordinate(arguments.get("coordinate"), where=where)
     if action in {"scroll", "hscroll"}:
         pixels = arguments.get("pixels")
         if isinstance(pixels, bool) or not isinstance(pixels, (int, float)):

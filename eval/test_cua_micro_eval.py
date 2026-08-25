@@ -365,6 +365,66 @@ class ActionAndAggregationTests(unittest.TestCase):
                 _tool({"action": "mouse_move", "coordinate": [1001, 0]})
             )
 
+    def test_qwen3vl_native_click_honors_its_own_coordinate(self) -> None:
+        # The off-the-shelf shape: ONE call, click + coordinate. It must move
+        # to the named point and click there -- previously the coordinate was
+        # dropped and the click fired at the stale cursor position.
+        calls = parse_qwen3vl_computer_use_action(
+            _tool({"action": "left_click", "coordinate": [750, 250]})
+        )
+        parsed = micro.qwen3vl_native_to_ordered(calls, (1920, 1080), (960, 540))
+        kinds = [(p.kind, p.dx, p.dy, p.name, p.count) for p in parsed.primitives]
+        self.assertEqual(kinds, [("move", 480, -270, None, None), ("click", None, None, "left", 1)])
+        self.assertEqual(
+            micro.qwen3vl_native_click_point(parsed, (960, 540), (1920, 1080)), (1440, 270)
+        )
+        # One tool call is still one atomic action, implicit move and all.
+        self.assertTrue(
+            micro.action_matches_expected(
+                parsed,
+                {"kind": "click", "button": "left"},
+                micro._QWEN3VL_NATIVE_FORMAT,
+                native_call_count=1,
+            )
+        )
+
+    def test_qwen3vl_native_click_on_target_emits_no_redundant_move(self) -> None:
+        # Cursor already on the named point (the seeded click micro-tasks):
+        # no zero-delta move, so it stays a single-primitive click.
+        calls = parse_qwen3vl_computer_use_action(
+            _tool({"action": "double_click", "coordinate": [500, 500]})
+        )
+        parsed = micro.qwen3vl_native_to_ordered(calls, (1000, 1000), (500, 500))
+        self.assertEqual(len(parsed.primitives), 1)
+        self.assertEqual(
+            micro.qwen3vl_native_click_point(parsed, (500, 500), (1000, 1000)), (500, 500)
+        )
+        self.assertTrue(
+            micro.action_matches_expected(
+                parsed,
+                {"kind": "click", "button": "left", "count": 2},
+                micro._QWEN3VL_NATIVE_FORMAT,
+                native_call_count=1,
+            )
+        )
+
+    def test_qwen3vl_native_bare_click_still_clicks_in_place(self) -> None:
+        # A coordinate-less click remains legal and unchanged.
+        calls = parse_qwen3vl_computer_use_action(_tool({"action": "left_click"}))
+        parsed = micro.qwen3vl_native_to_ordered(calls, (1000, 1000), (400, 400))
+        self.assertEqual([p.kind for p in parsed.primitives], ["click"])
+        self.assertEqual(
+            micro.qwen3vl_native_click_point(parsed, (400, 400), (1000, 1000)), (400, 400)
+        )
+
+    def test_qwen3vl_native_click_coordinate_is_range_checked(self) -> None:
+        with self.assertRaisesRegex(ValueError, "0..1000"):
+            parse_qwen3vl_computer_use_action(
+                _tool({"action": "left_click", "coordinate": [1200, 0]})
+            )
+        with self.assertRaisesRegex(ValueError, "0..1000"):
+            parse_qwen3vl_computer_use_action(_tool({"action": "right_click", "coordinate": [10]}))
+
     def test_qwen3vl_native_multiple_calls_are_parse_valid_but_not_atomic(self) -> None:
         calls = parse_qwen3vl_computer_use_action(
             _tool({"action": "mouse_move", "coordinate": [500, 500]})
@@ -475,6 +535,23 @@ class ActionAndAggregationTests(unittest.TestCase):
         self.assertTrue(row["pass_at_4"])
         self.assertEqual(row["best_of_4_progress"], 1.0)
         self.assertEqual(row["parse_valid_rate"], 0.75)
+
+        # Every flat score key -- and the `primary` pin labctl's dashboard
+        # follows -- carries the suite level, so easy and mid never overwrite
+        # each other's series when charted together. The nested/structured
+        # views stay keyed on the bare metric name.
+        leveled = micro.aggregate_results([task], attempts, "easy")
+        self.assertEqual(leveled["primary"], "overall/pass_at_1_easy")
+        self.assertIn("overall/pass_at_1_easy", leveled["scores"])
+        self.assertNotIn("overall/pass_at_1", leveled["scores"])
+        self.assertTrue(all(k.endswith("_easy") for k in leveled["scores"]))
+        self.assertEqual(leveled["scores"], leveled["tasks"])
+        self.assertIn("pass_at_1", leveled["overall"])
+        self.assertEqual(leveled["per_task"], aggregate["per_task"])
+        # No level (a manual run with an unrecognisable suite filename) leaves
+        # the keys exactly as they have always been.
+        self.assertEqual(aggregate["primary"], "overall/pass_at_1")
+        self.assertIn("overall/pass_at_1", aggregate["scores"])
 
     def test_finalize_multiturn_result_prefix_mode_requires_full_ordered_run(self) -> None:
         turns = tuple(
@@ -720,7 +797,10 @@ class NativeOrderedFormatTests(unittest.TestCase):
         parsed = micro.qwen3vl_native_to_ordered(calls, (1000, 1000), (0, 0))
         self.assertFalse(
             micro.action_matches_expected(
-                parsed, {"kind": "click", "button": "left"}, micro._QWEN3VL_NATIVE_FORMAT
+                parsed,
+                {"kind": "click", "button": "left"},
+                micro._QWEN3VL_NATIVE_FORMAT,
+                native_call_count=len(calls),
             )
         )
 

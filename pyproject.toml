@@ -15,6 +15,10 @@ prerelease = "allow"
 override-dependencies = [
     "openai>=2.26.0",
     "nvidia-cudnn-cu12>=9.16",
+    # wandb pulls sentry-sdk, and the workspace-wide `prerelease = "allow"`
+    # above (needed for the torch/sglang stack) would otherwise happily lock a
+    # sentry-sdk 3.x alpha. Crash reporting is not worth an alpha dependency.
+    "sentry-sdk<3",
 ]
 
 # Force the torch stack to come from PyTorch's cu128 wheel index. The hai

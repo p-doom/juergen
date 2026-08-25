@@ -27,6 +27,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -35,13 +36,19 @@ from typing import Any
 import requests
 from PIL import Image, ImageDraw
 
+import cua_micro_harvest
+import cua_micro_oracle
+import cua_micro_wandb
 import sampling as sampling_mod
-from action_parser import ComputerUseCall
+from action_parser import ComputerUseCall, parse_ordered_action_tolerant
 from action_parser import OrderedAction as NativeOrderedAction
-from action_parser import parse_ordered_action_tolerant
 from cua_micro_action_parser import (
     RelStepAction as OrderedAction,
+)
+from cua_micro_action_parser import (
     RelStepPrimitive as OrderedPrimitive,
+)
+from cua_micro_action_parser import (
     parse_computer_use_rel_step_action,
     parse_qwen3vl_computer_use_action,
 )
@@ -200,6 +207,11 @@ class Task:
     expected: dict[str, Any]
     verifier: dict[str, Any]
     turns: tuple[Turn, ...] = ()
+    # The task's scripted expert program (cua_micro_oracle.validate_plan output),
+    # or None when the task carries no ``oracle`` block. Only ever read by
+    # --mode harvest; the ordinary eval path ignores it entirely, which is why
+    # adding one to a suite does not change what that suite measures.
+    oracle_plan: tuple[dict[str, Any], ...] | None = None
     # "prefix" (default): turns are distinct ordered sub-goals -- the
     # trajectory stops at the first turn whose action+verifier don't match,
     # and success requires every turn to pass in order (see
@@ -256,7 +268,10 @@ def load_suite(path: Path) -> tuple[dict[str, Any], list[Task]]:
         # "prefix"), and always required -- via the required set above --
         # on the compact 'turn'+'max_turns' template. Not allowed at all on
         # atomic tasks.
-        allowed = required | ({"turn_mode"} if has_turns_list else set())
+        # 'oracle' is optional everywhere and never required: it is read only
+        # by --mode harvest, so a suite with no oracle blocks still loads and
+        # evaluates exactly as before.
+        allowed = required | {"oracle"} | ({"turn_mode"} if has_turns_list else set())
         missing = required - set(item)
         extra = set(item) - allowed
         if missing or extra:
@@ -276,6 +291,11 @@ def load_suite(path: Path) -> tuple[dict[str, Any], list[Task]]:
         if not isinstance(task_id, str) or not task_id or task_id in seen:
             raise ValueError(f"task {index}: invalid/duplicate id {task_id!r}")
         seen.add(task_id)
+        oracle_plan: tuple[dict[str, Any], ...] | None = None
+        if "oracle" in item:
+            oracle_plan = tuple(
+                cua_micro_oracle.validate_plan(item["oracle"], where=f"task {index} ({task_id})")
+            )
         turns: list[Turn] = []
         if has_turn_template:
             template = item["turn"]
@@ -332,6 +352,7 @@ def load_suite(path: Path) -> tuple[dict[str, Any], list[Task]]:
                 expected=dict(item.get("expected", {})),
                 verifier=dict(item.get("verifier", {})),
                 turns=tuple(turns),
+                oracle_plan=oracle_plan,
                 turn_mode=turn_mode,
             )
         )
@@ -533,6 +554,14 @@ def denormalize_native_ordered_action(
     )
 
 
+def _qwen3vl_grid_to_px(coordinate: Any, screen: tuple[int, int]) -> tuple[int, int]:
+    """Map one cookbook 0..1000 grid point onto screen pixels."""
+    return (
+        max(0, min(screen[0] - 1, round(float(coordinate[0]) * screen[0] / _GRID))),
+        max(0, min(screen[1] - 1, round(float(coordinate[1]) * screen[1] / _GRID))),
+    )
+
+
 def qwen3vl_native_to_ordered(
     calls: tuple[ComputerUseCall, ...],
     screen: tuple[int, int],
@@ -552,17 +581,33 @@ def qwen3vl_native_to_ordered(
         arguments = call.arguments
         action = str(arguments["action"])
         if action == "mouse_move":
-            coordinate = arguments["coordinate"]
-            target = (
-                max(0, min(screen[0] - 1, round(float(coordinate[0]) * screen[0] / _GRID))),
-                max(0, min(screen[1] - 1, round(float(coordinate[1]) * screen[1] / _GRID))),
-            )
+            target = _qwen3vl_grid_to_px(arguments["coordinate"], screen)
             primitives.append(
                 OrderedPrimitive(kind="move", dx=target[0] - cursor[0], dy=target[1] - cursor[1])
             )
             cursor = target
         elif action in click_map:
             button, count = click_map[action]
+            # The cookbook schema defines every click as happening "at a
+            # specified (x, y) pixel coordinate", and that single-call form is
+            # what off-the-shelf Qwen3-VL actually emits -- the notebook's own
+            # example reads action["arguments"]["coordinate"] straight off a
+            # click. Dropping it (as this did) executed the click wherever the
+            # cursor happened to already be, so the model's grounding never
+            # reached the VM: on the seeded click micro-tasks it silently
+            # passed on the pre-seeded cursor, and everywhere else it clicked
+            # the wrong place. A coordinate-less click is still legal and
+            # still clicks in place.
+            coordinate = arguments.get("coordinate")
+            if coordinate is not None:
+                target = _qwen3vl_grid_to_px(coordinate, screen)
+                if target != cursor:
+                    primitives.append(
+                        OrderedPrimitive(
+                            kind="move", dx=target[0] - cursor[0], dy=target[1] - cursor[1]
+                        )
+                    )
+                cursor = target
             primitives.append(OrderedPrimitive(kind="click", name=button, count=count))
         elif action == "type":
             primitives.append(OrderedPrimitive(kind="type", text=arguments["text"]))
@@ -577,11 +622,7 @@ def qwen3vl_native_to_ordered(
         elif action == "terminate":
             primitives.append(OrderedPrimitive(kind="terminate", status=arguments["status"]))
         elif action == "left_click_drag":
-            coordinate = arguments["coordinate"]
-            target = (
-                max(0, min(screen[0] - 1, round(float(coordinate[0]) * screen[0] / _GRID))),
-                max(0, min(screen[1] - 1, round(float(coordinate[1]) * screen[1] / _GRID))),
-            )
+            target = _qwen3vl_grid_to_px(arguments["coordinate"], screen)
             primitives.append(
                 OrderedPrimitive(kind="drag", dx=target[0] - cursor[0], dy=target[1] - cursor[1])
             )
@@ -591,6 +632,34 @@ def qwen3vl_native_to_ordered(
         else:  # guarded by the strict native parser
             raise AssertionError(f"unhandled Qwen3-VL action {action!r}")
     return OrderedAction(primitives=tuple(primitives), no_op=False)
+
+
+def qwen3vl_native_click_point(
+    action: OrderedAction | None,
+    cursor_start: tuple[int, int],
+    screen: tuple[int, int],
+) -> tuple[int, int] | None:
+    """Where the first click of a qwen3vl_native_cua_v1 action actually lands.
+
+    Only valid for that format: qwen3vl_native_to_ordered already emits move
+    deltas in screen pixels, so they can be walked directly. (rel-step move
+    deltas are grid units until denormalize_action scales them, and
+    cua_ordered_typing_v1's until denormalize_native_ordered_action does.)
+
+    Returns None when the action contains no click at all, which leaves the
+    caller on its pre-dispatch cursor -- the click micro-tasks seed the cursor
+    on the target, so a coordinate-less click still scores against that seed.
+    """
+    if action is None:
+        return None
+    x, y = cursor_start
+    for primitive in action.primitives:
+        if primitive.kind in ("click", "button_down"):
+            return (x, y)
+        if primitive.kind in ("move", "drag"):
+            x = max(0, min(screen[0] - 1, x + (primitive.dx or 0)))
+            y = max(0, min(screen[1] - 1, y + (primitive.dy or 0)))
+    return None
 
 
 def serialize_action(action: OrderedAction | None) -> list[dict[str, Any]]:
@@ -788,8 +857,24 @@ def _native_ordered_key_or_type_match(
 
 
 def action_matches_expected(
-    action: OrderedAction | None, expected: dict[str, Any], action_format: str = _REL_STEP_FORMAT
+    action: OrderedAction | None,
+    expected: dict[str, Any],
+    action_format: str = _REL_STEP_FORMAT,
+    *,
+    native_call_count: int | None = None,
 ) -> bool:
+    """Score one parsed action against a micro-task's expected primitive.
+
+    ``native_call_count`` is the number of Qwen3-VL ``<tool_call>`` blocks the
+    reply contained, and is only consulted for qwen3vl_native_cua_v1. That
+    format's atomicity contract is "one tool call", not "one primitive": a
+    single ``left_click`` carrying a ``coordinate`` legitimately expands to
+    move-then-click (see qwen3vl_native_to_ordered), so the implicit leading
+    move must not be read as a second action. Two *separate* calls
+    (``mouse_move`` then ``left_click``) still expand to the same primitives
+    and still count as a mismatch -- pass the real call count and the two
+    cases stay distinguishable. Left unset, behavior is unchanged.
+    """
     if expected.get("kind") == "any":
         # Outcome-only tasks (turn_mode="multiturn") don't prescribe a specific
         # primitive -- any dispatchable, non-no-op action counts, regardless
@@ -805,6 +890,15 @@ def action_matches_expected(
         return True
     if action_format == _NATIVE_ORDERED_FORMAT:
         primitive = _canonicalize_native_ordered_action(action)
+    elif (
+        action_format == _QWEN3VL_NATIVE_FORMAT
+        and native_call_count == 1
+        and action is not None
+        and len(action.primitives) == 2
+        and action.primitives[0].kind == "move"
+        and action.primitives[1].kind in ("click", "drag")
+    ):
+        primitive = action.primitives[1]
     elif action is not None and len(action.primitives) == 1:
         primitive = action.primitives[0]
     else:
@@ -977,6 +1071,73 @@ def _chrome_html(variant: str) -> dict[str, str]:
             function cuaOpenFirstResult(){
               document.title='PLAYING_3BLUE1BROWN';
             }
+          </script>
+        """
+    elif variant == "mousepage":
+        # Pure-mouse fixture: three click targets plus a drag-only slider, all
+        # positioned in vw/vh so their screen bboxes are derivable (window
+        # origin x=70px, page origin y=119px on the 1920x1080 guest => vw=18.5px,
+        # vh=9.61px; the suite's fixed_norm bboxes were computed from exactly
+        # these rules).  End state is reported in the title only, so every task
+        # on this page is verified by active_title_regex and nothing else:
+        #   PASS_BLUE_CIRCLE  the blue circle was clicked
+        #   PASS_SEQUENCE     blue -> green -> red were clicked in that order
+        #   PASS_SLIDER       the purple handle was DRAGGED to the right end
+        # Flags are cumulative and space-joined, so one task's incidental side
+        # effects can never mask another task's pass token.
+        body = """
+          <div id='mp-head'>Mouse targets</div>
+          <div id='mp-track'><div id='mp-handle'></div></div>
+          <div id='mp-green' onclick="mpHit('green')"></div>
+          <div id='mp-blue' onclick="mpHit('blue')"></div>
+          <div id='mp-red' onclick="mpHit('red')"></div>
+          <style>
+            #mp-head{position:fixed;left:4vw;top:3vh;font-size:26px;font-weight:700;color:#5a6473}
+            #mp-track{position:fixed;left:20vw;top:14vh;width:60vw;height:5vh;
+              background:#dfe4ec;border-radius:2.5vh}
+            #mp-handle{position:absolute;left:0;top:-2vh;width:5vw;height:9vh;
+              background:#7b2ff7;border-radius:1vh;cursor:grab}
+            #mp-blue{position:fixed;left:42vw;top:34vh;width:16vw;height:28vh;
+              background:#1769e0;border-radius:50%}
+            #mp-green{position:fixed;left:10vw;top:36vh;width:12vw;height:22vh;
+              background:#1aa64b;border-radius:50%}
+            #mp-red{position:fixed;left:80vw;top:66vh;width:12vw;height:22vh;background:#d92b2b}
+          </style>
+          <script>
+            var mpDone={}, mpWant=['blue','green','red'], mpIdx=0;
+            function mpTitle(){
+              var flags=[];
+              if(mpDone.blue) flags.push('PASS_BLUE_CIRCLE');
+              if(mpDone.sequence) flags.push('PASS_SEQUENCE');
+              if(mpDone.slider) flags.push('PASS_SLIDER');
+              document.title = flags.length ? flags.join(' ') : 'MOUSEPAGE_READY';
+            }
+            function mpHit(name){
+              if(name==='blue'){ mpDone.blue=true; }
+              if(name===mpWant[mpIdx]){ mpIdx++; }
+              else { mpIdx = (name===mpWant[0]) ? 1 : 0; }
+              if(mpIdx>=mpWant.length){ mpDone.sequence=true; }
+              mpTitle();
+            }
+            var mpTrack=document.getElementById('mp-track');
+            var mpHandle=document.getElementById('mp-handle');
+            var mpDrag=false, mpGrab=0;
+            mpHandle.addEventListener('mousedown', function(e){
+              mpDrag=true;
+              mpGrab=e.clientX - mpHandle.getBoundingClientRect().left;
+              e.preventDefault();
+            });
+            window.addEventListener('mousemove', function(e){
+              if(!mpDrag){ return; }
+              var rect=mpTrack.getBoundingClientRect();
+              var max=rect.width - mpHandle.offsetWidth;
+              var x=Math.min(Math.max(e.clientX - rect.left - mpGrab, 0), max);
+              mpHandle.style.left = x + 'px';
+              if(max>0 && x >= max-2){ mpDone.slider=true; }
+              mpTitle();
+            });
+            window.addEventListener('mouseup', function(){ mpDrag=false; });
+            mpTitle();
           </script>
         """
     elif variant == "wikipedia":
@@ -1180,6 +1341,7 @@ def _launch_chrome(client: OSWorldClient, variant: str) -> None:
             "button": "BUTTON_READY",
             "scroll": "SCROLL_READY",
             "search": "SEARCH_READY",
+            "mousepage": "MOUSEPAGE_READY",
             "blank": "BLANK_READY",
         }.get(variant, "BLANK_READY")
     for path, text in files.items():
@@ -1195,12 +1357,45 @@ def _launch_chrome(client: OSWorldClient, variant: str) -> None:
         "--start-maximized --remote-debugging-port=9222 "
         f"{quoted_urls} >/tmp/cua_micro_chrome.log 2>&1 &"
     )
-    client.run_command(command, shell=True)
-    time.sleep(1.0)
-    _close_browser_popups(client, keep_title=expected_title)
-    if activate_title is not None:
-        _wait_until(lambda: _activate_chrome_target(client, activate_title), timeout_s=40)
-    _wait_until(lambda: expected_title in _active_title(client), timeout_s=40)
+    # Launch, then wait for the fixture's title -- retried once, because this
+    # is by far the flakiest step in the suite. Across ~500 historical attempts
+    # each, click.chrome.reload and click.chrome.deterministic_button died here
+    # with "condition not met after 40s" 118 and 126 times respectively (~25%):
+    # under several concurrent VMs a Chrome cold start plus first paint does not
+    # reliably fit in 40s. Every one of those was scored as a task failure
+    # despite the model never getting a turn, so this depressed measured pass
+    # rates as well as costing a VM-minute each time. A second try with a longer
+    # window costs nothing on the (common) happy path.
+    last_error: TimeoutError | None = None
+    for attempt in range(2):
+        if attempt:
+            _LOGGER.warning(
+                "chrome variant=%s did not reach %r; killing and relaunching (try %d)",
+                variant,
+                expected_title,
+                attempt + 1,
+            )
+            # A half-started Chrome would hold the user-data-dir lock and make
+            # the relaunch a no-op, so clear it out first.
+            client.run_command("pkill -f 'google-chrome|chromium' || true", shell=True)
+            time.sleep(2.0)
+        client.run_command(command, shell=True)
+        time.sleep(1.0)
+        _close_browser_popups(client, keep_title=expected_title)
+        try:
+            if activate_title is not None:
+                _wait_until(
+                    lambda: _activate_chrome_target(client, activate_title), timeout_s=60
+                )
+            _wait_until(lambda: expected_title in _active_title(client), timeout_s=60)
+            break
+        except TimeoutError as error:
+            last_error = error
+    else:
+        raise TimeoutError(
+            f"chrome variant={variant!r} never showed title {expected_title!r} "
+            f"after 2 launch attempts: {last_error}"
+        )
     if variant == "history":
         width, height = client.screen_size()
         client.execute(f"pyautogui.click(x={width // 2}, y={height // 2}, button='left')")
@@ -1623,6 +1818,7 @@ def run_multiturn_attempt(
     save_frames: bool,
     settle_s: float,
     n_history_frames: int | None = None,
+    action_source: Callable[..., tuple[str, str | None]] | None = None,
 ) -> dict[str, Any]:
     """Run one stateful trajectory, stopping at the first unverified turn.
 
@@ -1633,6 +1829,15 @@ def run_multiturn_attempt(
     ``None`` (the default) means unbounded -- history grows for the whole
     trajectory, matching this function's original behavior. This matters now
     that ``turn_mode="multiturn"`` tasks can run dozens of turns in one attempt.
+
+    ``action_source`` replaces the sglang call with a local policy, keyword-args
+    ``turn_index``/``cursor``/``bbox``/``screen`` and returning the same
+    ``(text, finish_reason)`` pair ``_call_model`` does. This is what
+    ``--mode harvest`` uses to drive the loop with a scripted oracle
+    (``cua_micro_oracle``): everything downstream -- parse, dispatch, verifier,
+    frame capture, history eviction -- is byte-for-byte the model path, so
+    harvested data cannot drift from what the eval actually sends. ``None``
+    (the default) calls the model, unchanged.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     setup_state = prepare_task(client, task)
@@ -1712,21 +1917,30 @@ def run_multiturn_attempt(
         )
         turn_seed = seed + turn_index * 100_000
         t0 = time.time()
-        response, finish_reason = _call_model(
-            sglang_url=sglang_url,
-            api_key=api_key,
-            model=model,
-            system_prompt=system_prompt,
-            instruction=instruction,
-            recent_frames=recent_frames,
-            recent_actions=recent_actions,
-            fresh_visual_context=False,
-            sampling=sampling,
-            seed=turn_seed,
-        )
+        if action_source is not None:
+            response, finish_reason = action_source(
+                turn_index=turn_index,
+                cursor=actual_start,
+                bbox=bbox,
+                screen=screen,
+            )
+        else:
+            response, finish_reason = _call_model(
+                sglang_url=sglang_url,
+                api_key=api_key,
+                model=model,
+                system_prompt=system_prompt,
+                instruction=instruction,
+                recent_frames=recent_frames,
+                recent_actions=recent_actions,
+                fresh_visual_context=False,
+                sampling=sampling,
+                seed=turn_seed,
+            )
         parse_error: str | None = None
         dispatch_error: str | None = None
         parsed: OrderedAction | None = None
+        native_call_count: int | None = None
         dispatched = False
         if finish_reason == "length":
             parse_error = "response truncated at max_tokens; nothing dispatched"
@@ -1736,6 +1950,7 @@ def run_multiturn_attempt(
                     parsed = parse_computer_use_rel_step_action(response)
                 elif action_format == _QWEN3VL_NATIVE_FORMAT:
                     calls = parse_qwen3vl_computer_use_action(response)
+                    native_call_count = len(calls)
                     parsed = qwen3vl_native_to_ordered(calls, screen, actual_start)
                 elif action_format == _NATIVE_ORDERED_FORMAT:
                     parsed = native_ordered_to_relstep(parse_ordered_action_tolerant(response))
@@ -1776,9 +1991,14 @@ def run_multiturn_attempt(
         )
         end = client.cursor_position()
         verifier_ok, after_state = verifier_passed(client, turn.verifier)
-        expected_ok = action_matches_expected(parsed, turn.expected, action_format)
+        expected_ok = action_matches_expected(
+            parsed, turn.expected, action_format, native_call_count=native_call_count
+        )
         metrics = movement_metrics(actual_start, end, bbox, screen)
-        click_in_bbox = in_bbox(actual_start, bbox)
+        click_point = actual_start
+        if action_format == _QWEN3VL_NATIVE_FORMAT:
+            click_point = qwen3vl_native_click_point(parsed, actual_start, screen) or actual_start
+        click_in_bbox = in_bbox(click_point, bbox)
         if turn.expected.get("kind") == "move":
             success = bool(expected_ok and metrics["bbox_hit"])
         else:
@@ -1815,6 +2035,7 @@ def run_multiturn_attempt(
             "dispatched": dispatched,
             "expected": turn.expected,
             "expected_action_ok": expected_ok,
+            "click_point": list(click_point),
             "click_in_bbox": click_in_bbox,
             "verifier": turn.verifier,
             "verifier_before": before_state,
@@ -1925,6 +2146,7 @@ def run_attempt(
     save_frames: bool,
     settle_s: float,
     n_history_frames: int | None = None,
+    action_source: Callable[..., tuple[str, str | None]] | None = None,
 ) -> dict[str, Any]:
     if task.turns:
         return run_multiturn_attempt(
@@ -1942,6 +2164,15 @@ def run_attempt(
             save_frames=save_frames,
             settle_s=settle_s,
             n_history_frames=n_history_frames,
+            action_source=action_source,
+        )
+    if action_source is not None:
+        # --mode harvest refuses atomic tasks up front (see main()); if one got
+        # this far the oracle would be silently ignored and the model called
+        # instead, which for harvest means a crash on model=None at best and a
+        # mislabelled training row at worst.
+        raise ValueError(
+            f"action_source is only supported for multi-turn tasks; {task.task_id!r} is atomic"
         )
     output_dir.mkdir(parents=True, exist_ok=True)
     setup_state = prepare_task(client, task)
@@ -2005,6 +2236,7 @@ def run_attempt(
     parse_error: str | None = None
     dispatch_error: str | None = None
     parsed: OrderedAction | None = None
+    native_call_count: int | None = None
     dispatched = False
     if finish_reason == "length":
         parse_error = "response truncated at max_tokens; nothing dispatched"
@@ -2014,6 +2246,7 @@ def run_attempt(
                 parsed = parse_computer_use_rel_step_action(response)
             elif action_format == _QWEN3VL_NATIVE_FORMAT:
                 calls = parse_qwen3vl_computer_use_action(response)
+                native_call_count = len(calls)
                 parsed = qwen3vl_native_to_ordered(calls, screen, actual_start)
             elif action_format == _NATIVE_ORDERED_FORMAT:
                 parsed = native_ordered_to_relstep(parse_ordered_action_tolerant(response))
@@ -2047,9 +2280,14 @@ def run_attempt(
     )
     end = client.cursor_position()
     verifier_ok, after_state = verifier_passed(client, task.verifier)
-    expected_ok = action_matches_expected(parsed, task.expected, action_format)
+    expected_ok = action_matches_expected(
+        parsed, task.expected, action_format, native_call_count=native_call_count
+    )
     metrics = movement_metrics(actual_start, end, bbox, screen)
-    click_in_bbox = in_bbox(actual_start, bbox)
+    click_point = actual_start
+    if action_format == _QWEN3VL_NATIVE_FORMAT:
+        click_point = qwen3vl_native_click_point(parsed, actual_start, screen) or actual_start
+    click_in_bbox = in_bbox(click_point, bbox)
     if task.expected.get("kind") == "move":
         success = bool(expected_ok and metrics["bbox_hit"])
         progress = max(0.0, float(metrics["legal_step_optimality"]))
@@ -2094,6 +2332,7 @@ def run_attempt(
         "parsed_primitives": serialize_action(parsed),
         "dispatched": dispatched,
         "expected_action_ok": expected_ok,
+        "click_point": list(click_point),
         "click_in_bbox": click_in_bbox,
         "verifier": task.verifier,
         "verifier_before": before_state,
@@ -2425,7 +2664,19 @@ def validate_task_setup(
     return result
 
 
-def aggregate_results(tasks: list[Task], attempts: list[dict[str, Any]]) -> dict[str, Any]:
+def aggregate_results(
+    tasks: list[Task],
+    attempts: list[dict[str, Any]],
+    level: str | None = None,
+) -> dict[str, Any]:
+    """Roll per-attempt rows up into the score dict written to result.json.
+
+    ``level`` is the suite difficulty ("easy"/"mid"). When given, every flat
+    metric key gets it as a suffix -- ``overall/pass_at_1_easy`` rather than
+    ``overall/pass_at_1`` -- so the two suites' series stay distinguishable
+    wherever they are charted side by side (a W&B group holds both, and both
+    feed labctl's per-checkpoint dashboard). ``None`` leaves the keys bare.
+    """
     by_task: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for attempt in attempts:
         by_task[str(attempt["task_id"])].append(attempt)
@@ -2524,9 +2775,14 @@ def aggregate_results(tasks: list[Task], attempts: list[dict[str, Any]]) -> dict
             [task.task_id for task in tasks if task.category == category]
         )
     overall = summarize([task.task_id for task in tasks])
-    scores = {f"overall/{key}": value for key, value in overall.items()}
+    # Suffix, not prefix: it keeps the "<scope>/<metric>" shape that labctl's
+    # dashboard and every existing chart already key on, and sorts the two
+    # levels of one metric next to each other rather than splitting the
+    # namespace in two.
+    suffix = f"_{level}" if level else ""
+    scores = {f"overall/{key}{suffix}": value for key, value in overall.items()}
     for category, summary in categories.items():
-        scores.update({f"{category}/{key}": value for key, value in summary.items()})
+        scores.update({f"{category}/{key}{suffix}": value for key, value in summary.items()})
     return {
         "scores": scores,
         # labctl's per-checkpoint dashboard (build_eval_series/first_metric)
@@ -2534,7 +2790,7 @@ def aggregate_results(tasks: list[Task], attempts: list[dict[str, Any]]) -> dict
         # falling back to name-guessing -- with ~90 flat "category/metric"
         # keys here, name-guessing would land on an arbitrary alphabetically
         # first key instead of the meaningful overall pass@1.
-        "primary": "overall/pass_at_1",
+        "primary": f"overall/pass_at_1{suffix}",
         "tasks": scores,
         "overall": overall,
         "categories": categories,
@@ -2694,7 +2950,13 @@ class _RunContext:
     model_resolution: tuple[int, int] | None
     total: int
     started: float
+    # Suite difficulty ("easy"/"mid"), suffixed onto every flat score key. See
+    # aggregate_results().
+    suite_level: str | None
     state_lock: threading.Lock
+    # --mode harvest only: one trainable chat.jsonl row per verified
+    # trajectory, appended under state_lock like attempts/runs.
+    records: list[dict[str, Any]]
     attempts: list[dict[str, Any]]
     runs: list[dict[str, Any]]
 
@@ -2746,6 +3008,14 @@ def _run_one_task_attempt(
         client = OSWorldClient(f"http://localhost:{vm_port}")
         client.wait_ready(timeout_s=300)
         client.patch_xcursor_leak()
+        action_source = None
+        if args.mode == "harvest":
+            action_source = cua_micro_harvest.make_oracle_action_source(
+                plan=task.oracle_plan or (),
+                active_title=lambda: _active_title(client),
+                model_resolution=ctx.model_resolution,
+                seed=seed,
+            )
         result = run_attempt(
             client=client,
             task=task,
@@ -2761,6 +3031,7 @@ def _run_one_task_attempt(
             save_frames=not args.no_frames,
             settle_s=args.settle_s,
             n_history_frames=args.n_history_frames,
+            action_source=action_source,
         )
     except Exception as error:
         _LOGGER.exception("attempt failed: task=%s seed=%d", task.task_id, seed)
@@ -2789,10 +3060,31 @@ def _run_one_task_attempt(
         "success": result.get("success"),
         "stop_reason": result.get("stop_reason"),
     }
+    if args.mode == "harvest":
+        record = cua_micro_harvest.build_chat_record(
+            result=result,
+            attempt_dir=attempt_dir,
+            suite_name=str(ctx.suite_raw["suite"]),
+            system_prompt=ctx.system_prompt,
+            system_prompt_id=args.system_prompt_id,
+            plan=task.oracle_plan or (),
+            terminal_action=None if args.no_terminal_action else "NO_OP",
+        )
+        if record is None:
+            _LOGGER.warning(
+                "harvest dropped task=%s seed=%d (stop_reason=%s)",
+                task.task_id,
+                seed,
+                result.get("stop_reason"),
+            )
+        else:
+            with ctx.state_lock:
+                ctx.records.append(record)
+
     with ctx.state_lock:
         ctx.attempts.append(result)
         ctx.runs.append(run_entry)
-        aggregate = aggregate_results(ctx.tasks, ctx.attempts)
+        aggregate = aggregate_results(ctx.tasks, ctx.attempts, ctx.suite_level)
         partial = {
             "schema_version": 1,
             "task": ctx.suite_raw["suite"],
@@ -2862,6 +3154,22 @@ def main() -> int:
         default=None,
     )
     parser.add_argument("--validate_setups_only", action="store_true")
+    parser.add_argument(
+        "--mode",
+        choices=("eval", "harvest"),
+        default="eval",
+        help="'eval' (default) scores a checkpoint. 'harvest' replaces the "
+        "model with each task's scripted oracle (see cua_micro_oracle) and "
+        "writes the verified trajectories to chat.jsonl as training data -- no "
+        "sglang server, no --model_path, no GPU. Every selected task must be "
+        "turn_mode='multiturn' and carry an 'oracle' block.",
+    )
+    parser.add_argument(
+        "--no_terminal_action",
+        action="store_true",
+        help="--mode harvest: drop the final post-success frame instead of "
+        "labelling it NO_OP, so a trajectory ends on its last real action.",
+    )
     parser.add_argument("--model_resolution", default="1280x720")
     parser.add_argument("--seed_base", type=int, default=41000)
     parser.add_argument("--no_frames", action="store_true")
@@ -2909,6 +3217,7 @@ def main() -> int:
     parser.add_argument("--qcow2", default=_DEFAULT_QCOW2)
     parser.add_argument("--qemu_bin", default=_DEFAULT_QEMU_BIN)
     sampling_mod.add_sampling_cli(parser, default_max_tokens=512)
+    cua_micro_wandb.add_wandb_cli(parser)
     args = parser.parse_args()
 
     if args.attempts < 1:
@@ -2921,8 +3230,12 @@ def main() -> int:
             "ports are allocated 1 apart per slot within a 10-wide per-job window, "
             "see job_mod."
         )
-    if not args.validate_setups_only and not args.model_path:
-        parser.error("--model_path is required unless --validate_setups_only is set")
+    if args.mode == "harvest" and args.validate_setups_only:
+        parser.error("--mode harvest and --validate_setups_only are mutually exclusive")
+    if not args.validate_setups_only and args.mode != "harvest" and not args.model_path:
+        parser.error(
+            "--model_path is required unless --validate_setups_only or --mode harvest is set"
+        )
     if args.system_prompt_id not in _PROMPT_FORMATS:
         parser.error(
             f"unsupported --system_prompt_id {args.system_prompt_id!r}; "
@@ -2949,6 +3262,18 @@ def main() -> int:
         tasks = [task for task in tasks if task.task_id in selected]
     if args.limit > 0:
         tasks = tasks[: args.limit]
+    if args.mode == "harvest":
+        # Checked here rather than per-attempt: discovering a missing oracle
+        # block after 40 minutes of VM time is a waste, and a partially
+        # harvested suite is easy to mistake for a complete one.
+        missing = [task.task_id for task in tasks if not task.oracle_plan]
+        if missing:
+            parser.error(f"--mode harvest: tasks without an 'oracle' block: {missing}")
+        atomic = [task.task_id for task in tasks if task.turn_mode != "multiturn"]
+        if atomic:
+            parser.error(
+                f"--mode harvest: tasks that are not turn_mode='multiturn': {atomic}"
+            )
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -3054,9 +3379,46 @@ def main() -> int:
         sampling.to_dict(),
     )
 
+    # Resolved once here and threaded through both consumers -- the score-key
+    # suffix in aggregate_results() and the W&B run name -- so they can never
+    # disagree about which suite this job ran.
+    suite_level = cua_micro_wandb.resolve_suite_level(args)
+    _LOGGER.info("suite_level=%s (score keys get it as a suffix)", suite_level)
+
+    # Started before the (long) VM/sglang work so the run shows up in W&B while
+    # it is still running, not only once it finishes. Harvest mode is skipped:
+    # it is oracle-driven, so its "scores" describe the scripted plan, not a
+    # model, and logging them would pollute the training run's group.
+    wandb_run = cua_micro_wandb.WandbRun(None, cua_micro_wandb.Lineage(None, None))
+    if args.mode != "harvest":
+        wandb_run = cua_micro_wandb.init(
+            args,
+            output_dir=output_dir,
+            config={
+                "suite": str(suite_raw["suite"]),
+                "suite_path": str(args.suite),
+                "model_path": args.model_path,
+                "attempts": args.attempts,
+                "n_tasks": len(tasks),
+                "system_prompt_id": args.system_prompt_id,
+                "action_format": action_format,
+                "model_resolution": list(model_resolution),
+                "n_history_frames": args.n_history_frames,
+                "sampling": sampling.to_dict(),
+            },
+            tags=[str(suite_raw["suite"]), action_format],
+            level=suite_level,
+        )
+
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: sys.exit(1))
-    if args.sglang_url:
+    if args.mode == "harvest":
+        # The oracle is local: no server, no GPU, no model weights. Keeping the
+        # url non-None but unusable would be a footgun, so it is empty and
+        # run_multiturn_attempt never reaches _call_model (action_source is set).
+        sglang_url = ""
+        _LOGGER.info("harvest mode: driving the loop with the scripted oracle, no sglang")
+    elif args.sglang_url:
         sglang_url = args.sglang_url.rstrip("/")
         _LOGGER.info("using existing sglang endpoint (not launching one): %s", sglang_url)
     else:
@@ -3106,6 +3468,7 @@ def main() -> int:
     # freeroll.py's multi-instruction mode uses. Lets `labctl show` browse
     # every attempt's screen+action trace, not just the aggregate numbers.
     runs: list[dict[str, Any]] = []
+    records: list[dict[str, Any]] = []
     started = time.time()
     total = len(tasks) * args.attempts
 
@@ -3143,7 +3506,9 @@ def main() -> int:
         model_resolution=model_resolution,
         total=total,
         started=started,
+        suite_level=suite_level,
         state_lock=threading.Lock(),
+        records=records,
         attempts=attempts,
         runs=runs,
     )
@@ -3166,7 +3531,7 @@ def main() -> int:
         for future in futures:
             future.result()
 
-    aggregate = aggregate_results(tasks, attempts)
+    aggregate = aggregate_results(tasks, attempts, suite_level)
     partial = {
         "schema_version": 1,
         "task": suite_raw["suite"],
@@ -3188,13 +3553,40 @@ def main() -> int:
         # in VM-slot completion order, not task order.
         "runs": sorted(runs, key=lambda run: run["index"]),
     }
+    if args.mode == "harvest":
+        chat_path = output_dir / "chat.jsonl"
+        cua_micro_harvest.write_chat_jsonl(records, chat_path)
+        harvest = cua_micro_harvest.harvest_summary(
+            records,
+            attempted=len(attempts),
+            suite_name=str(suite_raw["suite"]),
+            task_ids=[task.task_id for task in tasks],
+        )
+        harvest["chat_jsonl"] = str(chat_path)
+        partial["harvest"] = harvest
+        (output_dir / "harvest_summary.json").write_text(json.dumps(harvest, indent=2))
+        _LOGGER.info(
+            "harvest: kept %d/%d trajectories (%d frames) -> %s",
+            harvest["n_kept"],
+            harvest["n_attempted"],
+            harvest["n_frames"],
+            chat_path,
+        )
+        for task_id in harvest["tasks_with_no_data"]:
+            # Deterministic policy + zero yield == the plan is wrong for that
+            # task. Loud, because a quietly missing task is how you end up
+            # overfitting on 19 of 21 tasks and wondering why two never learn.
+            _LOGGER.error("harvest: task %s produced NO usable trajectories", task_id)
+
     (output_dir / "result.json").write_text(json.dumps(partial, indent=2))
     completion_marker.write_text(json.dumps(partial, indent=2))
+    wandb_run.log_aggregate(partial)
+    wandb_run.finish(exit_code=0 if partial["completed"] else 1)
     _LOGGER.info(
         "done: tasks=%d attempts=%d overall=%s output=%s",
         len(tasks),
         len(attempts),
-        aggregate_results(tasks, attempts)["overall"],
+        aggregate["overall"],
         output_dir,
     )
     return 0

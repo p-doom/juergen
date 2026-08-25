@@ -54,6 +54,9 @@ dependencies = [
     "pyautogui>=0.9",             # transitive: imported by OSWorld upstream agent/env modules
     "rapidfuzz",                  # evaluator string matching
     "json_repair",                # tolerant tool-call JSON parsing in some agents
+    # cua_micro_eval logs its per-checkpoint scores to W&B (grouped by the
+    # training recipe the checkpoint came from) -- see eval/cua_micro_wandb.py.
+    "wandb>=0.19",
     "lxml",                       # accessibility-tree parsing
     "cssselect",                  # ditto
     "xmltodict",                  # ditto

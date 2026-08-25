@@ -292,6 +292,21 @@ else:
             _LOGGER.warning(
                 "xcursor leak patch: agent did not come back after restart (%s)", exc
             )
+            # The restart request may have been *served* before the connection
+            # dropped, in which case the detached `sleep 1; kill -9` it queued
+            # is still pending and the agent is about to go away. Returning
+            # straight to the caller here handed back a client whose very next
+            # call died with ECONNRESET (observed at VM boot, where /execute
+            # races the agent's own startup). The patch itself is best-effort,
+            # but the client must be usable afterwards either way -- so wait
+            # the agent back before returning.
+            try:
+                self.wait_ready(timeout_s=ready_timeout_s)
+            except Exception as settle_exc:  # noqa: BLE001
+                _LOGGER.warning(
+                    "xcursor leak patch: agent still unreachable after waiting (%s)",
+                    settle_exc,
+                )
             return "error"
         _LOGGER.info("xcursor leak patch: applied, agent restarted")
         return status
