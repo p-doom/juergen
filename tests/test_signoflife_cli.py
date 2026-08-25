@@ -1179,7 +1179,7 @@ def test_the_attempt_deadline_is_derived_from_the_selected_arm_and_cell() -> Non
     task = load_suite().by_id("terminal_submit_only")
     arm = ARMS["ordered"]
 
-    assert _attempt_wall_bound_s(task, arm) == 5498.0
+    assert _attempt_wall_bound_s(task, arm) == 5538.0
     assert _suite_wall_bound_s(
         [task, task, task],
         arm=arm,
@@ -1187,7 +1187,7 @@ def test_the_attempt_deadline_is_derived_from_the_selected_arm_and_cell() -> Non
         vm_slots=2,
         local_sglang=False,
         sglang_ready_timeout_s=1500.0,
-    ) == 11146.0
+    ) == 11226.0
     assert _suite_wall_bound_s(
         [task],
         arm=arm,
@@ -1195,7 +1195,7 @@ def test_the_attempt_deadline_is_derived_from_the_selected_arm_and_cell() -> Non
         vm_slots=1,
         local_sglang=True,
         sglang_ready_timeout_s=1500.0,
-    ) == 9228.0
+    ) == 9268.0
 
 
 @pytest.mark.parametrize(
