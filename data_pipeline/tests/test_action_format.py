@@ -19,9 +19,9 @@ from pathlib import Path
 import grammars
 import msgpack
 
-from pipeline.lib.action_format import FORMATTERS, get_formatter
-from pipeline.lib.common import aggregate_actions, format_action, resolve_key_name
-from pipeline.lib.events import RawEvent, Window, load_events
+from pipeline.crowdcast.lib.action_format import FORMATTERS, get_formatter
+from pipeline.crowdcast.lib.common import aggregate_actions, format_action, resolve_key_name
+from pipeline.crowdcast.lib.events import RawEvent, Window, load_events
 
 MASTER_FPS = 15.0
 TARGET_FPS = 1.0

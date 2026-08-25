@@ -24,9 +24,9 @@ from typing import Any
 import cv2
 import numpy as np
 
-from pipeline.lib.action_format import TEXT_KEYS, WindowKeyboard
-from pipeline.lib.image_store import read_jpeg_bytes
-from pipeline.lib.views import SegmentView, ViewFrame
+from pipeline.crowdcast.lib.action_format import TEXT_KEYS, WindowKeyboard
+from pipeline.crowdcast.lib.image_store import read_jpeg_bytes
+from pipeline.crowdcast.lib.views import SegmentView, ViewFrame
 
 
 

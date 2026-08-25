@@ -20,8 +20,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from pipeline.annotation.lib.registry import MethodContext
-from pipeline.annotation.lib.units import (
+from pipeline.crowdcast.annotation.lib.registry import MethodContext
+from pipeline.crowdcast.annotation.lib.units import (
     AnnotationUnit,
     _is_submission,
     frames_to_data_urls,

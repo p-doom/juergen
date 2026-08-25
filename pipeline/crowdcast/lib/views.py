@@ -36,10 +36,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pipeline.lib.common import read_jsonl
-from pipeline.lib.events import DeadZone, Window
-from pipeline.lib.image_store import make_arrayrecord_image_uri
-from pipeline.lib.manifest import check_artifact_id, make_artifact_id
+from pipeline.crowdcast.lib.common import read_jsonl
+from pipeline.crowdcast.lib.events import DeadZone, Window
+from pipeline.crowdcast.lib.image_store import make_arrayrecord_image_uri
+from pipeline.crowdcast.lib.manifest import check_artifact_id, make_artifact_id
 
 _FPS_EPS = 1e-9
 

@@ -88,16 +88,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from pipeline.lib import config  # noqa: E402
-from pipeline.lib import realign as R  # noqa: E402  (keylog_to_video)
-from pipeline.lib.common import (  # noqa: E402
+from pipeline.crowdcast.lib import config  # noqa: E402
+from pipeline.crowdcast.lib import realign as R  # noqa: E402  (keylog_to_video)
+from pipeline.crowdcast.lib.common import (  # noqa: E402
     aggregate_actions,
     format_action,
     load_keylog_entries,
     resolve_button_name,
     resolve_key_name,
 )
-from pipeline.lib.image_store import (  # noqa: E402
+from pipeline.crowdcast.lib.image_store import (  # noqa: E402
     is_arrayrecord_image_uri,
     parse_arrayrecord_image_uri,
     read_jpeg_bytes,

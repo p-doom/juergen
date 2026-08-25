@@ -27,11 +27,11 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from pipeline.lib.action_format import get_formatter
-from pipeline.lib.common import read_jsonl
-from pipeline.lib.events import load_events
-from pipeline.lib.realign import mp4_mvhd
-from pipeline.lib.views import FilterArtifact, SegmentView
+from pipeline.crowdcast.lib.action_format import get_formatter
+from pipeline.crowdcast.lib.common import read_jsonl
+from pipeline.crowdcast.lib.events import load_events
+from pipeline.crowdcast.lib.realign import mp4_mvhd
+from pipeline.crowdcast.lib.views import FilterArtifact, SegmentView
 
 DEFAULT_TZ = "Europe/Berlin"
 DEFAULT_GAP_CUT_S = 180.0  # a recording gap > this splits the day into chunks

@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.lib import config
-from pipeline.stage_03_filter import (
+from pipeline.crowdcast.lib import config
+from pipeline.crowdcast.stage_03_filter import (
     FILTER_PARAM_KEYS,
     filter_params,
     filter_params_from_task,

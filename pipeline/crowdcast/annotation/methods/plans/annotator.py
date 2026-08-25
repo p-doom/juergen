@@ -18,9 +18,9 @@ import json
 import re
 from typing import Any
 
-from pipeline.annotation.lib.registry import MethodContext
-from pipeline.annotation.lib.units import frames_to_data_urls
-from pipeline.lib.views import SegmentView
+from pipeline.crowdcast.annotation.lib.registry import MethodContext
+from pipeline.crowdcast.annotation.lib.units import frames_to_data_urls
+from pipeline.crowdcast.lib.views import SegmentView
 
 INPUT_KIND = "goals"
 

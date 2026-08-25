@@ -1,10 +1,11 @@
 """Make the source roots importable for the tests.
 
-``pipeline`` lives at the repo root; ``configs`` lives under ``data_pipeline``.
+``pipeline`` lives at the repo root (one package per corpus, e.g.
+``pipeline.crowdcast``); ``configs`` lives under ``data_pipeline``.
 Neither is an installed package (the stage scripts sys.path-hack their own root
 when run directly), so both roots go on ``sys.path``.
 
-``pipeline.lib.action_format`` renders every label through a grammar codec, and
+``pipeline.crowdcast.lib.action_format`` renders every label through a grammar codec, and
 ``grammars`` hard-imports ``desktop``, so the sibling checkout goes on the path
 too — exactly as ``juergen/tests/conftest.py`` does. Under a venv that resolves
 ``desktop`` as the declared dependency it is already importable and this append

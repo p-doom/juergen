@@ -54,8 +54,8 @@ from grammars.deltatype_v2 import DeltatypeV2Action
 from grammars.ordered_events_v3 import CODEC as ORDERED_EVENTS_V3
 from grammars.ordered_events_v3 import OrderedEventsV3Action, Primitive
 
-from pipeline.lib.common import ActionBin
-from pipeline.lib.events import (
+from pipeline.crowdcast.lib.common import ActionBin
+from pipeline.crowdcast.lib.events import (
     DeadZone,
     LabeledEvent,
     PolicyCounters,

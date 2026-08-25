@@ -1,6 +1,6 @@
 """Every numbered stage must import under the interpreter this suite runs in.
 
-The stages are dispatched as file paths (``python pipeline/stage_NN_*.py --flags``)
+The stages are dispatched as file paths (``python pipeline/<corpus>/stage_NN_*.py --flags``)
 from whatever cwd the scheduler picks, and their dependency set is declared here,
 in ``data_pipeline/pyproject.toml`` -- not in the root project, which packages no
 ``pipeline/`` and carries neither cv2 nor array-record. Nothing tied the two
@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-STAGES = sorted((REPO_ROOT / "pipeline").glob("stage_0*.py"))
+STAGES = sorted((REPO_ROOT / "pipeline").glob("*/stage_0*.py"))
 
 # Running the module top level is not enough on its own: the array-record writers
 # are imported inside the worker functions that use them (PLC0415), so a venv
@@ -51,7 +51,7 @@ for node in ast.walk(ast.parse(open(path).read())):
 
 def test_the_probe_found_stages():
     # An empty parametrize list reports as one skip, which reads as green.
-    assert STAGES, f"no pipeline/stage_0*.py under {REPO_ROOT}"
+    assert STAGES, f"no pipeline/*/stage_0*.py under {REPO_ROOT}"
 
 
 @pytest.mark.parametrize("stage", STAGES, ids=lambda p: p.stem)

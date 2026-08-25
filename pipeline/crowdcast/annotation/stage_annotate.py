@@ -51,47 +51,47 @@ import sys
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from pipeline.annotation.lib.days import (  # noqa: E402
+from pipeline.crowdcast.annotation.lib.days import (  # noqa: E402
     DEFAULT_GAP_CUT_S,
     DEFAULT_TZ,
     build_day_index,
     build_day_stream,
     fmt_t,
 )
-from pipeline.annotation.lib.driver import model_slug, run_driver  # noqa: E402
-from pipeline.annotation.lib.labeler import (  # noqa: E402
+from pipeline.crowdcast.annotation.lib.driver import model_slug, run_driver  # noqa: E402
+from pipeline.crowdcast.annotation.lib.labeler import (  # noqa: E402
     Labeler,
     LabelerConfig,
     labeler_model,
 )
-from pipeline.annotation.lib.registry import (  # noqa: E402
+from pipeline.crowdcast.annotation.lib.registry import (  # noqa: E402
     Method,
     MethodContext,
     discover_methods,
     load_method,
 )
-from pipeline.annotation.lib.units import build_units  # noqa: E402
-from pipeline.lib import config  # noqa: E402
-from pipeline.lib.action_format import WindowKeyboard, get_formatter  # noqa: E402
-from pipeline.lib.common import (  # noqa: E402
+from pipeline.crowdcast.annotation.lib.units import build_units  # noqa: E402
+from pipeline.crowdcast.lib import config  # noqa: E402
+from pipeline.crowdcast.lib.action_format import WindowKeyboard, get_formatter  # noqa: E402
+from pipeline.crowdcast.lib.common import (  # noqa: E402
     ensure_dir,
     normalize_dashed_argv,
     write_json,
     write_jsonl,
 )
-from pipeline.lib.events import load_events  # noqa: E402
-from pipeline.lib.goals import (  # noqa: E402
+from pipeline.crowdcast.lib.events import load_events  # noqa: E402
+from pipeline.crowdcast.lib.goals import (  # noqa: E402
     assert_same_artifact,
     load_goals,
     validate_goal_row,
     view_span_to_master,
 )
-from pipeline.lib.manifest import make_artifact_id  # noqa: E402
-from pipeline.lib.views import FPS_MODES, FilterArtifact  # noqa: E402
+from pipeline.crowdcast.lib.manifest import make_artifact_id  # noqa: E402
+from pipeline.crowdcast.lib.views import FPS_MODES, FilterArtifact  # noqa: E402
 
 # Routing-only per-frame token guess (720p-ish); the governor corrects with
 # measured actuals, so precision doesn't matter here.

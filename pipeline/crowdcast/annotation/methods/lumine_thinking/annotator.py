@@ -38,11 +38,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pipeline.annotation.lib.days import DayFrame, DayStream, fmt_t, frame_label
-from pipeline.annotation.lib.labeler import ContentFilteredError
-from pipeline.annotation.lib.registry import MethodContext
-from pipeline.annotation.lib.units import frames_to_data_urls
-from pipeline.lib.common import write_json, write_jsonl
+from pipeline.crowdcast.annotation.lib.days import DayFrame, DayStream, fmt_t, frame_label
+from pipeline.crowdcast.annotation.lib.labeler import ContentFilteredError
+from pipeline.crowdcast.annotation.lib.registry import MethodContext
+from pipeline.crowdcast.annotation.lib.units import frames_to_data_urls
+from pipeline.crowdcast.lib.common import write_json, write_jsonl
 
 INPUT_KIND = "days"
 # Locked model discipline of the validated mechanic (Kimi: never temperature 0;

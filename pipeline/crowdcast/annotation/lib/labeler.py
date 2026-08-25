@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pipeline.lib.common import extract_json_object, image_data_url
+from pipeline.crowdcast.lib.common import extract_json_object, image_data_url
 
 # Served from the same Azure mihir-4710 /openai/v1/ surface; pass the model by
 # name.

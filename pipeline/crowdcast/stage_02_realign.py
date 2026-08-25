@@ -42,12 +42,12 @@ import msgpack
 # directly as a script (mirrors the other stages' PYTHONPATH setup).
 import sys
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from pipeline.lib import realign as R  # noqa: E402
-from pipeline.lib.common import ensure_dir, read_jsonl, write_json  # noqa: E402
+from pipeline.crowdcast.lib import realign as R  # noqa: E402
+from pipeline.crowdcast.lib.common import ensure_dir, read_jsonl, write_json  # noqa: E402
 
 
 def build_keylog_index(uploads_roots: set[Path]) -> dict[str, list[Path]]:

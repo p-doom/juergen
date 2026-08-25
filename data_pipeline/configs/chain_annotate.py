@@ -30,16 +30,17 @@ def _resolve_project_repo() -> str:
 
     Both configs in this package derive the same thing -- the juergen checkout,
     from this file's location or from ``JUERGEN_REPO`` -- and stage the checkout
-    itself, because their entrypoints are ``pipeline/...``.
+    itself, because their entrypoints are ``pipeline/crowdcast/...``.
     """
     root = Path(os.environ.get("JUERGEN_REPO") or Path(__file__).resolve().parents[2])
-    if not (root / "pipeline").is_dir():
+    if not (root / "pipeline" / "crowdcast").is_dir():
         raise RuntimeError(
-            f"PROJECT_REPO={root} has no 'pipeline/' directory, so every "
-            "cfg.entrypoint.path in this config would fail at dispatch. Pre-"
-            "rearchitecture checkouts keep the stages under 'data_pipeline/"
-            "realigned_pipeline/'. Set JUERGEN_REPO to a checkout with the "
-            "root-'pipeline/' layout."
+            f"PROJECT_REPO={root} has no 'pipeline/crowdcast/' directory, so "
+            "every cfg.entrypoint.path in this config would fail at dispatch. "
+            "Pre-rearchitecture checkouts keep the stages under 'data_pipeline/"
+            "realigned_pipeline/', and checkouts from before the per-corpus "
+            "split keep them at 'pipeline/'. Set JUERGEN_REPO to a checkout "
+            "with the 'pipeline/crowdcast/' layout."
         )
     return str(root)
 
@@ -105,7 +106,7 @@ def stage_03_filter():
     cfg.resources.mem = "128GB"
     cfg.resources.cpus = 32
     cfg.entrypoint.repo_paths = {"berlin": PROJECT_REPO}
-    cfg.entrypoint.path = _entrypoint("pipeline/stage_03_filter.py")
+    cfg.entrypoint.path = _entrypoint("pipeline/crowdcast/stage_03_filter.py")
     cfg.entrypoint.args.frames_master_dir = _source(MASTER_DIR)
     cfg.entrypoint.args.clips_manifest = _source(CLIPS_MANIFEST)
     cfg.entrypoint.args.num_workers = 32
@@ -132,7 +133,7 @@ def stage_03b_annotate():
     cfg.resources.mem = "64GB"
     cfg.resources.cpus = 16
     cfg.entrypoint.repo_paths = {"berlin": PROJECT_REPO}
-    cfg.entrypoint.path = _entrypoint("pipeline/annotation/stage_annotate.py")
+    cfg.entrypoint.path = _entrypoint("pipeline/crowdcast/annotation/stage_annotate.py")
     cfg.entrypoint.args.filter_dir = f"{DATASETS_ROOT}/{FILTER_VERSION}"
     cfg.entrypoint.args.fps = ANNOTATE_FPS
     cfg.entrypoint.args.method = "describe_extract"

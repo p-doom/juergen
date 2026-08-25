@@ -29,12 +29,12 @@ from absl import app, flags
 
 # Make the ``pipeline`` package importable when this stage is run
 # directly as a script (mirrors the other stages' PYTHONPATH setup).
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from pipeline.lib.goals import assert_same_artifact  # noqa: E402
-from pipeline.lib.manifest import make_artifact_id, write_manifest  # noqa: E402
+from pipeline.crowdcast.lib.goals import assert_same_artifact  # noqa: E402
+from pipeline.crowdcast.lib.manifest import make_artifact_id, write_manifest  # noqa: E402
 
 FLAGS = flags.FLAGS
 

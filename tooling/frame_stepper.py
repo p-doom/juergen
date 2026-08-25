@@ -33,7 +33,7 @@ _REPO_ROOT = _Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in _sys.path:
     _sys.path.insert(0, str(_REPO_ROOT))
 
-from pipeline.lib.common import aggregate_actions, ceil_frames, format_action
+from pipeline.crowdcast.lib.common import aggregate_actions, ceil_frames, format_action
 
 VIDEO = Path()
 VIDEO_FPS = 30.0

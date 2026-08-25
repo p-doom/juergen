@@ -51,13 +51,13 @@ from typing import Any
 
 # Make the ``pipeline`` package importable when run directly
 # from this folder (mirrors the other stages).
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from pipeline.lib import config  # noqa: E402
-from pipeline.lib.action_format import get_formatter  # noqa: E402
-from pipeline.lib.common import (  # noqa: E402
+from pipeline.crowdcast.lib import config  # noqa: E402
+from pipeline.crowdcast.lib.action_format import get_formatter  # noqa: E402
+from pipeline.crowdcast.lib.common import (  # noqa: E402
     aggregate_actions,
     ensure_dir,
     format_action,
@@ -67,9 +67,9 @@ from pipeline.lib.common import (  # noqa: E402
     write_json,
     write_jsonl,
 )
-from pipeline.lib.events import load_events  # noqa: E402
-from pipeline.lib.manifest import make_artifact_id  # noqa: E402
-from pipeline.lib.views import build_segment_view, resolve_stride  # noqa: E402
+from pipeline.crowdcast.lib.events import load_events  # noqa: E402
+from pipeline.crowdcast.lib.manifest import make_artifact_id  # noqa: E402
+from pipeline.crowdcast.lib.views import build_segment_view, resolve_stride  # noqa: E402
 
 # Master statuses (from stage-01 segment_index.jsonl) that carry a usable store.
 USABLE_MASTER_STATUSES = {"ok", "cached"}

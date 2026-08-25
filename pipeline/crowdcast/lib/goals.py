@@ -24,8 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pipeline.lib.common import read_jsonl
-from pipeline.lib.views import SegmentView, ViewFrame
+from pipeline.crowdcast.lib.common import read_jsonl
+from pipeline.crowdcast.lib.views import SegmentView, ViewFrame
 
 SNAP_START_MODES = ("before", "inside")
 

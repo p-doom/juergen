@@ -35,8 +35,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pipeline.annotation.lib.labeler import Labeler
-from pipeline.annotation.lib.prompts import PromptPack
+from pipeline.crowdcast.annotation.lib.labeler import Labeler
+from pipeline.crowdcast.annotation.lib.prompts import PromptPack
 
 METHODS_DIR = Path(__file__).resolve().parents[1] / "methods"
 INPUT_KINDS = ("frames", "goals", "days")

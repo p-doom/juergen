@@ -50,14 +50,14 @@ from tqdm import tqdm
 
 # Make the ``pipeline`` package importable when this script
 # is run directly from its own folder (mirrors run_dataset's PYTHONPATH setup).
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from pipeline.lib import config  # noqa: E402
-from pipeline.lib.common import ensure_dir, read_jsonl, write_json  # noqa: E402
-from pipeline.lib.image_store import make_arrayrecord_image_uri  # noqa: E402
-from pipeline.lib.frames_actions import (  # noqa: E402
+from pipeline.crowdcast.lib import config  # noqa: E402
+from pipeline.crowdcast.lib.common import ensure_dir, read_jsonl, write_json  # noqa: E402
+from pipeline.crowdcast.lib.image_store import make_arrayrecord_image_uri  # noqa: E402
+from pipeline.crowdcast.lib.frames_actions import (  # noqa: E402
     extract_frames_ffmpeg,
     resolve_ffmpeg_bin,
 )

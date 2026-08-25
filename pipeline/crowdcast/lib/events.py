@@ -50,7 +50,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from pipeline.lib.common import (
+from pipeline.crowdcast.lib.common import (
     load_keylog_entries,
     resolve_button_name,
     resolve_key_name,

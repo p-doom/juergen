@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import unittest
 
-from pipeline.lib.action_format import get_formatter
-from pipeline.lib.events import (
+from pipeline.crowdcast.lib.action_format import get_formatter
+from pipeline.crowdcast.lib.events import (
     DeadZone,
     RawEvent,
     Window,

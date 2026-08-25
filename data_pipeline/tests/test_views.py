@@ -10,9 +10,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pipeline.lib.events import RawEvent, apply_label_policy
-from pipeline.lib.manifest import make_artifact_id
-from pipeline.lib.views import (
+from pipeline.crowdcast.lib.events import RawEvent, apply_label_policy
+from pipeline.crowdcast.lib.manifest import make_artifact_id
+from pipeline.crowdcast.lib.views import (
     FilterArtifact,
     build_segment_view,
     resolve_stride,

@@ -26,7 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from pipeline.lib.common import read_jsonl
+from pipeline.crowdcast.lib.common import read_jsonl
 
 
 def model_slug(model: str | None) -> str:

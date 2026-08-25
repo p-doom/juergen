@@ -9,24 +9,24 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pipeline.annotation.lib.prompts import PromptPack
-from pipeline.annotation.lib.registry import discover_methods, load_method
-from pipeline.annotation.lib.units import (
+from pipeline.crowdcast.annotation.lib.prompts import PromptPack
+from pipeline.crowdcast.annotation.lib.registry import discover_methods, load_method
+from pipeline.crowdcast.annotation.lib.units import (
     AnnotationUnit,
     _is_submission,
     build_units,
     is_typing,
     plan_windows,
 )
-from pipeline.annotation.methods.describe_extract.annotator import (
+from pipeline.crowdcast.annotation.methods.describe_extract.annotator import (
     clean_goals,
     snap_goal_starts,
 )
-from pipeline.annotation.methods.plans.annotator import goal_start_frame, plan_flags
-from pipeline.lib.action_format import _US_PRINTABLE, WindowKeyboard, get_formatter
-from pipeline.lib.events import RawEvent, Window
-from pipeline.lib.goals import validate_goal_row, view_span_to_master
-from pipeline.lib.views import build_segment_view
+from pipeline.crowdcast.annotation.methods.plans.annotator import goal_start_frame, plan_flags
+from pipeline.crowdcast.lib.action_format import _US_PRINTABLE, WindowKeyboard, get_formatter
+from pipeline.crowdcast.lib.events import RawEvent, Window
+from pipeline.crowdcast.lib.goals import validate_goal_row, view_span_to_master
+from pipeline.crowdcast.lib.views import build_segment_view
 
 
 def _kb(*names: str) -> WindowKeyboard:

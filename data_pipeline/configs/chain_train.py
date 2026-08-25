@@ -33,19 +33,20 @@ def _resolve_project_repo() -> str:
 
     Both configs in this package derive the same thing -- the juergen checkout,
     from this file's location or from ``JUERGEN_REPO`` -- and stage the checkout
-    itself, because their entrypoints are ``pipeline/...``.
+    itself, because their entrypoints are ``pipeline/crowdcast/...``.
 
     Duplicated verbatim in chain_annotate.py (as ``_as_child`` is) so each config
     stays standalone-launchable with no cross-import at module scope.
     """
     root = Path(os.environ.get("JUERGEN_REPO") or Path(__file__).resolve().parents[2])
-    if not (root / "pipeline").is_dir():
+    if not (root / "pipeline" / "crowdcast").is_dir():
         raise RuntimeError(
-            f"PROJECT_REPO={root} has no 'pipeline/' directory, so every "
-            "cfg.entrypoint.path in this config would fail at dispatch. Pre-"
-            "rearchitecture checkouts keep the stages under 'data_pipeline/"
-            "realigned_pipeline/'. Set JUERGEN_REPO to a checkout with the "
-            "root-'pipeline/' layout."
+            f"PROJECT_REPO={root} has no 'pipeline/crowdcast/' directory, so "
+            "every cfg.entrypoint.path in this config would fail at dispatch. "
+            "Pre-rearchitecture checkouts keep the stages under 'data_pipeline/"
+            "realigned_pipeline/', and checkouts from before the per-corpus "
+            "split keep them at 'pipeline/'. Set JUERGEN_REPO to a checkout "
+            "with the 'pipeline/crowdcast/' layout."
         )
     return str(root)
 
@@ -141,7 +142,7 @@ def stage_04_conversations():
     cfg.resources.mem = "128GB"
     cfg.resources.cpus = 32
     cfg.entrypoint.repo_paths = {"berlin": PROJECT_REPO}
-    cfg.entrypoint.path = _entrypoint("pipeline/stage_04_build_conversations.py")
+    cfg.entrypoint.path = _entrypoint("pipeline/crowdcast/stage_04_build_conversations.py")
     cfg.entrypoint.args.filter_dir = f"{DATASETS_ROOT}/{FILTER_VERSION}"
     cfg.entrypoint.args.fps = TRAIN_FPS
     cfg.entrypoint.args.action_format = "canonical"
@@ -165,7 +166,7 @@ def stage_05_measure():
     cfg.resources.mem = "128GB"
     cfg.resources.cpus = 32
     cfg.entrypoint.repo_paths = {"berlin": PROJECT_REPO}
-    cfg.entrypoint.path = _entrypoint("pipeline/stage_05_measure_lengths.py")
+    cfg.entrypoint.path = _entrypoint("pipeline/crowdcast/stage_05_measure_lengths.py")
     cfg.entrypoint.args.source_path = f"{DATASETS_ROOT}/{CONV_VERSION}"
     cfg.entrypoint.args.omegalax_repo = _omegalax_repo(OMEGALAX_REPO)
     cfg.entrypoint.args.model_id = MODEL_ID
@@ -185,7 +186,7 @@ def stage_06_records():
     cfg.resources.mem = "128GB"
     cfg.resources.cpus = 32
     cfg.entrypoint.repo_paths = {"berlin": PROJECT_REPO}
-    cfg.entrypoint.path = _entrypoint("pipeline/stage_06_training_records.py")
+    cfg.entrypoint.path = _entrypoint("pipeline/crowdcast/stage_06_training_records.py")
     cfg.entrypoint.args.source_path = f"{DATASETS_ROOT}/{CONV_VERSION}"
     cfg.entrypoint.args.message_lengths_path = f"{DATASETS_ROOT}/{MEASURE_VERSION}"
     cfg.entrypoint.args.omegalax_repo = _omegalax_repo(OMEGALAX_REPO)

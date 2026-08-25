@@ -13,8 +13,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from pipeline.lib import config
-from pipeline.lib.common import (
+from pipeline.crowdcast.lib import config
+from pipeline.crowdcast.lib.common import (
     ActionBin,
     aggregate_actions,
     ceil_frames,
@@ -25,7 +25,7 @@ from pipeline.lib.common import (
     write_json,
     write_jsonl,
 )
-from pipeline.lib.image_store import make_arrayrecord_image_uri
+from pipeline.crowdcast.lib.image_store import make_arrayrecord_image_uri
 
 
 def jpeg_quality_to_qscale(jpeg_quality: int) -> int:
