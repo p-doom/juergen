@@ -1261,10 +1261,10 @@ def _idle_in_own_process_group() -> None:
     time.sleep(60)
 
 
-def test_attempt_process_group_termination_reaps_the_owned_worker() -> None:
+def test_attempt_session_termination_reaps_the_owned_worker() -> None:
     import multiprocessing
 
-    from evals.signoflife.__main__ import _terminate_attempt_process_group
+    from evals.signoflife.__main__ import _terminate_attempt_process_session
 
     process = multiprocessing.get_context("fork").Process(target=_idle_in_own_process_group)
     process.start()
@@ -1274,7 +1274,7 @@ def test_attempt_process_group_termination_reaps_the_owned_worker() -> None:
         time.sleep(0.01)
     try:
         assert os.getpgid(process.pid) == process.pid
-        _terminate_attempt_process_group(process)
+        _terminate_attempt_process_session(process)
         assert not process.is_alive()
     finally:
         if process.is_alive():
@@ -1308,31 +1308,39 @@ def _scheduler_runtime(tmp_path):
 
 def _crash_with_stubborn_descendant(pid_path: str) -> None:
     os.setsid()
-    descendant = subprocess.Popen(
+    subprocess.Popen(
         [
             sys.executable,
             "-c",
-            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)",
+            "import os,pathlib,signal,sys,time; os.setpgid(0,0); "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(300)",
+            pid_path,
         ]
     )
-    Path(pid_path).write_text(str(descendant.pid), encoding="utf-8")
+    while not Path(pid_path).exists():
+        time.sleep(0.01)
     os._exit(7)
 
 
 def _wait_with_stubborn_descendant(pid_path: str) -> None:
     os.setsid()
-    descendant = subprocess.Popen(
+    subprocess.Popen(
         [
             sys.executable,
             "-c",
-            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)",
+            "import os,pathlib,signal,sys,time; os.setpgid(0,0); "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(300)",
+            pid_path,
         ]
     )
-    Path(pid_path).write_text(str(descendant.pid), encoding="utf-8")
+    while not Path(pid_path).exists():
+        time.sleep(0.01)
     time.sleep(300)
 
 
-def test_natural_worker_crash_reaps_its_stubborn_descendant(
+def test_natural_worker_crash_reaps_an_escaped_stubborn_descendant(
     tmp_path, monkeypatch
 ) -> None:
     import multiprocessing
@@ -1367,6 +1375,9 @@ def test_natural_worker_crash_reaps_its_stubborn_descendant(
             time.sleep(0.01)
         assert descendant_path.exists()
         assert os.getpgid(process.pid) == process.pid
+        descendant = int(descendant_path.read_text(encoding="utf-8"))
+        assert os.getpgid(descendant) == descendant
+        assert os.getsid(descendant) == process.pid
         return process
 
     monkeypatch.setattr(dispatcher, "_spawn_attempt_process", spawn)
@@ -1382,6 +1393,13 @@ def test_natural_worker_crash_reaps_its_stubborn_descendant(
         assert not Path(f"/proc/{descendant}").exists()
         assert rows[0]["infra_error"]["type"] == "AttemptDescendantLeak"
     finally:
+        if descendant_path.exists() and launched:
+            descendant = int(descendant_path.read_text(encoding="utf-8"))
+            try:
+                if os.getsid(descendant) == launched[0].pid:
+                    os.killpg(descendant, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         if launched and launched[0].pid is not None:
             try:
                 os.killpg(launched[0].pid, signal.SIGKILL)
@@ -1390,7 +1408,7 @@ def test_natural_worker_crash_reaps_its_stubborn_descendant(
             launched[0].join(timeout=5)
 
 
-def test_supervisor_baseexception_reaps_its_stubborn_descendant(
+def test_supervisor_baseexception_reaps_an_escaped_stubborn_descendant(
     tmp_path, monkeypatch
 ) -> None:
     import multiprocessing
@@ -1422,6 +1440,9 @@ def test_supervisor_baseexception_reaps_its_stubborn_descendant(
             time.sleep(0.01)
         assert descendant_path.exists()
         assert os.getpgid(process.pid) == process.pid
+        descendant = int(descendant_path.read_text(encoding="utf-8"))
+        assert os.getpgid(descendant) == descendant
+        assert os.getsid(descendant) == process.pid
         return process
 
     original_exited = dispatcher._attempt_process_exited
@@ -1451,12 +1472,72 @@ def test_supervisor_baseexception_reaps_its_stubborn_descendant(
             os.killpg(launched[0].pid, 0)
         assert not Path(f"/proc/{descendant}").exists()
     finally:
+        if descendant_path.exists() and launched:
+            descendant = int(descendant_path.read_text(encoding="utf-8"))
+            try:
+                if os.getsid(descendant) == launched[0].pid:
+                    os.killpg(descendant, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         if launched and launched[0].pid is not None:
             try:
                 os.killpg(launched[0].pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             launched[0].join(timeout=5)
+
+
+def test_supervisor_cleanup_visits_every_active_session_after_failures(
+    tmp_path, monkeypatch
+) -> None:
+    import evals.signoflife.__main__ as dispatcher
+
+    runtime = _scheduler_runtime(tmp_path)
+    task = load_suite().by_id("terminal_submit_only")
+    specs = [
+        dispatcher._AttemptSpec(
+            index=index,
+            cell_ordinal=index,
+            trial=1,
+            task=task,
+            wall_bound_s=10.0,
+        )
+        for index in range(2)
+    ]
+
+    class Process:
+        exitcode = None
+
+        def __init__(self, pid):
+            self.pid = pid
+
+    cleaned = []
+    processes = iter((Process(1000), Process(1001)))
+    monkeypatch.setattr(
+        dispatcher, "_spawn_attempt_process", lambda _runtime, _spec: next(processes)
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "_attempt_process_exited",
+        lambda _process: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    def fail_cleanup(process, *, terminate=True):
+        del terminate
+        cleaned.append(process.pid)
+        raise RuntimeError(f"cleanup failed for {process.pid}")
+
+    monkeypatch.setattr(dispatcher, "_terminate_attempt_process_session", fail_cleanup)
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        dispatcher._run_attempts(runtime, specs)
+
+    assert cleaned == [1000, 1001]
+    assert [type(error) for error in raised.value.exceptions] == [
+        KeyboardInterrupt,
+        RuntimeError,
+        RuntimeError,
+    ]
 
 
 def test_the_dynamic_scheduler_refills_a_free_slot_and_returns_canonical_order(
@@ -1512,7 +1593,7 @@ def test_the_dynamic_scheduler_refills_a_free_slot_and_returns_canonical_order(
     )
     monkeypatch.setattr(
         dispatcher,
-        "_terminate_attempt_process_group",
+        "_terminate_attempt_process_session",
         lambda process, *, terminate=False: False,
     )
     monkeypatch.setattr(dispatcher.time, "sleep", lambda seconds: None)
@@ -1583,7 +1664,7 @@ def test_the_scheduler_types_a_wall_timeout_and_preserves_null_success(
     )
     monkeypatch.setattr(
         dispatcher,
-        "_terminate_attempt_process_group",
+        "_terminate_attempt_process_session",
         lambda process, *, terminate=True: False,
     )
 

@@ -126,13 +126,15 @@ _OUTPUT_MAX_TOTAL_BYTES = 64 * 1024 * 1024 * 1024
 _OUTPUT_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _SAMPLING_SEED_DOMAIN = b"juergen-signoflife-sampling-seed-v1\0"
 _DETERMINISTIC_ATTENTION_BACKENDS = frozenset({"fa3", "flashinfer", "triton"})
+_PIDFD_SEND_SIGNAL_SYSCALL_X86_64 = 424
 _SGLANG_VERSION = "0.5.10.post1"
 _SGLANG_PIDFD_OPEN_SYSCALL_X86_64 = 434
 _SGLANG_PIDFD_GETFD_SYSCALL_X86_64 = 438
 _SGLANG_MAX_FDS = 4096
 _SGLANG_MAX_FD_COMPONENT_BYTES = 10
-_SGLANG_MAX_PROC_ENTRIES = 32768
-_SGLANG_MAX_PROC_STAT_BYTES = 4096
+_PROC_MAX_ENTRIES = 32768
+_PROC_MAX_STAT_BYTES = 4096
+_ATTEMPT_MAX_SESSION_IDENTITIES = 4096
 _SGLANG_TERM_TIMEOUT_S = 30.0
 _SGLANG_KILL_TIMEOUT_S = 10.0
 _SGLANG_GROUP_POLL_S = 0.05
@@ -730,6 +732,14 @@ def _pidfd_getfd(pidfd: int, target_fd: int) -> int:
     return duplicated
 
 
+def _pidfd_send_signal(pidfd: int, signal_number: int) -> None:
+    try:
+        _linux_syscall(_PIDFD_SEND_SIGNAL_SYSCALL_X86_64, pidfd, signal_number, 0, 0)
+    except OSError as error:
+        if error.errno != errno.ESRCH:
+            raise
+
+
 def _preflight_pidfd_getfd() -> None:
     read_fd, write_fd = os.pipe2(os.O_CLOEXEC)
     pidfd = -1
@@ -851,42 +861,49 @@ def _pidfd_exited(pidfd: int) -> bool:
     return bool(poller.poll(0))
 
 
+def _process_identity(pid: int) -> tuple[str, int, int, int]:
+    stat_fd = os.open(
+        f"/proc/{pid}/stat",
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    try:
+        raw = os.read(stat_fd, _PROC_MAX_STAT_BYTES + 1)
+    finally:
+        os.close(stat_fd)
+    if len(raw) > _PROC_MAX_STAT_BYTES:
+        raise RuntimeError("oversized /proc process stat during process teardown")
+    closing = raw.rfind(b") ")
+    fields = raw[closing + 2 :].split() if closing >= 0 else []
+    if len(fields) < 20:
+        raise RuntimeError("malformed /proc process stat during process teardown")
+    try:
+        state = fields[0].decode("ascii", errors="strict")
+        process_group = int(fields[2])
+        session = int(fields[3])
+        start_time = int(fields[19])
+    except (UnicodeDecodeError, ValueError) as error:
+        raise RuntimeError("invalid /proc process identity during teardown") from error
+    return state, process_group, session, start_time
+
+
 def _process_group_members(pgid: int) -> dict[int, str]:
     members: dict[int, str] = {}
     with os.scandir("/proc") as entries:
         for count, entry in enumerate(entries, start=1):
-            if count > _SGLANG_MAX_PROC_ENTRIES:
+            if count > _PROC_MAX_ENTRIES:
                 raise RuntimeError(
-                    f"/proc exceeds {_SGLANG_MAX_PROC_ENTRIES} entries during SGLang teardown"
+                    f"/proc exceeds {_PROC_MAX_ENTRIES} entries during process teardown"
                 )
             if not entry.name.isascii() or not entry.name.isdecimal():
                 continue
-            stat_fd = -1
             try:
-                stat_fd = os.open(
-                    f"/proc/{entry.name}/stat",
-                    os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                state, process_group, _session, _start_time = _process_identity(
+                    int(entry.name)
                 )
-                raw = os.read(stat_fd, _SGLANG_MAX_PROC_STAT_BYTES + 1)
             except (FileNotFoundError, ProcessLookupError):
                 continue
-            finally:
-                if stat_fd >= 0:
-                    os.close(stat_fd)
-            if len(raw) > _SGLANG_MAX_PROC_STAT_BYTES:
-                raise RuntimeError("oversized /proc process stat during SGLang teardown")
-            closing = raw.rfind(b") ")
-            fields = raw[closing + 2 :].split() if closing >= 0 else []
-            if len(fields) < 3:
-                raise RuntimeError("malformed /proc process stat during SGLang teardown")
-            try:
-                process_group = int(fields[2])
-            except ValueError as error:
-                raise RuntimeError(
-                    "non-numeric /proc process group during SGLang teardown"
-                ) from error
             if process_group == pgid:
-                members[int(entry.name)] = fields[0].decode("ascii", errors="strict")
+                members[int(entry.name)] = state
     return members
 
 
@@ -2118,12 +2135,19 @@ def _spawn_attempt_process(
             raise RuntimeError(
                 f"attempt worker reported invalid session leader {leader_pid!r}"
             )
-        if os.getpgid(process.pid) != process.pid:
+        if (
+            os.getsid(process.pid) != process.pid
+            or os.getpgid(process.pid) != process.pid
+        ):
             raise RuntimeError("attempt worker session identity changed after readiness")
     except BaseException:
         try:
-            if process.pid is not None and os.getpgid(process.pid) == process.pid:
-                _terminate_attempt_process_group(process)
+            if (
+                process.pid is not None
+                and os.getsid(process.pid) == process.pid
+                and os.getpgid(process.pid) == process.pid
+            ):
+                _terminate_attempt_process_session(process)
             else:
                 process.terminate()
                 if not _wait_for_attempt_exit(process, _SUPERVISOR_KILL_TIMEOUT_S):
@@ -2151,51 +2175,164 @@ def _wait_for_attempt_exit(
     return bool(poller.poll(max(0, int(timeout_s * 1000))))
 
 
-def _terminate_attempt_process_group(
+def _retain_attempt_session_members(
+    session_id: int,
+    retained: dict[tuple[int, int], int],
+) -> dict[tuple[int, int], str]:
+    members: dict[tuple[int, int], str] = {}
+    with os.scandir("/proc") as entries:
+        for count, entry in enumerate(entries, start=1):
+            if count > _PROC_MAX_ENTRIES:
+                raise RuntimeError(
+                    f"/proc exceeds {_PROC_MAX_ENTRIES} entries during attempt teardown"
+                )
+            if not entry.name.isascii() or not entry.name.isdecimal():
+                continue
+            pid = int(entry.name)
+            try:
+                before = _process_identity(pid)
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            if before[2] != session_id:
+                continue
+            identity = (pid, before[3])
+            observed_state = before[0]
+            if identity not in retained:
+                if len(retained) >= _ATTEMPT_MAX_SESSION_IDENTITIES:
+                    raise RuntimeError(
+                        "attempt session exceeded its retained process-identity bound"
+                    )
+                pidfd = -1
+                try:
+                    pidfd = _pidfd_open(pid)
+                    after = _process_identity(pid)
+                except (FileNotFoundError, ProcessLookupError):
+                    if pidfd >= 0:
+                        os.close(pidfd)
+                    continue
+                except BaseException:
+                    if pidfd >= 0:
+                        os.close(pidfd)
+                    raise
+                if after[2:] != before[2:]:
+                    os.close(pidfd)
+                    continue
+                retained[identity] = pidfd
+                observed_state = after[0]
+            members[identity] = observed_state
+    return members
+
+
+def _wait_for_reserved_session_leader(
+    *,
+    session_id: int,
+    leader_pid: int,
+    retained: dict[tuple[int, int], int],
+    signal_number: int,
+    timeout_s: float,
+) -> dict[tuple[int, int], str]:
+    deadline = time.monotonic() + timeout_s
+    while True:
+        members = _retain_attempt_session_members(session_id, retained)
+        live = {
+            identity: state
+            for identity, state in members.items()
+            if identity[0] != leader_pid or state != "Z"
+        }
+        for identity in live:
+            _pidfd_send_signal(retained[identity], signal_number)
+        if not live or time.monotonic() >= deadline:
+            return members
+        time.sleep(_SGLANG_GROUP_POLL_S)
+
+
+def _wait_for_empty_session(
+    session_id: int,
+    retained: dict[tuple[int, int], int],
+    timeout_s: float,
+) -> dict[tuple[int, int], str]:
+    deadline = time.monotonic() + timeout_s
+    while True:
+        members = _retain_attempt_session_members(session_id, retained)
+        if not members or time.monotonic() >= deadline:
+            return members
+        time.sleep(_SGLANG_GROUP_POLL_S)
+
+
+def _terminate_attempt_process_session(
     process: multiprocessing.Process, *, terminate: bool = True
 ) -> bool:
     if process.pid is None:
         raise RuntimeError("attempt process has no pid")
-    process_group = os.getpgid(process.pid)
-    if process_group != process.pid or process_group == os.getpgrp():
+    session_id = os.getsid(process.pid)
+    if (
+        session_id != process.pid
+        or os.getpgid(process.pid) != process.pid
+        or session_id == os.getsid(0)
+    ):
         raise RuntimeError(
-            f"attempt process {process.pid} is not in its owned process group"
+            f"attempt process {process.pid} is not its owned session leader"
         )
-    members = _process_group_members(process_group)
-    leaked_descendants = any(pid != process.pid for pid in members)
-    if terminate or leaked_descendants:
-        _signal_process_group(process_group, signal.SIGTERM)
-        members = _wait_for_reserved_leader_only(
-            pgid=process_group,
-            leader_pid=process.pid,
-            timeout_s=_SUPERVISOR_REAP_TIMEOUT_S,
+    retained: dict[tuple[int, int], int] = {}
+    try:
+        members = _retain_attempt_session_members(session_id, retained)
+        leaked_descendants = any(
+            identity[0] != process.pid for identity in members
         )
-    if members and members != {process.pid: "Z"}:
-        _signal_process_group(process_group, signal.SIGKILL)
-        members = _wait_for_reserved_leader_only(
-            pgid=process_group,
-            leader_pid=process.pid,
-            timeout_s=_SUPERVISOR_KILL_TIMEOUT_S,
-        )
-    if members and members != {process.pid: "Z"}:
-        raise RuntimeError(
-            f"attempt process group {process_group} survived SIGKILL: {members}"
-        )
-    if not _attempt_process_exited(process):
-        _signal_process_group(process_group, signal.SIGKILL)
-        if not _wait_for_attempt_exit(process, _SUPERVISOR_KILL_TIMEOUT_S):
-            raise RuntimeError(
-                f"attempt process leader {process.pid} did not become reapable"
+        if terminate or leaked_descendants:
+            members = _wait_for_reserved_session_leader(
+                session_id=session_id,
+                leader_pid=process.pid,
+                retained=retained,
+                signal_number=signal.SIGTERM,
+                timeout_s=_SUPERVISOR_REAP_TIMEOUT_S,
             )
-    process.join()
-    remaining = _wait_for_empty_process_group(
-        process_group, _SUPERVISOR_KILL_TIMEOUT_S
-    )
-    if remaining:
-        raise RuntimeError(
-            f"attempt process group {process_group} remains after leader reap: {remaining}"
+        live = {
+            identity: state
+            for identity, state in members.items()
+            if identity[0] != process.pid or state != "Z"
+        }
+        if live:
+            members = _wait_for_reserved_session_leader(
+                session_id=session_id,
+                leader_pid=process.pid,
+                retained=retained,
+                signal_number=signal.SIGKILL,
+                timeout_s=_SUPERVISOR_KILL_TIMEOUT_S,
+            )
+        live = {
+            identity: state
+            for identity, state in members.items()
+            if identity[0] != process.pid or state != "Z"
+        }
+        if live:
+            raise RuntimeError(
+                f"attempt session {session_id} survived SIGKILL: {live}"
+            )
+        if not _attempt_process_exited(process):
+            _wait_for_reserved_session_leader(
+                session_id=session_id,
+                leader_pid=process.pid,
+                retained=retained,
+                signal_number=signal.SIGKILL,
+                timeout_s=_SUPERVISOR_KILL_TIMEOUT_S,
+            )
+            if not _attempt_process_exited(process):
+                raise RuntimeError(
+                    f"attempt session leader {process.pid} did not become reapable"
+                )
+        process.join()
+        remaining = _wait_for_empty_session(
+            session_id, retained, _SUPERVISOR_KILL_TIMEOUT_S
         )
-    return leaked_descendants
+        if remaining:
+            raise RuntimeError(
+                f"attempt session {session_id} remains after leader reap: {remaining}"
+            )
+        return leaked_descendants
+    finally:
+        for pidfd in retained.values():
+            os.close(pidfd)
 
 
 def _read_attempt_row(runtime: _WorkerRuntime, spec: _AttemptSpec) -> dict[str, Any]:
@@ -2281,7 +2418,7 @@ def _run_attempts(
                 process = attempt.process
                 spec = attempt.spec
                 if _attempt_process_exited(process):
-                    leaked_descendants = _terminate_attempt_process_group(
+                    leaked_descendants = _terminate_attempt_process_session(
                         process, terminate=False
                     )
                     reaped.add(index)
@@ -2313,7 +2450,7 @@ def _run_attempts(
                         process.pid,
                         spec.wall_bound_s,
                     )
-                    _terminate_attempt_process_group(process)
+                    _terminate_attempt_process_session(process)
                     reaped.add(index)
                     row = _infra_invalid_attempt_row(
                         runtime,
@@ -2339,9 +2476,23 @@ def _run_attempts(
             if active and not finished:
                 time.sleep(_SCHEDULER_POLL_S)
     finally:
+        cleanup_errors: list[BaseException] = []
         for index, attempt in active.items():
             if index not in reaped:
-                _terminate_attempt_process_group(attempt.process)
+                try:
+                    _terminate_attempt_process_session(attempt.process)
+                except BaseException as error:
+                    cleanup_errors.append(error)
+        if cleanup_errors:
+            active_error = sys.exc_info()[1]
+            if active_error is None and len(cleanup_errors) == 1:
+                raise cleanup_errors[0]
+            errors = (
+                cleanup_errors
+                if active_error is None
+                else [active_error, *cleanup_errors]
+            )
+            raise BaseExceptionGroup("attempt scheduler cleanup failed", errors)
     return sorted(rows, key=lambda row: int(row["index"]))
 
 
