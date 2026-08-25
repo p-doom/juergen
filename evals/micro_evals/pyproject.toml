@@ -1,0 +1,84 @@
+# A STANDALONE uv project, deliberately NOT a workspace member.
+#
+# The root workspace lists exactly one member (`data_pipeline`), and the `eval`
+# member that used to exist was deleted along with the whole torch stack it
+# dragged in: "Resolution went 382 -> 124 packages. Restore all of it together
+# if anything here depends on torch again" (root pyproject.toml). Nothing here
+# does — this suite IMPORTS only PIL, requests and wandb. It needs sglang the
+# way it needs qemu: as a server it starts in a subprocess
+#
+#     uv run --project <this dir> python -m sglang.launch_server ...
+#
+# so the heavy resolve belongs in this directory's own lock, not in the root's.
+# Keeping it out is what lets `pytest grammars/` and the data-pipeline venv stay
+# cheap enough to run on a login node.
+#
+# Dispatch:
+#     uv run --project evals/micro_evals python -m evals.micro_evals.cua_micro_eval ...
+# run from the REPO ROOT, so `evals`, `grammars` and `prompts` import as packages.
+[project]
+name = "juergen-micro-evals"
+version = "0.1.0"
+description = "CUA micro-eval suite: per-interaction-type canary tasks in a real VM."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # What the harness itself imports.
+    "pillow>=10",          # screenshot decode + the overlay HUD
+    "requests>=2.31",      # the in-VM Flask agent client and the sglang wire
+    "wandb>=0.17",         # cua_micro_wandb (optional at runtime, imported at load)
+
+    # `evals/__init__.py` eagerly registers the fixture preparers, which import
+    # `verifiers.v1` — so anything under `evals/` inherits this whether or not it
+    # uses it. Pinned exactly, as the root does: `Harness.launch`, `loaders.
+    # _plugin_class` and `narrow_plugin_field` are unversioned internal API.
+    "verifiers==0.2.1",
+    # `grammars/` hard-imports it, and `prompts/` composes over `grammars/`.
+    "desktop",
+
+    # NOT imported — launched. `python -m sglang.launch_server` is spawned as a
+    # subprocess against THIS project, so the server runtime has to resolve here.
+    # Upper-bounded at <0.5.11: 0.5.12 requires cuda-python>=13.0, which forces a
+    # CUDA 13 torch wheel, and the hai nodes' driver (12080) supports only 12.8.
+    "sglang[all]>=0.5,<0.5.11",
+    # Pinned directly so [tool.uv.sources] below can redirect them to the cu128
+    # index; a transitive-only mention would not be redirected.
+    "torch",
+    "torchaudio",
+    "torchvision",
+    "torchcodec",
+    # sglang pins openai==2.6.1; nothing here needs that ceiling.
+    "openai>=2.26.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+# The hai nodes' NVIDIA driver reports CUDA 12.8, and PyPI's torch ships +cu130
+# wheels it rejects with "No accelerator available". cu128 wheels are runtime
+# compatible.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+torchcodec = { index = "pytorch-cu128" }
+# Same bare repo and rev the root pins, so the two resolves cannot disagree about
+# which desktop commit a run used. Bump both together.
+desktop = { git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git", rev = "5ed77a58b821be6dc02522f9fc1c998d230f5f59" }
+
+[tool.uv]
+prerelease = "allow"
+override-dependencies = ["openai>=2.26.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Not a distribution: this pyproject anchors a venv. The suite is imported as
+# `evals.micro_evals.*` from the repo root, which is where it is run from.
+py-modules = []
