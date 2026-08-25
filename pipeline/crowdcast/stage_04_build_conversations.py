@@ -79,6 +79,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import grammars  # noqa: E402
 import prompts  # noqa: E402
+from grammars._support import CONTROL_TOKEN, split_control  # noqa: E402
 
 from pipeline.crowdcast.lib.action_format import (  # noqa: E402
     DEFAULT_CONTINUOUS_ACTION_HZ,
@@ -653,8 +654,12 @@ def parse_args() -> argparse.Namespace:
                         "at-or-before the goal start — the observation its first action was "
                         "taken from; 'inside' keeps only frames within the interval.")
     p.add_argument("--terminal-token", type=str, default=None,
-                   help="Append this token to the final assistant message "
-                        "(as '<action>\\n<token>', never a standalone turn).")
+                   help="Append this token to the final assistant message (as "
+                        f"'<action>\\n<token>', never a standalone turn). To train "
+                        f"the grammars' control channel, pass '{CONTROL_TOKEN}: "
+                        f"success' — the exact line `_support.split_control` reads. "
+                        f"A token mentioning {CONTROL_TOKEN} that is not a valid "
+                        "control line is refused.")
     p.add_argument("--dead-zone-flag-frac", type=float, default=0.05,
                    help="Flag a segment when more than this fraction of its keylog events "
                         "were discarded by the dead-zone policy (realignment health).")
@@ -703,6 +708,25 @@ def main() -> None:
 
     # Config contradictions before any I/O: a run that cannot be right should not
     # first spend a minute reading a filter artifact to find that out.
+    # `startswith`, not `in`: a token is only *trying* to be a control line when
+    # it opens with the control token. `<terminate>` is the vendor tool-call
+    # spelling and a legitimate token that merely contains the word.
+    if args.terminal_token and args.terminal_token.strip().upper().startswith(
+        CONTROL_TOKEN
+    ):
+        # A keylog records no intent to terminate, so the control line can only
+        # come from here. Spelling it wrong is invisible until eval: the label
+        # parses as an ACTION, the episode never ends, and the grammar's one
+        # control channel silently has two spellings in the training data.
+        if split_control(args.terminal_token).status is None:
+            raise SystemExit(
+                f"--terminal-token {args.terminal_token!r} mentions {CONTROL_TOKEN} "
+                f"but is not a control line. The only two spellings are "
+                f"'{CONTROL_TOKEN}: success' and '{CONTROL_TOKEN}: failure' "
+                "(grammars/_support.py CONTROL_SPEC); a bare token is read as an "
+                "action and the episode never ends."
+            )
+
     if args.coalesce_typing and args.action_format not in TYPING_COALESCE_FORMATS:
         raise SystemExit(
             f"--coalesce-typing needs a format whose grammar spells typing as its "
