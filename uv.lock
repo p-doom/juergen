@@ -296,6 +296,7 @@ source = { editable = "data_pipeline" }
 dependencies = [
     { name = "absl-py" },
     { name = "array-record" },
+    { name = "datasets" },
     { name = "desktop" },
     { name = "imageio-ffmpeg" },
     { name = "msgpack" },
@@ -311,6 +312,7 @@ dependencies = [
 requires-dist = [
     { name = "absl-py", specifier = ">=2.0" },
     { name = "array-record", specifier = ">=0.5.1" },
+    { name = "datasets", specifier = ">=3.0" },
     { name = "desktop", git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git?rev=5ed77a58b821be6dc02522f9fc1c998d230f5f59" },
     { name = "imageio-ffmpeg", specifier = ">=0.5.1" },
     { name = "msgpack", specifier = ">=1.0" },
