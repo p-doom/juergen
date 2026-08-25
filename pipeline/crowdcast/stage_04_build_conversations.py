@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
 """Stage 04 (conversations): the single injection point — join frames (stage
-01, via the stage-03 filter mask), actions (stage 02's realigned keylogs), and
+01, via either stage-03 reading), actions (stage 02's realigned keylogs), and
 optionally goals (stage 03b), and emit training conversations.
+
+Two frame sources, one shape. `--filter-dir` takes stage 03's keep/drop mask and
+selects frames HERE at `--fps`; `--sample-dir` takes stage 03's already-sampled
+frame records, where the ticks were chosen there (with NO_OP thinning and
+black-frame drops applied) so `--fps` does not apply. Both are lifted into one
+`SegmentView` (`lib/views`, `lib/samples`), so every knob below behaves
+identically whichever produced the frames. The sampler's own `action` string is
+deliberately ignored on that path: the format is a flag here, so the label is
+always re-derived from the realigned keylog through the selected grammar.
 
 Everything trainable is decided here, so ablations are flags, not pipeline
 reruns:
-  * frame rate     --fps X (any integer divisor of the master fps; the shared
-                   selector in lib/views picks frames within filter survivors)
+  * frame rate     --fps X (--filter-dir only; any integer divisor of the master
+                   fps; the shared selector in lib/views picks frames within
+                   filter survivors)
   * action format  --action-format (lib/action_format registry; ``canonical``
                    is byte-identical to the historical format on dead-zone-free
                    stretches; ``ordered_events_v2`` renders each window as an
@@ -52,8 +62,9 @@ Output (--output-dir):
 Run::
 
     cd <repo root>
-    uv run python pipeline/stage_04_build_conversations.py \
-        --filter-dir <stage-03 --output-dir> --fps 1 --output-dir <dest> \
+    uv run python pipeline/crowdcast/stage_04_build_conversations.py \
+        --filter-dir <stage-03 filter --output-dir> --fps 1 --output-dir <dest> \
+        [--sample-dir <stage-03 sample_frames --output-dir> instead of the two] \
         [--goals-dir <stage-03b --output-dir> --use-plans --include-variants] \
         [--terminal-token '<terminate>']
 """
@@ -117,6 +128,10 @@ from pipeline.crowdcast.lib.goals import (  # noqa: E402
     project_goals,
 )
 from pipeline.crowdcast.lib.manifest import make_artifact_id  # noqa: E402
+from pipeline.crowdcast.lib.samples import (  # noqa: E402
+    SampleArtifact,
+    build_sample_view,
+)
 from pipeline.crowdcast.lib.views import (  # noqa: E402
     FPS_MODES,
     FilterArtifact,
@@ -319,8 +334,16 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
     are captured, never raised."""
     seg = str(task["index_row"]["segment_id"])
     try:
-        filter_seg = json.loads(Path(task["filter_seg_path"]).read_text())
-        view = build_segment_view(filter_seg, fps=task["fps"], fps_mode=task["fps_mode"])
+        if task["sampled"]:
+            filter_seg = {}
+            view = build_sample_view(
+                task["index_row"], Path(task["filter_seg_path"])
+            )
+        else:
+            filter_seg = json.loads(Path(task["filter_seg_path"]).read_text())
+            view = build_segment_view(
+                filter_seg, fps=task["fps"], fps_mode=task["fps_mode"]
+            )
         base = {
             "segment_id": seg,
             "recording_id": view.recording_id,
@@ -582,12 +605,19 @@ def resolve_system_prompt(prompt_id: str | None, grammar: str) -> tuple[str, str
 def parse_args() -> argparse.Namespace:
     normalize_dashed_argv()  # accept pmanager's --foo_bar=value arg form
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--filter-dir", type=Path, required=True,
-                   help="A stage-03 (filter) --output-dir: manifest.json + filter_index.jsonl "
-                        "+ filter/<seg>.json.")
-    p.add_argument("--fps", type=float, required=True,
-                   help="Training frame rate. With --fps-mode exact, master_fps/fps must "
-                        "be an integer.")
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--filter-dir", type=Path, default=None,
+                     help="A stage-03 (filter) --output-dir: manifest.json + "
+                          "filter_index.jsonl + filter/<seg>.json. Frames are selected "
+                          "here, at --fps.")
+    src.add_argument("--sample-dir", type=Path, default=None,
+                     help="A stage-03 (sample_frames) --output-dir: manifest.json + "
+                          "sample_index.jsonl + per-segment frame_records.jsonl. The "
+                          "frames were already chosen there, so --fps does not apply; "
+                          "the LABEL is still re-derived here through --action-format.")
+    p.add_argument("--fps", type=float, default=None,
+                   help="--filter-dir only: training frame rate. With --fps-mode exact, "
+                        "master_fps/fps must be an integer.")
     p.add_argument("--fps-mode", choices=FPS_MODES, default="exact",
                    help="'exact' (default): fps must divide the master fps; even spacing. "
                         "'nearest': any fps <= master; each slot takes the master tick "
@@ -735,8 +765,21 @@ def main() -> None:
             f"{sorted(TYPING_COALESCE_FORMATS)}."
         )
 
-    art = FilterArtifact(args.filter_dir)
-    stride = art.stride_for(args.fps, args.fps_mode)  # fail fast on invalid rates
+    sampled = args.sample_dir is not None
+    if sampled:
+        if args.fps is not None:
+            raise SystemExit(
+                "--fps does not apply to --sample-dir: stage 03 already chose the "
+                "frames at its own --target-fps, and re-selecting here would drop "
+                "frames whose actions it had already folded into the ones it kept."
+            )
+        art = SampleArtifact(args.sample_dir)
+        stride = art.master_fps / art.target_fps if art.target_fps else 0.0
+    else:
+        if args.fps is None:
+            raise SystemExit("--fps is required with --filter-dir")
+        art = FilterArtifact(args.filter_dir)
+        stride = art.stride_for(args.fps, args.fps_mode)  # fail fast on invalid rates
 
     goals_id = None
     goals_map = None
@@ -791,6 +834,7 @@ def main() -> None:
         {
             "index_row": row,
             "filter_seg_path": str(art.segment_path(str(row["segment_id"]))),
+            "sampled": sampled,
             "fps": args.fps,
             "fps_mode": args.fps_mode,
             "action_format": args.action_format,
@@ -815,7 +859,9 @@ def main() -> None:
 
     n_workers = max(1, min(resolve_workers(args.num_workers), len(tasks)))
     print(
-        f"[conversations] {len(tasks)} segments | fps={args.fps} ({args.fps_mode}, stride {stride:g}) "
+        f"[conversations] {len(tasks)} segments | "
+        f"fps={art.target_fps if sampled else args.fps} "
+        f"({'sampled' if sampled else args.fps_mode}, stride {stride:g}) "
         f"format={args.action_format} mode={'goals' if goal_mode else 'goal-free'} "
         f"| workers={n_workers}",
         flush=True,
@@ -861,8 +907,9 @@ def main() -> None:
         "n_turns_total": sum(r["n_turns"] for r in records),
         "status_counts": dict(counts),
         "goal_mode": goal_mode,
-        "fps": args.fps,
-        "fps_mode": args.fps_mode,
+        "source": "sample" if sampled else "filter",
+        "fps": (art.target_fps if sampled else args.fps),
+        "fps_mode": "sampled" if sampled else args.fps_mode,
         "stride": stride,
         "master_fps": art.master_fps,
         "action_format": args.action_format,
@@ -900,6 +947,7 @@ def main() -> None:
         "n_dead_zone_flagged": n_flagged,
         "goal_projection_totals": dict(proj_totals),
         "filter_dir": str(art.dir),
+        "sample_dir": str(args.sample_dir) if sampled else None,
         "goals_dir": str(args.goals_dir) if args.goals_dir else None,
     }
     write_json(out_dir / "conversations_summary.json", summary)
