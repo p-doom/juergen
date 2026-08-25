@@ -240,6 +240,9 @@ class Oev3Agent:
         return ""
 
     def predict(self, instruction: str, obs: dict) -> tuple[str, list[str]]:
+        if not obs.get("screenshot"):
+            self.logger.warning("missing screenshot in obs; waiting one step")
+            return "<screenshot_missing>", ["WAIT"]
         screenshot_b64 = base64.b64encode(obs["screenshot"]).decode()
         messages = self._build_messages(instruction, screenshot_b64)
         response = self._call_llm(messages)
