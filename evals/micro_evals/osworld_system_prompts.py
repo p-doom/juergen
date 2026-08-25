@@ -790,7 +790,7 @@ For each function call, return a json object with function name and arguments wi
     ),
     # Ported from yll/cua-micro-evals for the CUA micro-eval suite
     # (cua_micro_eval.py). Binding contract for computer_use_rel_step_v1: see
-    # data_pipeline/realigned_pipeline/action_specs/computer_use_rel_step_v1.json
+    # evals/micro_evals/action_specs/computer_use_rel_step_v1.json
     # and eval/cua_micro_action_parser.py.
     "cua_rel_step_v1_thinking": _CUA_REL_STEP_V1_THINKING_FILE.read_text().strip(),
 }

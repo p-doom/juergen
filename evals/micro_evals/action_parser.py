@@ -21,7 +21,7 @@ one by ``--action_format`` and never mixes them:
   * ``parse_computer_use_tool_call`` — Qwen3-VL native ``<tool_call>`` JSON.
   * ``parse_ordered_action`` — the ordered_events_v2/v3 mini-program
     (``move(4,-1); down(LMB); up(LMB)``), inverse of
-    ``data_pipeline/realigned_pipeline/lib/action_format.py``. Unlike the
+    ``pipeline/crowdcast/lib/action_format.py``. Unlike the
     aggregate grammar above it is order-preserving, so ``move -> click ->
     move`` survives in a single turn; see the section at the bottom of this
     module.
@@ -265,7 +265,7 @@ def parse_computer_use_tool_call(text: str) -> ComputerUseCall:
 # --------------------------------------------------------------------------
 # ordered_events_v2 / v3 (the ORDERED mini-program format)
 # --------------------------------------------------------------------------
-# Inverse of data_pipeline/realigned_pipeline/lib/action_format.py's
+# Inverse of pipeline/crowdcast/lib/action_format.py's
 # OrderedFormatter (v2) / OrderedTypingFormatter (v3), implementing
 # ORDERED_EVENTS_V3_GRAMMAR verbatim:
 #

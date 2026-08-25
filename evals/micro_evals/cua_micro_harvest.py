@@ -7,7 +7,7 @@ harvesting: the action source itself, and the conversion of a finished
 trajectory into one training record.
 
 The output row matches the canonical schema built by
-``data_pipeline/realigned_pipeline/stage_04_build_conversations.py``
+``pipeline/crowdcast/stage_04_build_conversations.py``
 (``build_messages``): instruction text before the image on the first user turn,
 image-only on later turns, one assistant turn per frame carrying its action, and
 every content field a list of typed blocks. That is what stage-05/stage-06 and
