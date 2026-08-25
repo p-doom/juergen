@@ -80,7 +80,7 @@ def load_method(name: str) -> Method:
     available = discover_methods()
     if name not in available:
         raise KeyError(f"unknown annotation method {name!r} (available: {sorted(available)})")
-    module = importlib.import_module(f"pipeline.annotation.methods.{name}.annotator")
+    module = importlib.import_module(f"pipeline.crowdcast.annotation.methods.{name}.annotator")
     input_kind = getattr(module, "INPUT_KIND", None)
     if input_kind not in INPUT_KINDS:
         raise ValueError(f"method {name!r} declares INPUT_KIND={input_kind!r}; must be one of {INPUT_KINDS}")

@@ -24,7 +24,7 @@ that stage 01 emits and stage 03 reproduces)::
                          | "<dx> <dy> <scroll> ; +KeyW -KeyW +LMB"   # format_action
     }
 
-The ``action`` grammar (``pipeline.lib.common.format_action``): ``NO_OP``,
+The ``action`` grammar (``pipeline.crowdcast.lib.common.format_action``): ``NO_OP``,
 or ``"<dx> <dy> <scroll>"`` (summed pixel deltas + scroll), optionally followed
 by ``" ; "`` and space-separated ``+Name``/``-Name`` press/release tokens in
 temporal order. Names are rdev keys (``KeyA``, ``Num1``, ``Space``, ``Backspace``,
@@ -35,7 +35,7 @@ Records for one segment must be contiguous and in trajectory order (stages 01 an
 03 both stream ``chat.jsonl``/segments in order, so this holds). Any extra
 top-level keys are ignored, so the viewer keeps working if stage 03 enriches rows.
 
-Frames are resolved through ``pipeline.lib.image_store`` (the same
+Frames are resolved through ``pipeline.crowdcast.lib.image_store`` (the same
 ``ar://`` resolver stage 02 uses), so it also renders plain image-file paths.
 The browser only ever asks for ``(segment, frame_index)``; the server maps that
 to the image ref held in its own index, so there is no client-supplied path.
@@ -243,7 +243,7 @@ def _is_noop(action: Any) -> bool:
 
 def _is_black(mean_luma: Any, frac_dark: Any) -> bool:
     """Black-frame flag from the stage-01a luma metrics, using the sampler's
-    default thresholds (``pipeline.lib.config``). Mirrors
+    default thresholds (``pipeline.crowdcast.lib.config``). Mirrors
     ``stage_03_filter._is_black`` so both views flag exactly the frames stage 03
     would drop under default settings — the master reads its own manifest, the
     stage-03 output cross-references the master's. Frames without metrics (older

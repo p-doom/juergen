@@ -63,6 +63,7 @@ import argparse
 import hashlib
 import json
 import multiprocessing as mp
+import os
 import sys
 import traceback
 from collections import Counter
@@ -77,6 +78,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import grammars  # noqa: E402
+import prompts  # noqa: E402
 
 from pipeline.crowdcast.lib.action_format import (  # noqa: E402
     DEFAULT_CONTINUOUS_ACTION_HZ,
@@ -209,7 +211,9 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
         keylog = Path(view.keylog_path) if view.keylog_path else None
         events, event_stats = load_events(keylog) if keylog else ([], EventStats())
         fmt = get_formatter(
-            task["action_format"], continuous_action_hz=task["continuous_action_hz"]
+            task["action_format"],
+            continuous_action_hz=task["continuous_action_hz"],
+            jitter_deadband_px=task.get("jitter_deadband_px", 0),
         )
         result = fmt.format_segment(
             events, view.windows(), view.dead_zones, master_fps=view.master_fps
@@ -331,6 +335,60 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
         }
 
 
+#: Cap for the affinity-mask fallback, so an interactive run on a big login node
+#: stays neighbourly. A Slurm allocation is never capped — it was granted.
+AUTO_WORKER_CAP = 32
+
+
+def resolve_workers(requested: int) -> int:
+    """``--num-workers 0`` (the default) means "the CPUs this run was given".
+
+    ``SLURM_CPUS_PER_TASK`` wins wherever it is set. `mp.cpu_count()` reports the
+    MACHINE, not the allocation, so on a shared node it forks a pool sized to
+    someone else's cores; and the affinity mask is no better, because a Slurm
+    allocation's mask includes the SMT siblings of the allocated cores — `-c 16`
+    reports 32, so the mask silently doubles the pool. The mask is the fallback
+    for interactive runs only, capped by ``AUTO_WORKER_CAP``.
+    """
+    if requested > 0:
+        return requested
+    slurm = os.environ.get("SLURM_CPUS_PER_TASK")
+    if slurm and slurm.isdigit() and int(slurm) > 0:
+        return int(slurm)
+    try:
+        available = len(os.sched_getaffinity(0))
+    except AttributeError:  # pragma: no cover - non-Linux
+        available = os.cpu_count() or 1
+    return max(1, min(available, AUTO_WORKER_CAP))
+
+
+def resolve_system_prompt(prompt_id: str | None, grammar: str) -> tuple[str, str | None]:
+    """This run's system prompt, and the prompt id recorded beside it.
+
+    Unset is the default and means the grammar's own ``describe()`` — the prompt
+    the eval harness and the RL rollout put in front of the model with no
+    justification needed. A prompt id selects a registered edit of that same
+    spec (`prompts/`), for the framing the grammar does not own: whether a goal
+    is stated, whether the corpus contains idle turns.
+
+    The grammar check is the guard that matters. A prompt composed over another
+    grammar would describe a syntax these labels are not written in, and nothing
+    downstream could tell: the labels would parse, the digests would differ from
+    nothing in particular, and the model would be trained to answer in a format
+    it was told not to use. Refusing here is the only place that is cheap.
+    """
+    if prompt_id is None:
+        return grammars.describe(grammar), None
+    named = prompts.get(prompt_id)
+    if named.grammar != grammar:
+        raise SystemExit(
+            f"--system-prompt-id {prompt_id!r} is composed over grammar "
+            f"{named.grammar!r}, but --action-format renders {grammar!r}. The "
+            "prompt would describe a syntax these labels are not written in."
+        )
+    return named.describe(), prompt_id
+
+
 def parse_args() -> argparse.Namespace:
     normalize_dashed_argv()  # accept pmanager's --foo_bar=value arg form
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -357,6 +415,18 @@ def parse_args() -> argparse.Namespace:
                    help="ordered formats only: internal motor-grid rate for accumulating "
                         "move/scroll deltas within a window (NOT a frame rate; recorded as "
                         "null for formats that ignore it).")
+    p.add_argument("--jitter-deadband-px", type=int, default=0,
+                   help="ordered formats only: drop single-axis move/scroll deltas within "
+                        "this many pixels after summing each move/scroll-only run — the "
+                        "hand tremor a resting hand contributes while clicking, scrolling "
+                        "or typing. A diagonal is never dropped, and a window is never "
+                        "emptied. 0 (default) is off and cannot move an existing label.")
+    p.add_argument("--system-prompt-id", type=str, default=None,
+                   choices=sorted(prompts.names()),
+                   help="A registered prompt (prompts/) composed over the action format's "
+                        "grammar — e.g. goal-conditioned vs not. Must name the same grammar "
+                        "the formatter renders. Default: the grammar's own describe(), "
+                        "which is what the eval harness accepts without a justification.")
     p.add_argument("--goals-dir", type=Path, default=None,
                    help="A stage-03b annotation artifact (goals.jsonl in master intervals). "
                         "Sets goal mode: one conversation per projected goal. Its manifest's "
@@ -388,7 +458,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dead-zone-flag-frac", type=float, default=0.05,
                    help="Flag a segment when more than this fraction of its keylog events "
                         "were discarded by the dead-zone policy (realignment health).")
-    p.add_argument("--num-workers", type=int, default=0, help="0 = cpu_count().")
+    p.add_argument("--num-workers", type=int, default=0,
+                   help="0 (default) = SLURM_CPUS_PER_TASK, else the CPU affinity "
+                        f"mask capped at {AUTO_WORKER_CAP}. Never cpu_count(), which "
+                        "reports the machine rather than this run's allocation.")
     p.add_argument("--limit", type=int, default=None, help="Process only the first N segments (debug).")
     return p.parse_args()
 
@@ -415,13 +488,17 @@ def main() -> None:
         goals_map = goals_by_segment(load_goals(args.goals_dir / "goals.jsonl"))
         goals_id = make_artifact_id(args.goals_dir)
 
-    # Fails fast on an unknown format / invalid hz, and resolves the grammar
-    # whose codec renders this run's labels and prompt.
+    # Fails fast on an unknown format / invalid hz / negative deadband, and
+    # resolves the grammar whose codec renders this run's labels and prompt.
     formatter = get_formatter(
-        args.action_format, continuous_action_hz=args.continuous_action_hz
+        args.action_format,
+        continuous_action_hz=args.continuous_action_hz,
+        jitter_deadband_px=args.jitter_deadband_px,
     )
     continuous_action_hz = getattr(formatter, "continuous_action_hz", None)
-    system_prompt = grammars.describe(formatter.grammar)
+    system_prompt, system_prompt_id = resolve_system_prompt(
+        args.system_prompt_id, formatter.grammar
+    )
     system_prompt_sha256 = hashlib.sha256(system_prompt.encode()).hexdigest()
 
     goal_mode = goals_map is not None
@@ -439,6 +516,7 @@ def main() -> None:
             "fps_mode": args.fps_mode,
             "action_format": args.action_format,
             "continuous_action_hz": args.continuous_action_hz,
+            "jitter_deadband_px": args.jitter_deadband_px,
             "goals_by_segment": goals_map,
             "instruction": args.instruction,
             "instruction_field": args.instruction_field,
@@ -453,7 +531,7 @@ def main() -> None:
         for row in rows_in
     ]
 
-    n_workers = max(1, min(args.num_workers or mp.cpu_count(), len(tasks)))
+    n_workers = max(1, min(resolve_workers(args.num_workers), len(tasks)))
     print(
         f"[conversations] {len(tasks)} segments | fps={args.fps} ({args.fps_mode}, stride {stride:g}) "
         f"format={args.action_format} mode={'goals' if goal_mode else 'goal-free'} "
@@ -508,11 +586,17 @@ def main() -> None:
         "action_format": args.action_format,
         "grammar": formatter.grammar,
         "continuous_action_hz": continuous_action_hz,
+        "jitter_deadband_px": args.jitter_deadband_px,
         "primitive_counts": dict(prim_totals) if prim_totals else None,
         "n_noop_turns": sum(r["n_turns"] - r["n_non_noop"] for r in records),
         "instruction": args.instruction,
         "instruction_field": args.instruction_field,
+        "system_prompt_id": system_prompt_id,
         "system_prompt_sha256": system_prompt_sha256,
+        # The grammar's own digest beside the prompt's. They are equal when no
+        # --system-prompt-id was given, and differ by exactly the prompt's edits
+        # when one was, so a reader can tell an edited prompt from a moved spec.
+        "grammar_sha256": grammars.load(formatter.grammar).digest,
         "use_plans": args.use_plans,
         "include_variants": args.include_variants,
         "min_frames": args.min_frames,
