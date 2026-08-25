@@ -46,7 +46,7 @@ Dead-zone label policy:
 from __future__ import annotations
 
 from bisect import bisect_right
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -416,3 +416,34 @@ def apply_label_policy(
             counters.n_releases_clamped += 1
 
     return labeled, counters
+
+
+def iter_context(
+    keylog_path: Path,
+    timemap: Callable[[float], float] | None = None,
+) -> Iterator[tuple[float, str]]:
+    """Parse the ``ContextChanged`` (foreground-app) events ``iter_events`` skips:
+    yields ``(t_s, raw_app_id)`` in FILE ORDER, which is the order that resolves
+    ties -- ``stage_02_realign`` clamps every timestamp inside a collapsed pause to
+    the splice point, so several switches can share one timestamp and the LAST is
+    the app in focus when recording resumed.
+
+    Raw ids are yielded unnormalized; ``lib/app_context`` owns canonicalization and
+    the tick fold. Same clock contract as ``iter_events``: a corrected keylog is
+    already on the master clock, ``timemap`` remaps otherwise."""
+    for entry in load_keylog_entries(keylog_path):
+        if not isinstance(entry, list) or len(entry) < 2:
+            continue
+        timestamp, event = entry[0], entry[1]
+        if not isinstance(event, list) or not event or str(event[0]) != "ContextChanged":
+            continue
+        try:
+            t_s = int(timestamp) / 1_000_000
+        except (TypeError, ValueError):
+            continue
+        app = event[1] if len(event) > 1 else None
+        if isinstance(app, (list, tuple)):   # the wire form is ['<bundle id>']
+            app = app[0] if app else None
+        if app is None:
+            continue
+        yield (timemap(t_s) if timemap is not None else t_s, str(app))
