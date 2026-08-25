@@ -75,8 +75,8 @@ def test_sglang_refuses_disabled_cudnn_validation_before_acquisition(
         with dispatcher._sglang(
             python="/runtime/bin/python",
             model_path=tmp_path / "model",
+            model_identity={},
             log_path=log_path,
-            port=29500,
             mem_fraction_static=0.65,
             ready_timeout_s=1.0,
             served_model="test-model",
@@ -101,13 +101,18 @@ def test_sglang_child_does_not_receive_cudnn_check_bypass(
         raise ExpectedPopen
 
     monkeypatch.setattr(dispatcher.subprocess, "Popen", capture_environment)
+    monkeypatch.setattr(
+        dispatcher,
+        "_preflight_serving_identities",
+        lambda **_kwargs: ({"runtime": "test"}, {"gpu": "test"}),
+    )
 
     with pytest.raises(ExpectedPopen):
         with dispatcher._sglang(
             python="/runtime/bin/python",
             model_path=tmp_path / "model",
+            model_identity={},
             log_path=tmp_path / "output" / "sglang.log",
-            port=29500,
             mem_fraction_static=0.65,
             ready_timeout_s=1.0,
             served_model="test-model",
@@ -425,8 +430,6 @@ def test_phaseb_always_fails_closed_on_a_checkpoint_that_is_not_the_one(
                 str(model),
                 "--sglang-python",
                 sys.executable,
-                "--sglang-port",
-                "29500",
             ]
         )
 
@@ -943,8 +946,6 @@ def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_se
             str(model),
             "--sglang-python",
             sys.executable,
-            "--sglang-port",
-            "29500",
         ]
     )
     result = read_committed_result(output)
@@ -1023,8 +1024,6 @@ def test_an_unattended_model_arm_samples_at_its_own_knobs(tmp_path, monkeypatch)
                 str(model),
                 "--sglang-python",
                 sys.executable,
-                "--sglang-port",
-                "29500",
                 *extra,
             ]
         )
@@ -1196,7 +1195,7 @@ def test_the_attempt_deadline_is_derived_from_the_selected_arm_and_cell() -> Non
         vm_slots=1,
         local_sglang=True,
         sglang_ready_timeout_s=1500.0,
-    ) == 8028.0
+    ) == 9228.0
 
 
 @pytest.mark.parametrize(

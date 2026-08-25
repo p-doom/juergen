@@ -132,8 +132,12 @@ _PIDFD_SEND_SIGNAL_SYSCALL_X86_64 = 424
 _SGLANG_VERSION = "0.5.10.post1"
 _SGLANG_PIDFD_OPEN_SYSCALL_X86_64 = 434
 _SGLANG_PIDFD_GETFD_SYSCALL_X86_64 = 438
-_SGLANG_MAX_FDS = 4096
-_SGLANG_MAX_FD_COMPONENT_BYTES = 10
+_SGLANG_MAX_PORT = 55535
+_SGLANG_LISTENER_ATTEMPTS = 64
+_SGLANG_RECEIPT_MAX_BYTES = 64 * 1024
+_SGLANG_RECEIPT_TIMEOUT_S = 600.0
+_SGLANG_IDENTITY_TIMEOUT_S = 600.0
+_SGLANG_ADAPTER = _REPO_ROOT / "evals" / "signoflife" / "sglang_server.py"
 _PROC_MAX_ENTRIES = 32768
 _PROC_MAX_STAT_BYTES = 4096
 _ATTEMPT_MAX_SESSION_IDENTITIES = 4096
@@ -141,6 +145,7 @@ _SGLANG_TERM_TIMEOUT_S = 30.0
 _SGLANG_KILL_TIMEOUT_S = 10.0
 _SGLANG_GROUP_POLL_S = 0.05
 _SGLANG_READY_POLL_S = 2.0
+_SGLANG_READY_REQUEST_TIMEOUT_S = 1.0
 _SGLANG_INHERITED_ENV = frozenset(
     {
         "CUDA_DEVICE_ORDER",
@@ -770,91 +775,109 @@ def _preflight_pidfd_getfd() -> None:
         os.close(write_fd)
 
 
-def _bounded_process_fds(pid: int) -> list[int]:
-    descriptor_numbers: list[int] = []
-    try:
-        entries = os.scandir(f"/proc/{pid}/fd")
-    except OSError as error:
-        raise RuntimeError(f"cannot enumerate SGLang leader {pid} descriptors") from error
-    with entries:
-        for count, entry in enumerate(entries, start=1):
-            if count > _SGLANG_MAX_FDS:
-                raise RuntimeError(
-                    f"SGLang leader exceeds {_SGLANG_MAX_FDS} open descriptors"
-                )
-            name = entry.name
-            if (
-                not name.isascii()
-                or not name.isdecimal()
-                or len(name.encode()) > _SGLANG_MAX_FD_COMPONENT_BYTES
-                or name != str(int(name))
-            ):
-                raise RuntimeError(f"noncanonical SGLang descriptor name: {name!r}")
-            descriptor_numbers.append(int(name))
-    return sorted(descriptor_numbers)
-
-
-def _leader_listener_lease(
-    *, pidfd: int, leader_pid: int, port: int
-) -> tuple[socket.socket, dict[str, Any]]:
-    retained: socket.socket | None = None
-    retained_identity: tuple[int, int] | None = None
-    retained_fd_number: int | None = None
-    try:
-        for target_fd in _bounded_process_fds(leader_pid):
-            try:
-                duplicated = _pidfd_getfd(pidfd, target_fd)
-            except OSError as error:
-                if error.errno in {errno.EBADF, errno.ESRCH}:
-                    continue
-                raise RuntimeError(
-                    f"cannot attest SGLang leader descriptor {target_fd}: {error}"
-                ) from error
-            try:
-                candidate = socket.socket(fileno=duplicated)
-            except OSError:
-                os.close(duplicated)
+def _reserve_listener() -> socket.socket:
+    for _ in range(_SGLANG_LISTENER_ATTEMPTS):
+        listener = socket.socket(
+            socket.AF_INET,
+            socket.SOCK_STREAM | socket.SOCK_CLOEXEC,
+        )
+        try:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+            if port > _SGLANG_MAX_PORT:
+                listener.close()
                 continue
-            try:
-                if (
-                    candidate.family != socket.AF_INET
-                    or candidate.type & socket.SOCK_STREAM != socket.SOCK_STREAM
-                    or candidate.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) != 1
-                    or candidate.getsockname() != ("127.0.0.1", port)
-                    or candidate.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT) != 0
-                ):
-                    continue
-                metadata = os.fstat(candidate.fileno())
-                if not stat.S_ISSOCK(metadata.st_mode):
-                    raise RuntimeError("attested SGLang listener is not a socket")
-                identity = (metadata.st_dev, metadata.st_ino)
-                if retained is None:
-                    retained = candidate
-                    retained_identity = identity
-                    retained_fd_number = target_fd
-                    candidate = None
-                elif identity != retained_identity:
-                    raise RuntimeError(
-                        "SGLang leader owns multiple matching loopback listeners"
-                    )
-            finally:
-                if candidate is not None:
-                    candidate.close()
-        if retained is None or retained_identity is None or retained_fd_number is None:
-            raise RuntimeError(
-                "SGLang readiness endpoint is not owned by the launched process-group leader"
-            )
-        return retained, {
-            "leader_fd": retained_fd_number,
-            "socket_device": retained_identity[0],
-            "socket_inode": retained_identity[1],
-            "host": "127.0.0.1",
-            "port": port,
-        }
-    except BaseException:
-        if retained is not None:
-            retained.close()
-        raise
+            listener.listen(socket.SOMAXCONN)
+            if (
+                listener.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT) != 0
+                or os.get_inheritable(listener.fileno())
+            ):
+                raise RuntimeError("reserved SGLang listener has unsafe socket flags")
+            return listener
+        except BaseException:
+            listener.close()
+            raise
+    raise RuntimeError("could not reserve a SGLang listener in the admitted port range")
+
+
+def _listener_record(listener: socket.socket, *, fd: int) -> dict[str, Any]:
+    metadata = os.fstat(listener.fileno())
+    address = listener.getsockname()
+    if (
+        not stat.S_ISSOCK(metadata.st_mode)
+        or listener.family != socket.AF_INET
+        or listener.type & socket.SOCK_STREAM != socket.SOCK_STREAM
+        or listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) != 1
+        or listener.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT) != 0
+        or address[0] != "127.0.0.1"
+        or not 1 <= address[1] <= _SGLANG_MAX_PORT
+    ):
+        raise RuntimeError("SGLang listener custody changed")
+    return {
+        "fd": fd,
+        "socket_device": metadata.st_dev,
+        "socket_inode": metadata.st_ino,
+        "host": address[0],
+        "port": address[1],
+    }
+
+
+def _attest_inherited_listener(
+    *, pidfd: int, child_fd: int, reserved: socket.socket
+) -> dict[str, Any]:
+    duplicated = -1
+    try:
+        duplicated = _pidfd_getfd(pidfd, child_fd)
+        inherited = socket.socket(fileno=duplicated)
+        duplicated = -1
+        try:
+            observed = _listener_record(inherited, fd=child_fd)
+        finally:
+            inherited.close()
+        expected = _listener_record(reserved, fd=child_fd)
+        if observed != expected:
+            raise RuntimeError("SGLang child inherited the wrong listener")
+        return expected
+    except OSError as error:
+        raise RuntimeError("cannot attest the inherited SGLang listener") from error
+    finally:
+        if duplicated >= 0:
+            os.close(duplicated)
+
+
+def _read_sglang_receipt(*, fd: int, pidfd: int) -> dict[str, Any]:
+    poller = select.poll()
+    poller.register(fd, select.POLLIN | select.POLLHUP | select.POLLERR)
+    poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+    payload = bytearray()
+    deadline = time.monotonic() + _SGLANG_RECEIPT_TIMEOUT_S
+    complete = False
+    while not complete:
+        remaining_s = deadline - time.monotonic()
+        if remaining_s <= 0:
+            raise RuntimeError("SGLang custody receipt timed out")
+        events = poller.poll(max(1, min(100, math.ceil(remaining_s * 1000))))
+        for descriptor, _event in events:
+            if descriptor == pidfd:
+                raise RuntimeError("SGLang exited before its custody receipt")
+            while True:
+                try:
+                    chunk = os.read(fd, 4096)
+                except BlockingIOError:
+                    break
+                if not chunk:
+                    complete = True
+                    break
+                payload.extend(chunk)
+                if len(payload) > _SGLANG_RECEIPT_MAX_BYTES:
+                    raise RuntimeError("SGLang custody receipt exceeds its bound")
+    try:
+        value = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("invalid SGLang custody receipt") from error
+    if not isinstance(value, dict):
+        raise RuntimeError("SGLang custody receipt is not an object")
+    return value
 
 
 def _pidfd_exited(pidfd: int) -> bool:
@@ -1038,8 +1061,8 @@ def _sglang(
     *,
     python: str,
     model_path: Path,
+    model_identity: dict[str, Any],
     log_path: Path,
-    port: int,
     mem_fraction_static: float,
     ready_timeout_s: float,
     served_model: str,
@@ -1051,44 +1074,60 @@ def _sglang(
     same venv.
     """
     _reject_disabled_cudnn_check()
-    if not 1 <= port <= 55535:
-        raise RuntimeError("SGLang requires an explicit port in [1, 55535]")
     _preflight_pidfd_getfd()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    command = _sglang_command(
-        python=python,
-        model_path=model_path,
-        port=port,
-        mem_fraction_static=mem_fraction_static,
-        served_model=served_model,
-    )
+    adapter_sha256 = _sha256_file(_SGLANG_ADAPTER)
     environment = _sglang_environment()
-    launch = {
-        "argv": command,
-        "argv_sha256": hashlib.sha256(_canonical_json(command)).hexdigest(),
-        "environment": [
-            {
-                "key": key,
-                "value_sha256": hashlib.sha256(value.encode()).hexdigest(),
-            }
-            for key, value in sorted(environment.items())
-        ],
-    }
-    _LOGGER.info("sglang launch command sha256: %s", launch["argv_sha256"])
+    runtime_identity, gpu_identity = _preflight_serving_identities(
+        python=python,
+        environment=environment,
+    )
     guard = _install_sglang_signal_guard()
     handle: Any | None = None
     process: subprocess.Popen[Any] | None = None
     pidfd = -1
     listener: socket.socket | None = None
+    receipt_read_fd = -1
+    receipt_write_fd = -1
     try:
+        listener = _reserve_listener()
+        port = listener.getsockname()[1]
+        receipt_read_fd, receipt_write_fd = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
+        command = _sglang_command(
+            python=python,
+            model_path=model_path,
+            model_identity=model_identity,
+            listener_fd=listener.fileno(),
+            receipt_fd=receipt_write_fd,
+            mem_fraction_static=mem_fraction_static,
+            served_model=served_model,
+            runtime_identity=runtime_identity,
+            gpu_identity=gpu_identity,
+        )
+        launch = {
+            "argv": command,
+            "argv_sha256": hashlib.sha256(_canonical_json(command)).hexdigest(),
+            "adapter_sha256": adapter_sha256,
+            "environment": [
+                {
+                    "key": key,
+                    "value_sha256": hashlib.sha256(value.encode()).hexdigest(),
+                }
+                for key, value in sorted(environment.items())
+            ],
+        }
+        _LOGGER.info("sglang launch command sha256: %s", launch["argv_sha256"])
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         handle = log_path.open("w", encoding="utf-8")
         process = subprocess.Popen(
             command,
             env=environment,
             stdout=handle,
             stderr=subprocess.STDOUT,
+            pass_fds=(listener.fileno(), receipt_write_fd),
             start_new_session=True,
         )
+        os.close(receipt_write_fd)
+        receipt_write_fd = -1
         _arm_sglang_signal_guard(guard)
         pgid = process.pid
         try:
@@ -1101,14 +1140,40 @@ def _sglang(
             pidfd = _pidfd_open(process.pid)
         except OSError as error:
             raise RuntimeError("cannot establish SGLang process custody") from error
+        receipt = _read_sglang_receipt(fd=receipt_read_fd, pidfd=pidfd)
+        expected_listener = _attest_inherited_listener(
+            pidfd=pidfd,
+            child_fd=listener.fileno(),
+            reserved=listener,
+        )
+        expected_receipt = {
+            "schema_version": 1,
+            "adapter_sha256": adapter_sha256,
+            "pid": process.pid,
+            "sid": process.pid,
+            "pgid": process.pid,
+            "listener": expected_listener,
+            "model": model_identity,
+            "runtime": runtime_identity,
+            "gpu": gpu_identity,
+        }
+        if receipt != expected_receipt:
+            raise RuntimeError(
+                f"SGLang custody receipt mismatch: expected {expected_receipt!r}, "
+                f"observed {receipt!r}"
+            )
         deadline = time.monotonic() + ready_timeout_s
         probe = f"http://127.0.0.1:{port}/health_generate"
         while time.monotonic() < deadline:
-            if _pidfd_exited(pidfd):
+            if process.poll() is not None or _pidfd_exited(pidfd):
                 tail = "\n".join(log_path.read_text().splitlines()[-40:])
                 raise RuntimeError(f"sglang exited before ready:\n{tail}")
             try:
-                with urllib.request.urlopen(probe, timeout=5) as response:
+                request_timeout_s = min(
+                    _SGLANG_READY_REQUEST_TIMEOUT_S,
+                    max(0.001, deadline - time.monotonic()),
+                )
+                with urllib.request.urlopen(probe, timeout=request_timeout_s) as response:
                     if response.status == 200:
                         break
             except Exception:  # noqa: BLE001 - not up yet is the normal case
@@ -1116,16 +1181,12 @@ def _sglang(
             time.sleep(_SGLANG_READY_POLL_S)
         else:
             raise TimeoutError(f"sglang not ready after {ready_timeout_s}s")
-        listener, listener_record = _leader_listener_lease(
-            pidfd=pidfd,
-            leader_pid=process.pid,
-            port=port,
-        )
         launch["process"] = {
             "pid": process.pid,
             "sid": observed_sid,
             "pgid": pgid,
-            "listener": listener_record,
+            "listener": expected_listener,
+            "receipt": receipt,
         }
         url = f"http://127.0.0.1:{port}/v1"
         _LOGGER.info("sglang ready at %s", url)
@@ -1138,6 +1199,10 @@ def _sglang(
         finally:
             if listener is not None:
                 listener.close()
+            if receipt_read_fd >= 0:
+                os.close(receipt_read_fd)
+            if receipt_write_fd >= 0:
+                os.close(receipt_write_fd)
             if pidfd >= 0:
                 os.close(pidfd)
             if handle is not None:
@@ -1149,28 +1214,79 @@ def _sglang_command(
     *,
     python: str,
     model_path: Path,
-    port: int,
+    model_identity: dict[str, Any],
+    listener_fd: int,
+    receipt_fd: int,
     mem_fraction_static: float,
     served_model: str,
+    runtime_identity: dict[str, Any],
+    gpu_identity: dict[str, Any],
 ) -> list[str]:
     return [
         python,
-        "-m",
-        "sglang.launch_server",
+        "-I",
+        "-B",
+        str(_SGLANG_ADAPTER),
+        "--listener-fd",
+        str(listener_fd),
+        "--receipt-fd",
+        str(receipt_fd),
         "--model-path",
         str(model_path),
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
+        "--model-identity-json",
+        _canonical_json(model_identity).decode(),
         "--served-model-name",
         served_model,
-        "--enable-deterministic-inference",
         "--mem-fraction-static",
         str(mem_fraction_static),
-        "--chunked-prefill-size",
-        "2048",
+        "--runtime-identity-sha256",
+        hashlib.sha256(_canonical_json(runtime_identity)).hexdigest(),
+        "--gpu-identity-sha256",
+        hashlib.sha256(_canonical_json(gpu_identity)).hexdigest(),
     ]
+
+
+def _preflight_serving_identities(
+    *, python: str, environment: dict[str, str]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    program = (
+        "import importlib.util,json,sys;"
+        "spec=importlib.util.spec_from_file_location('juergen_sglang_identity',sys.argv[1]);"
+        "module=importlib.util.module_from_spec(spec);"
+        "spec.loader.exec_module(module);"
+        "print(json.dumps({'runtime':module._installed_runtime_identity(),"
+        "'gpu':module._gpu_identity()},sort_keys=True,separators=(',',':')))"
+    )
+    try:
+        result = subprocess.run(
+            [python, "-I", "-B", "-c", program, str(_SGLANG_ADAPTER)],
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=_SGLANG_IDENTITY_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeError("cannot inspect the SGLang runtime identity") from error
+    if result.returncode != 0:
+        error = result.stderr[-4096:].decode("utf-8", errors="replace")
+        raise RuntimeError(f"SGLang runtime identity inspection failed: {error}")
+    if len(result.stdout) > _SGLANG_RECEIPT_MAX_BYTES:
+        raise RuntimeError("SGLang runtime identity exceeds its bound")
+    try:
+        value = json.loads(result.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("invalid SGLang runtime identity") from error
+    if not isinstance(value, dict) or set(value) != {"runtime", "gpu"}:
+        raise RuntimeError("invalid SGLang runtime identity fields")
+    runtime = value["runtime"]
+    gpu = value["gpu"]
+    if not isinstance(runtime, dict) or not isinstance(gpu, dict):
+        raise RuntimeError("invalid SGLang runtime or GPU identity")
+    return runtime, gpu
+
+
 def _sglang_environment() -> dict[str, str]:
     rejected = sorted(
         key
@@ -1217,7 +1333,7 @@ class _ModelArtifact:
     total_bytes: int
     served_model: str
 
-    def record(self, *, attestation: dict[str, Any]) -> dict[str, Any]:
+    def custody_identity(self) -> dict[str, Any]:
         return {
             "path": str(self.model_path),
             "artifact_id": self.artifact_id,
@@ -1232,6 +1348,11 @@ class _ModelArtifact:
             "file_count": self.file_count,
             "total_bytes": self.total_bytes,
             "served_model": self.served_model,
+        }
+
+    def record(self, *, attestation: dict[str, Any]) -> dict[str, Any]:
+        return {
+            **self.custody_identity(),
             "attestation": attestation,
         }
 
@@ -1578,7 +1699,9 @@ def _suite_wall_bound_s(
     local_server_bound_s = 0.0
     if local_sglang:
         local_server_bound_s = (
-            sglang_ready_timeout_s
+            _SGLANG_IDENTITY_TIMEOUT_S
+            + _SGLANG_RECEIPT_TIMEOUT_S
+            + sglang_ready_timeout_s
             + _ATTESTATION_REQUESTS * _ATTESTATION_TIMEOUT_S
             + _SEED_PROBE_REQUESTS * arm.model_request_timeout_s
             + _SGLANG_TERM_TIMEOUT_S
@@ -2620,7 +2743,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("--model-path", type=Path, default=None)
     parser.add_argument("--sglang-python", default=None)
-    parser.add_argument("--sglang-port", type=int, default=0)
     parser.add_argument("--sglang-mem-fraction", type=float, default=0.65)
     parser.add_argument("--sglang-ready-timeout-s", type=float, default=1500.0)
     parser.add_argument(
@@ -2746,12 +2868,6 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(
                 "--sglang-python must be an absolute executable regular file"
             )
-    if not scripted and not 1 <= args.sglang_port <= 55535:
-        raise SystemExit("model arms require --sglang-port in [1, 55535]")
-    if scripted and args.sglang_port != 0:
-        raise SystemExit(
-            f"arm {args.arm} never launches SGLang; --sglang-port would be ignored"
-        )
     if (
         not math.isfinite(args.sglang_mem_fraction)
         or not 0.0 < args.sglang_mem_fraction <= 1.0
@@ -2835,15 +2951,16 @@ def main(argv: list[str] | None = None) -> int:
         if scripted:
             _run_selected("http://127.0.0.1:1/v1")
         else:
-            assert artifact is not None
+            if artifact is None:
+                raise RuntimeError("model artifact validation did not produce custody")
             with tempfile.TemporaryDirectory(prefix="juergen-sglang-") as temporary:
                 log_path = Path(temporary) / "sglang.log"
                 try:
                     with _sglang(
                         python=args.sglang_python,
                         model_path=args.model_path,
+                        model_identity=artifact.custody_identity(),
                         log_path=log_path,
-                        port=args.sglang_port,
                         mem_fraction_static=args.sglang_mem_fraction,
                         ready_timeout_s=args.sglang_ready_timeout_s,
                         served_model=served_model,

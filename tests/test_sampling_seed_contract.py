@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -293,18 +294,33 @@ def test_local_launch_enables_deterministic_sampling_without_an_api_key(
     monkeypatch,
 ) -> None:
     from evals.signoflife.__main__ import _sglang_command, _sglang_environment
+    from evals.signoflife.sglang_server import _server_arguments
 
     monkeypatch.setenv("SIGN_OF_LIFE_API_KEY", "never-in-the-server-child")
 
     command = _sglang_command(
         python="/sealed/venv/bin/python",
         model_path="/sealed/model",
-        port=19000,
+        model_identity={"artifact_sha256": "a" * 64},
+        listener_fd=7,
+        receipt_fd=8,
         mem_fraction_static=0.65,
         served_model="sign-of-life-sha256-test",
+        runtime_identity={"runtime": "exact"},
+        gpu_identity={"gpu": "exact"},
     )
 
-    assert "--enable-deterministic-inference" in command
+    server_arguments = _server_arguments(
+        SimpleNamespace(
+            model_path="/sealed/model",
+            served_model_name="sign-of-life-sha256-test",
+            mem_fraction_static=0.65,
+        ),
+        {"host": "127.0.0.1", "port": 19000},
+    )
+    assert "--enable-deterministic-inference" in server_arguments
+    assert command[:3] == ["/sealed/venv/bin/python", "-I", "-B"]
+    assert "--listener-fd" in command
     assert "--api-key" not in command
     assert not any("secret" in value for value in command)
     assert "SIGN_OF_LIFE_API_KEY" not in _sglang_environment()

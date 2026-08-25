@@ -186,8 +186,6 @@ def test_changed_artifact_bytes_are_refused_before_output_or_resources(
                 str(model),
                 "--sglang-python",
                 sys.executable,
-                "--sglang-port",
-                "29500",
             ]
         )
     assert not output.exists()
@@ -215,7 +213,7 @@ def test_missing_local_runtime_prerequisite_does_not_consume_run_id(tmp_path) ->
     assert not output.exists()
 
 
-def test_missing_listener_port_is_refused_before_artifact_or_output(
+def test_caller_chosen_listener_port_is_refused_before_artifact_or_output(
     tmp_path, monkeypatch
 ) -> None:
     import evals.signoflife.__main__ as dispatcher
@@ -227,7 +225,7 @@ def test_missing_listener_port_is_refused_before_artifact_or_output(
         lambda *_args, **_kwargs: pytest.fail("artifact verification acquired resources"),
     )
 
-    with pytest.raises(SystemExit, match="--sglang-port in \\[1, 55535\\]"):
+    with pytest.raises(SystemExit):
         dispatcher.main(
             [
                 "--arm",
@@ -240,6 +238,8 @@ def test_missing_listener_port_is_refused_before_artifact_or_output(
                 str(tmp_path / "model"),
                 "--sglang-python",
                 sys.executable,
+                "--sglang-port",
+                "29500",
             ]
         )
 
