@@ -102,6 +102,12 @@ class FormatResult:
     counters: PolicyCounters
     # Provenance for primitive-based formats (None for the aggregate format).
     primitive_counts: dict[str, int] | None = None
+    #: Per-window primitives, for a consumer that has to RE-RENDER over merged
+    #: windows rather than read the labels back (stage 04's typing coalesce).
+    #: Parsing a label back is what the annotation window planner did, and its
+    #: typing-burst invariant went silently inoperative the moment a grammar
+    #: spelled typing differently. None for the aggregate format.
+    primitives: list[list[Primitive]] | None = None
 
 
 class ActionFormatter(Protocol):
@@ -225,6 +231,7 @@ def _ordered_result(
         keyboard=[_primitive_keyboard(a) for a in actions],
         counters=counters,
         primitive_counts={k: counts.get(k, 0) for k in kinds},
+        primitives=[list(window) for window in primitives],
     )
 
 
@@ -271,6 +278,18 @@ _NON_SHIFT_MODIFIERS = frozenset({
     "Function",
 })
 _MODIFIER_KEYS = _SHIFT_KEYS | _NON_SHIFT_MODIFIERS
+
+
+def render_primitives(primitives: Sequence[Primitive]) -> str:
+    """One window's primitives -> its label, through the grammar's own codec.
+
+    The single place stage 04's typing coalesce turns merged windows back into
+    text. It goes through `CODEC.format` rather than joining `render()` calls so
+    a re-derived label cannot differ from a first-pass one.
+    """
+    return ORDERED_EVENTS_V3.format(
+        OrderedEventsV3Action(primitives=tuple(primitives), no_op=not primitives)
+    )
 
 
 def _collapse_typing(
@@ -605,3 +624,168 @@ def get_formatter(
             f"unknown action format {name!r} (available: {sorted(FORMATTERS)})"
         ) from None
     return factory(continuous_action_hz, jitter_deadband_px)
+
+
+# Cross-window typing coalescing (stage 04 --coalesce-typing)
+# ---------------------------------------------------------------------------
+
+# The idle label of the ordered text formats (a window with no primitives).
+ORDERED_IDLE_LABEL = "NO_OP"
+
+# Formats whose windows carry a ``type()`` primitive, i.e. the only ones where
+# "this window is typing and nothing else" is a well-defined question. The
+# aggregate formats spell typing as bare key transitions, indistinguishable
+# from a chord.
+TYPING_COALESCE_FORMATS = frozenset({OrderedTypingFormatter.name})
+
+
+@dataclass
+class TypingCoalescePlan:
+    """Which windows survive a cross-window typing coalesce, and what each
+    surviving window swallows.
+
+    ``keep`` are the retained window indices (ascending); everything else is
+    dropped — its keystrokes land in the label of the run's FIRST window once
+    the caller re-derives labels over merged windows.
+
+    ``spans`` maps a run's first window index to the LAST window index it
+    absorbs (inclusive); windows absent from ``spans`` are untouched singletons.
+
+    ``forced_idle`` are kept windows whose label must be overwritten with
+    ``ORDERED_IDLE_LABEL`` because a run absorbed their span: a run is never
+    allowed to end a conversation, so when one reaches a terminal window that
+    window is retained as a trailing do-nothing turn (its frame is a fresh
+    screenshot, and ``--terminate-token`` can overwrite it without destroying
+    typing supervision). Such a window must be EXCLUDED from the re-derived
+    window list, so the run's window extends over it."""
+
+    keep: list[int]
+    spans: dict[int, int]
+    forced_idle: list[int]
+
+    @property
+    def n_dropped(self) -> int:
+        return sum(end - start for start, end in self.spans.items()) - len(self.forced_idle)
+
+
+def is_typing_only_window(
+    prims: Sequence[Primitive], held_non_shift_mods: Sequence[str] | set[str] = ()
+) -> bool:
+    """True iff every primitive in the window is typing: a ``type()`` run, a
+    Shift transition, or a bare printable-key transition — and no non-Shift
+    modifier is physically held.
+
+    The bare printable transitions are the ones ``_collapse_typing`` could not
+    fold because the run did not BALANCE inside this window: key rollover at a
+    frame boundary (``…; down(KeyC)`` here, ``up(KeyC); …`` next window) and a
+    Shift held across frames. Admitting them is what lets the caller re-derive
+    a single ``type()`` over the merged window.
+
+    Breakers (anything else): move, scroll, mouse buttons, Return/Tab/Backspace/
+    arrows/F-keys (deliberately kept as their own turns — backtracking and
+    submitting are actions worth supervising per frame), and every non-Shift
+    modifier. The held-modifier veto is what keeps a Ctrl+C whose halves fall in
+    different windows (``down(ControlLeft)`` | ``down(KeyC); up(KeyC)`` |
+    ``up(ControlLeft)``) from reading as typing."""
+    if not prims or (set(held_non_shift_mods) & _NON_SHIFT_MODIFIERS):
+        return False
+    return all(
+        p.kind == "type"
+        or (
+            p.kind in ("down", "up")
+            and (p.name in _US_PRINTABLE or p.name in _SHIFT_KEYS)
+        )
+        for p in prims
+    )
+
+
+def plan_typing_coalesce(
+    primitives: Sequence[Sequence[Primitive]],
+    *,
+    barrier_start: Sequence[int] | set[int] = (),
+    terminal: Sequence[int] | set[int] = (),
+    break_before: Sequence[int] | set[int] = (),
+    max_frames: int = 0,
+) -> TypingCoalescePlan:
+    """Group maximal runs of typing-only windows (see ``is_typing_only_window``)
+    into single turns.
+
+    A run opens on a typing-only window and extends while the next window is
+    typing-only OR idle — an idle window INSIDE a typing stretch is a pause the
+    demonstrator took mid-sentence, not an action, so it is absorbed. The run
+    ends at its last TYPING window: trailing idle windows are never absorbed
+    (they stay their own turns, so the conversation keeps a screenshot of the
+    settled screen).
+
+    Hard stops, all of them meaning "the next window cannot join this run":
+      * ``max_frames`` — the number of ORIGINAL windows one turn may span (0 ==
+        unlimited). This is the staleness bound: the turn shows the run's FIRST
+        screenshot while its label carries everything typed until the run's end,
+        so a long run must split into consecutive capped chunks, each keeping its
+        own screenshot.
+      * ``barrier_start`` — windows that must begin a fresh run (a goal window's
+        first frame: a run crossing into it would move that goal's opening
+        keystrokes into a turn the goal does not contain).
+      * ``break_before`` — windows whose gap from the previous window contains a
+        dead zone: the policy discards/clamps keystrokes there, so a merged label
+        would be text with a silent hole in it.
+      * ``terminal`` — a window that must never be absorbed as a run's interior
+        (a goal window's last frame, and the last window of the segment). A run
+        that REACHES one absorbs its span but keeps it as a trailing
+        ``forced_idle`` turn; a run cannot start at one and extend past it (that
+        would leak post-goal keystrokes into the goal's final turn)."""
+    n = len(primitives)
+    barriers, terminals, breaks = set(barrier_start), set(terminal), set(break_before)
+    cap = max_frames if max_frames and max_frames > 0 else n
+
+    # Per-window typing eligibility. The non-Shift modifier held-set is
+    # cross-window state (exactly as ``_collapse_typing`` tracks it: a modifier
+    # only ever enters it via an explicitly rendered down()).
+    typing: list[bool] = []
+    mods: set[str] = set()
+    for prims in primitives:
+        typing.append(is_typing_only_window(prims, mods))
+        for p in prims:
+            if p.kind == "down" and p.name in _MODIFIER_KEYS:
+                mods.add(p.name)
+            elif p.kind == "up" and p.name in _MODIFIER_KEYS:
+                mods.discard(p.name)
+    idle = [not bool(prims) for prims in primitives]
+
+    keep: list[int] = []
+    spans: dict[int, int] = {}
+    forced_idle: list[int] = []
+    i = 0
+    while i < n:
+        keep.append(i)
+        if not typing[i] or i in terminals:
+            i += 1
+            continue
+        last_typing = i
+        stop_terminal: int | None = None
+        j = i + 1
+        while (
+            j < n
+            and (j - i) < cap  # a run of [i..j] spans j-i+1 windows
+            and j not in barriers
+            and j not in breaks
+            and (typing[j] or idle[j])
+        ):
+            if j in terminals:
+                # Absorb it only as the run's trailing idle turn (typing
+                # windows), else leave it alone (an idle window is not worth
+                # absorbing at the cost of ending the run here).
+                if typing[j]:
+                    stop_terminal = last_typing = j
+                break
+            if typing[j]:
+                last_typing = j
+            j += 1
+        end = stop_terminal if stop_terminal is not None else last_typing
+        if end > i:
+            spans[i] = end
+            if stop_terminal is not None:
+                keep.append(stop_terminal)
+                forced_idle.append(stop_terminal)
+        i = end + 1
+    return TypingCoalescePlan(keep=keep, spans=spans, forced_idle=forced_idle)
