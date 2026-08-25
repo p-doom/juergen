@@ -37,12 +37,12 @@ That marker proves atomic transport completion, not authorization or promotion.
 Promotion additionally requires the Labctl DB-bound exhaustive result receipt
 named by `result["promotion_evidence"]["required_receipt"]`.
 
-External OpenAI-compatible servers are diagnostic and non-causal. A causal model
-comparison requires the registered model generation, the pinned deterministic
-local SGLang runtime, the recorded host GPU/driver boundary, paired
-suite/cell/trial sampling seeds, and a green server/model preflight. Never put an
-evaluation API credential in an argument; the only accepted external-client path
-is the redacted `SIGN_OF_LIFE_API_KEY` environment boundary.
+External OpenAI-compatible servers are unsupported by the canonical evaluator.
+It rejects the presence of `SIGN_OF_LIFE_API_KEY` before argument parsing or
+resource acquisition and launches only a local no-auth loopback SGLang server.
+Causal evaluation remains blocked until the registered model generation, sealed
+runtime, inherited listener, host GPU/driver boundary, and registrar contracts
+are all production-authoritative.
 
 ## Nightly model-estate check
 
