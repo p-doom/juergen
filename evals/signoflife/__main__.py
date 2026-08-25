@@ -1564,14 +1564,15 @@ def _suite_wall_bound_s(
     if vm_slots < 1:
         raise ValueError("vm_slots must be >= 1")
     slot_bounds = [0.0] * vm_slots
+    attempt_count = 0
     for task in tasks:
         for _trial in range(trials):
             slot = min(range(vm_slots), key=lambda index: (slot_bounds[index], index))
-            slot_bounds[slot] += (
-                _attempt_wall_bound_s(task, arm)
-                + _SUPERVISOR_REAP_TIMEOUT_S
-                + _SUPERVISOR_KILL_TIMEOUT_S
-            )
+            slot_bounds[slot] += _attempt_wall_bound_s(task, arm)
+            attempt_count += 1
+    supervisor_drain_bound_s = attempt_count * (
+        _SUPERVISOR_REAP_TIMEOUT_S + 3 * _SUPERVISOR_KILL_TIMEOUT_S
+    )
     local_server_bound_s = 0.0
     if local_sglang:
         local_server_bound_s = (
@@ -1579,9 +1580,13 @@ def _suite_wall_bound_s(
             + _ATTESTATION_REQUESTS * _ATTESTATION_TIMEOUT_S
             + _SEED_PROBE_REQUESTS * arm.model_request_timeout_s
             + _SGLANG_TERM_TIMEOUT_S
-            + _SGLANG_KILL_TIMEOUT_S
+            + 3 * _SGLANG_KILL_TIMEOUT_S
         )
-    return max(slot_bounds, default=0.0) + local_server_bound_s
+    return (
+        max(slot_bounds, default=0.0)
+        + supervisor_drain_bound_s
+        + local_server_bound_s
+    )
 
 
 def _parse_slurm_duration_s(value: str) -> float:
