@@ -38,8 +38,18 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from action_parser import Action, parse_action, parse_action_tolerant
+from action_parser import (
+    Action,
+    KeyEvent,
+    OrderedAction,
+    parse_action,
+    parse_action_tolerant,
+    parse_ordered_action,
+    parse_ordered_action_tolerant,
+)
 from result import write_result
+
+ACTION_FORMATS = ("legacy", "oev3")
 
 # Action-type taxonomy, in priority order: a step that both moves and clicks is
 # a "click" (the click is the salient intent; the move is just the approach).
@@ -63,7 +73,37 @@ def classify(act: Action | None, *, is_terminate: bool) -> str:
     return "move" if (act.dx or act.dy) else "no_op"
 
 
-def parse_any(text: str, *, tolerant: bool) -> tuple[Action | None, bool, bool]:
+def _ordered_to_action(oa: OrderedAction) -> Action:
+    """Project an ``ordered_events_v3`` action onto the legacy ``Action`` shape.
+
+    Move deltas are summed (net cursor displacement), scroll keeps the
+    vertical component (horizontal as fallback), down/up become press/release
+    events, and each ``type(...)`` becomes a synthetic TYPE press+release so
+    typing classifies as "key".
+    """
+    if oa.no_op:
+        return Action(dx=0, dy=0, scroll=0, events=(), no_op=True)
+    dx = dy = scroll = 0
+    events: list[KeyEvent] = []
+    for p in oa.primitives:
+        if p.kind == "move":
+            dx += p.dx
+            dy += p.dy
+        elif p.kind == "scroll":
+            scroll += p.dy if p.dy else (p.dx or 0)
+        elif p.kind == "down":
+            events.append(KeyEvent(kind="press", what=p.name, mouse_button=p.mouse_button))
+        elif p.kind == "up":
+            events.append(KeyEvent(kind="release", what=p.name, mouse_button=p.mouse_button))
+        elif p.kind == "type":
+            events.append(KeyEvent(kind="press", what="TYPE", mouse_button=None))
+            events.append(KeyEvent(kind="release", what="TYPE", mouse_button=None))
+    return Action(dx=dx, dy=dy, scroll=scroll, events=tuple(events), no_op=False)
+
+
+def parse_any(
+    text: str, *, tolerant: bool, action_format: str = "legacy"
+) -> tuple[Action | None, bool, bool]:
     """Parse one action string.
 
     Returns ``(action, is_terminate, ok)``. ``TERMINATE`` is handled out-of-band
@@ -72,6 +112,9 @@ def parse_any(text: str, *, tolerant: bool) -> tuple[Action | None, bool, bool]:
     if text is not None and text.strip().split("\n", 1)[0].strip() == _TERMINATE:
         return None, True, True
     try:
+        if action_format == "oev3":
+            oa = parse_ordered_action_tolerant(text) if tolerant else parse_ordered_action(text)
+            return _ordered_to_action(oa), False, True
         act = parse_action_tolerant(text) if tolerant else parse_action(text)
         return act, False, True
     except (ValueError, TypeError):
@@ -82,7 +125,7 @@ def _has_left_click(act: Action | None) -> bool:
     return act is not None and (act.has_left_click_press or act.has_left_click_release)
 
 
-def score_pairs(pairs: list[tuple[str, str]]) -> dict:
+def score_pairs(pairs: list[tuple[str, str]], action_format: str = "legacy") -> dict:
     """Compute imitation-fidelity metrics over (gold, pred) action strings."""
     n = len(pairs)
     if n == 0:
@@ -97,10 +140,10 @@ def score_pairs(pairs: list[tuple[str, str]]) -> dict:
     term_tp = term_fp = term_fn = 0
 
     for gold_s, pred_s in pairs:
-        g_act, g_term, _ = parse_any(gold_s, tolerant=False)  # gold is clean data
+        g_act, g_term, _ = parse_any(gold_s, tolerant=False, action_format=action_format)
         gtype = classify(g_act, is_terminate=g_term)
 
-        p_act, p_term, p_ok = parse_any(pred_s, tolerant=True)
+        p_act, p_term, p_ok = parse_any(pred_s, tolerant=True, action_format=action_format)
         if p_ok:
             n_valid += 1
             ptype = classify(p_act, is_terminate=p_term)
@@ -193,7 +236,7 @@ def iter_gold_actions(val_jsonl: Path, limit: int = 0):
                 return
 
 
-def profile(val_jsonl: Path, limit: int = 0) -> dict:
+def profile(val_jsonl: Path, limit: int = 0, action_format: str = "legacy") -> dict:
     """Gold-only distribution over the val set — no model required."""
     type_counts: Counter = Counter()
     n_unparseable = 0
@@ -203,7 +246,7 @@ def profile(val_jsonl: Path, limit: int = 0) -> dict:
     total = 0
     for s in iter_gold_actions(val_jsonl, limit=limit):
         total += 1
-        act, term, ok = parse_any(s, tolerant=False)
+        act, term, ok = parse_any(s, tolerant=False, action_format=action_format)
         if not ok:
             n_unparseable += 1
             type_counts["UNPARSEABLE"] += 1
@@ -236,16 +279,18 @@ def main() -> None:
     p_prof = sub.add_parser("profile", help="gold-only distribution over a val.jsonl")
     p_prof.add_argument("--val_jsonl", required=True)
     p_prof.add_argument("--limit", type=int, default=0, help="max sessions (0 = all)")
+    p_prof.add_argument("--action_format", choices=ACTION_FORMATS, default="legacy")
 
     p_score = sub.add_parser("score", help="score (gold,pred) pairs → result.json")
     p_score.add_argument("--pairs_jsonl", required=True, help='jsonl of {"gold","pred"}')
     p_score.add_argument("--output_dir", required=True)
     p_score.add_argument("--task", default="bc_offline_imitation")
+    p_score.add_argument("--action_format", choices=ACTION_FORMATS, default="legacy")
 
     args = ap.parse_args()
 
     if args.mode == "profile":
-        out = profile(Path(args.val_jsonl), limit=args.limit)
+        out = profile(Path(args.val_jsonl), limit=args.limit, action_format=args.action_format)
         print(json.dumps(out, indent=2))
         return
 
@@ -257,13 +302,13 @@ def main() -> None:
                 rec = json.loads(line)
                 pairs.append((rec["gold"], rec["pred"]))
     t0 = time.time()
-    res = score_pairs(pairs)
+    res = score_pairs(pairs, action_format=args.action_format)
     out_dir = Path(args.output_dir)
     write_result(
         out_dir / "result.json",
         task=args.task,
         scores={f"bc_offline/{k}": v for k, v in res["scores"].items()},
-        params={},
+        params={"action_format": args.action_format},
         inputs={"pairs_jsonl": args.pairs_jsonl, "n_pairs": len(pairs)},
         n_samples=len(pairs),
         elapsed_s=int(time.time() - t0),
