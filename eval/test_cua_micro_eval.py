@@ -816,5 +816,45 @@ class ResultPersistenceTests(unittest.TestCase):
         self.assertEqual(len(tasks), len(raw["tasks"]))
 
 
+class PortGuardTests(unittest.TestCase):
+    """Two guards against a colliding job's sglang answering on our port."""
+
+    def test_job_ports_covers_vm_vnc_and_sglang(self) -> None:
+        self.assertEqual(
+            micro._job_ports(job_mod=340, n_slots=2, sglang_port=30340),
+            [5340, 5341, 6240, 6241, 30340],
+        )
+
+    def test_job_ports_omits_a_server_we_do_not_launch(self) -> None:
+        self.assertEqual(
+            micro._job_ports(job_mod=0, n_slots=1, sglang_port=None), [5000, 5900]
+        )
+
+    @mock.patch("cua_micro_eval.requests.get")
+    def test_foreign_model_on_our_port_aborts_the_run(self, get: mock.Mock) -> None:
+        get.return_value.raise_for_status.return_value = None
+        get.return_value.json.return_value = {"data": [{"id": "/checkpoints/someone_else/003250"}]}
+        with self.assertRaises(SystemExit) as caught:
+            micro._assert_serving_our_model(
+                "http://localhost:30340/v1", api_key="k", model_path="/checkpoints/ours/003250"
+            )
+        self.assertIn("hijack", str(caught.exception))
+
+    @mock.patch("cua_micro_eval.requests.get")
+    def test_our_own_model_passes(self, get: mock.Mock) -> None:
+        get.return_value.raise_for_status.return_value = None
+        get.return_value.json.return_value = {"data": [{"id": "/checkpoints/ours/003250"}]}
+        micro._assert_serving_our_model(
+            "http://localhost:30340/v1", api_key="k", model_path="/checkpoints/ours/003250"
+        )
+
+    @mock.patch("cua_micro_eval.requests.get")
+    def test_unqueryable_server_warns_but_runs(self, get: mock.Mock) -> None:
+        get.side_effect = micro.requests.RequestException("no /v1/models on this build")
+        micro._assert_serving_our_model(
+            "http://localhost:30340/v1", api_key="k", model_path="/checkpoints/ours/003250"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
