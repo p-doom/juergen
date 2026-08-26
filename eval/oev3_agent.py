@@ -139,6 +139,17 @@ def compile_primitives(
     return "\n".join(stmts)
 
 
+def _to_jpeg_b64(png_bytes: bytes) -> str:
+    import io
+
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=92)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
 class Oev3Agent:
     def __init__(
         self,
@@ -196,7 +207,7 @@ class Oev3Agent:
             content = [
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{window_shots[idx]}"},
+                    "image_url": {"url": f"data:image/jpeg;base64,{window_shots[idx]}"},
                 }
             ]
             if idx == 0:
@@ -211,7 +222,7 @@ class Oev3Agent:
         content = [
             {
                 "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"},
+                "image_url": {"url": f"data:image/jpeg;base64,{screenshot_b64}"},
             }
         ]
         if n_window == 0:
@@ -248,7 +259,7 @@ class Oev3Agent:
         if not obs.get("screenshot"):
             self.logger.warning("missing screenshot in obs; waiting one step")
             return "<screenshot_missing>", ["WAIT"]
-        screenshot_b64 = base64.b64encode(obs["screenshot"]).decode()
+        screenshot_b64 = _to_jpeg_b64(obs["screenshot"])
         messages = self._build_messages(instruction, screenshot_b64)
         response = self._call_llm(messages)
         if not response:
