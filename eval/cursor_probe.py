@@ -607,37 +607,65 @@ def _fit(xs: list[float], ys: list[float]) -> dict:
     }
 
 
-def score_rows(rows: list[dict]) -> dict:
-    xs: list[float] = []
-    ys: list[float] = []
-    xs_ax = {"x": [], "y": []}
-    ys_ax = {"x": [], "y": []}
-    n_both_move = 0
-    n_changed = 0
+def _cosine(u: tuple[int, int] | None, v: tuple[int, int] | None) -> float | None:
+    if u is None or v is None:
+        return None
+    nu, nv = math.hypot(*u), math.hypot(*v)
+    if nu == 0 or nv == 0:
+        return None
+    return (u[0] * v[0] + u[1] * v[1]) / (nu * nv)
+
+
+def observations(rows: list[dict]) -> list[dict]:
+    """One (expected, observed) pair per axis, for every usable row."""
+    out = []
     for r in rows:
         a, b = net_move(r.get("pred_a", "")), net_move(r.get("pred_b", ""))
-        if r.get("pred_a", "") != r.get("pred_b", ""):
-            n_changed += 1
         if a is None or b is None:
             continue
-        n_both_move += 1
         sw, sh = r["screen"]
         sx, sy = r["shift_px"]
-        expect = (-sx / sw * GRID, -sy / sh * GRID)
-        obs = (b[0] - a[0], b[1] - a[1])
-        for k, e, o in (("x", expect[0], obs[0]), ("y", expect[1], obs[1])):
-            xs.append(e)
-            ys.append(o)
-            xs_ax[k].append(e)
-            ys_ax[k].append(o)
+        aim = _cosine(net_move(r.get("gold", "")), a)
+        for axis, expect, obs in (
+            ("x", -sx / sw * GRID, b[0] - a[0]),
+            ("y", -sy / sh * GRID, b[1] - a[1]),
+        ):
+            out.append({
+                "axis": axis,
+                "expect": expect,
+                "obs": obs,
+                "pool": r.get("pool"),
+                "aim_cosine": aim,
+            })
+    return out
+
+
+def _fit_of(obs: list[dict]) -> dict:
+    return _fit([o["expect"] for o in obs], [o["obs"] for o in obs])
+
+
+def score_rows(rows: list[dict]) -> dict:
+    obs = observations(rows)
+    n_both_move = len(obs) // 2
+    n_changed = sum(1 for r in rows if r.get("pred_a", "") != r.get("pred_b", ""))
+    by_pool = {
+        pool: _fit_of([o for o in obs if o["pool"] == pool])
+        for pool in sorted({o["pool"] for o in obs if o["pool"]})
+    }
+    aimed = [o for o in obs if o["aim_cosine"] is not None]
     return {
         "n_rows": len(rows),
         "n_both_move": n_both_move,
         "move_pair_rate": n_both_move / len(rows) if rows else 0.0,
         "prediction_changed_rate": n_changed / len(rows) if rows else 0.0,
-        "pooled": _fit(xs, ys),
-        "axis_x": _fit(xs_ax["x"], ys_ax["x"]),
-        "axis_y": _fit(xs_ax["y"], ys_ax["y"]),
+        "pooled": _fit_of(obs),
+        "axis_x": _fit_of([o for o in obs if o["axis"] == "x"]),
+        "axis_y": _fit_of([o for o in obs if o["axis"] == "y"]),
+        "by_pool": by_pool,
+        # Does it read the cursor at least when it is aiming well? If the slope
+        # is flat here too, no amount of on-target aiming came from the pixels.
+        "gold_aligned": _fit_of([o for o in aimed if o["aim_cosine"] > 0.5]),
+        "gold_misaligned": _fit_of([o for o in aimed if o["aim_cosine"] <= 0.5]),
     }
 
 
@@ -654,6 +682,7 @@ def cmd_score(args) -> None:
         "cursor_probe/move_pair_rate": res["move_pair_rate"],
         "cursor_probe/prediction_changed_rate": res["prediction_changed_rate"],
         "cursor_probe/n_both_move": res["n_both_move"],
+        "cursor_probe/slope_gold_aligned": res["gold_aligned"]["slope"],
     }
     write_result(
         Path(args.output_dir) / "result.json",

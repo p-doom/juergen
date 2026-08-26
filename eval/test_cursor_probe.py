@@ -209,6 +209,19 @@ class ScoreRowsTest(unittest.TestCase):
         self.assertAlmostEqual(res["axis_x"]["slope_robust"], 1.0, places=2)
         self.assertLess(res["axis_x"]["slope"], 0.0)
 
+    def test_subgroups_split_by_pool_and_by_aim_quality(self):
+        SX = 384
+        ex = round(-SX / SW * cp.GRID)
+        good = row((SX, 0), "move(100,0)", f"move({100 + ex},0)")
+        good.update(pool="success", gold="move(80,0)")
+        bad = row((SX, 0), "move(-100,0)", "move(-100,0)")
+        bad.update(pool="failure", gold="move(80,0)")
+        res = cp.score_rows([good, bad])
+        self.assertAlmostEqual(res["by_pool"]["success"]["slope"], 1.0, places=2)
+        self.assertAlmostEqual(res["by_pool"]["failure"]["slope"], 0.0)
+        self.assertAlmostEqual(res["gold_aligned"]["slope"], 1.0, places=2)
+        self.assertAlmostEqual(res["gold_misaligned"]["slope"], 0.0)
+
     def test_empty_rows_do_not_crash(self):
         res = cp.score_rows([])
         self.assertEqual(res["n_both_move"], 0)
