@@ -17,9 +17,23 @@ Metrics
   - type_accuracy / confusion over {no_op, move, scroll, click, key, terminate}
                              (reported overall AND on decision points, i.e.
                              gold != no_op, so idle steps can't inflate it)
-  - move_dir_cosine          cosine(pred_delta, gold_delta) on gold-move steps
-  - move_mag_relerr          |‖pred‖-‖gold‖| / ‖gold‖ on gold-move steps
+  - move_coverage            fraction of gold-move steps where the prediction
+                             also produced a nonzero net move
+  - move_dir_cosine          cosine(pred_delta, gold_delta) over ALL gold-move
+                             steps; a gold-move step the model answers without a
+                             move scores 0, so the denominator is the gold set
+                             and cannot drift with the checkpoint. Reported as
+                             mean / median / frac(>0.9) / frac(<0), plus the
+                             matched-only mean under ``_matched`` for continuity
+                             with older runs.
+  - move_mag_relerr          |‖pred‖-‖gold‖| / ‖gold‖ on matched move steps
+  - move_big_*               same family restricted to gold moves of at least
+                             MAG_FLOOR thousandths — below that a move is finer
+                             than one merged vision token and unresolvable
   - click / terminate        precision & recall of the discrete decision
+
+Every metric above is also reported per ``pool`` ("success" / "failure") when
+the pairs file carries that field.
 
 Modes
   profile   gold-only distribution over a val.jsonl. No model needed — runnable
@@ -50,6 +64,8 @@ from action_parser import (
 from result import write_result
 
 ACTION_FORMATS = ("legacy", "oev3")
+
+MAG_FLOOR = 50
 
 # Action-type taxonomy, in priority order: a step that both moves and clicks is
 # a "click" (the click is the salient intent; the move is just the approach).
@@ -125,75 +141,103 @@ def _has_left_click(act: Action | None) -> bool:
     return act is not None and (act.has_left_click_press or act.has_left_click_release)
 
 
-def score_pairs(pairs: list[tuple[str, str]], action_format: str = "legacy") -> dict:
-    """Compute imitation-fidelity metrics over (gold, pred) action strings."""
-    n = len(pairs)
+def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
+    p = tp / (tp + fp) if (tp + fp) else 0.0
+    r = tp / (tp + fn) if (tp + fn) else 0.0
+    f = 2 * p * r / (p + r) if (p + r) else 0.0
+    return p, r, f
+
+
+def analyze_pair(gold_s: str, pred_s: str, action_format: str = "legacy") -> dict:
+    """Reduce one (gold, pred) action pair to the per-step facts we aggregate."""
+    g_act, g_term, _ = parse_any(gold_s, tolerant=False, action_format=action_format)
+    p_act, p_term, p_ok = parse_any(pred_s, tolerant=True, action_format=action_format)
+
+    gold_moved = bool(not g_term and g_act is not None and (g_act.dx or g_act.dy))
+    pred_moved = bool(p_ok and not p_term and p_act is not None and (p_act.dx or p_act.dy))
+    gold_norm = math.hypot(g_act.dx, g_act.dy) if gold_moved else 0.0
+    cosine = relerr = None
+    if gold_moved:
+        # A gold move the model answers without any move is a total aim miss,
+        # not a step to drop: it scores 0 so the denominator stays the gold set.
+        cosine = 0.0
+        if pred_moved:
+            pnorm = math.hypot(p_act.dx, p_act.dy)
+            cosine = (g_act.dx * p_act.dx + g_act.dy * p_act.dy) / (gold_norm * pnorm)
+            relerr = abs(pnorm - gold_norm) / gold_norm
+
+    return {
+        "gold_type": classify(g_act, is_terminate=g_term),
+        "pred_type": classify(p_act, is_terminate=p_term) if p_ok else "INVALID",
+        "pred_valid": p_ok,
+        "gold_moved": gold_moved,
+        "pred_moved": pred_moved,
+        "gold_norm": gold_norm,
+        "cosine": cosine,
+        "relerr": relerr,
+        "gold_click": _has_left_click(g_act),
+        "pred_click": bool(p_ok and _has_left_click(p_act)),
+        "gold_term": bool(g_term),
+        "pred_term": bool(p_ok and p_term),
+    }
+
+
+def _move_scores(steps: list[dict], prefix: str, mag_floor: float = 0.0) -> dict:
+    """Aim metrics over the gold-move steps whose |delta| clears ``mag_floor``."""
+    sel = [s for s in steps if s["gold_moved"] and s["gold_norm"] >= mag_floor]
+    matched = [s for s in sel if s["pred_moved"]]
+    cosines = [s["cosine"] for s in sel]
+    relerrs = [s["relerr"] for s in matched]
+    n = len(sel)
+    return {
+        f"{prefix}n": n,
+        f"{prefix}coverage": (len(matched) / n) if n else 0.0,
+        f"{prefix}dir_cosine_mean": (sum(cosines) / n) if n else 0.0,
+        f"{prefix}dir_cosine_median": _median(cosines) if cosines else 0.0,
+        f"{prefix}dir_cosine_frac_above_0p9": (
+            sum(1 for c in cosines if c > 0.9) / n if n else 0.0
+        ),
+        f"{prefix}dir_cosine_frac_negative": (
+            sum(1 for c in cosines if c < 0) / n if n else 0.0
+        ),
+        f"{prefix}dir_cosine_mean_matched": (
+            sum(s["cosine"] for s in matched) / len(matched) if matched else 0.0
+        ),
+        f"{prefix}mag_relerr_median": _median(relerrs) if relerrs else 0.0,
+    }
+
+
+def aggregate_steps(steps: list[dict]) -> dict:
+    """Turn per-step facts into the reported score dict."""
+    n = len(steps)
     if n == 0:
         raise ValueError("no (gold, pred) pairs to score")
+    confusion: dict[str, Counter] = defaultdict(Counter)
+    for s in steps:
+        confusion[s["gold_type"]][s["pred_type"]] += 1
 
-    n_valid = 0
-    confusion: dict[str, Counter] = defaultdict(Counter)  # confusion[gold][pred]
-    cosines: list[float] = []
-    mag_relerrs: list[float] = []
-    # discrete-decision tallies for precision/recall
-    click_tp = click_fp = click_fn = 0
-    term_tp = term_fp = term_fn = 0
-
-    for gold_s, pred_s in pairs:
-        g_act, g_term, _ = parse_any(gold_s, tolerant=False, action_format=action_format)
-        gtype = classify(g_act, is_terminate=g_term)
-
-        p_act, p_term, p_ok = parse_any(pred_s, tolerant=True, action_format=action_format)
-        if p_ok:
-            n_valid += 1
-            ptype = classify(p_act, is_terminate=p_term)
-        else:
-            ptype = "INVALID"
-        confusion[gtype][ptype] += 1
-
-        # Move geometry: only where the human actually moved the cursor and the
-        # prediction is a parseable move too.
-        gold_moved = not g_term and g_act is not None and (g_act.dx or g_act.dy)
-        pred_moved = p_ok and not p_term and p_act is not None and (p_act.dx or p_act.dy)
-        if gold_moved and pred_moved:
-            gx, gy, px, py = g_act.dx, g_act.dy, p_act.dx, p_act.dy
-            gnorm = math.hypot(gx, gy)
-            pnorm = math.hypot(px, py)
-            if gnorm > 0 and pnorm > 0:
-                cosines.append((gx * px + gy * py) / (gnorm * pnorm))
-                mag_relerrs.append(abs(pnorm - gnorm) / gnorm)
-
-        # Click decision (LMB).
-        g_click, p_click = _has_left_click(g_act), (p_ok and _has_left_click(p_act))
-        click_tp += g_click and p_click
-        click_fp += (not g_click) and p_click
-        click_fn += g_click and (not p_click)
-
-        # Terminate decision.
-        term_tp += g_term and p_term
-        term_fp += (not g_term) and p_term
-        term_fn += g_term and (not p_term)
-
-    # Aggregate.
     correct = sum(confusion[t].get(t, 0) for t in ACTION_TYPES)
     decision_total = sum(sum(confusion[g].values()) for g in ACTION_TYPES if g != "no_op")
     decision_correct = sum(confusion[g].get(g, 0) for g in ACTION_TYPES if g != "no_op")
 
-    def _prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
-        p = tp / (tp + fp) if (tp + fp) else 0.0
-        r = tp / (tp + fn) if (tp + fn) else 0.0
-        f = 2 * p * r / (p + r) if (p + r) else 0.0
-        return p, r, f
-
-    cp, cr, cf = _prf(click_tp, click_fp, click_fn)
-    tp_, tr, tf = _prf(term_tp, term_fp, term_fn)
+    cp, cr, cf = _prf(
+        sum(1 for s in steps if s["gold_click"] and s["pred_click"]),
+        sum(1 for s in steps if not s["gold_click"] and s["pred_click"]),
+        sum(1 for s in steps if s["gold_click"] and not s["pred_click"]),
+    )
+    tp_, tr, tf = _prf(
+        sum(1 for s in steps if s["gold_term"] and s["pred_term"]),
+        sum(1 for s in steps if not s["gold_term"] and s["pred_term"]),
+        sum(1 for s in steps if s["gold_term"] and not s["pred_term"]),
+    )
 
     scores = {
-        "format_validity_rate": n_valid / n,
+        "n_pairs": n,
+        "format_validity_rate": sum(1 for s in steps if s["pred_valid"]) / n,
         "type_accuracy_overall": correct / n,
         "type_accuracy_decision": (decision_correct / decision_total) if decision_total else 0.0,
-        "move_dir_cosine_mean": (sum(cosines) / len(cosines)) if cosines else 0.0,
-        "move_mag_relerr_median": _median(mag_relerrs) if mag_relerrs else 0.0,
+        **_move_scores(steps, "move_"),
+        **_move_scores(steps, "move_big_", mag_floor=MAG_FLOOR),
         "click_precision": cp,
         "click_recall": cr,
         "click_f1": cf,
@@ -201,8 +245,29 @@ def score_pairs(pairs: list[tuple[str, str]], action_format: str = "legacy") -> 
         "terminate_recall": tr,
         "terminate_f1": tf,
     }
-    confusion_plain = {g: dict(confusion[g]) for g in confusion}
-    return {"scores": scores, "confusion": confusion_plain, "n_move_steps": len(cosines)}
+    return {"scores": scores, "confusion": {g: dict(confusion[g]) for g in confusion}}
+
+
+def score_pairs(
+    pairs: list[tuple[str, str]],
+    action_format: str = "legacy",
+    pools: list | None = None,
+) -> dict:
+    """Compute imitation-fidelity metrics over (gold, pred) action strings."""
+    steps = [analyze_pair(g, p, action_format=action_format) for g, p in pairs]
+    out = aggregate_steps(steps)
+    out["n_move_steps"] = sum(1 for s in steps if s["gold_moved"])
+    out["n_move_steps_matched"] = sum(1 for s in steps if s["gold_moved"] and s["pred_moved"])
+
+    if pools:
+        by_pool: dict[str, dict] = {}
+        for pool in sorted({p for p in pools if p}):
+            sub = [s for s, p in zip(steps, pools) if p == pool]
+            if sub:
+                by_pool[pool] = aggregate_steps(sub)["scores"]
+        if by_pool:
+            out["by_pool"] = by_pool
+    return out
 
 
 def _median(xs: list[float]) -> float:
@@ -295,24 +360,33 @@ def main() -> None:
         return
 
     pairs = []
+    pools = []
     with Path(args.pairs_jsonl).open() as fh:
         for raw in fh:
             line = raw.strip()
             if line:
                 rec = json.loads(line)
                 pairs.append((rec["gold"], rec["pred"]))
+                pools.append(rec.get("pool"))
     t0 = time.time()
-    res = score_pairs(pairs, action_format=args.action_format)
+    res = score_pairs(pairs, action_format=args.action_format, pools=pools)
     out_dir = Path(args.output_dir)
+    extra = {
+        "confusion": res["confusion"],
+        "n_move_steps": res["n_move_steps"],
+        "n_move_steps_matched": res["n_move_steps_matched"],
+    }
+    if "by_pool" in res:
+        extra["by_pool"] = res["by_pool"]
     write_result(
         out_dir / "result.json",
         task=args.task,
         scores={f"bc_offline/{k}": v for k, v in res["scores"].items()},
-        params={"action_format": args.action_format},
+        params={"action_format": args.action_format, "mag_floor": MAG_FLOOR},
         inputs={"pairs_jsonl": args.pairs_jsonl, "n_pairs": len(pairs)},
         n_samples=len(pairs),
         elapsed_s=int(time.time() - t0),
-        extra={"confusion": res["confusion"], "n_move_steps": res["n_move_steps"]},
+        extra=extra,
     )
     print(json.dumps({f"bc_offline/{k}": v for k, v in res["scores"].items()}, indent=2))
 

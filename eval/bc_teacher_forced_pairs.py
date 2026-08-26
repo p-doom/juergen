@@ -2,7 +2,9 @@
 
 Reads per-step ArrayRecord chat records (stage_06 val split), replays every
 message except the final assistant turn against an OpenAI-compatible sglang
-server, and writes a jsonl of {"idx", "gold", "pred"} action-line pairs.
+server, and writes a jsonl of {"idx", "gold", "pred"} action-line pairs plus
+whatever record metadata bc_offline_score slices on ("pool", "app",
+"recording_id", "target_step").
 Gold is the last non-blank line of the final assistant message (after any
 </think>); pred is extracted from the model response the same way. Sampling is
 deterministic: every (total // num_records)-th record.
@@ -172,6 +174,9 @@ def run_pairs(args, reader, indices: list[int], base_url: str, out_path: Path) -
             if done % 25 == 0:
                 print(f"[pairs] {done}/{len(indices)}", flush=True)
         row = {"idx": idx, "gold": gold, "pred": pred}
+        for key in ("pool", "app", "recording_id", "target_step"):
+            if rec.get(key) is not None:
+                row[key] = rec[key]
         if not raw and err:
             row["error"] = err
         return row
