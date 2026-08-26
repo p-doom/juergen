@@ -76,6 +76,7 @@ from sglang_runner import sglang_server
 
 GRID = 1000
 JPEG_QUALITY = 92
+N_BOOTSTRAP = 5000
 
 # Sprite frame: the cursor hotspot sits at (HOT_X, HOT_Y) inside a SPR_W x SPR_H
 # patch, big enough to hold the arrow plus its drop shadow.
@@ -584,8 +585,18 @@ def net_move(line: str) -> tuple[int, int] | None:
     return act.dx, act.dy
 
 
-def _fit(xs: list[float], ys: list[float]) -> dict:
-    """Slope through the origin, plus an outlier-proof median-of-ratios twin."""
+def _slope(xs, ys) -> float:
+    sxx = sum(x * x for x in xs)
+    return (sum(x * y for x, y in zip(xs, ys)) / sxx) if sxx else 0.0
+
+
+def _fit(xs: list[float], ys: list[float], groups: list[int] | None = None) -> dict:
+    """Slope through the origin, plus an outlier-proof median-of-ratios twin.
+
+    The confidence interval resamples whole records, not single observations:
+    the x and y axis of one screenshot share a prediction and are not
+    independent draws.
+    """
     if not xs:
         return {"n": 0, "slope": 0.0, "slope_robust": 0.0, "r2": 0.0, "intercept": 0.0}
     sxx = sum(x * x for x in xs)
@@ -597,9 +608,30 @@ def _fit(xs: list[float], ys: list[float]) -> dict:
     cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
     varx = sum((x - mx) ** 2 for x in xs)
     ratios = [y / x for x, y in zip(xs, ys) if abs(x) > 20]
+    lo = hi = None
+    if groups:
+        by_group: dict[int, list[tuple[float, float]]] = {}
+        for g, x, y in zip(groups, xs, ys):
+            by_group.setdefault(g, []).append((x, y))
+        keys = list(by_group)
+        rng = random.Random(0)
+        boots = []
+        for _ in range(N_BOOTSTRAP):
+            bx: list[float] = []
+            by: list[float] = []
+            for _ in range(len(keys)):
+                for x, y in by_group[keys[rng.randrange(len(keys))]]:
+                    bx.append(x)
+                    by.append(y)
+            boots.append(_slope(bx, by))
+        boots.sort()
+        lo = boots[int(0.025 * N_BOOTSTRAP)]
+        hi = boots[int(0.975 * N_BOOTSTRAP)]
     return {
         "n": n,
         "slope": slope,
+        "slope_ci_lo": lo,
+        "slope_ci_hi": hi,
         "slope_robust": _median(ratios) if ratios else 0.0,
         "slope_with_intercept": (cov / varx) if varx else 0.0,
         "intercept": my - (cov / varx) * mx if varx else 0.0,
@@ -619,7 +651,7 @@ def _cosine(u: tuple[int, int] | None, v: tuple[int, int] | None) -> float | Non
 def observations(rows: list[dict]) -> list[dict]:
     """One (expected, observed) pair per axis, for every usable row."""
     out = []
-    for r in rows:
+    for i, r in enumerate(rows):
         a, b = net_move(r.get("pred_a", "")), net_move(r.get("pred_b", ""))
         if a is None or b is None:
             continue
@@ -631,6 +663,7 @@ def observations(rows: list[dict]) -> list[dict]:
             ("y", -sy / sh * GRID, b[1] - a[1]),
         ):
             out.append({
+                "row": i,
                 "axis": axis,
                 "expect": expect,
                 "obs": obs,
@@ -640,8 +673,12 @@ def observations(rows: list[dict]) -> list[dict]:
     return out
 
 
-def _fit_of(obs: list[dict]) -> dict:
-    return _fit([o["expect"] for o in obs], [o["obs"] for o in obs])
+def _fit_of(obs: list[dict], ci: bool = False) -> dict:
+    return _fit(
+        [o["expect"] for o in obs],
+        [o["obs"] for o in obs],
+        groups=[o["row"] for o in obs] if ci else None,
+    )
 
 
 def score_rows(rows: list[dict]) -> dict:
@@ -658,7 +695,7 @@ def score_rows(rows: list[dict]) -> dict:
         "n_both_move": n_both_move,
         "move_pair_rate": n_both_move / len(rows) if rows else 0.0,
         "prediction_changed_rate": n_changed / len(rows) if rows else 0.0,
-        "pooled": _fit_of(obs),
+        "pooled": _fit_of(obs, ci=True),
         "axis_x": _fit_of([o for o in obs if o["axis"] == "x"]),
         "axis_y": _fit_of([o for o in obs if o["axis"] == "y"]),
         "by_pool": by_pool,
@@ -675,6 +712,8 @@ def cmd_score(args) -> None:
     res = score_rows(rows)
     scores = {
         "cursor_probe/slope": res["pooled"]["slope"],
+        "cursor_probe/slope_ci_lo": res["pooled"]["slope_ci_lo"],
+        "cursor_probe/slope_ci_hi": res["pooled"]["slope_ci_hi"],
         "cursor_probe/slope_robust": res["pooled"]["slope_robust"],
         "cursor_probe/r2": res["pooled"]["r2"],
         "cursor_probe/slope_x": res["axis_x"]["slope"],
