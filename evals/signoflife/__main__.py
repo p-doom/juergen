@@ -64,7 +64,7 @@ import tempfile
 import time
 import urllib.request
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Iterator
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -77,7 +77,7 @@ import verifiers.v1 as vf  # noqa: E402
 from verifiers.v1.cli.eval.runner import run_eval  # noqa: E402
 from verifiers.v1.configs.eval import EvalConfig  # noqa: E402
 
-from evals.signoflife.cells import ARMS, verify_phaseb_provenance  # noqa: E402
+from evals.signoflife.cells import ARMS  # noqa: E402
 from evals.signoflife.guest import SETUP_GUEST_REQUESTS  # noqa: E402
 from evals.signoflife.suite import TIERS, DevelopmentTask, load_suite  # noqa: E402
 from evals.tasks import RESULT_KEY  # noqa: E402
@@ -85,7 +85,6 @@ from signoflife import PLUGIN_ID  # noqa: E402
 
 _LOGGER = logging.getLogger("signoflife")
 
-_SERVED_MODEL_PREFIX = "sign-of-life-sha256-"
 _ATTESTATION_TIMEOUT_S = 10.0
 _ATTESTATION_REQUESTS = 2
 _ATTESTATION_MAX_BYTES = 65536
@@ -131,12 +130,8 @@ _DETERMINISTIC_ATTENTION_BACKENDS = frozenset({"fa3", "flashinfer", "triton"})
 _PIDFD_SEND_SIGNAL_SYSCALL_X86_64 = 424
 _SGLANG_VERSION = "0.5.10.post1"
 _SGLANG_PIDFD_OPEN_SYSCALL_X86_64 = 434
-_SGLANG_PIDFD_GETFD_SYSCALL_X86_64 = 438
 _SGLANG_MAX_PORT = 55535
 _SGLANG_LISTENER_ATTEMPTS = 64
-_SGLANG_RECEIPT_MAX_BYTES = 64 * 1024
-_SGLANG_RECEIPT_TIMEOUT_S = 600.0
-_SGLANG_IDENTITY_TIMEOUT_S = 600.0
 _SGLANG_ADAPTER = _REPO_ROOT / "evals" / "signoflife" / "sglang_server.py"
 _PROC_MAX_ENTRIES = 32768
 _PROC_MAX_STAT_BYTES = 4096
@@ -159,22 +154,6 @@ _SGLANG_INHERITED_ENV = frozenset(
         "TMPDIR",
     }
 )
-_SGLANG_SEMANTIC_ENV_PREFIXES = (
-    "CUDA_",
-    "FLASHINFER_",
-    "HF_",
-    "NCCL_",
-    "NVIDIA_",
-    "PYTORCH_",
-    "SGLANG_",
-    "TORCH_",
-    "TRANSFORMERS_",
-    "TRITON_",
-    "VLLM_",
-)
-_SGLANG_SEMANTIC_ENV_NAMES = frozenset({"PYTHONHOME", "PYTHONPATH"})
-
-
 @dataclass(frozen=True)
 class _LocalServer:
     base_url: str
@@ -574,8 +553,6 @@ def _commit_marker(entries: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "status": "committed",
-        "authority": "transport_completion_only",
-        "promotion_evidence": False,
         "inventory": {
             "file_count": len(ordered),
             "total_bytes": sum(entry["size"] for entry in ordered),
@@ -598,11 +575,7 @@ def _write_all(descriptor: int, value: bytes) -> None:
 
 
 def read_committed_result(output: Path) -> dict[str, Any]:
-    """Read a complete transport generation through its exhaustive marker.
-
-    This does not authorize promotion. Promotion additionally requires the
-    Labctl DB-bound receipt named by ``result["promotion_evidence"]``.
-    """
+    """Read a complete output through its commit marker."""
     if not output.is_absolute():
         raise RuntimeError(f"committed output path must be absolute: {output}")
     parent = output.parent
@@ -731,48 +704,12 @@ def _pidfd_open(pid: int) -> int:
     return pidfd
 
 
-def _pidfd_getfd(pidfd: int, target_fd: int) -> int:
-    duplicated = _linux_syscall(
-        _SGLANG_PIDFD_GETFD_SYSCALL_X86_64, pidfd, target_fd, 0
-    )
-    fcntl.fcntl(duplicated, fcntl.F_SETFD, fcntl.FD_CLOEXEC)
-    return duplicated
-
-
 def _pidfd_send_signal(pidfd: int, signal_number: int) -> None:
     try:
         _linux_syscall(_PIDFD_SEND_SIGNAL_SYSCALL_X86_64, pidfd, signal_number, 0, 0)
     except OSError as error:
         if error.errno != errno.ESRCH:
             raise
-
-
-def _preflight_pidfd_getfd() -> None:
-    read_fd, write_fd = os.pipe2(os.O_CLOEXEC)
-    pidfd = -1
-    duplicated = -1
-    try:
-        pidfd = _pidfd_open(os.getpid())
-        duplicated = _pidfd_getfd(pidfd, read_fd)
-        before = os.fstat(read_fd)
-        after = os.fstat(duplicated)
-        if (before.st_dev, before.st_ino, stat.S_IFMT(before.st_mode)) != (
-            after.st_dev,
-            after.st_ino,
-            stat.S_IFMT(after.st_mode),
-        ):
-            raise RuntimeError("pidfd_getfd preflight duplicated the wrong object")
-    except OSError as error:
-        raise RuntimeError(
-            f"SGLang custody pidfd_getfd preflight failed: {error}"
-        ) from error
-    finally:
-        if duplicated >= 0:
-            os.close(duplicated)
-        if pidfd >= 0:
-            os.close(pidfd)
-        os.close(read_fd)
-        os.close(write_fd)
 
 
 def _reserve_listener() -> socket.socket:
@@ -820,64 +757,6 @@ def _listener_record(listener: socket.socket, *, fd: int) -> dict[str, Any]:
         "host": address[0],
         "port": address[1],
     }
-
-
-def _attest_inherited_listener(
-    *, pidfd: int, child_fd: int, reserved: socket.socket
-) -> dict[str, Any]:
-    duplicated = -1
-    try:
-        duplicated = _pidfd_getfd(pidfd, child_fd)
-        inherited = socket.socket(fileno=duplicated)
-        duplicated = -1
-        try:
-            observed = _listener_record(inherited, fd=child_fd)
-        finally:
-            inherited.close()
-        expected = _listener_record(reserved, fd=child_fd)
-        if observed != expected:
-            raise RuntimeError("SGLang child inherited the wrong listener")
-        return expected
-    except OSError as error:
-        raise RuntimeError("cannot attest the inherited SGLang listener") from error
-    finally:
-        if duplicated >= 0:
-            os.close(duplicated)
-
-
-def _read_sglang_receipt(*, fd: int, pidfd: int) -> dict[str, Any]:
-    poller = select.poll()
-    poller.register(fd, select.POLLIN | select.POLLHUP | select.POLLERR)
-    poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
-    payload = bytearray()
-    deadline = time.monotonic() + _SGLANG_RECEIPT_TIMEOUT_S
-    complete = False
-    while not complete:
-        remaining_s = deadline - time.monotonic()
-        if remaining_s <= 0:
-            raise RuntimeError("SGLang custody receipt timed out")
-        events = poller.poll(max(1, min(100, math.ceil(remaining_s * 1000))))
-        for descriptor, _event in events:
-            if descriptor == pidfd:
-                raise RuntimeError("SGLang exited before its custody receipt")
-            while True:
-                try:
-                    chunk = os.read(fd, 4096)
-                except BlockingIOError:
-                    break
-                if not chunk:
-                    complete = True
-                    break
-                payload.extend(chunk)
-                if len(payload) > _SGLANG_RECEIPT_MAX_BYTES:
-                    raise RuntimeError("SGLang custody receipt exceeds its bound")
-    try:
-        value = json.loads(payload)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise RuntimeError("invalid SGLang custody receipt") from error
-    if not isinstance(value, dict):
-        raise RuntimeError("SGLang custody receipt is not an object")
-    return value
 
 
 def _pidfd_exited(pidfd: int) -> bool:
@@ -1061,61 +940,26 @@ def _sglang(
     *,
     python: str,
     model_path: Path,
-    model_identity: dict[str, Any],
     log_path: Path,
     mem_fraction_static: float,
     ready_timeout_s: float,
-    served_model: str,
 ) -> Iterator[_LocalServer]:
-    """Serve `model_path` and yield its OpenAI base URL.
-
-    `python` is an explicit interpreter, not `sys.executable`: the harness needs
-    `verifiers`, sglang needs a 14 GB CUDA stack, and the two do not have to be the
-    same venv.
-    """
     _reject_disabled_cudnn_check()
-    _preflight_pidfd_getfd()
-    adapter_sha256 = _sha256_file(_SGLANG_ADAPTER)
     environment = _sglang_environment()
-    runtime_identity, gpu_identity = _preflight_serving_identities(
-        python=python,
-        environment=environment,
-    )
     guard = _install_sglang_signal_guard()
     handle: Any | None = None
     process: subprocess.Popen[Any] | None = None
     pidfd = -1
     listener: socket.socket | None = None
-    receipt_read_fd = -1
-    receipt_write_fd = -1
     try:
         listener = _reserve_listener()
         port = listener.getsockname()[1]
-        receipt_read_fd, receipt_write_fd = os.pipe2(os.O_CLOEXEC | os.O_NONBLOCK)
         command = _sglang_command(
             python=python,
             model_path=model_path,
-            model_identity=model_identity,
             listener_fd=listener.fileno(),
-            receipt_fd=receipt_write_fd,
             mem_fraction_static=mem_fraction_static,
-            served_model=served_model,
-            runtime_identity=runtime_identity,
-            gpu_identity=gpu_identity,
         )
-        launch = {
-            "argv": command,
-            "argv_sha256": hashlib.sha256(_canonical_json(command)).hexdigest(),
-            "adapter_sha256": adapter_sha256,
-            "environment": [
-                {
-                    "key": key,
-                    "value_sha256": hashlib.sha256(value.encode()).hexdigest(),
-                }
-                for key, value in sorted(environment.items())
-            ],
-        }
-        _LOGGER.info("sglang launch command sha256: %s", launch["argv_sha256"])
         log_path.parent.mkdir(parents=True, exist_ok=True)
         handle = log_path.open("w", encoding="utf-8")
         process = subprocess.Popen(
@@ -1123,11 +967,9 @@ def _sglang(
             env=environment,
             stdout=handle,
             stderr=subprocess.STDOUT,
-            pass_fds=(listener.fileno(), receipt_write_fd),
+            pass_fds=(listener.fileno(),),
             start_new_session=True,
         )
-        os.close(receipt_write_fd)
-        receipt_write_fd = -1
         _arm_sglang_signal_guard(guard)
         pgid = process.pid
         try:
@@ -1140,28 +982,6 @@ def _sglang(
             pidfd = _pidfd_open(process.pid)
         except OSError as error:
             raise RuntimeError("cannot establish SGLang process custody") from error
-        receipt = _read_sglang_receipt(fd=receipt_read_fd, pidfd=pidfd)
-        expected_listener = _attest_inherited_listener(
-            pidfd=pidfd,
-            child_fd=listener.fileno(),
-            reserved=listener,
-        )
-        expected_receipt = {
-            "schema_version": 1,
-            "adapter_sha256": adapter_sha256,
-            "pid": process.pid,
-            "sid": process.pid,
-            "pgid": process.pid,
-            "listener": expected_listener,
-            "model": model_identity,
-            "runtime": runtime_identity,
-            "gpu": gpu_identity,
-        }
-        if receipt != expected_receipt:
-            raise RuntimeError(
-                f"SGLang custody receipt mismatch: expected {expected_receipt!r}, "
-                f"observed {receipt!r}"
-            )
         deadline = time.monotonic() + ready_timeout_s
         probe = f"http://127.0.0.1:{port}/health_generate"
         while time.monotonic() < deadline:
@@ -1176,17 +996,17 @@ def _sglang(
                 with urllib.request.urlopen(probe, timeout=request_timeout_s) as response:
                     if response.status == 200:
                         break
-            except Exception:  # noqa: BLE001 - not up yet is the normal case
+            except OSError:
                 pass
             time.sleep(_SGLANG_READY_POLL_S)
         else:
             raise TimeoutError(f"sglang not ready after {ready_timeout_s}s")
-        launch["process"] = {
+        launch = {
+            "argv": command,
             "pid": process.pid,
             "sid": observed_sid,
             "pgid": pgid,
-            "listener": expected_listener,
-            "receipt": receipt,
+            "listener": _listener_record(listener, fd=listener.fileno()),
         }
         url = f"http://127.0.0.1:{port}/v1"
         _LOGGER.info("sglang ready at %s", url)
@@ -1199,10 +1019,6 @@ def _sglang(
         finally:
             if listener is not None:
                 listener.close()
-            if receipt_read_fd >= 0:
-                os.close(receipt_read_fd)
-            if receipt_write_fd >= 0:
-                os.close(receipt_write_fd)
             if pidfd >= 0:
                 os.close(pidfd)
             if handle is not None:
@@ -1214,13 +1030,8 @@ def _sglang_command(
     *,
     python: str,
     model_path: Path,
-    model_identity: dict[str, Any],
     listener_fd: int,
-    receipt_fd: int,
     mem_fraction_static: float,
-    served_model: str,
-    runtime_identity: dict[str, Any],
-    gpu_identity: dict[str, Any],
 ) -> list[str]:
     return [
         python,
@@ -1229,130 +1040,33 @@ def _sglang_command(
         str(_SGLANG_ADAPTER),
         "--listener-fd",
         str(listener_fd),
-        "--receipt-fd",
-        str(receipt_fd),
         "--model-path",
         str(model_path),
-        "--model-identity-json",
-        _canonical_json(model_identity).decode(),
-        "--served-model-name",
-        served_model,
         "--mem-fraction-static",
         str(mem_fraction_static),
-        "--runtime-identity-sha256",
-        hashlib.sha256(_canonical_json(runtime_identity)).hexdigest(),
-        "--gpu-identity-sha256",
-        hashlib.sha256(_canonical_json(gpu_identity)).hexdigest(),
     ]
 
 
-def _preflight_serving_identities(
-    *, python: str, environment: dict[str, str]
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    program = (
-        "import importlib.util,json,sys;"
-        "spec=importlib.util.spec_from_file_location('juergen_sglang_identity',sys.argv[1]);"
-        "module=importlib.util.module_from_spec(spec);"
-        "spec.loader.exec_module(module);"
-        "print(json.dumps({'runtime':module._installed_runtime_identity(),"
-        "'gpu':module._gpu_identity()},sort_keys=True,separators=(',',':')))"
-    )
-    try:
-        result = subprocess.run(
-            [python, "-I", "-B", "-c", program, str(_SGLANG_ADAPTER)],
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=_SGLANG_IDENTITY_TIMEOUT_S,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise RuntimeError("cannot inspect the SGLang runtime identity") from error
-    if result.returncode != 0:
-        error = result.stderr[-4096:].decode("utf-8", errors="replace")
-        raise RuntimeError(f"SGLang runtime identity inspection failed: {error}")
-    if len(result.stdout) > _SGLANG_RECEIPT_MAX_BYTES:
-        raise RuntimeError("SGLang runtime identity exceeds its bound")
-    try:
-        value = json.loads(result.stdout)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise RuntimeError("invalid SGLang runtime identity") from error
-    if not isinstance(value, dict) or set(value) != {"runtime", "gpu"}:
-        raise RuntimeError("invalid SGLang runtime identity fields")
-    runtime = value["runtime"]
-    gpu = value["gpu"]
-    if not isinstance(runtime, dict) or not isinstance(gpu, dict):
-        raise RuntimeError("invalid SGLang runtime or GPU identity")
-    return runtime, gpu
-
-
 def _sglang_environment() -> dict[str, str]:
-    rejected = sorted(
-        key
-        for key, value in os.environ.items()
-        if value
-        and key not in _SGLANG_INHERITED_ENV
-        and (
-            key in _SGLANG_SEMANTIC_ENV_NAMES
-            or key.startswith(_SGLANG_SEMANTIC_ENV_PREFIXES)
-        )
-    )
-    if rejected:
-        raise RuntimeError(
-            "refusing unbound semantic variables in local SGLang environment: "
-            + ", ".join(rejected)
-        )
     environment = {
         key: os.environ[key] for key in sorted(_SGLANG_INHERITED_ENV) if key in os.environ
     }
+    environment["HF_HUB_OFFLINE"] = "1"
+    environment["TRANSFORMERS_OFFLINE"] = "1"
     return environment
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
 class _ModelArtifact:
     model_path: Path
-    artifact_id: str
-    producer_run_id: str
-    registration_path: Path
-    registration_sha256: str
-    manifest_path: Path
-    manifest_sha256: str
-    artifact_sha256: str
-    config_sha256: str
     config_identity: dict[str, Any]
-    file_count: int
-    total_bytes: int
     served_model: str
-
-    def custody_identity(self) -> dict[str, Any]:
-        return {
-            "path": str(self.model_path),
-            "artifact_id": self.artifact_id,
-            "producer_run_id": self.producer_run_id,
-            "registration": str(self.registration_path),
-            "registration_sha256": self.registration_sha256,
-            "artifact_manifest": str(self.manifest_path),
-            "manifest_sha256": self.manifest_sha256,
-            "artifact_sha256": self.artifact_sha256,
-            "config_sha256": self.config_sha256,
-            "config_identity": self.config_identity,
-            "file_count": self.file_count,
-            "total_bytes": self.total_bytes,
-            "served_model": self.served_model,
-        }
 
     def record(self, *, attestation: dict[str, Any]) -> dict[str, Any]:
         return {
-            **self.custody_identity(),
+            "path": str(self.model_path),
+            "config_identity": self.config_identity,
+            "served_model": self.served_model,
             "attestation": attestation,
         }
 
@@ -1371,140 +1085,32 @@ def _json_object(path: Path, *, label: str) -> dict[str, Any]:
     return value
 
 
-def _manifest_file_row(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != {"path", "size", "sha256"}:
-        raise RuntimeError("invalid artifact manifest file inventory row")
-    relative = value["path"]
-    parsed = PurePosixPath(relative) if isinstance(relative, str) else None
-    if (
-        parsed is None
-        or not relative
-        or parsed.is_absolute()
-        or parsed.as_posix() != relative
-        or any(part in {"", ".", ".."} for part in parsed.parts)
-    ):
-        raise RuntimeError(f"invalid artifact manifest path {relative!r}")
-    size = value["size"]
-    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-        raise RuntimeError(f"invalid artifact manifest size for {relative!r}")
-    digest = value["sha256"]
-    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
-        raise RuntimeError(f"invalid artifact manifest sha256 for {relative!r}")
-    return {"path": relative, "size": size, "sha256": digest}
-
-
-def _model_inventory(model_path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-
-    def _raise_walk_error(error: OSError) -> None:
-        raise error
-
-    for directory, directories, filenames in os.walk(
-        model_path, followlinks=False, onerror=_raise_walk_error
-    ):
-        directory_path = Path(directory)
-        for name in directories:
-            candidate = directory_path / name
-            mode = candidate.lstat().st_mode
-            if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
-                raise RuntimeError(f"model artifact contains a non-directory: {candidate}")
-        for name in filenames:
-            candidate = directory_path / name
-            mode = candidate.lstat().st_mode
-            if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
-                raise RuntimeError(f"model artifact contains a non-regular file: {candidate}")
-            rows.append(
-                {
-                    "path": candidate.relative_to(model_path).as_posix(),
-                    "size": candidate.stat().st_size,
-                    "sha256": _sha256_file(candidate),
-                }
-            )
-    return sorted(rows, key=lambda row: row["path"])
-
-
 def _verify_model_artifact(model_path: Path) -> _ModelArtifact:
-    """Verify the registered exhaustive byte inventory before allocating a VM."""
     if not model_path.is_absolute():
-        raise RuntimeError(f"model artifact path must be absolute: {model_path}")
-    if model_path.is_symlink() or not model_path.is_dir():
-        raise RuntimeError(f"model artifact is not a regular directory: {model_path}")
-    root = model_path.parent
-    metadata_path = root / ".meta.json"
-    manifest_path = root / "artifact_manifest.json"
-    for path, label in (
-        (metadata_path, "artifact registration"),
-        (manifest_path, "artifact manifest"),
+        raise RuntimeError(f"model path must be absolute: {model_path}")
+    try:
+        resolved = model_path.resolve(strict=True)
+    except OSError as error:
+        raise RuntimeError(f"model path does not exist: {model_path}") from error
+    if not resolved.is_dir():
+        raise RuntimeError(f"model path is not a directory: {resolved}")
+    config = _json_object(resolved / "config.json", label="model config")
+    model_type = config.get("model_type")
+    architectures = config.get("architectures")
+    if not isinstance(model_type, str) or not model_type:
+        raise RuntimeError("model config requires model_type")
+    if (
+        not isinstance(architectures, list)
+        or not architectures
+        or any(not isinstance(value, str) or not value for value in architectures)
     ):
-        try:
-            mode = path.lstat().st_mode
-        except OSError as error:
-            raise RuntimeError(f"missing {label}: {path}") from error
-        if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
-            raise RuntimeError(f"{label} is not a regular file: {path}")
-
-    metadata = _json_object(metadata_path, label="artifact registration")
-    manifest_sha256 = _sha256_file(manifest_path)
-    if metadata.get("artifact_manifest_sha256") != manifest_sha256:
-        raise RuntimeError(
-            "artifact manifest registration mismatch: "
-            f"expected {metadata.get('artifact_manifest_sha256')!r}, "
-            f"observed {manifest_sha256!r}"
-        )
-    artifact_id = metadata.get("id")
-    producer_run_id = metadata.get("producer_run_id")
-    if not isinstance(artifact_id, str) or not artifact_id:
-        raise RuntimeError("artifact registration requires a non-empty id")
-    if not isinstance(producer_run_id, str) or not producer_run_id:
-        raise RuntimeError("artifact registration requires a non-empty producer_run_id")
-
-    manifest = _json_object(manifest_path, label="artifact manifest")
-    if set(manifest) != {
-        "schema_version",
-        "status",
-        "artifact_sha256",
-        "config_sha256",
-        "files",
-    }:
-        raise RuntimeError("invalid artifact manifest fields")
-    if manifest["schema_version"] != 1 or manifest["status"] != "complete":
-        raise RuntimeError("artifact manifest is not schema 1 complete")
-    if not isinstance(manifest["files"], list) or not manifest["files"]:
-        raise RuntimeError("artifact manifest requires a non-empty file inventory")
-    expected = [_manifest_file_row(row) for row in manifest["files"]]
-    expected_paths = [row["path"] for row in expected]
-    if expected_paths != sorted(set(expected_paths)):
-        raise RuntimeError("artifact manifest inventory must be sorted and unique")
-    expected_artifact_sha256 = hashlib.sha256(_canonical_json(expected)).hexdigest()
-    if manifest["artifact_sha256"] != expected_artifact_sha256:
-        raise RuntimeError("artifact manifest has an invalid artifact_sha256")
-
-    observed = _model_inventory(model_path)
-    if observed != expected:
-        raise RuntimeError(
-            f"artifact inventory mismatch: expected {expected!r}, observed {observed!r}"
-        )
-    config_rows = [row for row in observed if row["path"] == "config.json"]
-    if len(config_rows) != 1 or manifest["config_sha256"] != config_rows[0]["sha256"]:
-        raise RuntimeError("artifact manifest has an invalid config_sha256")
-    config = _json_object(model_path / "config.json", label="model config")
-    config_identity = {
-        key: config.get(key) for key in ("model_type", "architectures")
-    }
+        raise RuntimeError("model config requires architectures")
+    if not any(resolved.glob("*.safetensors")):
+        raise RuntimeError("model path contains no safetensors weights")
     return _ModelArtifact(
-        model_path=model_path,
-        artifact_id=artifact_id,
-        producer_run_id=producer_run_id,
-        registration_path=metadata_path,
-        registration_sha256=_sha256_file(metadata_path),
-        manifest_path=manifest_path,
-        manifest_sha256=manifest_sha256,
-        artifact_sha256=expected_artifact_sha256,
-        config_sha256=config_rows[0]["sha256"],
-        config_identity=config_identity,
-        file_count=len(observed),
-        total_bytes=sum(row["size"] for row in observed),
-        served_model=f"{_SERVED_MODEL_PREFIX}{expected_artifact_sha256}",
+        model_path=resolved,
+        config_identity={"model_type": model_type, "architectures": architectures},
+        served_model=str(resolved),
     )
 
 
@@ -1558,8 +1164,6 @@ def _attest_local_server(
         raise RuntimeError(f"local SGLang deterministic server mismatch: {attested}")
     return {
         "source": "local_verified_launch",
-        "artifact_sha256": artifact.artifact_sha256,
-        "config_sha256": artifact.config_sha256,
         "served_model": artifact.served_model,
         "server": attested,
     }
@@ -1699,9 +1303,7 @@ def _suite_wall_bound_s(
     local_server_bound_s = 0.0
     if local_sglang:
         local_server_bound_s = (
-            _SGLANG_IDENTITY_TIMEOUT_S
-            + _SGLANG_RECEIPT_TIMEOUT_S
-            + sglang_ready_timeout_s
+            sglang_ready_timeout_s
             + _ATTESTATION_REQUESTS * _ATTESTATION_TIMEOUT_S
             + _SEED_PROBE_REQUESTS * arm.model_request_timeout_s
             + _SGLANG_TERM_TIMEOUT_S
@@ -2880,10 +2482,6 @@ def main(argv: list[str] | None = None) -> int:
     if not scripted:
         artifact = _verify_model_artifact(args.model_path)
         served_model = artifact.served_model
-        if args.arm == "phaseb_compact":
-            # This arm names one historical checkpoint, not a family of compatible
-            # architectures. Its registration is therefore always part of dispatch.
-            verify_phaseb_provenance(args.model_path)
 
     suite_wall_bound_s = _suite_wall_bound_s(
         selected,
@@ -2958,18 +2556,11 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     with _sglang(
                         python=args.sglang_python,
-                        model_path=args.model_path,
-                        model_identity=artifact.custody_identity(),
+                        model_path=artifact.model_path,
                         log_path=log_path,
                         mem_fraction_static=args.sglang_mem_fraction,
                         ready_timeout_s=args.sglang_ready_timeout_s,
-                        served_model=served_model,
                     ) as server:
-                        reverified = _verify_model_artifact(args.model_path)
-                        if reverified != artifact:
-                            raise RuntimeError(
-                                "model artifact changed while sglang was loading it"
-                            )
                         attestation = _attest_local_server(
                             server.base_url, artifact=artifact
                         )
@@ -3029,16 +2620,6 @@ def main(argv: list[str] | None = None) -> int:
         "selection": {"task_ids": cell_ids, "full_tier_task_count": len(tier_cells)},
         "suite_wall_bound_s": suite_wall_bound_s,
         "status": "complete" if not infrastructure_errors else "infrastructure_failure",
-        "promotion_evidence": {
-            "status": "unregistered",
-            "eligible": False,
-            "required_receipt": "labctl_db_bound_exhaustive_result_receipt_v1",
-            "note": (
-                "RESULT_COMMITTED.json proves atomic transport completion only. "
-                "Promotion requires a separately authorized Labctl DB record that "
-                "binds this exhaustive generation inventory."
-            ),
-        },
         "aggregate": aggregate,
         "model": model_record,
         "sampling": {

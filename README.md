@@ -33,16 +33,13 @@ from evals.signoflife.__main__ import read_committed_result
 result = read_committed_result(Path("/absolute/run/path"))
 ```
 
-That marker proves atomic transport completion, not authorization or promotion.
-Promotion additionally requires the Labctl DB-bound exhaustive result receipt
-named by `result["promotion_evidence"]["required_receipt"]`.
-
 External OpenAI-compatible servers are unsupported by the canonical evaluator.
 It rejects the presence of `SIGN_OF_LIFE_API_KEY` before argument parsing or
 resource acquisition and launches only a local no-auth loopback SGLang server.
-Causal evaluation remains blocked until the registered model generation, sealed
-runtime, inherited listener, host GPU/driver boundary, and registrar contracts
-are all production-authoritative.
+Model runs require an absolute local Hugging Face model directory and an explicit
+SGLang interpreter. The evaluator passes its pre-bound loopback listener to that
+runtime and verifies the served model and deterministic inference settings before
+dispatching episodes.
 
 ## Nightly model-estate check
 

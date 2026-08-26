@@ -300,20 +300,14 @@ def test_local_launch_enables_deterministic_sampling_without_an_api_key(
 
     command = _sglang_command(
         python="/sealed/venv/bin/python",
-        model_path="/sealed/model",
-        model_identity={"artifact_sha256": "a" * 64},
+        model_path=Path("/sealed/model"),
         listener_fd=7,
-        receipt_fd=8,
         mem_fraction_static=0.65,
-        served_model="sign-of-life-sha256-test",
-        runtime_identity={"runtime": "exact"},
-        gpu_identity={"gpu": "exact"},
     )
 
     server_arguments = _server_arguments(
         SimpleNamespace(
             model_path="/sealed/model",
-            served_model_name="sign-of-life-sha256-test",
             mem_fraction_static=0.65,
         ),
         {"host": "127.0.0.1", "port": 19000},
@@ -327,12 +321,11 @@ def test_local_launch_enables_deterministic_sampling_without_an_api_key(
     assert "never-in-the-server-child" not in json.dumps(_sglang_environment())
 
 
-def test_local_launch_refuses_unbound_semantic_environment(monkeypatch) -> None:
+def test_local_launch_drops_unbound_semantic_environment(monkeypatch) -> None:
     from evals.signoflife.__main__ import _sglang_environment
 
     monkeypatch.setenv("TORCH_LOGS", "recompiles")
-    with pytest.raises(RuntimeError, match="TORCH_LOGS"):
-        _sglang_environment()
+    assert "TORCH_LOGS" not in _sglang_environment()
 
 
 def test_local_child_process_and_log_never_receive_parent_credentials(

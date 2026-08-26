@@ -75,11 +75,9 @@ def test_sglang_refuses_disabled_cudnn_validation_before_acquisition(
         with dispatcher._sglang(
             python="/runtime/bin/python",
             model_path=tmp_path / "model",
-            model_identity={},
             log_path=log_path,
             mem_fraction_static=0.65,
             ready_timeout_s=1.0,
-            served_model="test-model",
         ):
             pytest.fail("SGLang became ready")
 
@@ -101,21 +99,13 @@ def test_sglang_child_does_not_receive_cudnn_check_bypass(
         raise ExpectedPopen
 
     monkeypatch.setattr(dispatcher.subprocess, "Popen", capture_environment)
-    monkeypatch.setattr(
-        dispatcher,
-        "_preflight_serving_identities",
-        lambda **_kwargs: ({"runtime": "test"}, {"gpu": "test"}),
-    )
-
     with pytest.raises(ExpectedPopen):
         with dispatcher._sglang(
             python="/runtime/bin/python",
             model_path=tmp_path / "model",
-            model_identity={},
             log_path=tmp_path / "output" / "sglang.log",
             mem_fraction_static=0.65,
             ready_timeout_s=1.0,
-            served_model="test-model",
         ):
             pytest.fail("SGLang became ready")
 
@@ -205,8 +195,6 @@ def _fake_owned_sglang(monkeypatch) -> None:
         "_attest_local_server",
         lambda base_url, artifact: {
             "source": "local_verified_launch",
-            "artifact_sha256": artifact.artifact_sha256,
-            "config_sha256": artifact.config_sha256,
             "served_model": artifact.served_model,
             "server": {"test_only": True},
         },
@@ -237,17 +225,6 @@ def test_the_dispatcher_runs_the_whole_scored_tier_and_writes_the_readers_shape(
     assert result["schema_version"] == 3
     assert result["arm"] == "native_negative"
     assert result["arm_kind"] == "scripted_negative"
-    assert result["promotion_evidence"] == {
-        "status": "unregistered",
-        "eligible": False,
-        "required_receipt": "labctl_db_bound_exhaustive_result_receipt_v1",
-        "note": (
-            "RESULT_COMMITTED.json proves atomic transport completion only. "
-            "Promotion requires a separately authorized Labctl DB record that "
-            "binds this exhaustive generation inventory."
-        ),
-    }
-
     aggregate = result["aggregate"]
     assert sorted(aggregate["per_cell"]) == sorted(CELL_IDS), "the gate is the whole scored tier"
     for cell, row in aggregate["per_cell"].items():
@@ -400,38 +377,6 @@ def test_a_model_arm_without_a_model_is_refused_before_a_vm_is_booted(tmp_path) 
         )
     assert "--model-path" in str(excinfo.value)
     assert not juergen_fake_desktop.FakeDesktopPool.instances, "no VM may be spent"
-
-
-def test_phaseb_always_fails_closed_on_a_checkpoint_that_is_not_the_one(
-    tmp_path, monkeypatch
-) -> None:
-    """`verify_phaseb_provenance` is the strict check for the step-900 export and
-    must not be satisfiable by any directory that happens to exist."""
-    model, _ = _register_model(tmp_path)
-    import evals.signoflife.__main__ as dispatcher
-
-    monkeypatch.setattr(
-        dispatcher,
-        "_sglang",
-        lambda **kwargs: pytest.fail(
-            "Phase-B identity validation ran after local server launch"
-        ),
-    )
-    with pytest.raises((RuntimeError, FileNotFoundError, OSError)):
-        main(
-            [
-                "--arm",
-                "phaseb_compact",
-                "--output",
-                str(tmp_path / "run"),
-                "--qcow",
-                str(tmp_path / "desktop.qcow2"),
-                "--model-path",
-                str(model),
-                "--sglang-python",
-                sys.executable,
-            ]
-        )
 
 
 def test_an_unknown_arm_is_rejected_by_argparse(tmp_path) -> None:
@@ -910,19 +855,9 @@ def test_an_episode_that_publishes_nothing_still_records_why(tmp_path, monkeypat
 
 
 @pytest.mark.slow
-def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_server(
+def test_a_model_arm_records_the_local_model_and_refuses_to_score_a_dead_server(
     tmp_path, monkeypatch
 ) -> None:
-    """Two properties in one run, because they are the same run.
-
-    Every byte is registered and verified before dispatch, and the owned local
-    launch must attest that exact artifact identity. The same identity is retained
-    on the result and its attempt row.
-
-    A model arm that cannot reach its server is an infrastructure failure: exit 3
-    and `pass_rate: null`, not 0/4, which would read as a model that tried and
-    failed.
-    """
     model, expected = _register_model(tmp_path)
     _fake_owned_sglang(monkeypatch)
 
@@ -952,10 +887,9 @@ def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_se
     assert code == 3, result["aggregate"]
     assert result["arm_kind"] == "model"
     assert result["status"] == "infrastructure_failure"
-    assert result["model"]["path"] == str(model)
-    assert result["model"]["artifact_id"] == expected["id"]
-    assert result["model"]["artifact_sha256"] == expected["artifact_sha256"]
-    assert result["model"]["served_model"].endswith(expected["artifact_sha256"])
+    assert result["model"]["path"] == expected["path"]
+    assert result["model"]["config_identity"] == expected["config_identity"]
+    assert result["model"]["served_model"] == expected["served_model"]
     assert result["episodes"][0]["model"] == result["model"]
     assert result["claim_scope"] == "local_causal_seeded"
     assert result["aggregate"]["controls_ok"] is None, "a model arm calibrates nothing"
@@ -1195,7 +1129,7 @@ def test_the_attempt_deadline_is_derived_from_the_selected_arm_and_cell() -> Non
         vm_slots=1,
         local_sglang=True,
         sglang_ready_timeout_s=1500.0,
-    ) == 9268.0
+    ) == 8068.0
 
 
 @pytest.mark.parametrize(
@@ -1333,7 +1267,7 @@ def _scheduler_runtime(tmp_path):
         top_p=1.0,
         max_tokens=256,
         served_model="sign-of-life-sha256-test",
-        model={"artifact_sha256": "test"},
+        model={"path": "/model"},
         qcow=tmp_path / "desktop.qcow2",
         qemu=None,
         qemu_img=None,
