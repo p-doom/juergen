@@ -173,9 +173,16 @@ def cmd_index(args) -> None:
 # sprite
 
 
-def extract_sprite(
-    reader, index: dict, want: int, stride: int, iters: int = 4
-) -> tuple[np.ndarray, np.ndarray, dict]:
+def crop_at_hotspot(img: np.ndarray, cx: int, cy: int) -> np.ndarray:
+    """A copy, not a view: a kept slice would pin the whole 25 MB frame."""
+    return img[cy - HOT_Y : cy - HOT_Y + SPR_H, cx - HOT_X : cx - HOT_X + SPR_W].copy()
+
+
+def sprite_crop_fits(cx: int, cy: int, sw: int, sh: int) -> bool:
+    return HOT_X <= cx < sw - (SPR_W - HOT_X) and HOT_Y <= cy < sh - (SPR_H - HOT_Y)
+
+
+def estimate_sprite(crops: list[np.ndarray], iters: int = 4) -> tuple[np.ndarray, np.ndarray, dict]:
     """Recover the arrow's colour and alpha matte from many cursor crops.
 
     Across crops the cursor pixels are identical while the background is not,
@@ -184,20 +191,6 @@ def extract_sprite(
     the running estimate are dropped, which sheds the non-arrow cursor shapes
     (I-beam, hand) that share the same hotspot convention.
     """
-    crops = []
-    for i in range(0, reader.num_records(), stride):
-        rec = json.loads(reader.read([i])[0])
-        pos = index.get(f"{rec['recording_id']}|{rec['target_step']}")
-        if pos is None:
-            continue
-        cx, cy, sw, sh = pos
-        if not (HOT_X <= cx < sw - (SPR_W - HOT_X) and HOT_Y <= cy < sh - (SPR_H - HOT_Y)):
-            continue
-        img = _load_rgb(final_image_uri(rec))
-        crops.append(img[cy - HOT_Y : cy - HOT_Y + SPR_H, cx - HOT_X : cx - HOT_X + SPR_W])
-        if len(crops) >= want:
-            break
-
     stack = np.stack(crops)
     keep = np.ones(len(stack), bool)
     alpha = np.zeros((SPR_H, SPR_W), np.float32)
@@ -230,6 +223,24 @@ def extract_sprite(
             "core_err_median": float(np.median(err)),
         }
     return rgb, alpha, stats
+
+
+def extract_sprite(
+    reader, index: dict, want: int, stride: int, iters: int = 4
+) -> tuple[np.ndarray, np.ndarray, dict]:
+    crops = []
+    for i in range(0, reader.num_records(), stride):
+        rec = json.loads(reader.read([i])[0])
+        pos = index.get(f"{rec['recording_id']}|{rec['target_step']}")
+        if pos is None:
+            continue
+        cx, cy, sw, sh = pos
+        if not sprite_crop_fits(cx, cy, sw, sh):
+            continue
+        crops.append(crop_at_hotspot(_load_rgb(final_image_uri(rec)), cx, cy))
+        if len(crops) >= want:
+            break
+    return estimate_sprite(crops, iters)
 
 
 # --------------------------------------------------------------------------
@@ -265,14 +276,13 @@ def sprite_masks(alpha: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return alpha > 0.5, _dilate(alpha > 0.08, 2)
 
 
-def nearest_cursor_err(img: np.ndarray, sprite_rgb: np.ndarray, core: np.ndarray,
-                       cx: int, cy: int, radius: int = SEARCH_R) -> float:
-    """Best match of the sprite core anywhere within ``radius`` of the hotspot.
+def cursor_match_errors(img: np.ndarray, sprite_rgb: np.ndarray, core: np.ndarray,
+                        cx: int, cy: int, radius: int = SEARCH_R) -> np.ndarray:
+    """Sprite-core match error at every hotspot offset within ``radius``.
 
-    Used on the frame we paste from: if it holds a pointer close enough to land
-    inside the repainted rectangle, the erase would leave a second cursor
-    behind. The arrow core is half dark and half white, so no flat patch of UI
-    scores low here by accident.
+    Row i, column j is the error with the hotspot at (cx + j - radius,
+    cy + i - radius). The arrow core is half dark and half white, so no flat
+    patch of UI scores low here by accident.
     """
     ys, xs = np.nonzero(core)
     vals = sprite_rgb[core]
@@ -282,7 +292,18 @@ def nearest_cursor_err(img: np.ndarray, sprite_rgb: np.ndarray, core: np.ndarray
     oy, ox = np.meshgrid(span, span, indexing="ij")
     iy = oy.reshape(-1, 1) + radius + ys
     ix = ox.reshape(-1, 1) + radius + xs
-    return float(np.abs(region[iy, ix] - vals).mean(axis=(1, 2)).min())
+    return np.abs(region[iy, ix] - vals).mean(axis=(1, 2)).reshape(oy.shape)
+
+
+def nearest_cursor_err(img: np.ndarray, sprite_rgb: np.ndarray, core: np.ndarray,
+                       cx: int, cy: int, radius: int = SEARCH_R) -> float:
+    """Best match of the sprite core anywhere within ``radius`` of the hotspot.
+
+    Used on the frame we paste from: if it holds a pointer close enough to land
+    inside the repainted rectangle, the erase would leave a second cursor
+    behind.
+    """
+    return float(cursor_match_errors(img, sprite_rgb, core, cx, cy, radius).min())
 
 
 def build_pair(cur: np.ndarray, prev: np.ndarray, sprite_rgb, alpha, masks,

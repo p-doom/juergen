@@ -19,19 +19,26 @@ from action_parser import parse_ordered_action
 from cuagym_pipeline.translate import DropStep, rewrite_assistant, translate_step
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string("trajectories", None, "Path to trajectories.jsonl", required=True)
-flags.DEFINE_string(
-    "image_index_root", None, "stage_01 image store root (per-tar index.jsonl)", required=True
+
+DEFAULT_SYSTEM_PROMPT_PATH = (
+    DATA_PIPELINE_DIR / "realigned_pipeline" / "system_prompts" / "cua_v3_cuagym.txt"
 )
-flags.DEFINE_string("output_dir", None, "Output dataset dir", required=True)
-flags.DEFINE_integer("history_n", 4, "Live history turns per record")
-flags.DEFINE_integer("failure_step_percent", 25, "Percent of failure-episode steps kept as targets")
-flags.DEFINE_integer("limit", 0, "Max rollouts (0 = all)")
-flags.DEFINE_string(
-    "system_prompt_path",
-    str(DATA_PIPELINE_DIR / "realigned_pipeline" / "system_prompts" / "cua_v3_cuagym.txt"),
-    "System prompt file",
-)
+
+
+def define_flags() -> None:
+    flags.DEFINE_string("trajectories", None, "Path to trajectories.jsonl", required=True)
+    flags.DEFINE_string(
+        "image_index_root", None, "stage_01 image store root (per-tar index.jsonl)", required=True
+    )
+    flags.DEFINE_string("output_dir", None, "Output dataset dir", required=True)
+    flags.DEFINE_integer("history_n", 4, "Live history turns per record")
+    flags.DEFINE_integer(
+        "failure_step_percent", 25, "Percent of failure-episode steps kept as targets"
+    )
+    flags.DEFINE_integer("limit", 0, "Max rollouts (0 = all)")
+    flags.DEFINE_string(
+        "system_prompt_path", str(DEFAULT_SYSTEM_PROMPT_PATH), "System prompt file"
+    )
 
 INSTRUCTION_TEMPLATE = """
 Please generate the next move according to the UI screenshot, instruction and previous actions.
@@ -237,4 +244,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    define_flags()
     app.run(main)
