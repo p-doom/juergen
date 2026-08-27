@@ -2,7 +2,11 @@
 
 Reads test_all.json (or another split), picks task at --task_index, runs
 it end-to-end, and writes result.json to:
-  {base_output_dir}/{app}/{task_id}/result.json
+  {base_output_dir}/{app}/{task_id}/result.json            (--sample_index=0)
+  {base_output_dir}/{app}/{task_id}/sample_{i}/result.json (--sample_index=i>0)
+
+Sample 0 keeps the historical layout so pass@1 aggregation over
+{app}/{task_id}/result.json is unaffected; pass@k runs add siblings.
 
 Designed to be called from a SLURM --array job: --task_index must equal
 $SLURM_ARRAY_TASK_ID, which the recipe wires up. When --sglang_port=0,
@@ -50,6 +54,12 @@ flags.DEFINE_string(
 )
 flags.DEFINE_integer(
     "task_index", None, "Index into the sorted task list (0-based).", required=True
+)
+flags.DEFINE_integer(
+    "sample_index",
+    0,
+    "pass@k sample index. 0 writes to {app}/{task_id}/ (historical layout); "
+    "i>0 writes to {app}/{task_id}/sample_{i}/.",
 )
 
 flags.DEFINE_string("model_path", None, "HF model_id or local HF dir.", required=True)
@@ -146,10 +156,18 @@ def main(_) -> None:
     with task_path.open() as f:
         task = json.load(f)
 
-    log.info("task_index=%d  app=%s  task_id=%s", FLAGS.task_index, app_name, task_id)
+    log.info(
+        "task_index=%d  sample_index=%d  app=%s  task_id=%s",
+        FLAGS.task_index,
+        FLAGS.sample_index,
+        app_name,
+        task_id,
+    )
     log.info("instruction: %r", task["instruction"])
 
     output_dir = Path(FLAGS.base_output_dir) / app_name / task_id
+    if FLAGS.sample_index:
+        output_dir = output_dir / f"sample_{FLAGS.sample_index}"
     output_dir.mkdir(parents=True, exist_ok=True)
     steps_dir = output_dir / "steps"
     steps_dir.mkdir(exist_ok=True)
@@ -159,7 +177,11 @@ def main(_) -> None:
     # Skip if already completed (allows resuming interrupted array runs).
     result_path = output_dir / "result.json"
     if result_path.exists():
-        log.info("result.json already exists — skipping (task_index=%d)", FLAGS.task_index)
+        log.info(
+            "result.json already exists — skipping (task_index=%d sample_index=%d)",
+            FLAGS.task_index,
+            FLAGS.sample_index,
+        )
         return
 
     if FLAGS.sglang_port == 0:
@@ -311,6 +333,7 @@ def main(_) -> None:
         },
         params={
             "task_index": FLAGS.task_index,
+            "sample_index": FLAGS.sample_index,
             "task_id": task_id,
             "app": app_name,
             "task_instruction": task["instruction"],
@@ -338,9 +361,10 @@ def main(_) -> None:
         extra={"gif_path": str(gif_path), "traj_path": str(traj_path)},
     )
     log.info(
-        "done in %ds task_index=%d app=%s task_id=%s reward=%.4f",
+        "done in %ds task_index=%d sample_index=%d app=%s task_id=%s reward=%.4f",
         elapsed_s,
         FLAGS.task_index,
+        FLAGS.sample_index,
         app_name,
         task_id,
         final_reward,
