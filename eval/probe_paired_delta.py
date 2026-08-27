@@ -7,6 +7,9 @@ records read as movement when they are noise.
 
   aim     difference in mean move-direction cosine (bc_aim_probe pairs.jsonl)
   cursor  difference in the cursor-compensation slope (cursor rows.jsonl)
+  rate    difference in frac_compensating — steadier than the slope, which is
+          one fit over a heavy-tailed ratio distribution and can swing while
+          the underlying behaviour holds still
 """
 
 from __future__ import annotations
@@ -52,6 +55,13 @@ def cursor_obs(root: Path, label: str) -> tuple[dict[int, list], set[int]]:
     return out, {r["idx"] for r in rows}
 
 
+def _rate(pairs, floor: float = 20.0) -> float:
+    usable = [(x, y) for x, y in pairs if abs(x) > floor]
+    if not usable:
+        return 0.0
+    return sum(1 for x, y in usable if 0.5 <= y / x <= 1.5) / len(usable)
+
+
 def _slope(pairs) -> float:
     sxx = sum(x * x for x, _ in pairs)
     return (sum(x * y for x, y in pairs) / sxx) if sxx else 0.0
@@ -76,33 +86,38 @@ def aim_delta(root: Path, a_label: str, b_label: str) -> None:
             sum(a[k] for k in keys) / n, sum(b[k] for k in keys) / n, boots)
 
 
-def cursor_delta(root: Path, a_label: str, b_label: str) -> None:
+def cursor_delta(root: Path, a_label: str, b_label: str, stat=_slope, name="cursor slope") -> None:
     a, all_a = cursor_obs(root, a_label)
     b, all_b = cursor_obs(root, b_label)
     keys = sorted(all_a & all_b)
-    sa = _slope([p for k in keys for p in a.get(k, [])])
-    sb = _slope([p for k in keys for p in b.get(k, [])])
+    sa = stat([p for k in keys for p in a.get(k, [])])
+    sb = stat([p for k in keys for p in b.get(k, [])])
     rng = random.Random(0)
     boots = []
     for _ in range(N_BOOT):
         draw = [keys[rng.randrange(len(keys))] for _ in keys]
         boots.append(
-            _slope([p for k in draw for p in b.get(k, [])])
-            - _slope([p for k in draw for p in a.get(k, [])])
+            stat([p for k in draw for p in b.get(k, [])])
+            - stat([p for k in draw for p in a.get(k, [])])
         )
-    _report("cursor slope", a_label, b_label, len(keys), sa, sb, boots)
+    _report(name, a_label, b_label, len(keys), sa, sb, boots)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("metric", choices=("aim", "cursor"))
+    ap.add_argument("metric", choices=("aim", "cursor", "rate"))
     ap.add_argument("baseline")
     ap.add_argument("candidate")
     ap.add_argument("--root", default=None)
     args = ap.parse_args()
     default = AIM_ROOT if args.metric == "aim" else CURSOR_ROOT
     root = Path(args.root) if args.root else default
-    (aim_delta if args.metric == "aim" else cursor_delta)(root, args.baseline, args.candidate)
+    if args.metric == "aim":
+        aim_delta(root, args.baseline, args.candidate)
+    elif args.metric == "rate":
+        cursor_delta(root, args.baseline, args.candidate, stat=_rate, name="frac_compensating")
+    else:
+        cursor_delta(root, args.baseline, args.candidate)
 
 
 if __name__ == "__main__":
