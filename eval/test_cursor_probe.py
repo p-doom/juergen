@@ -222,6 +222,20 @@ class ScoreRowsTest(unittest.TestCase):
         self.assertAlmostEqual(res["gold_aligned"]["slope"], 1.0, places=2)
         self.assertAlmostEqual(res["gold_misaligned"]["slope"], 0.0)
 
+    def test_compensation_rates_count_tracking_and_indifference(self):
+        SX = 384  # expected dx is -200 thousandths
+        full = [row((SX, 0), "move(300,0)", "move(100,0)") for _ in range(4)]
+        none = [row((SX, 0), "move(300,0)", "move(300,0)") for _ in range(4)]
+        half = [row((SX, 0), "move(300,0)", "move(200,0)") for _ in range(2)]
+        rates = cp.score_rows(full + none + half)["rates"]
+        self.assertEqual(rates["n"], 10)
+        self.assertAlmostEqual(rates["frac_compensating"], 0.6)
+        self.assertAlmostEqual(rates["frac_ignoring"], 0.4)
+
+    def test_rates_ignore_axes_whose_shift_was_negligible(self):
+        rows = [row((384, 0), "move(100,0)", "move(-100,0)")]
+        self.assertEqual(cp.score_rows(rows)["rates"]["n"], 1)
+
     def test_empty_rows_do_not_crash(self):
         res = cp.score_rows([])
         self.assertEqual(res["n_both_move"], 0)

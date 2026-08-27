@@ -694,6 +694,26 @@ def observations(rows: list[dict]) -> list[dict]:
     return out
 
 
+def compensation_rates(obs: list[dict], floor: float = 20.0) -> dict:
+    """How often the model actually tracks the cursor, outlier-free.
+
+    The mean slope is one number over a heavy-tailed ratio distribution, so a
+    handful of wild predictions can carry it either way. Counting where each
+    observation falls is steadier and says the thing directly: on what share of
+    steps does the prediction move by roughly the amount the cursor moved, and
+    on what share does it not budge at all.
+    """
+    usable = [o for o in obs if abs(o["expect"]) > floor]
+    if not usable:
+        return {"n": 0, "frac_compensating": 0.0, "frac_ignoring": 0.0}
+    ratios = [o["obs"] / o["expect"] for o in usable]
+    return {
+        "n": len(usable),
+        "frac_compensating": sum(1 for r in ratios if 0.5 <= r <= 1.5) / len(ratios),
+        "frac_ignoring": sum(1 for r in ratios if abs(r) < 0.1) / len(ratios),
+    }
+
+
 def _fit_of(obs: list[dict], ci: bool = False) -> dict:
     return _fit(
         [o["expect"] for o in obs],
@@ -717,6 +737,7 @@ def score_rows(rows: list[dict]) -> dict:
         "move_pair_rate": n_both_move / len(rows) if rows else 0.0,
         "prediction_changed_rate": n_changed / len(rows) if rows else 0.0,
         "pooled": _fit_of(obs, ci=True),
+        "rates": compensation_rates(obs),
         "axis_x": _fit_of([o for o in obs if o["axis"] == "x"]),
         "axis_y": _fit_of([o for o in obs if o["axis"] == "y"]),
         "by_pool": by_pool,
@@ -743,6 +764,8 @@ def cmd_score(args) -> None:
         "cursor_probe/prediction_changed_rate": res["prediction_changed_rate"],
         "cursor_probe/n_both_move": res["n_both_move"],
         "cursor_probe/slope_gold_aligned": res["gold_aligned"]["slope"],
+        "cursor_probe/frac_compensating": res["rates"]["frac_compensating"],
+        "cursor_probe/frac_ignoring": res["rates"]["frac_ignoring"],
     }
     write_result(
         Path(args.output_dir) / "result.json",
