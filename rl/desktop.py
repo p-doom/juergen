@@ -18,7 +18,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
 
-from rl.geometry import png_bytes, render_cursor
+from rl.geometry import jpeg_bytes, render_cursor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ class VirtualDesktop:
         return self.cursor
 
     def screenshot(self) -> bytes:
-        return png_bytes(render_cursor(self.canvas, self.cursor))
+        return jpeg_bytes(render_cursor(self.canvas, self.cursor))
 
     def execute_atomic(self, operations: Sequence[Any]) -> CanvasReceipt:
         before = self.cursor

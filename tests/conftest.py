@@ -23,7 +23,7 @@ for candidate in (_HERE, _REPO):
 if str(_DESKTOP) not in sys.path:
     sys.path.append(str(_DESKTOP))
 
-from juergen_doubles import FakeSession, png  # noqa: E402
+from juergen_doubles import FakeSession, jpeg  # noqa: E402
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -36,7 +36,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
 @pytest.fixture
 def frame() -> bytes:
-    return png()
+    return jpeg()
 
 
 @pytest.fixture

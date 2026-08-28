@@ -70,7 +70,7 @@ def test_the_virtual_desktop_has_the_session_surface_the_harness_needs() -> None
         assert callable(getattr(desktop, attribute)), attribute
     assert desktop.screen_size() == (200, 150)
     assert desktop.cursor_position() == (10, 10)
-    assert desktop.screenshot()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert desktop.screenshot().startswith(b"\xff\xd8\xff")
 
 
 def test_configure_resets_every_per_episode_accumulator() -> None:

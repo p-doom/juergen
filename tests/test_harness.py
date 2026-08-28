@@ -8,6 +8,7 @@ GPU, no network.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import threading
 import time
@@ -49,7 +50,7 @@ from juergen_doubles import (
     make_ctx,
     make_task_data,
     make_trace,
-    png,
+    jpeg,
 )
 
 
@@ -399,8 +400,8 @@ def test_a_truncated_turn_is_never_written_to_the_trajectory(tmp_path, preparer)
     ]
     assert [row["step_num"] for row in rows] == [0], "only the reset survives"
     assert not [row for row in rows if row["info"].get("truncated")]
-    frames = sorted(p.name for p in (run_dir / "steps").glob("*.png"))
-    assert frames == ["step_000.png"], "the truncated turn produced no frame"
+    frames = sorted(p.name for p in (run_dir / "steps").glob("*.jpg"))
+    assert frames == ["step_000.jpg"], "the truncated turn produced no frame"
 
 
 def test_a_whole_turn_is_not_flagged_as_truncated(tmp_path, preparer) -> None:
@@ -762,7 +763,7 @@ def test_a_stability_capable_session_is_polled_instead_of_slept(monkeypatch) -> 
     class Settling(FakeSession):
         def screenshot_settled(self, *, min_delay_s, stability_timeout_s, poll_s):
             calls.update(min_delay_s=min_delay_s, stability_timeout_s=stability_timeout_s)
-            return png()
+            return jpeg()
 
     monkeypatch.setattr("time.sleep", lambda s: (_ for _ in ()).throw(AssertionError("slept")))
     settle = SettleConfig(min_delay_s=0.75, stability_timeout_s=5.0, per_kind={"open_chrome": 2.0})
@@ -858,8 +859,8 @@ def test_frames_prompts_and_result_json_are_written(tmp_path, preparer) -> None:
     _run(_config(tmp_path), task, replies=["0 0 0 ;"] * 2)
     root = tmp_path / "cell_artifacts"
     assert (root / "result.json").is_file()
-    assert (root / "steps" / "step_000.png").is_file()
-    assert (root / "steps" / "step_001.png").is_file()
+    assert (root / "steps" / "step_000.jpg").is_file()
+    assert (root / "steps" / "step_001.jpg").is_file()
     assert (root / "steps" / "prompt_001.json").is_file()
     payload = json.loads((root / "result.json").read_text())
     assert payload["schema_version"] == 1
@@ -890,7 +891,7 @@ def test_a_single_frame_rollout_writes_no_gif(tmp_path, preparer) -> None:
     from evals.harness import _write_gif
 
     target = tmp_path / "one.gif"
-    _write_gif([png()], target)
+    _write_gif([jpeg()], target)
     assert not target.exists(), "a one-frame animation is not an animation"
 
 
@@ -961,12 +962,12 @@ def test_the_rollout_artifact_is_the_layout_labctl_and_convert_both_read(
     """The whole contract in one place, read back through the real consumer.
 
     `<out>/result.json` (runs[] + traj_path) / `<out>/<subdir>/trajectory.jsonl` /
-    `<out>/<subdir>/steps/step_%03d.png`, with `n_steps + 1` frames so that row
+    `<out>/<subdir>/steps/step_%03d.jpg`, with `n_steps + 1` frames so that row
     ordinal, `step_num` and frame index are the same number.
     """
     convert = load_convert()
     session = FakeSession()
-    _, result, _ = _run(
+    _, result, ctx = _run(
         _config(tmp_path),
         _task(max_steps=3, name="cell_contract", instruction="do the thing"),
         replies=["10 10 0 ;", "10 10 0 ;", "10 10 0 ;"],
@@ -982,21 +983,31 @@ def test_the_rollout_artifact_is_the_layout_labctl_and_convert_both_read(
     assert [row["step_num"] for row in rows] == [0, 1, 2, 3]
     assert rows[0]["action"] == "<reset>", "convert.py and evals/tasks.py both skip it"
     assert [row["done"] for row in rows] == [False, False, False, True]
-    frames = sorted(p.name for p in (run_dir / "steps").glob("*.png"))
-    assert frames == ["step_000.png", "step_001.png", "step_002.png", "step_003.png"], (
+    frames = sorted(p.name for p in (run_dir / "steps").glob("*.jpg"))
+    assert frames == ["step_000.jpg", "step_001.jpg", "step_002.jpg", "step_003.jpg"], (
         "n_steps + 1 frames: frame 0 is the initial observation"
     )
 
     # The alignment itself: `convert.py:458` reads the frame a step SAW as
     # `step_{step_num - 1}`, and the harness observed screenshot k as frame k.
     observed = [
-        (run_dir / "steps" / f"step_{index:03d}.png").read_bytes() for index in range(4)
+        (run_dir / "steps" / f"step_{index:03d}.jpg").read_bytes() for index in range(4)
     ]
     assert len(set(observed)) == 4, "the fake session hands out distinguishable frames"
     for row in rows[1:]:
-        seen = run_dir / "steps" / f"step_{row['step_num'] - 1:03d}.png"
+        seen = run_dir / "steps" / f"step_{row['step_num'] - 1:03d}.jpg"
         assert seen.is_file()
         assert seen.read_bytes() == observed[row["step_num"] - 1]
+
+    first_prompt = _wire_messages(ctx, 1)
+    image_part = next(
+        part
+        for message in first_prompt
+        for part in message["content"]
+        if isinstance(part, dict) and part.get("type") == "image_url"
+    )
+    data_url = image_part["image_url"]["url"]
+    assert base64.b64decode(data_url.split(",", 1)[1]) == observed[0]
 
     # And through the reader, not around it: a rollout of ours is BC input, so every
     # row must convert, not be booked as a parse error for speaking its own grammar.
@@ -1110,11 +1121,11 @@ def test_an_infra_invalid_episode_is_counted_but_kept_out_of_the_rate(
 
 
 def test_a_stray_frame_is_refused_by_name(tmp_path, preparer) -> None:
-    """The viewer counts every `*.png` as a frame and fetches it by index, so a
+    """The viewer counts every `*.jpg` as a frame and fetches it by index, so a
     leftover from a longer earlier run offers frames that do not exist."""
     run_dir = tmp_path / "cell_stray"
     (run_dir / "steps").mkdir(parents=True)
-    (run_dir / "steps" / "step_009.png").write_bytes(png())
+    (run_dir / "steps" / "step_009.jpg").write_bytes(jpeg())
     with pytest.raises(RuntimeError, match="cell_stray/steps"):
         _run(_config(tmp_path), _task(max_steps=1, name="cell_stray"), replies=["0 0 0 ;"])
 
@@ -1125,8 +1136,8 @@ def test_a_missing_frame_is_refused_by_name(tmp_path, preparer) -> None:
     steps = tmp_path / "steps"
     steps.mkdir()
     for index in (0, 2):
-        (steps / f"step_{index:03d}.png").write_bytes(png())
-    with pytest.raises(RuntimeError, match=r"missing \['step_001.png'\]"):
+        (steps / f"step_{index:03d}.jpg").write_bytes(jpeg())
+    with pytest.raises(RuntimeError, match=r"missing \['step_001.jpg'\]"):
         _assert_frame_set(steps, 3)
     assert _assert_frame_set(steps / "absent", 0) is None, "no frames, no rows, no error"
 
@@ -1150,7 +1161,7 @@ def test_a_step_with_no_post_action_frame_gets_no_row(tmp_path, preparer) -> Non
     run_dir = tmp_path / "cell_broken"
     rows = [json.loads(line) for line in (run_dir / _TRAJECTORY).read_text().splitlines()]
     assert [row["step_num"] for row in rows] == [0]
-    assert sorted(p.name for p in (run_dir / "steps").glob("*.png")) == ["step_000.png"]
+    assert sorted(p.name for p in (run_dir / "steps").glob("*.jpg")) == ["step_000.jpg"]
 
 
 def test_a_rerun_replaces_the_trajectory_rather_than_doubling_it(tmp_path, preparer) -> None:
@@ -1306,80 +1317,17 @@ def test_a_system_prompt_override_is_honoured_and_hashed(tmp_path) -> None:
     assert report["prompt_sha256"] == hashlib.sha256(b"SEALED PROMPT").hexdigest()
 
 
-def test_a_png_dataset_scored_through_the_jpeg_default_is_refused(tmp_path) -> None:
-    """The defect the gate exists for. `evals/harness.py` writes the guest's raw
-    PNG framebuffer to `steps/step_NNN.png`, `datasets/convert.py` puts that path
-    in the training record, and the eval that produced it sent JPEG q85 -- so a
-    rollout-BC student is scored on pixels it was never trained on, and no
-    published field said so."""
-    from agent.history import ImageBudget
-
-    harness = DesktopHarness(_config(tmp_path, image_domain=ImageBudget(media="png").domain))
-    with pytest.raises(ValueError, match="is not the encoding this arm renders"):
-        harness._image_report()
-
-
-def test_a_justified_image_mismatch_passes_and_the_reason_lands_in_the_record(
-    tmp_path,
-) -> None:
-    from agent.history import ImageBudget
-
-    report = DesktopHarness(
-        _config(
-            tmp_path,
-            image_domain=ImageBudget(media="png").domain,
-            expect_image_mismatch="lossless records, q85 eval, deliberately",
-        )
-    )._image_report()
-    assert report["matches_expected"] is False
-    assert report["expect_image_mismatch"] == "lossless records, q85 eval, deliberately"
-    assert report["image_domain"] == ImageBudget(quality=85).domain
-    assert report["expected_image_domain"] == ImageBudget(media="png").domain
-
-
-def test_an_arm_that_renders_what_it_declares_matches(tmp_path) -> None:
-    from agent.history import ImageBudget
-
-    config = _config(tmp_path, image_domain=ImageBudget(media="png").domain)
-    config.images.media = "png"
-    assert DesktopHarness(config)._image_report()["matches_expected"] is True
-
-
-def test_no_expected_image_domain_reports_none_rather_than_a_false_match(tmp_path) -> None:
-    assert DesktopHarness(_config(tmp_path))._image_report()["matches_expected"] is None
-
-
-def test_a_foreign_image_domain_is_refused_before_a_vm_is_booted(
-    tmp_path, preparer, monkeypatch
-) -> None:
-    """The encoding is resolvable from config alone, so refusing after the boot
-    costs one VM and one guest setup per task across a 369-cell array."""
-    from agent.history import ImageBudget
-
-    captured = _captured_lease(monkeypatch)
-    with pytest.raises(ValueError, match="is not the encoding this arm renders"):
-        _run(
-            _config(tmp_path, image_domain=ImageBudget(media="png").domain),
-            _task(max_steps=1, name="i"),
-            replies=["0 0 0 ;"],
-        )
-    assert captured == [], "no VM may be leased for a run that cannot be scored"
-    assert preparer.prepared == 0
-
-
 def test_every_episode_publishes_the_image_encoding_it_sent(tmp_path, preparer) -> None:
     """`dump_prompt` elides the image bytes, so this is the only record of which
     pixels the checkpoint was scored on."""
-    from agent.history import ImageBudget
+    from image_domain import OSWORLD_CURSOR_JPEG_DOMAIN
 
     trace, result, _ = _run(_config(tmp_path), _task(max_steps=1), replies=["0 0 0 ;"])
     assert result["images"] == {
+        "image_domain": OSWORLD_CURSOR_JPEG_DOMAIN,
         "max_images": 4,
-        "media": "jpeg",
-        "quality": 85,
-        "max_pixels": 0,
     }
-    assert trace.info["images"]["image_domain"] == ImageBudget(quality=85).domain
+    assert trace.info["images"] == {"image_domain": OSWORLD_CURSOR_JPEG_DOMAIN}
 
 
 def test_the_pool_target_injects_a_fake_and_receives_session_kwargs(tmp_path, preparer) -> None:
@@ -1935,21 +1883,12 @@ def test_a_scripted_arm_cannot_name_sampling_it_never_uses() -> None:
             )
 
 
-def test_the_image_budget_config_validates_quality_and_pixels() -> None:
+def test_the_image_budget_config_accepts_only_an_image_count() -> None:
     from pydantic import ValidationError
 
-    for kwargs in ({"quality": 0}, {"quality": 101}, {"max_images": 0}, {"max_pixels": -1}):
+    for kwargs in ({"max_images": 0}, {"media": "png"}, {"quality": 85}, {"max_pixels": 0}):
         with pytest.raises(ValidationError):
             ImageBudgetConfig(**kwargs)
-
-
-def test_the_image_budget_config_refuses_a_media_it_cannot_encode() -> None:
-    """A bare `str` coerced to jpeg by anything but the word png would make
-    `media="webp"` silently produce JPEG."""
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
-        ImageBudgetConfig(media="webp")
 
 
 def test_persist_instruction_is_refused_by_a_policy_that_would_ignore_it() -> None:

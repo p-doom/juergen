@@ -23,13 +23,12 @@ The policy only renders; the window owns append and eviction.
 from __future__ import annotations
 
 import base64
-import io
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, Sequence, runtime_checkable
+from typing import Any, Protocol, Sequence, runtime_checkable
 
 import verifiers.v1 as vf
 
-from image_domain import image_domain
+from image_domain import OSWORLD_CURSOR_JPEG_DOMAIN
 
 __all__ = [
     "History",
@@ -50,69 +49,27 @@ IMAGE_PLACEHOLDER = "Previous screenshot omitted."
 
 @dataclass(frozen=True)
 class ImageBudget:
-    """How many images may ride a prompt, and how each is encoded.
+    """How many received desktop images may ride a prompt.
 
     `max_images` is the hard cap the policy honours; the window's
     `n_history_frames` is the eviction trigger. They are separate because the
     Phase-B contract evicts at 5 images while keeping older *actions*, and
     target_box accumulates turns while sending exactly one image.
 
-    JPEG at quality 85 is what every runner used (`_pil_to_data_url`); PNG is
-    kept for the RL renderers, which composite synthetic markers and want them
-    lossless.
     """
 
     max_images: int = 16
-    media: Literal["jpeg", "png"] = "jpeg"
-    quality: int = 85
-    max_pixels: int = 0
-    """If > 0, downscale (preserving aspect) until w*h <= max_pixels. 0 = never."""
-
-    @property
-    def domain(self) -> str:
-        """The pixels this budget delivers, as one comparable string.
-
-        `datasets/convert.py` records it for the frames its records point at and
-        `evals/harness.py` refuses to score a checkpoint through a different one: a
-        student trained on the guest's lossless PNG framebuffer and evaluated
-        through JPEG q85 is read through pixels it never saw. `quality` is left out
-        of the PNG form because `_encode` ignores it there, and carrying it would
-        refuse a lossless arm against a lossless dataset.
-        """
-        return image_domain(
-            media=self.media,
-            quality=self.quality,
-            geometry="max_pixels",
-            extent=self.max_pixels,
-        )
 
     def data_url(self, image: bytes) -> str:
-        payload, mime = self._encode(image)
-        return f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
+        if not image.startswith(b"\xff\xd8\xff"):
+            raise ValueError(
+                "desktop observations must be "
+                f"{OSWORLD_CURSOR_JPEG_DOMAIN}, not a non-JPEG payload"
+            )
+        return f"data:image/jpeg;base64,{base64.b64encode(image).decode('ascii')}"
 
     def image_part(self, image: bytes) -> dict[str, Any]:
         return {"type": "image_url", "image_url": {"url": self.data_url(image)}}
-
-    def _encode(self, image: bytes) -> tuple[bytes, str]:
-        if self.media == "png" and not self.max_pixels:
-            return image, "image/png"
-        from PIL import Image  # local: keep PIL off the import path of pure-text users
-
-        with Image.open(io.BytesIO(image)) as handle:
-            frame = handle.convert("RGB")
-            if self.max_pixels and frame.width * frame.height > self.max_pixels:
-                scale = (self.max_pixels / (frame.width * frame.height)) ** 0.5
-                frame = frame.resize(
-                    (max(1, int(frame.width * scale)), max(1, int(frame.height * scale))),
-                    Image.LANCZOS,
-                )
-            buffer = io.BytesIO()
-            if self.media == "png":
-                frame.save(buffer, format="PNG")
-                return buffer.getvalue(), "image/png"
-            frame.save(buffer, format="JPEG", quality=self.quality, optimize=False)
-            return buffer.getvalue(), "image/jpeg"
-
 
 @dataclass
 class Turn:

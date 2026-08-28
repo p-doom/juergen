@@ -95,8 +95,8 @@ def annotate(screenshot: bytes, box: tuple[int, int, int, int]) -> bytes:
 
     from PIL import Image
 
-    from rl.geometry import draw_box, png_bytes
+    from rl.geometry import draw_box, jpeg_bytes
 
     with Image.open(io.BytesIO(screenshot)) as handle:
         base = handle.convert("RGB")
-        return png_bytes(draw_box(base, box, width=3))
+        return jpeg_bytes(draw_box(base, box, width=3))

@@ -1,23 +1,20 @@
-"""One spelling of which pixels a model was shown.
+"""Image-domain identifiers written into training artifacts.
 
-Two producers write it and one consumer enforces it: `datasets/convert.py` for
-the rollout frames its records point at, `pipeline/stage_04_build_conversations`
-for the crowd-cast master frames its conversations point at, and
-`evals/harness.py`, which refuses to score a checkpoint through a domain other
-than the one its dataset named. Comparing those means one string, built here.
+The desktop observation contract is a fixed identity. Crowd-cast has a separate
+generic recording identity because its source is not established as desktop
+observations; stage 06 refuses to mix it into desktop SFT records.
 
-The geometry token names the knob that bounded the frame, not the size that came
-out. `max_pixels_0` (`ImageBudget` never downscales) and `height_0` (ffmpeg
-`scale=null`) both read as "the source's own pixels", but one source is a guest
-framebuffer and the other is whatever the crowd-cast screen recording was.
-Collapsing them would turn a real train/serve mismatch into a silent match; kept
-apart, the worst case is a loud refusal an arm can vouch for in writing.
+The legacy generic geometry token names the knob that bounded a crowd-cast frame,
+not the size that came out. It remains only to identify those artifacts; no
+generic identity can satisfy the fixed desktop contract.
 
 This module imports nothing, deliberately: `pipeline/` runs in a venv without
 `verifiers`, so it cannot reach `agent/history.py`, where `ImageBudget` lives.
 """
 
 from __future__ import annotations
+
+OSWORLD_CURSOR_JPEG_DOMAIN = "osworld_cursor_jpeg_q85_420_1920x1080_v1"
 
 IMAGE_GEOMETRIES = ("max_pixels", "height")
 

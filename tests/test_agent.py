@@ -45,7 +45,7 @@ from agent.history import (
     StatelessSingleTurn,
     history_policy,
 )
-from juergen_doubles import FakeClient, make_ctx, png
+from juergen_doubles import FakeClient, jpeg, make_ctx
 
 BARE_TOKEN_GRAMMARS = ("deltatype_v2",)
 TOOL_CALL_GRAMMARS = ("native_absolute", "move_rel")
@@ -475,7 +475,7 @@ def test_a_historical_temperature_cannot_reappear_once_the_eval_has_spoken(histo
 
 def _one_frame_history() -> History:
     history = History(n_history_frames=4)
-    history.start(png())
+    history.start(jpeg())
     return history
 
 
@@ -641,9 +641,9 @@ def test_an_observation_note_rides_the_last_user_turn_under_every_policy(
     words — so the invariant is asserted here rather than assumed at each policy.
     """
     history = History(n_history_frames=8)
-    history.start(png())
-    history.append("0 0 0 ;", png())
-    history.append("0 0 0 ;", png(), "REJECTED")
+    history.start(jpeg())
+    history.append("0 0 0 ;", jpeg())
+    history.append("0 0 0 ;", jpeg(), "REJECTED")
     agent = Agent(
         codec=load_codec("deltatype_v2"),
         policy=history_policy(policy),

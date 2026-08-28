@@ -64,6 +64,10 @@ class TargetBoxPreparer:
             # change only.
             session.setup(osworld_task_config(task))
         box, cursor, screen = _scene(task)
+        if screen != (1920, 1080):
+            raise ValueError(
+                f"target_box desktop observations must be 1920x1080, got {screen!r}"
+            )
         observed = tuple(session.screen_size())
         if observed != screen:
             raise ValueError(
@@ -107,7 +111,7 @@ class TargetBoxHarnessConfig(DesktopHarnessConfig):
     """Accumulate turns (the model's own reasoning is load-bearing here) but send
     only the newest image — the only shape that kept a 10-step VM rollout inside the
     renderer's image cache."""
-    images: ImageBudgetConfig = ImageBudgetConfig(max_images=1, media="png")
+    images: ImageBudgetConfig = ImageBudgetConfig(max_images=1)
     settle: SettleConfig = SettleConfig(min_delay_s=1.0, per_kind={})
     pool: DesktopPoolConfig = DesktopPoolConfig(key="target_box_vm", max_node_slots=14)
     max_steps: int = 10

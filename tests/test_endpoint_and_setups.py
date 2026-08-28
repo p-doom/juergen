@@ -19,7 +19,7 @@ import verifiers.v1 as vf
 
 from agent.agent import EndpointTransport, ModelCallError, load_codec
 from agent.history import History, ImageBudget, StatelessSingleTurn
-from juergen_doubles import FakeSession, make_ctx, make_task_data, png
+from juergen_doubles import FakeSession, jpeg, make_ctx, make_task_data, png
 
 
 class FakeOpenAI:
@@ -105,7 +105,7 @@ def endpoint():
 
 def _history() -> History:
     history = History(n_history_frames=4)
-    history.start(png())
+    history.start(jpeg())
     return history
 
 
@@ -572,8 +572,10 @@ def test_the_target_box_preparer_places_the_real_cursor_and_annotates_every_fram
     assert evidence["screen"] == [1920, 1080]
     assert session.cursor == tuple(evidence["cursor_start"])
     assert any("moveTo" in code for code in session.pyautogui_log)
-    annotated = preparer.observe(png(1920, 1080), task)
-    assert annotated != png(1920, 1080), "the box is drawn on every observation"
+    source = jpeg(1920, 1080)
+    annotated = preparer.observe(source, task)
+    assert annotated.startswith(b"\xff\xd8\xff")
+    assert annotated != source, "the box is drawn on every observation"
     probe = preparer.probe(session, task)
     assert probe["postcondition_success"] is False, (
         "success needs the model to declare it, so entering the box does not end it"
@@ -592,6 +594,17 @@ def test_the_target_box_preparer_refuses_a_screen_size_mismatch() -> None:
     )
     with pytest.raises(ValueError, match="does not match the configured"):
         TargetBoxPreparer().prepare(session, task)
+
+
+def test_the_target_box_preparer_refuses_a_noncanonical_observation_size() -> None:
+    from rl.target_box.harness import TargetBoxPreparer
+
+    task = make_task_data(
+        kind="target_box",
+        setup={"screen": [1280, 720], "instance_key": "k", "box": {}},
+    )
+    with pytest.raises(ValueError, match="1920x1080"):
+        TargetBoxPreparer().prepare(FakeSession(screen=(1280, 720)), task)
 
 
 def test_the_target_box_scene_is_stable_across_prepare_observe_and_probe() -> None:

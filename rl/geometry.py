@@ -20,6 +20,7 @@ __all__ = [
     "distance_to_box",
     "draw_box",
     "in_bbox",
+    "jpeg_bytes",
     "png_bytes",
     "render_cursor",
 ]
@@ -49,6 +50,14 @@ def box_center(bbox: tuple[int, int, int, int]) -> tuple[int, int]:
 def png_bytes(image: object) -> bytes:
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")  # type: ignore[attr-defined]
+    return buffer.getvalue()
+
+
+def jpeg_bytes(image: object) -> bytes:
+    buffer = io.BytesIO()
+    image.save(  # type: ignore[attr-defined]
+        buffer, format="JPEG", quality=85, subsampling=2, optimize=False
+    )
     return buffer.getvalue()
 
 

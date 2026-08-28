@@ -104,8 +104,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import grammars  # noqa: E402
-from agent.history import ImageBudget  # noqa: E402
 from grammars import _support  # noqa: E402
+from image_domain import OSWORLD_CURSOR_JPEG_DOMAIN  # noqa: E402
 
 # Duration used when lowering a teacher drag into a timed stroke.
 DRAG_SECONDS = 0.5
@@ -461,6 +461,24 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
 
 
+def _require_observation_contract(result_path: Path, result: dict[str, Any], steps_dir: Path) -> None:
+    images = result.get("images")
+    if not isinstance(images, dict) or images.get("image_domain") != OSWORLD_CURSOR_JPEG_DOMAIN:
+        raise SystemExit(
+            f"{result_path}: requires images.image_domain="
+            f"{OSWORLD_CURSOR_JPEG_DOMAIN!r}"
+        )
+    if not steps_dir.is_dir():
+        raise SystemExit(f"{result_path}: no steps directory: {steps_dir}")
+    non_jpeg = sorted(
+        path.name
+        for path in steps_dir.iterdir()
+        if path.is_file() and path.name.startswith("step_") and path.suffix != ".jpg"
+    )
+    if non_jpeg:
+        raise SystemExit(f"{result_path}: non-canonical frame file(s): {non_jpeg}")
+
+
 def _read_slugs(path: str | None, *, flag: str) -> set[str] | None:
     """The slug set from a caller-named file. ``None`` only when no file was named.
 
@@ -521,6 +539,8 @@ def convert_rollout(
     if not result_path.is_file() or not traj_path.is_file():
         return None
     result = json.loads(result_path.read_text())
+    steps_dir = run_dir / "steps"
+    _require_observation_contract(result_path, result, steps_dir)
 
     # Deterministic-task-success filter (gold): keep only traces the OSWorld
     # evaluator scored >= threshold. The key is `task_reward` — what
@@ -551,7 +571,6 @@ def convert_rollout(
             "move_rel normalizes by it — so a default would emit silently wrong "
             "labels for the whole rollout."
         )
-    steps_dir = run_dir / "steps"
     read_step = source_reader(result)
 
     turns: list[tuple[str, str, str]] = []  # (frame_path, assistant_text, prose)
@@ -562,9 +581,11 @@ def convert_rollout(
             continue
         n_steps += 1
         info = entry.get("info", {}) or {}
-        seen_frame = steps_dir / f"step_{step_num - 1:03d}.png"
+        seen_frame = steps_dir / f"step_{step_num - 1:03d}.jpg"
         if not seen_frame.is_file():
-            continue
+            raise SystemExit(f"{traj_path}: missing JPEG frame for step {step_num}: {seen_frame}")
+        if not seen_frame.read_bytes().startswith(b"\xff\xd8\xff"):
+            raise SystemExit(f"{seen_frame}: not a JPEG frame")
 
         prose = extract_prose(entry.get("action") or entry.get("response") or "")
         # `parsed` is NOT read here. It is the source grammar's own action dict,
@@ -1066,12 +1087,7 @@ def main(argv: list[str] | None = None) -> int:
         "system_prompt_sha256": hashlib.sha256(
             grammars.system_prompt(codec, thinking=bool(args.keep_prose)).encode()
         ).hexdigest(),
-        # The encoding of every frame these records point at. They are the guest
-        # framebuffers `evals/harness.py` wrote to `steps/step_NNN.png`, referenced
-        # by path and never re-encoded, so a record is lossless and full-resolution
-        # while the eval that produced it sent JPEG q85. `image_domain` on the eval
-        # arm is what refuses to score a checkpoint through the other one.
-        "image_domain": ImageBudget(media="png").domain,
+        "image_domain": OSWORLD_CURSOR_JPEG_DOMAIN,
         "rollouts_dir": args.rollouts_dir,
         "recursive": args.recursive,
         "keep_slugs": args.keep_slugs,

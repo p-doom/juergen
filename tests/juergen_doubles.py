@@ -52,6 +52,16 @@ def png(width: int = 8, height: int = 6, colour: tuple[int, int, int] = (10, 20,
     return buffer.getvalue()
 
 
+def jpeg(width: int = 8, height: int = 6, colour: tuple[int, int, int] = (10, 20, 30)) -> bytes:
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height), colour).save(
+        buffer, format="JPEG", quality=85, subsampling=2, optimize=False
+    )
+    return buffer.getvalue()
+
+
 @dataclass(frozen=True)
 class FakeGuestReceipt:
     """What `execute_atomic` returns: desktop's `AtomicExecutionResult` surface.
@@ -108,7 +118,7 @@ class FakeSession:
         self.screenshots += 1
         if self.frames:
             return self.frames[min(self.screenshots - 1, len(self.frames) - 1)]
-        return png(colour=(self.screenshots % 250, 0, 0))
+        return jpeg(colour=(self.screenshots % 250, 0, 0))
 
     def execute_atomic(self, operations: Any) -> FakeGuestReceipt:
         ops = list(operations)

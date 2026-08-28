@@ -153,17 +153,19 @@ class FakeGuestClient:
     def __init__(self) -> None:
         self.screenshots = 0
 
-    def _png(self) -> bytes:
+    def _jpeg(self) -> bytes:
         from PIL import Image
         import io
 
         buffer = io.BytesIO()
-        Image.new("RGB", (32, 24), (self.screenshots % 250, 10, 20)).save(buffer, format="PNG")
+        Image.new("RGB", (32, 24), (self.screenshots % 250, 10, 20)).save(
+            buffer, format="JPEG", quality=85, subsampling=2, optimize=False
+        )
         return buffer.getvalue()
 
     def screenshot(self) -> bytes:
         self.screenshots += 1
-        return self._png()
+        return self._jpeg()
 
     def screenshot_settled(self, **kwargs: float) -> bytes:
         return self.screenshot()

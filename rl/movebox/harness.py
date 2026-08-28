@@ -98,7 +98,7 @@ class MoveBoxHarnessConfig(DesktopHarnessConfig):
     history: HistoryConfig = HistoryConfig(name="stateless_single_turn")
     """Stateless: a fresh single-turn prompt each step makes the per-step grounding
     decision identifiable."""
-    images: ImageBudgetConfig = ImageBudgetConfig(max_images=1, media="png")
+    images: ImageBudgetConfig = ImageBudgetConfig(max_images=1)
     settle: SettleConfig = SettleConfig(min_delay_s=0.0, per_kind={})
     pool: DesktopPoolConfig = DesktopPoolConfig(
         key="movebox_canvas", max_node_slots=64, hide_gpu_during_boot=False

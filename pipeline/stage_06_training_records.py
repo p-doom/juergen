@@ -35,6 +35,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from pipeline.lib.goals import assert_same_artifact  # noqa: E402
 from pipeline.lib.manifest import make_artifact_id, write_manifest  # noqa: E402
+from image_domain import OSWORLD_CURSOR_JPEG_DOMAIN  # noqa: E402
 
 FLAGS = flags.FLAGS
 
@@ -135,11 +136,31 @@ def _run_split(split: str, src_chat: Path, out_split_dir: Path, cache_path: Path
     return {"split": split, "n_shards": n_shards, "elapsed_s": int(elapsed)}
 
 
+def _require_desktop_observation_contract(source_path: Path) -> None:
+    """Refuse records whose source frames were not desktop observations.
+
+    Stage 04's generic crowd-cast stream currently emits JPEG q80 frames resized
+    by height. Those are not interchangeable with the cursor-composited native
+    desktop frames used by the desktop SFT harness. This is the final boundary
+    before Omegalax would bake either stream into the same training format.
+    """
+    manifest_path = source_path / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"no manifest.json under {source_path}")
+    manifest = json.loads(manifest_path.read_text())
+    actual = manifest.get("image_domain")
+    if actual != OSWORLD_CURSOR_JPEG_DOMAIN:
+        raise RuntimeError(
+            f"{manifest_path}: desktop SFT requires image_domain="
+            f"{OSWORLD_CURSOR_JPEG_DOMAIN!r}, got {actual!r}"
+        )
+
+
 def main(_) -> None:
     output_dir = Path(FLAGS.output_dir)
     source_path = Path(FLAGS.source_path)
     lengths_root = Path(FLAGS.message_lengths_path) if FLAGS.message_lengths_path else None
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _require_desktop_observation_contract(source_path)
 
     src_chat = source_path / "chat.jsonl"
     if not src_chat.is_file():
@@ -148,6 +169,7 @@ def main(_) -> None:
             f"<source>/chat.jsonl)"
         )
     source_id = make_artifact_id(source_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
     cache_path = None
     if lengths_root is not None:
         # Per-message lengths are independent of max_length / overflow_mode /
@@ -173,7 +195,11 @@ def main(_) -> None:
             "message_lengths_path": FLAGS.message_lengths_path,
             "val_fraction": FLAGS.val_fraction,
         },
-        inputs={"source": str(source_path), "source_id": source_id},
+        inputs={
+            "source": str(source_path),
+            "source_id": source_id,
+            "image_domain": OSWORLD_CURSOR_JPEG_DOMAIN,
+        },
         stats={"per_split": per_split},
     )
     print(f"Wrote {output_dir / 'manifest.json'}")

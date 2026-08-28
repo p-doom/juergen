@@ -1673,7 +1673,7 @@ def test_a_spawn_worker_runs_the_owned_pool_and_publishes_its_attempt(
     attempt = output / result["episodes"][0]["artifact_subdir"]
     assert (attempt / "attempt.json").is_file()
     assert (
-        attempt / "artifacts" / "terminal_submit_only" / "steps" / "step_000.png"
+        attempt / "artifacts" / "terminal_submit_only" / "steps" / "step_000.jpg"
     ).is_file()
 
 

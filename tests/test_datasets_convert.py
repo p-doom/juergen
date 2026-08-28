@@ -20,7 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from juergen_doubles import load_convert  # noqa: E402
+from image_domain import OSWORLD_CURSOR_JPEG_DOMAIN  # noqa: E402
+from juergen_doubles import jpeg, load_convert  # noqa: E402
 
 convert = load_convert()
 
@@ -42,14 +43,16 @@ def _rollout(root: Path, slug: str, n_steps: int = 4, **result_extra) -> None:
                 "instruction": "open the terminal",
                 "screen_size": SCREEN,
                 "stop_reason": "terminate",
+                "images": {"image_domain": OSWORLD_CURSOR_JPEG_DOMAIN},
                 **result_extra,
             }
         )
     )
     rows = []
     for step in range(1, n_steps + 1):
-        # Only existence is checked, so an empty file is a frame.
-        (run / "steps" / f"step_{step - 1:03d}.png").write_bytes(b"")
+        (run / "steps" / f"step_{step - 1:03d}.jpg").write_bytes(
+            jpeg(colour=(step, 20, 30))
+        )
         rows.append(
             {
                 "step_num": step,
@@ -92,13 +95,16 @@ def _harness_rollout(root: Path, slug: str, n_steps: int = 4, **result_extra) ->
                 "instruction": "open the terminal",
                 "screen_size": SCREEN,
                 "outcome": "max_steps",
+                "images": {"image_domain": OSWORLD_CURSOR_JPEG_DOMAIN},
                 **result_extra,
             }
         )
     )
     rows = []
     for step in range(1, n_steps + 1):
-        (run / "steps" / f"step_{step - 1:03d}.png").write_bytes(b"")
+        (run / "steps" / f"step_{step - 1:03d}.jpg").write_bytes(
+            jpeg(colour=(step, 20, 30))
+        )
         rows.append(
             {
                 "step_num": step,
@@ -171,12 +177,6 @@ def test_manifest_digest_is_the_prompt_in_the_records(tmp_path, prose):
 
 
 def test_manifest_records_the_image_encoding_in_the_records(tmp_path):
-    """The image half of the same claim. The eval harness refuses to score a
-    checkpoint through a different encoding, so the manifest has to describe the
-    frames these records actually point at -- lossless full-resolution PNG, since
-    the harness framebuffers are referenced by path and never re-encoded."""
-    from agent.history import ImageBudget
-
     manifest, records = _run(tmp_path)
     frames = [
         part["image"]
@@ -185,11 +185,49 @@ def test_manifest_records_the_image_encoding_in_the_records(tmp_path):
         for part in message["content"]
         if part.get("type") == "image"
     ]
-    assert frames and all(frame.endswith(".png") for frame in frames)
-    assert manifest["image_domain"] == ImageBudget(media="png").domain
-    assert manifest["image_domain"] != ImageBudget().domain, (
-        "the eval default is JPEG q85; if these ever agree the gate is asleep"
-    )
+    assert frames and all(frame.endswith(".jpg") for frame in frames)
+    assert manifest["image_domain"] == OSWORLD_CURSOR_JPEG_DOMAIN
+    assert all(Path(frame).read_bytes().startswith(b"\xff\xd8\xff") for frame in frames)
+
+
+def test_records_reference_the_rollout_jpeg_bytes_without_a_copy(tmp_path):
+    manifest, records = _run(tmp_path)
+    assert manifest["image_domain"] == OSWORLD_CURSOR_JPEG_DOMAIN
+    images = [
+        part["image"]
+        for record in records
+        for message in record["messages"]
+        for part in message["content"]
+        if part.get("type") == "image"
+    ]
+    artifacts = {}
+    for slug in ("task_a", "task_b", "task_c", "task_d"):
+        for step in range(4):
+            path = tmp_path / "rollouts" / slug / "steps" / f"step_{step:03d}.jpg"
+            artifacts[path] = path.read_bytes()
+    assert images
+    for image in images:
+        reference = Path(image)
+        assert reference in artifacts
+        assert reference.read_bytes() == artifacts[reference]
+
+
+@pytest.mark.parametrize(
+    ("result_extra", "legacy_png", "message"),
+    [
+        ({"images": {}}, False, "images.image_domain"),
+        ({"images": {"image_domain": "jpeg_q80_height_720"}}, False, "images.image_domain"),
+        ({}, True, "non-canonical frame"),
+    ],
+)
+def test_legacy_or_foreign_observation_contract_is_refused(tmp_path, result_extra, legacy_png, message):
+    rollouts = tmp_path / "rollouts"
+    rollouts.mkdir()
+    _rollout(rollouts, "bad", **result_extra)
+    if legacy_png:
+        (rollouts / "bad" / "steps" / "step_000.png").write_bytes(jpeg())
+    with pytest.raises(SystemExit, match=message):
+        _convert(rollouts, tmp_path / "out")
 
 
 def test_the_two_prose_modes_are_not_the_same_prompt(tmp_path):

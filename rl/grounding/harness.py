@@ -83,7 +83,7 @@ class GroundingHarnessConfig(DesktopHarnessConfig):
     id: str = "rl_grounding"
     codec: str = "move_rel"
     history: HistoryConfig = HistoryConfig(name="stateless_single_turn")
-    images: ImageBudgetConfig = ImageBudgetConfig(max_images=1, media="png")
+    images: ImageBudgetConfig = ImageBudgetConfig(max_images=1)
     settle: SettleConfig = SettleConfig(min_delay_s=0.0, per_kind={})
     pool: DesktopPoolConfig = DesktopPoolConfig(
         key="grounding_canvas", max_node_slots=64, hide_gpu_during_boot=False

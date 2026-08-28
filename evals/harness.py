@@ -26,7 +26,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Literal, Protocol
+from typing import Any, Iterator, Protocol
 
 import verifiers.v1 as vf
 from pydantic import Field, model_validator
@@ -55,6 +55,7 @@ from evals.tasks import (
     in_bbox,
     preparer_for,
 )
+from image_domain import OSWORLD_CURSOR_JPEG_DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -111,9 +112,6 @@ class HistoryConfig(vf.BaseConfig):
 
 class ImageBudgetConfig(vf.BaseConfig):
     max_images: int = Field(default=16, ge=1)
-    media: Literal["jpeg", "png"] = "jpeg"
-    quality: int = Field(default=85, ge=1, le=100)
-    max_pixels: int = Field(default=0, ge=0)
 
 
 class SettleConfig(vf.BaseConfig):
@@ -246,19 +244,6 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     can tell one apart from the wrong checkpoint entirely -- only the arm's author
     knows. Stating the reason here makes it data that lands in the record instead
     of a comment nobody can check, and leaves the unjustified case loud."""
-    image_domain: str | None = None
-    """The encoding of the frames in a checkpoint's training records, as
-    `datasets/convert.py` writes it into `convert_manifest.json`. ENFORCED unless a
-    mismatch is justified in writing by `expect_image_mismatch`.
-
-    The prompt failure one domain over: the rollout-BC loop trains on the raw PNG
-    framebuffer this harness writes to `steps/step_NNN.png` and scores through
-    `images.media`/`quality`, so a mismatch does not error -- it reads the
-    checkpoint through pixels it never saw and presents as a weak number rather
-    than as the config mistake it is."""
-    expect_image_mismatch: str | None = None
-    """Why THIS arm's image encoding legitimately differs, or `None` to require a
-    match."""
     history: HistoryConfig = HistoryConfig()
     images: ImageBudgetConfig = ImageBudgetConfig()
     settle: SettleConfig = SettleConfig()
@@ -521,7 +506,7 @@ def _write_gif(frames: list[bytes], path: Path) -> None:
 
 
 _TRAJECTORY = "trajectory.jsonl"
-_FRAME = "step_{index:03d}.png"
+_FRAME = "step_{index:03d}.jpg"
 _RESET = "<reset>"
 _PROMOTED_STEP_KEYS = frozenset({"step", "raw_model_output", "sampling"})
 
@@ -565,9 +550,9 @@ def _trajectory_rows(
     """The rollout rows labctl's viewer and `datasets/convert.py` both read.
 
     One row per frame: row 0 is the pre-action observation, row n the turn whose
-    post-action screenshot is `step_{n:03d}.png`. Row ordinal, `step_num` and frame
+    post-action screenshot is `step_{n:03d}.jpg`. Row ordinal, `step_num` and frame
     index are all the same number, because the viewer indexes `steps[frame]` and
-    `convert.py:458` reads the frame a step SAW as `step_{step_num - 1:03d}.png`.
+    `convert.py:458` reads the frame a step SAW as `step_{step_num - 1:03d}.jpg`.
     Hence `n_steps + 1` frames, not `n_steps`.
 
     A turn whose post-action screenshot never happened — the executor died mid-turn,
@@ -621,16 +606,16 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def _assert_frame_set(steps_dir: Path, n_rows: int) -> None:
-    """Exactly `step_000..step_{n-1}.png` under `steps/`, and nothing else.
+    """Exactly `step_000..step_{n-1}.jpg` under `steps/`, and nothing else.
 
-    labctl never lists the directory. One endpoint formats `step_{n:03}.png` from the
+    labctl never lists the directory. One endpoint formats `step_{n:03}.jpg` from the
     index it wants (`server.rs:1655`) while a sibling reports `frame_count` by
-    counting every `*.png` (`server.rs:1606`), so a gap is a frame the viewer offers
+    counting every `*.jpg` (`server.rs:1606`), so a gap is a frame the viewer offers
     and cannot fetch, and a stray image — a longer earlier run into the same
     directory — offers frames that do not exist.
     """
     expected = {_FRAME.format(index=index) for index in range(n_rows)}
-    present = {path.name for path in steps_dir.glob("*.png")}
+    present = {path.name for path in steps_dir.glob("*.jpg")}
     if present == expected:
         return
     raise RuntimeError(
@@ -878,7 +863,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             history.start(frame)
             if self.config.artifacts.save_frames:
                 (artifacts / "steps").mkdir(parents=True, exist_ok=True)
-                (artifacts / "steps" / "step_000.png").write_bytes(frame)
+                (artifacts / "steps" / "step_000.jpg").write_bytes(frame)
 
             script = self._script_plan(preparer, task) if self.config.scripted.enabled else None
             reach_frame = -1
@@ -978,7 +963,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 frame = await self._observe(preparer, session, task)
                 frames.append(frame)
                 if self.config.artifacts.save_frames:
-                    (artifacts / "steps" / f"step_{step:03d}.png").write_bytes(frame)
+                    (artifacts / "steps" / f"step_{step:03d}.jpg").write_bytes(frame)
                 history.append(
                     decision.text, frame, notice if decision.parse_error else None
                 )
@@ -1125,7 +1110,10 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             "screen_size": state.screen_size,
             "history_policy": state.history_policy,
             "sampling": sampling,
-            "images": self.config.images.model_dump(),
+            "images": {
+                "image_domain": OSWORLD_CURSOR_JPEG_DOMAIN,
+                **self.config.images.model_dump(),
+            },
             "success": state.success,
             "outcome": outcome,
             "steps": state.steps,
@@ -1367,39 +1355,10 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         }
 
     def _budget(self) -> ImageBudget:
-        return ImageBudget(
-            max_images=self.config.images.max_images,
-            media=self.config.images.media,
-            quality=self.config.images.quality,
-            max_pixels=self.config.images.max_pixels,
-        )
+        return ImageBudget(max_images=self.config.images.max_images)
 
     def _image_report(self) -> dict[str, Any]:
-        """The image half of the wire as data, and the one check that must not be skipped.
-
-        `dump_prompt` elides the image bytes and the published result named no
-        encoding, so a train/serve pixel mismatch used to leave no trace in any
-        artifact. Unlike the prompt there is no second accepted form: an arm renders
-        exactly one encoding, so a difference is always the arm's to vouch for.
-        """
-        observed = self._budget().domain
-        expected = self.config.image_domain
-        justification = self.config.expect_image_mismatch
-        matches = None if expected is None else expected == observed
-        if matches is False and justification is None:
-            raise ValueError(
-                f"image_domain={expected!r} is not the encoding this arm renders "
-                f"({observed!r}). This checkpoint was trained on different pixels than "
-                f"this eval sends, so a score from this run would not be the number it "
-                f"looks like. Set expect_image_mismatch=<why> on the arm if the "
-                f"difference is known and intended."
-            )
-        return {
-            "image_domain": observed,
-            "expected_image_domain": expected,
-            "matches_expected": matches,
-            "expect_image_mismatch": justification,
-        }
+        return {"image_domain": OSWORLD_CURSOR_JPEG_DOMAIN}
 
     def _control_ok(self, state: DesktopState) -> bool | None:
         """Calibration conformance for a control arm; `None` for a model arm.

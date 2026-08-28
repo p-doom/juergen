@@ -43,6 +43,7 @@ import grammars
 import pytest
 import synthetic_clip as clip
 
+from image_domain import OSWORLD_CURSOR_JPEG_DOMAIN
 from pipeline.lib.manifest import make_artifact_id
 from pipeline.stage_04_build_conversations import build_messages
 
@@ -148,6 +149,7 @@ def make_source(root: Path, *, n_conversations: int = 2, n_turns: int = 3) -> Pa
                 "schema_version": 2,
                 "chat": "chat.jsonl",
                 "n_conversations": len(rows),
+                "image_domain": OSWORLD_CURSOR_JPEG_DOMAIN,
             },
             indent=2,
         )
@@ -311,6 +313,27 @@ def test_stage_06_refuses_a_cache_measured_from_another_dataset(
     assert len(_invocations(omegalax["log"])) == 1
 
 
+def test_stage_06_refuses_crowd_cast_frames_before_the_record_builder(
+    tmp_path: Path, omegalax
+) -> None:
+    source = make_source(tmp_path / "conv")
+    manifest_path = source / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["image_domain"] = "jpeg_q80_height_720"
+    manifest_path.write_text(json.dumps(manifest))
+
+    proc = _run(
+        "stage_06_training_records.py", omegalax["env"],
+        output_dir=tmp_path / "records", source_path=source,
+        omegalax_repo=omegalax["repo"], model_id=MODEL_ID, processor=MODEL_ID,
+        max_length=4096, records_per_shard=8, num_workers=2,
+    )
+
+    assert proc.returncode != 0
+    assert OSWORLD_CURSOR_JPEG_DOMAIN in proc.stderr
+    assert _builds(omegalax["log"]) == []
+
+
 def test_stage_06_fans_out_one_build_per_split_and_reuses_the_cache(
     tmp_path: Path, omegalax
 ) -> None:
@@ -341,6 +364,7 @@ def test_stage_06_fans_out_one_build_per_split_and_reuses_the_cache(
     manifest = json.loads((out_dir / "manifest.json").read_text())
     assert manifest["stage"] == "inline_records"
     assert manifest["inputs"]["source_id"] == make_artifact_id(source)
+    assert manifest["inputs"]["image_domain"] == OSWORLD_CURSOR_JPEG_DOMAIN
     assert [s["split"] for s in manifest["stats"]["per_split"]] == ["train", "val"]
     assert all(s["n_shards"] == 1 for s in manifest["stats"]["per_split"])
 
