@@ -170,6 +170,28 @@ def test_manifest_digest_is_the_prompt_in_the_records(tmp_path, prose):
     assert manifest["system_prompt_sha256"] == written
 
 
+def test_manifest_records_the_image_encoding_in_the_records(tmp_path):
+    """The image half of the same claim. The eval harness refuses to score a
+    checkpoint through a different encoding, so the manifest has to describe the
+    frames these records actually point at -- lossless full-resolution PNG, since
+    the harness framebuffers are referenced by path and never re-encoded."""
+    from agent.history import ImageBudget
+
+    manifest, records = _run(tmp_path)
+    frames = [
+        part["image"]
+        for record in records
+        for message in record["messages"]
+        for part in message["content"]
+        if part.get("type") == "image"
+    ]
+    assert frames and all(frame.endswith(".png") for frame in frames)
+    assert manifest["image_domain"] == ImageBudget(media="png").domain
+    assert manifest["image_domain"] != ImageBudget().domain, (
+        "the eval default is JPEG q85; if these ever agree the gate is asleep"
+    )
+
+
 def test_the_two_prose_modes_are_not_the_same_prompt(tmp_path):
     """So a single recorded digest cannot cover both."""
     with_prose, _ = _run(tmp_path / "a")

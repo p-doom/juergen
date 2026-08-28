@@ -16,6 +16,7 @@ temperatures are 1.0 train, 0.0 parity and 0.7 movebox.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 
 import pytest
@@ -505,6 +506,111 @@ def test_wire_body_keys_are_recorded_without_the_messages() -> None:
     _, effective = resolve_sampling(ctx, {"messages": [], "top_p": 0.8})
     assert "messages" not in effective.wire_body_keys
     assert set(effective.wire_body_keys) >= {"model", "temperature", "max_tokens", "top_p"}
+
+
+def test_normalized_wire_request_and_sampling_digests_are_canonical() -> None:
+    from verifiers.v1.dialects.chat import message_to_wire
+
+    ctx = make_ctx(model="digest-model", temperature=0.7, seed=1234567)
+    body = {
+        "messages": [vf.UserMessage(content="move")],
+        "max_tokens": 64,
+        "top_p": 0.8,
+    }
+    wire, effective = resolve_sampling(ctx, body)
+    normalized = {
+        **wire,
+        "messages": [message_to_wire(message) for message in wire["messages"]],
+    }
+    sampling = {key: value for key, value in normalized.items() if key != "messages"}
+
+    def digest(value) -> str:
+        encoded = json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    assert effective.seed == 1234567
+    assert effective.wire_request_sha256 == digest(normalized)
+    assert effective.wire_sampling_sha256 == digest(sampling)
+    _, reordered = resolve_sampling(
+        ctx,
+        {"top_p": 0.8, "max_tokens": 64, "messages": body["messages"]},
+    )
+    assert reordered.wire_request_sha256 == effective.wire_request_sha256
+    assert reordered.wire_sampling_sha256 == effective.wire_sampling_sha256
+
+
+def test_endpoint_first_hop_is_seed_free_while_the_step_persists_the_final_digest() -> None:
+    calls = []
+
+    class Completions:
+        async def create(self, **kwargs):
+            calls.append(kwargs)
+            message = type("Message", (), {"content": "0 0 0 ;", "tool_calls": None})()
+            choice = type(
+                "Choice", (), {"message": message, "finish_reason": "stop"}
+            )()
+            return type("Completion", (), {"choices": [choice]})()
+
+    class Client:
+        chat = type("Chat", (), {"completions": Completions()})()
+
+        async def close(self):
+            return None
+
+    transport = EndpointTransport("http://127.0.0.1:1/v1", "test")
+    transport._client = Client()
+    agent = _agent("deltatype_v2", temperature=0.0, max_tokens=32)
+    agent.transport = transport
+    ctx = make_ctx(temperature=0.7, top_p=1.0, max_tokens=64, seed=987654)
+
+    decision = asyncio.run(
+        agent.step(
+            ctx,
+            history=_one_frame_history(),
+            instruction="G",
+            step=1,
+            geometry=_geometry(),
+            cursor=(0, 0),
+            session_id="trial-1",
+        )
+    )
+
+    assert "seed" not in calls[0], "the interception hop does not own model sampling"
+    record = decision.as_record()["sampling"]
+    assert record["seed"] == 987654
+    assert len(record["wire_request_sha256"]) == 64
+    assert len(record["wire_sampling_sha256"]) == 64
+
+    context_ctx = make_ctx(
+        temperature=0.7,
+        top_p=1.0,
+        max_tokens=64,
+        seed=987654,
+        replies=["0 0 0 ;"],
+    )
+    context_agent = _agent("deltatype_v2", temperature=0.0, max_tokens=32)
+    context_decision = asyncio.run(
+        context_agent.step(
+            context_ctx,
+            history=_one_frame_history(),
+            instruction="G",
+            step=1,
+            geometry=_geometry(),
+            cursor=(0, 0),
+            session_id="trial-1",
+        )
+    )
+    assert context_ctx.client.calls[0]["sampling"].seed == 987654
+    assert (
+        context_decision.sampling.wire_request_sha256
+        == decision.sampling.wire_request_sha256
+    )
 
 
 def test_a_string_stop_sequence_is_normalised_to_a_tuple() -> None:

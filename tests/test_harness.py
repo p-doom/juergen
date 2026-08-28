@@ -37,7 +37,6 @@ from evals.harness import (
 from agent.agent import load_codec
 from desktop.geometry import DisplayGeometry
 from evals.tasks import (
-    FULL_SUCCESS_THRESHOLD,
     PREPARERS,
     RESULT_KEY,
     DesktopState,
@@ -511,6 +510,37 @@ def test_a_bad_action_is_a_scored_outcome_not_an_infra_failure(tmp_path, prepare
     assert result["steps_detail"][0]["action_error"]["type"] == "ValueError"
 
 
+def test_only_a_held_state_refusal_is_a_scored_executor_error(tmp_path, preparer) -> None:
+    from desktop.execute.guest_program import ExecutionError, HeldStateError
+
+    class Unbalanced(FakeSession):
+        def execute_atomic(self, operations):
+            raise HeldStateError("key not held: shiftleft")
+
+    _, refused, _ = _run(
+        _config(tmp_path / "refused"),
+        _task(max_steps=1),
+        replies=["0 0 0 ; +LMB -LMB"],
+        session=Unbalanced(),
+    )
+    assert refused["validity"] == "valid" and refused["success"] is False
+    assert refused["action_errors"] == 1 and refused["executor_errors"] == 0
+    assert refused["steps_detail"][0]["action_error"]["type"] == "HeldStateError"
+
+    class GuestGone(FakeSession):
+        def execute_atomic(self, operations):
+            raise ExecutionError("guest request failed")
+
+    _, failed, _ = _run(
+        _config(tmp_path / "failed"),
+        _task(max_steps=1),
+        replies=["0 0 0 ; +LMB -LMB"],
+        session=GuestGone(),
+    )
+    assert failed["validity"] == "infra_invalid" and failed["success"] is None
+    assert failed["action_errors"] == 0 and failed["executor_errors"] == 1
+
+
 def test_a_model_call_failure_is_infrastructure(tmp_path, preparer) -> None:
     class Angry:
         async def get_response(self, *args, **kwargs):
@@ -760,12 +790,37 @@ def test_the_operations_budget_ends_the_episode(tmp_path, preparer) -> None:
     assert result["outcome"].startswith("budget_operations")
 
 
+def test_the_parse_error_streak_ends_the_episode(tmp_path, preparer) -> None:
+    """`model_turns` cannot separate a checkpoint that acted for nine turns from one
+    that emitted nine turns nothing could read: both spend the cell's whole VM and
+    both publish `max_steps`."""
+    config = _config(tmp_path, budget=BudgetConfig(consecutive_parse_errors=2))
+    _, result, _ = _run(config, _task(max_steps=9), replies=["not an action"] * 9)
+    assert result["outcome"] == "budget_consecutive_parse_errors_exceeded"
+    assert result["steps"] == 3, "the third unreadable turn in a row exceeds a ceiling of 2"
+    assert result["parse_errors"] == 3
+    assert result["budget"]["consecutive_parse_errors"] == 3
+
+
+def test_a_turn_that_parsed_resets_the_parse_error_streak(tmp_path, preparer) -> None:
+    """Half the turns unreadable is a rate, not a collapse, and the ceiling counts
+    only turns in a row — otherwise it would be `parse_errors` with a worse name."""
+    config = _config(tmp_path, budget=BudgetConfig(consecutive_parse_errors=2))
+    _, result, _ = _run(
+        config, _task(max_steps=6), replies=["not an action", "0 0 0 ;"] * 3
+    )
+    assert result["outcome"] == "max_steps"
+    assert result["parse_errors"] == 3
+    assert result["budget"]["consecutive_parse_errors"] == 0
+
+
 def test_an_unset_budget_never_fires() -> None:
     budget = _Budget(BudgetConfig())
     for _ in range(1000):
         budget.turn()
         budget.dispatched(100)
         budget.tokens(1000)
+        budget.parsed(False)
     assert budget.failure is None, "a budget nobody set must never fire"
 
 
@@ -792,6 +847,7 @@ def test_the_budget_snapshot_is_json_serialisable() -> None:
         "model_turns",
         "operations",
         "output_tokens",
+        "consecutive_parse_errors",
         "wall_time_s",
         "failure",
     }
@@ -1250,6 +1306,82 @@ def test_a_system_prompt_override_is_honoured_and_hashed(tmp_path) -> None:
     assert report["prompt_sha256"] == hashlib.sha256(b"SEALED PROMPT").hexdigest()
 
 
+def test_a_png_dataset_scored_through_the_jpeg_default_is_refused(tmp_path) -> None:
+    """The defect the gate exists for. `evals/harness.py` writes the guest's raw
+    PNG framebuffer to `steps/step_NNN.png`, `datasets/convert.py` puts that path
+    in the training record, and the eval that produced it sent JPEG q85 -- so a
+    rollout-BC student is scored on pixels it was never trained on, and no
+    published field said so."""
+    from agent.history import ImageBudget
+
+    harness = DesktopHarness(_config(tmp_path, image_domain=ImageBudget(media="png").domain))
+    with pytest.raises(ValueError, match="is not the encoding this arm renders"):
+        harness._image_report()
+
+
+def test_a_justified_image_mismatch_passes_and_the_reason_lands_in_the_record(
+    tmp_path,
+) -> None:
+    from agent.history import ImageBudget
+
+    report = DesktopHarness(
+        _config(
+            tmp_path,
+            image_domain=ImageBudget(media="png").domain,
+            expect_image_mismatch="lossless records, q85 eval, deliberately",
+        )
+    )._image_report()
+    assert report["matches_expected"] is False
+    assert report["expect_image_mismatch"] == "lossless records, q85 eval, deliberately"
+    assert report["image_domain"] == ImageBudget(quality=85).domain
+    assert report["expected_image_domain"] == ImageBudget(media="png").domain
+
+
+def test_an_arm_that_renders_what_it_declares_matches(tmp_path) -> None:
+    from agent.history import ImageBudget
+
+    config = _config(tmp_path, image_domain=ImageBudget(media="png").domain)
+    config.images.media = "png"
+    assert DesktopHarness(config)._image_report()["matches_expected"] is True
+
+
+def test_no_expected_image_domain_reports_none_rather_than_a_false_match(tmp_path) -> None:
+    assert DesktopHarness(_config(tmp_path))._image_report()["matches_expected"] is None
+
+
+def test_a_foreign_image_domain_is_refused_before_a_vm_is_booted(
+    tmp_path, preparer, monkeypatch
+) -> None:
+    """The encoding is resolvable from config alone, so refusing after the boot
+    costs one VM and one guest setup per task across a 369-cell array."""
+    from agent.history import ImageBudget
+
+    captured = _captured_lease(monkeypatch)
+    with pytest.raises(ValueError, match="is not the encoding this arm renders"):
+        _run(
+            _config(tmp_path, image_domain=ImageBudget(media="png").domain),
+            _task(max_steps=1, name="i"),
+            replies=["0 0 0 ;"],
+        )
+    assert captured == [], "no VM may be leased for a run that cannot be scored"
+    assert preparer.prepared == 0
+
+
+def test_every_episode_publishes_the_image_encoding_it_sent(tmp_path, preparer) -> None:
+    """`dump_prompt` elides the image bytes, so this is the only record of which
+    pixels the checkpoint was scored on."""
+    from agent.history import ImageBudget
+
+    trace, result, _ = _run(_config(tmp_path), _task(max_steps=1), replies=["0 0 0 ;"])
+    assert result["images"] == {
+        "max_images": 4,
+        "media": "jpeg",
+        "quality": 85,
+        "max_pixels": 0,
+    }
+    assert trace.info["images"]["image_domain"] == ImageBudget(quality=85).domain
+
+
 def test_the_pool_target_injects_a_fake_and_receives_session_kwargs(tmp_path, preparer) -> None:
     """`pool_target` exists to inject a fake, not to select a backend."""
     config = _config(tmp_path)
@@ -1616,7 +1748,7 @@ def test_the_osworld_score_is_the_verdict_a_scored_arm_reports(tmp_path, prepare
     assert index["tasks"][index["primary"]] == 1.0
 
 
-@pytest.mark.parametrize("reward", [0.0, 0.5, 0.9989, 1.0])
+@pytest.mark.parametrize("reward", [0.0, 0.5, 0.9989, 0.999999, 1.0])
 def test_no_scored_episode_can_disagree_with_its_own_reward(
     tmp_path, preparer, reward
 ) -> None:
@@ -1628,7 +1760,23 @@ def test_no_scored_episode_can_disagree_with_its_own_reward(
     config = _config(tmp_path, evaluate_on_finish=True)
     _, result, _ = _run(config, _task(max_steps=1), replies=["0 0 0 ;"], session=session)
     assert result["task_reward"] == reward
-    assert result["success"] is (reward >= FULL_SUCCESS_THRESHOLD)
+    assert result["success"] is (reward == 1.0)
+
+
+@pytest.mark.parametrize(
+    "reward",
+    [True, "1.0", float("nan"), float("inf"), -0.1, 1.1],
+)
+def test_an_invalid_osworld_score_is_infrastructure_invalid(
+    tmp_path, preparer, reward
+) -> None:
+    session = FakeSession()
+    session.evaluate_value = reward
+    config = _config(tmp_path, evaluate_on_finish=True)
+    _, result, _ = _run(config, _task(max_steps=1), replies=["0 0 0 ;"], session=session)
+    assert result["task_reward"] is None
+    assert result["validity"] == "infra_invalid" and result["success"] is None
+    assert result["infra_error"]["stage"] == "evaluate"
 
 
 def test_a_session_without_evaluate_refuses_the_flag_it_cannot_honour(
@@ -1755,6 +1903,12 @@ def test_a_config_without_a_codec_is_refused() -> None:
     "field,bad",
     [
         ("max_tokens", 0),
+        ("max_tokens", True),
+        ("temperature", float("nan")),
+        ("temperature", -0.1),
+        ("top_p", float("nan")),
+        ("top_p", 0.0),
+        ("top_p", 1.1),
         ("max_steps", -1),
     ],
 )
@@ -1765,6 +1919,20 @@ def test_the_config_validates_its_bounds(field, bad) -> None:
     # raises on its own and the assertion would be satisfied by any input at all.
     with pytest.raises(ValidationError, match=field):
         DesktopHarnessConfig(**{"codec": "deltatype_v2", field: bad})
+
+
+def test_a_scripted_arm_cannot_name_sampling_it_never_uses() -> None:
+    """A scripted arm renders its own action, so a temperature on it would be
+    published as the run's sampling and never reach anything. `None` is what says
+    "this arm does not sample", and the six control arms depend on it meaning that.
+    """
+    from pydantic import ValidationError
+
+    for knob in ("temperature", "top_p"):
+        with pytest.raises(ValidationError, match="never calls a model"):
+            DesktopHarnessConfig(
+                codec="deltatype_v2", scripted=ScriptedConfig(enabled=True), **{knob: 0.7}
+            )
 
 
 def test_the_image_budget_config_validates_quality_and_pixels() -> None:

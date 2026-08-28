@@ -19,6 +19,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import math
 import os
 import socket
 import tempfile
@@ -31,6 +32,7 @@ import verifiers.v1 as vf
 from pydantic import Field, model_validator
 
 import grammars
+from desktop.execute.guest_program import HeldStateError
 
 from agent.agent import (
     Agent,
@@ -142,13 +144,23 @@ class ScriptedConfig(vf.BaseConfig):
 
 class BudgetConfig(vf.BaseConfig):
     """Hard per-episode ceilings: model turns, dispatched operations, output
-    tokens, wall time.
+    tokens, wall time, consecutive unparseable turns. `0` is off, on all five.
     """
 
     model_turns: int = Field(default=0, ge=0)
     operations: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     wall_time_s: float = Field(default=0.0, ge=0.0)
+    consecutive_parse_errors: int = Field(default=0, ge=0)
+    """Unparseable turns in a row before the episode ends; the streak resets on any
+    turn that parsed.
+
+    Off by default, unlike the other four, and deliberately: `parse_error_rate` is
+    measured over the whole episode, so an arm studying a parse collapse has to be
+    able to run through one. It is the arms that pay for a VM per cell — an OSWorld
+    array, a sign-of-life gate — that set it, because `model_turns` cannot separate
+    a checkpoint that acted for 60 turns from one that emitted 60 turns nothing
+    could read."""
 
 
 class ArtifactConfig(vf.BaseConfig):
@@ -234,6 +246,19 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     can tell one apart from the wrong checkpoint entirely -- only the arm's author
     knows. Stating the reason here makes it data that lands in the record instead
     of a comment nobody can check, and leaves the unjustified case loud."""
+    image_domain: str | None = None
+    """The encoding of the frames in a checkpoint's training records, as
+    `datasets/convert.py` writes it into `convert_manifest.json`. ENFORCED unless a
+    mismatch is justified in writing by `expect_image_mismatch`.
+
+    The prompt failure one domain over: the rollout-BC loop trains on the raw PNG
+    framebuffer this harness writes to `steps/step_NNN.png` and scores through
+    `images.media`/`quality`, so a mismatch does not error -- it reads the
+    checkpoint through pixels it never saw and presents as a weak number rather
+    than as the config mistake it is."""
+    expect_image_mismatch: str | None = None
+    """Why THIS arm's image encoding legitimately differs, or `None` to require a
+    match."""
     history: HistoryConfig = HistoryConfig()
     images: ImageBudgetConfig = ImageBudgetConfig()
     settle: SettleConfig = SettleConfig()
@@ -243,12 +268,35 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     pool: DesktopPoolConfig = DesktopPoolConfig()
     max_steps: int = Field(default=0, ge=0)
     """Overrides the task's own `max_steps` when > 0."""
-    max_tokens: int = Field(default=256, ge=1)
+    max_tokens: int = Field(default=256, ge=1, strict=True)
     """Fallback only — used for a knob `ctx.sampling` leaves unset."""
-    temperature: float | None = None
-    """Fallback only. `ctx.sampling.temperature` wins at the wire; see
-    `agent.agent.resolve_sampling`."""
-    top_p: float | None = None
+    model_request_timeout_s: float = Field(default=180.0, gt=0.0, allow_inf_nan=False)
+    """One model request's inactivity timeout.
+
+    The sign-of-life supervisor also uses this declared value when deriving the
+    outer attempt deadline. A server that keeps yielding bytes can outlive an
+    inactivity timeout, so this is not itself the attempt deadline.
+    """
+    temperature: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
+    """The arm's sampling temperature, which `evals/signoflife/__main__.py` promotes
+    into the eval's `sampling` block; `ctx.sampling` still wins at the wire
+    (`agent.agent.resolve_sampling`). `None` names no temperature, which is what a
+    scripted arm must do and what the validator below enforces: it renders its own
+    action and calls no model, so a number here would be recorded in the run and
+    never sent.
+
+    There is deliberately no default for a model arm, because greedy is not a
+    neutral choice. Measured on the eov3 relative family: temperature 0 confines
+    100% of mouse deltas to {0, ±1, ±10, ±100} and lands no click within 1000 px of
+    its target, which scores the decoder rather than the checkpoint; at 0.7 the
+    on-lattice share is 3.9%, clicks land 36-49 px out, and the target application
+    opens. So `evals/signoflife/__main__.py` refuses a model arm that names a
+    temperature neither here nor on the command line, rather than supplying one of
+    its own."""
+    top_p: float | None = Field(default=None, gt=0.0, le=1.0, allow_inf_nan=False)
+    """`temperature`'s sibling, same contract. 1.0 is the no-op value, not the
+    absence: an arm names it so the wire body carries the arm's nucleus setting and
+    not the server's."""
     parse_error_notice: str = ""
     """What to tell the model after a turn it could not have executed, or `""` to
     tell it nothing.
@@ -271,6 +319,16 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     prefer_context_transport: bool = False
     """Sample through `ctx.client` instead of posting to `endpoint`."""
 
+    @model_validator(mode="after")
+    def _a_scripted_arm_names_no_sampling(self) -> "DesktopHarnessConfig":
+        if self.scripted.enabled and (self.temperature is not None or self.top_p is not None):
+            raise ValueError(
+                "a scripted arm renders its own action and never calls a model, so a "
+                "temperature or top_p here would be published as the run's sampling "
+                "and never sent to anything"
+            )
+        return self
+
 
 @dataclass
 class _Budget:
@@ -279,6 +337,7 @@ class _Budget:
     model_turns: int = 0
     operations: int = 0
     output_tokens: int = 0
+    consecutive_parse_errors: int = 0
     failure: str | None = None
 
     def __post_init__(self) -> None:
@@ -295,6 +354,14 @@ class _Budget:
     def tokens(self, count: int) -> None:
         self.output_tokens += count
         self._check("output_tokens", self.output_tokens, self.config.output_tokens)
+
+    def parsed(self, ok: bool) -> None:
+        self.consecutive_parse_errors = 0 if ok else self.consecutive_parse_errors + 1
+        self._check(
+            "consecutive_parse_errors",
+            self.consecutive_parse_errors,
+            self.config.consecutive_parse_errors,
+        )
 
     def _check(self, name: str, used: int, limit: int) -> None:
         if limit and used > limit and self.failure is None:
@@ -314,6 +381,7 @@ class _Budget:
             "model_turns": self.model_turns,
             "operations": self.operations,
             "output_tokens": self.output_tokens,
+            "consecutive_parse_errors": self.consecutive_parse_errors,
             "wall_time_s": round(time.monotonic() - self.started, 3),
             "failure": self.failure,
         }
@@ -685,6 +753,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         # unjustified mismatch must be refused here rather than one boot and one
         # guest setup per task into a 369-cell array.
         trace.info["prompt"] = self._prompt_report(codec)
+        trace.info["images"] = self._image_report()
 
         spec = PoolSpec(
             key=self.config.pool.key,
@@ -768,16 +837,12 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                     else {}
                 ),
             ),
-            budget=ImageBudget(
-                max_images=self.config.images.max_images,
-                media="png" if self.config.images.media == "png" else "jpeg",
-                quality=self.config.images.quality,
-                max_pixels=self.config.images.max_pixels,
-            ),
+            budget=self._budget(),
             transport=build_transport(
                 endpoint=endpoint,
                 secret=secret,
                 prefer_context=self.config.prefer_context_transport,
+                timeout_s=self.config.model_request_timeout_s,
             ),
             system_prompt=self.config.system_prompt_override,
             max_tokens=self.config.max_tokens,
@@ -829,6 +894,13 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                     outcome = f"framework_stop_{trace.stop_condition}"
                     break
                 cursor = tuple(await _to_thread(session.cursor_position))
+                _LOGGER.info(
+                    "turn start: trace=%s cell=%s turn=%d/%d",
+                    trace.id,
+                    task.name,
+                    step,
+                    max_steps,
+                )
                 decision, step_sampling = await self._decide(
                     agent,
                     ctx,
@@ -843,6 +915,14 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                     session=session,
                     codec=codec,
                     artifacts=artifacts,
+                )
+                _LOGGER.info(
+                    "turn done: trace=%s cell=%s turn=%d/%d response=%s",
+                    trace.id,
+                    task.name,
+                    step,
+                    max_steps,
+                    decision is not None,
                 )
                 # Only a real turn updates the provenance. Assigning unconditionally
                 # erased it on the terminal non-turn: a scripted arm exhausting its
@@ -875,7 +955,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                         )
                         budget.dispatched(len(decision.operations))
                         _update_held(held, decision.operations)
-                    except (TypeError, ValueError) as exc:
+                    except (TypeError, ValueError, HeldStateError) as exc:
                         action_error = {"type": type(exc).__name__, "message": str(exc)}
                         state.action_errors += 1
                     except Exception as exc:  # noqa: BLE001 - transport, fails closed
@@ -892,6 +972,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                         break
                 if decision.parse_error:
                     state.parse_errors += 1
+                budget.parsed(decision.parse_error is None)
                 state.ignored_after_terminate += decision.ignored_after_terminate
 
                 frame = await self._observe(preparer, session, task)
@@ -1044,6 +1125,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             "screen_size": state.screen_size,
             "history_policy": state.history_policy,
             "sampling": sampling,
+            "images": self.config.images.model_dump(),
             "success": state.success,
             "outcome": outcome,
             "steps": state.steps,
@@ -1284,6 +1366,41 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             ),
         }
 
+    def _budget(self) -> ImageBudget:
+        return ImageBudget(
+            max_images=self.config.images.max_images,
+            media=self.config.images.media,
+            quality=self.config.images.quality,
+            max_pixels=self.config.images.max_pixels,
+        )
+
+    def _image_report(self) -> dict[str, Any]:
+        """The image half of the wire as data, and the one check that must not be skipped.
+
+        `dump_prompt` elides the image bytes and the published result named no
+        encoding, so a train/serve pixel mismatch used to leave no trace in any
+        artifact. Unlike the prompt there is no second accepted form: an arm renders
+        exactly one encoding, so a difference is always the arm's to vouch for.
+        """
+        observed = self._budget().domain
+        expected = self.config.image_domain
+        justification = self.config.expect_image_mismatch
+        matches = None if expected is None else expected == observed
+        if matches is False and justification is None:
+            raise ValueError(
+                f"image_domain={expected!r} is not the encoding this arm renders "
+                f"({observed!r}). This checkpoint was trained on different pixels than "
+                f"this eval sends, so a score from this run would not be the number it "
+                f"looks like. Set expect_image_mismatch=<why> on the arm if the "
+                f"difference is known and intended."
+            )
+        return {
+            "image_domain": observed,
+            "expected_image_domain": expected,
+            "matches_expected": matches,
+            "expect_image_mismatch": justification,
+        }
+
     def _control_ok(self, state: DesktopState) -> bool | None:
         """Calibration conformance for a control arm; `None` for a model arm.
 
@@ -1327,7 +1444,12 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         # declaration silently forfeits every `infeasible` task in it.
         session.declare_terminal(declared)
         try:
-            score = float(await _to_thread(evaluate))
+            raw = await _to_thread(evaluate)
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+                raise TypeError(f"evaluate() returned a non-numeric score: {raw!r}")
+            score = float(raw)
+            if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+                raise ValueError(f"evaluate() returned an invalid score: {score!r}")
         except Exception as exc:  # noqa: BLE001 - recorded as missing, never as 0.0
             _LOGGER.warning("evaluate() failed: %r", exc)
             return None

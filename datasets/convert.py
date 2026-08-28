@@ -104,6 +104,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import grammars  # noqa: E402
+from agent.history import ImageBudget  # noqa: E402
 from grammars import _support  # noqa: E402
 
 # Duration used when lowering a teacher drag into a timed stroke.
@@ -1065,6 +1066,12 @@ def main(argv: list[str] | None = None) -> int:
         "system_prompt_sha256": hashlib.sha256(
             grammars.system_prompt(codec, thinking=bool(args.keep_prose)).encode()
         ).hexdigest(),
+        # The encoding of every frame these records point at. They are the guest
+        # framebuffers `evals/harness.py` wrote to `steps/step_NNN.png`, referenced
+        # by path and never re-encoded, so a record is lossless and full-resolution
+        # while the eval that produced it sent JPEG q85. `image_domain` on the eval
+        # arm is what refuses to score a checkpoint through the other one.
+        "image_domain": ImageBudget(media="png").domain,
         "rollouts_dir": args.rollouts_dir,
         "recursive": args.recursive,
         "keep_slugs": args.keep_slugs,

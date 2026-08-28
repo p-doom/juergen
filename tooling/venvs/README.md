@@ -1,9 +1,9 @@
 # venv manifests
 
-The estate runs on nine hand-built virtual environments under
-`/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/venvs/`. None of them had a
-manifest: they were built by hand, drifted by hand, and could not be rebuilt if
-the filesystem lost them. This directory is the record — one
+The estate runs on ten hand-built virtual environments. Nine are under
+`/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/venvs/`; the sign-of-life
+serving runtime is a sibling named directly by the eval recipes. This directory
+is the record — one
 `<name>.requirements.txt` and one `rebuild-<name>.sh` per venv, captured
 2026-08-23 with `uv pip freeze` (uv 0.7.19).
 
@@ -24,6 +24,7 @@ whose manifest no longer reproduces it is a venv nobody can rebuild.
 | `osworld-parity-venv` | 3.12.11 | 323 | OSWorld parity evaluation — the one environment where juergen's dependencies and OSWorld's coexist. It exists because they could not be merged into an existing venv: a numpy 1.x/2.x ABI conflict forced a dedicated build. |
 | `eval-venv` | 3.12.9 | 309 | Serving/eval: sglang 0.5.6.post1 from PyPI, torch 2.9.1, transformers 5.0.0rc0. Not on any gate path. |
 | `sglang-eval-venv` | 3.12.9 | 248 | Serving/eval against a forked sglang (`JustinTong0323/sglang@39b37ca6`, `subdirectory=python`). Oldest venv in the estate (2026-03-31), and the only one that still carries its own pip. |
+| `sign_of_life_eval_v2_venv` | 3.12.11 | 344 | Active SGLang serving runtime named by the sign-of-life eval recipes. Torch 2.9.1+cu128, sglang 0.5.10.post1, transformers 5.3.0. |
 
 Interpreters: `3.12.11` and `3.13.5` are uv-managed
 (`cpython-*-linux-x86_64-gnu`) and the rebuild scripts name them by version, so
@@ -40,7 +41,7 @@ Pins are exact versions, plus shas for VCS requirements. Only
 VCS requirement, and `--require-hashes` is all-or-nothing — one
 `pkg @ file:///…` line disqualifies a whole file.
 
-Re-freezing after a change. For eight of the nine:
+Re-freezing after a change. For nine of the ten:
 
     NO_COLOR=1 uv pip freeze --no-config --python <venv>/bin/python
 
@@ -60,7 +61,7 @@ defeats `--require-hashes` outright since an override is not `==` pinned.
 
 ## Provenance holes
 
-Eleven requirements across seven venvs are installed from a path rather than an
+The remaining requirements below are installed from a path rather than an
 identity. The manifest records what the path held at capture time, but the path
 is what gets installed, so a rebuild takes whatever is there when it runs. These
 are the holes, and closing them means publishing those trees and pinning a sha:
@@ -83,6 +84,13 @@ point at directories that are gone; nothing on disk records what they contained.
 Those lines are commented out in their manifests so the rebuild completes, and
 the rebuild is **not** equivalent to the captured venv. Both venvs are
 serving-only and off every gate path, which is the only reason this is survivable.
+
+The three sign-of-life editables are archived on `origin` at
+`refs/heads/archive/sign-of-life-eval-v2-20260803`, which resolves to
+`119b2e252b9a91ee4e15124b720daccfd1c9789b`. Its rebuild script requires the
+caller repository's `refs/remotes/origin/archive/sign-of-life-eval-v2-20260803`
+to resolve to that exact commit; it neither fetches nor accepts an unverified
+local object.
 
 Three requirements do pin, because the sha is in the URL:
 `tokamax @ git+https://github.com/p-doom/tokamax.git@d81bc23b` (the three omegalax
@@ -123,3 +131,7 @@ the capture, 113 distributions, no drift. Under the rebuilt interpreter,
 `pytest tests/test_suite_and_gate.py grammars/` with the gate's own
 `PYTEST_ADDOPTS="-q -p no:cacheprovider"`: **756 passed**, matching the same
 slice under the original venv.
+
+`sign_of_life_eval_v2_venv` was captured from its live recipe interpreter:
+Python 3.12.11, 344 distributions, raw freeze sha256
+`997ae8ba16caa70eac29f2f4316691323bf2f041bcc32c6f3fe0f62a3c8b1b23`.

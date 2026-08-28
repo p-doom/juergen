@@ -23,7 +23,13 @@ from typing import Any
 
 from juergen_doubles import FakeGuestReceipt
 
-__all__ = ["FakeCheckout", "FakeDesktopPool", "FakeGuestSession", "build_desktop_pool"]
+__all__ = [
+    "FakeCheckout",
+    "FakeDesktopPool",
+    "FakeGuestSession",
+    "build_desktop_pool",
+    "kvm_desktop_pool",
+]
 
 _TASK_ID = re.compile(r"'task_id':\s*(?P<value>'[^']*'|\"[^\"]*\")")
 
@@ -224,3 +230,16 @@ class FakeDesktopPool:
 def build_desktop_pool(**kwargs: Any) -> FakeDesktopPool:
     """The one substituted function. Signature-compatible with the real one."""
     return FakeDesktopPool(**kwargs)
+
+
+def kvm_desktop_pool(**kwargs: Any) -> Any:
+    """The production adapter over the fake factory, importable by a spawn worker."""
+    import desktop.vm.factory as factory
+    from evals.vm import kvm_desktop_pool as production_pool
+
+    original = factory.build_desktop_pool
+    factory.build_desktop_pool = build_desktop_pool
+    try:
+        return production_pool(**kwargs)
+    finally:
+        factory.build_desktop_pool = original

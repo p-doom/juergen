@@ -107,6 +107,10 @@ build-backend = "setuptools.build_meta"
 # resolve only from a cwd that happens to be the checkout, and every
 # `--taskset.id` breaks the moment a run is dispatched from anywhere else.
 py-modules = [
+    # Not a plugin id. The image-domain spelling `agent/` and `pipeline/` both
+    # write, flat because `pipeline/` runs in a venv without `verifiers` and so
+    # can import nothing under `agent/`.
+    "image_domain",
     "osworld_bench",
     "rl_grounding",
     "rl_movebox",

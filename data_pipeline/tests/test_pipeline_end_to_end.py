@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Iterable
@@ -43,7 +44,9 @@ import synthetic_clip as clip
 from grammars.deltatype_v2 import CODEC as DELTATYPE_V2
 from grammars.ordered_events_v3 import CODEC as ORDERED_EVENTS_V3
 
+from image_domain import image_domain
 from pipeline.lib import config
+from pipeline.lib.image_store import open_image_pil
 from pipeline.lib.manifest import make_artifact_id
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -507,6 +510,50 @@ def test_stage_04_records_the_join_ids_and_the_prompt_it_trained_against(chain: 
     assert (chain.conv_canonical / "chat.jsonl").read_bytes() == (
         chain.conv_canonical / "conversations.jsonl"
     ).read_bytes()
+
+
+def test_stage_04_records_the_image_encoding_of_the_frames_in_the_records(
+    chain: Chain,
+) -> None:
+    """The image half of the same claim. Stage 01 encoded these frames once and
+    stage 04 points at them by ``ar://`` URI, so the manifest has to describe the
+    bytes behind those URIs -- otherwise nothing records that a crowd-cast
+    checkpoint trained at q80 and a reduced height, and `evals/harness.py` has
+    nothing to refuse a full-resolution q85 eval arm against."""
+    manifest = json.loads((chain.conv_canonical / "manifest.json").read_text())
+    assert manifest["image_domain"] == image_domain(
+        media="jpeg",
+        quality=config.DEFAULT_JPEG_QUALITY,
+        geometry="height",
+        extent=clip.FRAME_H,
+    )
+    assert manifest["image_domain"] != image_domain(
+        media="jpeg", quality=85, geometry="max_pixels", extent=0
+    ), "the eval default is full-resolution q85; if these ever agree the gate is asleep"
+    (row,) = chain.rows(chain.conv_canonical)
+    images = user_images(row)
+    assert images
+    for uri in images:
+        with open_image_pil(uri) as frame:
+            assert frame.format == "JPEG"
+            assert frame.height == clip.FRAME_H
+
+
+def test_stage_04_refuses_a_master_store_that_did_not_record_its_encoding(
+    chain: Chain, tmp_path: Path
+) -> None:
+    """The field is only worth reading if it cannot be fabricated. Stage 01's
+    merge path fills ``jpeg_quality`` from a shard summary that can be absent, and
+    a ``jpeg_qNone_height_None`` written into a manifest would be compared against
+    like any other domain."""
+    master = tmp_path / "master"
+    shutil.copytree(chain.master, master)
+    manifest = json.loads((master / "manifest.json").read_text())
+    manifest["jpeg_quality"] = None
+    (master / "manifest.json").write_text(json.dumps(manifest))
+    filter_dir = _filter(master, chain.realigned_manifest, tmp_path / "s03", *_NO_IDLE)
+    with pytest.raises(AssertionError, match="image domain of these conversations"):
+        _conversations(filter_dir, tmp_path / "s04", "canonical")
 
 
 # --------------------------------------------------------------------------

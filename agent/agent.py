@@ -20,6 +20,7 @@ on the wire.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -150,6 +151,9 @@ class EffectiveSampling:
     stop: tuple[str, ...]
     temperature_source: str
     wire_body_keys: tuple[str, ...]
+    seed: int | None = None
+    wire_request_sha256: str | None = None
+    wire_sampling_sha256: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -160,6 +164,9 @@ class EffectiveSampling:
             "stop": list(self.stop),
             "temperature_source": self.temperature_source,
             "wire_body_keys": list(self.wire_body_keys),
+            "seed": self.seed,
+            "wire_request_sha256": self.wire_request_sha256,
+            "wire_sampling_sha256": self.wire_sampling_sha256,
         }
 
 
@@ -210,6 +217,22 @@ def resolve_sampling(
     stop = wire.get("stop") or ()
     if isinstance(stop, str):
         stop = (stop,)
+    normalized = dict(wire)
+    normalized["messages"] = [
+        message_to_wire(message) for message in wire.get("messages", [])
+    ]
+    sampling = {key: value for key, value in normalized.items() if key != "messages"}
+
+    def digest(value: dict[str, Any]) -> str:
+        encoded = json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
     effective = EffectiveSampling(
         model=str(wire.get("model", ctx.model)),
         temperature=wire.get("temperature"),
@@ -220,6 +243,9 @@ def resolve_sampling(
             "ctx.sampling" if _eval_set(ctx.sampling, "temperature") else "harness_default"
         ),
         wire_body_keys=tuple(sorted(k for k in wire if k != "messages")),
+        seed=wire.get("seed"),
+        wire_request_sha256=digest(normalized),
+        wire_sampling_sha256=digest(sampling),
     )
     return wire, effective
 
@@ -681,12 +707,18 @@ class Agent:
 
 
 def build_transport(
-    *, endpoint: str | None, secret: str | None, prefer_context: bool = False
+    *,
+    endpoint: str | None,
+    secret: str | None,
+    prefer_context: bool = False,
+    timeout_s: float = 180.0,
 ) -> Transport:
     """`ContextTransport` when asked, or when there is no endpoint to post to."""
     if prefer_context or not endpoint:
         return ContextTransport()
-    return EndpointTransport(endpoint=endpoint, secret=secret or "")
+    return EndpointTransport(
+        endpoint=endpoint, secret=secret or "", timeout_s=timeout_s
+    )
 
 
 def dump_prompt(body: dict[str, Any]) -> str:

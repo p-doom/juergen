@@ -235,6 +235,11 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
         images=ImageBudgetConfig(max_images=8),
         settle=_settle(),
         max_tokens=256,
+        # Inherited: the command-line default every recorded run of this arm took.
+        # Never validated as a choice -- nothing here was measured against another
+        # temperature, so it claims only reproducibility.
+        temperature=0.0,
+        top_p=1.0,
         artifacts=ArtifactConfig(save_prompts=True, write_gif=True),
     ),
     "phaseb_compact": DesktopHarnessConfig(
@@ -259,6 +264,9 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
         ),
         settle=_settle(),
         max_tokens=256,
+        # Inherited and unvalidated, as for `offshelf_native`.
+        temperature=0.0,
+        top_p=1.0,
         artifacts=ArtifactConfig(save_prompts=True, write_gif=True),
     ),
     "ordered": DesktopHarnessConfig(
@@ -269,6 +277,11 @@ MODEL_ARMS: dict[str, DesktopHarnessConfig] = {
         system_prompt_sha256=ORDERED_SYSTEM_PROMPT_SHA256,
         settle=_settle(),
         max_tokens=256,
+        # Measured, not a preference: greedy collapses this family's mouse deltas
+        # onto the {0, ±1, ±10, ±100} lattice and lands no click on its target. See
+        # `DesktopHarnessConfig.temperature`.
+        temperature=0.7,
+        top_p=1.0,
         artifacts=ArtifactConfig(save_prompts=True, write_gif=True),
     ),
 }
