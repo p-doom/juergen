@@ -43,6 +43,7 @@ PROBED = FLAT_PLUGIN_IDS + (
     "desktop.geometry",
     "desktop.ir",
     "evals.signoflife.suite",
+    "evals.cua_gym.manifest",
 )
 
 # Nothing a build reads, and `build/` in particular is poison: setuptools copies
@@ -133,6 +134,19 @@ def test_the_sign_of_life_cell_table_ships_beside_its_module(resolved) -> None:
     # It was left out: only `vectors/*.json` was declared.
     _, files = resolved
     assert (files["evals.signoflife.suite"].parent / "suite.json").is_file()
+
+
+def test_the_pinned_cua_gym_compatibility_document_ships_beside_its_package(
+    resolved,
+) -> None:
+    # `load_default_manifest()` resolves it through `importlib.resources`, and
+    # `compatibility/` holds no `__init__.py`, so `packages.find` never sees it:
+    # only the `package-data` line puts it in the wheel.
+    from evals.cua_gym import PINNED_REVISION
+
+    _, files = resolved
+    package = files["evals.cua_gym.manifest"].parent
+    assert (package / "compatibility" / f"{PINNED_REVISION}.json").is_file()
 
 
 def test_the_pinned_desktop_source_resolves_where_a_path_could_not() -> None:

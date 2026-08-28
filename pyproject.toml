@@ -22,6 +22,9 @@ dependencies = [
     # is excluded from this resolve (see project_harbor_migration -- audit-only,
     # opt-in).
     "verifiers==0.2.1",
+    # `evals/cua_gym` reads the CUA-Gym dataset's Parquet metadata directly:
+    # `snapshot.py` and `task_health.py` are the only importers.
+    "pyarrow>=21.0.0",
 ]
 
 [project.optional-dependencies]
@@ -124,3 +127,7 @@ include = ["agent", "agent.*", "evals", "evals.*", "grammars", "grammars.*", "rl
 # table is read beside its module, and a wheel built straight from the tree (what
 # `uv sync` and `pip install .` do) carries no data file nobody names here.
 "evals.signoflife" = ["suite.json"]
+# `load_default_manifest()` reads `compatibility/<PINNED_REVISION>.json` through
+# `importlib.resources`. The directory holds no `__init__.py`, so `packages.find`
+# never sees it and only this line puts the document in the wheel.
+"evals.cua_gym" = ["compatibility/*.json"]
