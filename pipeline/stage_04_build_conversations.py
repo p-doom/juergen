@@ -32,9 +32,8 @@ conformance vectors pin the same digest, so neither side can move alone.
 
 Neither are the pixels. A conversation points at stage-01 master records by
 ``ar://`` URI and nothing re-encodes them, so the manifest states their encoding
-as ``image_domain`` (e.g. ``jpeg_q80_height_720``) — the field and spelling
-``datasets/convert.py`` also writes. Stage 06 refuses this generic recording
-identity as a desktop SFT source instead of silently transcoding it.
+as ``image_domain`` (e.g. ``jpeg_q80_height_720``). Stage 06 preserves that
+identity in its records manifest; it never silently transcodes these frames.
 
 Dead-zone accounting: every segment row carries the label-policy counters
 (discarded deltas, clamped/dropped pairs); segments whose discard fraction

@@ -44,7 +44,7 @@ import synthetic_clip as clip
 from grammars.deltatype_v2 import CODEC as DELTATYPE_V2
 from grammars.ordered_events_v3 import CODEC as ORDERED_EVENTS_V3
 
-from image_domain import OSWORLD_CURSOR_JPEG_DOMAIN, image_domain
+from image_domain import image_domain
 from pipeline.lib import config
 from pipeline.lib.image_store import open_image_pil
 from pipeline.lib.manifest import make_artifact_id
@@ -517,8 +517,8 @@ def test_stage_04_records_the_image_encoding_of_the_frames_in_the_records(
 ) -> None:
     """The image half of the same claim. Stage 01 encoded these frames once and
     stage 04 points at them by ``ar://`` URI, so the manifest has to describe the
-    bytes behind those URIs -- otherwise a crowd-cast checkpoint trained at q80
-    and a reduced height could be mixed into desktop SFT. Stage 06 refuses it."""
+    bytes behind those URIs. Stage 06 carries this identity into its records
+    manifest rather than silently transcoding the frames."""
     manifest = json.loads((chain.conv_canonical / "manifest.json").read_text())
     assert manifest["image_domain"] == image_domain(
         media="jpeg",
@@ -526,7 +526,6 @@ def test_stage_04_records_the_image_encoding_of_the_frames_in_the_records(
         geometry="height",
         extent=clip.FRAME_H,
     )
-    assert manifest["image_domain"] != OSWORLD_CURSOR_JPEG_DOMAIN
     (row,) = chain.rows(chain.conv_canonical)
     images = user_images(row)
     assert images

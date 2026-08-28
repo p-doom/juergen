@@ -35,8 +35,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from pipeline.lib.goals import assert_same_artifact  # noqa: E402
 from pipeline.lib.manifest import make_artifact_id, write_manifest  # noqa: E402
-from image_domain import OSWORLD_CURSOR_JPEG_DOMAIN  # noqa: E402
-
 FLAGS = flags.FLAGS
 
 # Filename of the per-message length cache written by the measure stage
@@ -136,31 +134,25 @@ def _run_split(split: str, src_chat: Path, out_split_dir: Path, cache_path: Path
     return {"split": split, "n_shards": n_shards, "elapsed_s": int(elapsed)}
 
 
-def _require_desktop_observation_contract(source_path: Path) -> None:
-    """Refuse records whose source frames were not desktop observations.
-
-    Stage 04's generic crowd-cast stream currently emits JPEG q80 frames resized
-    by height. Those are not interchangeable with the cursor-composited native
-    desktop frames used by the desktop SFT harness. This is the final boundary
-    before Omegalax would bake either stream into the same training format.
-    """
+def _source_image_domain(source_path: Path) -> str:
+    """Read the image identity that stage 06 carries into its records artifact."""
     manifest_path = source_path / "manifest.json"
     if not manifest_path.is_file():
         raise FileNotFoundError(f"no manifest.json under {source_path}")
     manifest = json.loads(manifest_path.read_text())
     actual = manifest.get("image_domain")
-    if actual != OSWORLD_CURSOR_JPEG_DOMAIN:
+    if not isinstance(actual, str) or not actual:
         raise RuntimeError(
-            f"{manifest_path}: desktop SFT requires image_domain="
-            f"{OSWORLD_CURSOR_JPEG_DOMAIN!r}, got {actual!r}"
+            f"{manifest_path}: source conversations must declare image_domain, got {actual!r}"
         )
+    return actual
 
 
 def main(_) -> None:
     output_dir = Path(FLAGS.output_dir)
     source_path = Path(FLAGS.source_path)
     lengths_root = Path(FLAGS.message_lengths_path) if FLAGS.message_lengths_path else None
-    _require_desktop_observation_contract(source_path)
+    source_image_domain = _source_image_domain(source_path)
 
     src_chat = source_path / "chat.jsonl"
     if not src_chat.is_file():
@@ -198,7 +190,7 @@ def main(_) -> None:
         inputs={
             "source": str(source_path),
             "source_id": source_id,
-            "image_domain": OSWORLD_CURSOR_JPEG_DOMAIN,
+            "image_domain": source_image_domain,
         },
         stats={"per_split": per_split},
     )

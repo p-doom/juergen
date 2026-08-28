@@ -606,7 +606,7 @@ def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def _assert_frame_set(steps_dir: Path, n_rows: int) -> None:
-    """Exactly `step_000..step_{n-1}.jpg` under `steps/`, and nothing else.
+    """Exactly `step_000..step_{n-1}.jpg` files, with no other `step_*` entry.
 
     labctl never lists the directory. One endpoint formats `step_{n:03}.jpg` from the
     index it wants (`server.rs:1655`) while a sibling reports `frame_count` by
@@ -615,7 +615,7 @@ def _assert_frame_set(steps_dir: Path, n_rows: int) -> None:
     directory — offers frames that do not exist.
     """
     expected = {_FRAME.format(index=index) for index in range(n_rows)}
-    present = {path.name for path in steps_dir.glob("*.jpg")}
+    present = {path.name for path in steps_dir.glob("step_*")}
     if present == expected:
         return
     raise RuntimeError(

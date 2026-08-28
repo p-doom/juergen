@@ -1142,6 +1142,17 @@ def test_a_missing_frame_is_refused_by_name(tmp_path, preparer) -> None:
     assert _assert_frame_set(steps / "absent", 0) is None, "no frames, no rows, no error"
 
 
+@pytest.mark.parametrize("stray", ["step_000.png", "step_001.bin"])
+def test_a_non_jpeg_step_file_is_refused_by_name(tmp_path, stray) -> None:
+    steps = tmp_path / "steps"
+    steps.mkdir()
+    (steps / "step_000.jpg").write_bytes(jpeg())
+    (steps / stray).write_bytes(b"legacy")
+
+    with pytest.raises(RuntimeError, match=rf"unexpected \['{stray}'\]"):
+        _assert_frame_set(steps, 1)
+
+
 def test_a_step_with_no_post_action_frame_gets_no_row(tmp_path, preparer) -> None:
     """The executor died mid-turn, so there is no screenshot to show for that step —
     but a row without a frame is a hole the viewer cannot fetch. `result.json` still
