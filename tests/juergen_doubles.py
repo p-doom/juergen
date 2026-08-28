@@ -191,7 +191,7 @@ class FakeClient:
     """A `Client` stand-in for `ContextTransport`. Records every wire body.
 
     A reply is either the content or a `(content, finish_reason)` pair; a bare
-    string finishes on `"stop"`, which is what a whole turn reports.
+    string finishes on `"stop"`. The reply's word count stands in for token usage.
     """
 
     def __init__(self, replies: list[str | tuple[str, str]] | None = None) -> None:
@@ -206,11 +206,14 @@ class FakeClient:
         )
         reply = self.replies.pop(0) if self.replies else ""
         text, finish_reason = reply if isinstance(reply, tuple) else (reply, "stop")
-        return type(
-            "Response",
-            (),
-            {"message": type("M", (), {"content": text})(), "finish_reason": finish_reason},
-        )()
+        return vf.Response(
+            id="fake-response",
+            created=0,
+            model=model,
+            message=vf.AssistantMessage(content=text),
+            finish_reason=finish_reason,
+            usage=vf.Usage(prompt_tokens=0, completion_tokens=len(text.split())),
+        )
 
 
 def make_ctx(

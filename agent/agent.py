@@ -24,7 +24,7 @@ import hashlib
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, Sequence
 
 import verifiers.v1 as vf
@@ -251,16 +251,23 @@ def resolve_sampling(
 
 
 class Transport(Protocol):
-    """`(content, finish_reason)`. The finish reason is not optional to report: a
-    turn cut off at `max_tokens` arrives as text that either fails to parse — a
-    fake parse error attributed to the model — or parses as a fragment of the
-    action it was still emitting."""
+    """`(content, finish_reason, output_tokens)` from one model call."""
 
     async def complete(
         self, ctx: vf.ModelContext, body: dict[str, Any], *, session_id: str | None
-    ) -> tuple[str, str | None]: ...
+    ) -> tuple[str, str | None, int]: ...
 
     async def close(self) -> None: ...
+
+
+def _output_tokens(usage: Any) -> int:
+    count = getattr(usage, "completion_tokens", None)
+    if type(count) is not int or count < 0:
+        raise ModelCallError(
+            "response usage.completion_tokens must be a non-negative integer, "
+            f"got {count!r}"
+        )
+    return count
 
 
 def _content(message: Any) -> str:
@@ -307,7 +314,7 @@ class EndpointTransport:
 
     async def complete(
         self, ctx: vf.ModelContext, body: dict[str, Any], *, session_id: str | None
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | None, int]:
         from openai import AsyncOpenAI
 
         if self._client is None:
@@ -323,7 +330,11 @@ class EndpointTransport:
         except Exception as exc:  # noqa: BLE001 - surfaced as infrastructure
             raise ModelCallError(f"{type(exc).__name__}: {exc}") from exc
         choice = completion.choices[0]
-        return _content(choice.message), choice.finish_reason
+        return (
+            _content(choice.message),
+            choice.finish_reason,
+            _output_tokens(completion.usage),
+        )
 
     async def close(self) -> None:
         if self._client is not None:
@@ -346,7 +357,7 @@ class ContextTransport:
 
     async def complete(
         self, ctx: vf.ModelContext, body: dict[str, Any], *, session_id: str | None
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | None, int]:
         wire = dict(body)
         wire["messages"] = [message_to_wire(m) for m in body["messages"]]
         try:
@@ -360,7 +371,11 @@ class ContextTransport:
         except Exception as exc:  # noqa: BLE001 - surfaced as infrastructure
             raise ModelCallError(f"{type(exc).__name__}: {exc}") from exc
         finish_reason = getattr(response, "finish_reason", None)
-        return _content(getattr(response, "message", None)), finish_reason
+        return (
+            _content(getattr(response, "message", None)),
+            finish_reason,
+            _output_tokens(getattr(response, "usage", None)),
+        )
 
     async def close(self) -> None:
         return None
@@ -403,6 +418,10 @@ class Decision:
     not the turn: the refused line is recorded here, does NOT end the episode, and
     the action on the lines above it is parsed and dispatched as if it stood
     alone."""
+    output_tokens: int = 0
+    """Completion tokens the server billed for this turn, and the only thing the
+    episode's `output_tokens` ceiling counts. Zero on the scripted arms alone:
+    they render their action locally and call no model."""
     intended_cursor: Any = None
     """Where the turn asked the cursor to go, before the display clamped it
     (`grammars._support.IntendedCursor`), or None when it named no position.
@@ -586,7 +605,7 @@ class Agent:
         program = {k: v for k, v in body.items() if k == "messages"}
         program.update(program_sampling(ctx, {k: v for k, v in body.items() if k != "messages"}))
         _, effective = resolve_sampling(ctx, body)
-        text, finish_reason = await self.transport.complete(
+        text, finish_reason, output_tokens = await self.transport.complete(
             ctx, program, session_id=session_id
         )
         if finish_reason == "length":
@@ -603,9 +622,13 @@ class Agent:
                 parse_error=None,
                 sampling=effective,
                 truncated=True,
+                output_tokens=output_tokens,
             )
-        return self.decide(
-            text, step=step, geometry=geometry, cursor=cursor, sampling=effective
+        return replace(
+            self.decide(
+                text, step=step, geometry=geometry, cursor=cursor, sampling=effective
+            ),
+            output_tokens=output_tokens,
         )
 
     def decide(

@@ -150,7 +150,10 @@ def test_every_relative_grammar_reports_its_own_move() -> None:
         if not read:
             absolute.add(name)
             continue
-        assert read == [(10, 20)] or name == "move_rel", (name, read)
+        assert read == [(10, 20)] or name in {"move_rel", "ordered_events_v3"}, (
+            name,
+            read,
+        )
     assert absolute == {"native_absolute", "compact_absolute"}, (
         "only the two absolute grammars carry a target rather than a delta"
     )

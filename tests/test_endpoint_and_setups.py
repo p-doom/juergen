@@ -26,7 +26,12 @@ class FakeOpenAI:
     """Serves `/chat/completions` and records every request body."""
 
     def __init__(
-        self, *, reply: str = "0 0 0 ;", status: int = 200, finish_reason: str = "stop"
+        self,
+        *,
+        reply: str = "0 0 0 ;",
+        status: int = 200,
+        finish_reason: str = "stop",
+        completion_tokens: int | None = 7,
     ) -> None:
         self.requests: list[dict] = []
         self.headers: list[dict] = []
@@ -63,11 +68,17 @@ class FakeOpenAI:
                                     "finish_reason": finish_reason,
                                 }
                             ],
-                            "usage": {
-                                "prompt_tokens": 1,
-                                "completion_tokens": 1,
-                                "total_tokens": 2,
-                            },
+                            **(
+                                {}
+                                if completion_tokens is None
+                                else {
+                                    "usage": {
+                                        "prompt_tokens": 1,
+                                        "completion_tokens": completion_tokens,
+                                        "total_tokens": 1 + completion_tokens,
+                                    }
+                                }
+                            ),
                         }
                     ).encode()
                     self.send_response(200)
@@ -123,7 +134,7 @@ def test_the_endpoint_transport_posts_and_returns_the_content(endpoint) -> None:
         finally:
             await transport.close()
 
-    assert asyncio.run(body()) == ("10 20 0 ; +LMB -LMB", "stop")
+    assert asyncio.run(body()) == ("10 20 0 ; +LMB -LMB", "stop", 7)
     request = server.requests[0]
     assert request["model"] == "my-model", "ctx.model is what goes on the wire"
     assert request["max_tokens"] == 32
@@ -266,7 +277,21 @@ def test_an_empty_completion_is_an_empty_string_not_none(endpoint) -> None:
         finally:
             await transport.close()
 
-    assert asyncio.run(body()) == ("", "stop")
+    assert asyncio.run(body()) == ("", "stop", 7)
+
+
+def test_a_response_without_usage_is_refused_not_counted_as_zero(endpoint) -> None:
+    server = endpoint(completion_tokens=None)
+
+    async def body():
+        transport = EndpointTransport(endpoint=server.base_url, secret="s")
+        try:
+            await transport.complete(make_ctx(), {"messages": []}, session_id=None)
+        finally:
+            await transport.close()
+
+    with pytest.raises(ModelCallError, match="non-negative integer"):
+        asyncio.run(body())
 
 
 def test_a_length_finish_is_reported_by_the_transport_not_swallowed(endpoint) -> None:
@@ -281,7 +306,7 @@ def test_a_length_finish_is_reported_by_the_transport_not_swallowed(endpoint) ->
         finally:
             await transport.close()
 
-    assert asyncio.run(body()) == ("10 20 0 ; +LM", "length")
+    assert asyncio.run(body()) == ("10 20 0 ; +LM", "length", 7)
 
 
 def _geometry():

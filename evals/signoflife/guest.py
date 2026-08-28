@@ -34,13 +34,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from grammars.native_absolute.codec import norm_from_pixels
-from grammars.ordered_events_v3.codec import escape
+from desktop.geometry import DisplayGeometry
+from desktop.ir import Operation
 
 from evals.fixtures import tk
 from evals.signoflife.oracle import evaluate_postcondition
 from evals.signoflife.suite import ALLOWED_KINDS
 from evals.tasks import DesktopTaskData, register_preparer
+from grammars.native_absolute.codec import norm_from_pixels
+from grammars.ordered_events_v3.codec import CODEC as ORDERED_EVENTS_V3
+from grammars.ordered_events_v3.codec import escape
 
 __all__ = [
     "Intent",
@@ -747,8 +750,20 @@ def _render_ordered_events_v3(
     if intent.kind == "click":
         cursor = tuple(session.cursor_position())
         target = _click_target(session, task, intent)
-        delta = (int(target[0]) - cursor[0], int(target[1]) - cursor[1])
-        return f"move({delta[0]},{delta[1]}); down(LMB); up(LMB)"
+        width, height = session.screen_size()
+        action = ORDERED_EVENTS_V3.action_from_operations(
+            (
+                Operation("move_to", (int(target[0]), int(target[1]))),
+                Operation("mouse_down", ("left",)),
+                Operation("mouse_up", ("left",)),
+            ),
+            geometry=DisplayGeometry(
+                desktop_width=width,
+                desktop_height=height,
+            ),
+            cursor=cursor,
+        )
+        return ORDERED_EVENTS_V3.format(action)
     raise ValueError(intent.kind)
 
 

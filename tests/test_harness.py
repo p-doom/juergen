@@ -593,7 +593,11 @@ def test_a_framework_stop_that_refuses_the_call_is_not_an_infra_failure(
             return type(
                 "R",
                 (),
-                {"message": type("M", (), {"content": "0 0 0 ;"})(), "finish_reason": "stop"},
+                {
+                    "message": type("M", (), {"content": "0 0 0 ;"})(),
+                    "finish_reason": "stop",
+                    "usage": type("U", (), {"completion_tokens": 4})(),
+                },
             )()
 
     trace, result = _launch(_config(tmp_path), _task(max_steps=9), Refusing)
@@ -627,6 +631,7 @@ def test_a_framework_stop_ends_the_loop_instead_of_replaying_the_last_turn(
                 {
                     "message": type("M", (), {"content": "0 0 0 ; +LMB -LMB"})(),
                     "finish_reason": "stop",
+                    "usage": type("U", (), {"completion_tokens": 6})(),
                 },
             )()
 
@@ -789,6 +794,30 @@ def test_the_operations_budget_ends_the_episode(tmp_path, preparer) -> None:
     config = _config(tmp_path, budget=BudgetConfig(operations=2))
     _, result, _ = _run(config, _task(max_steps=9), replies=["0 0 0 ; +LMB -LMB"] * 9)
     assert result["outcome"].startswith("budget_operations")
+
+
+def test_the_output_token_budget_ends_the_episode(tmp_path, preparer) -> None:
+    config = _config(tmp_path, budget=BudgetConfig(output_tokens=8))
+    _, result, _ = _run(config, _task(max_steps=9), replies=["0 0 0 ;"] * 9)
+    assert result["outcome"] == "budget_output_tokens_exceeded"
+    assert result["budget"]["output_tokens"] == 12, "the third four-token turn spends it"
+
+
+def test_the_published_token_count_is_the_one_the_server_reported(tmp_path, preparer) -> None:
+    _, result, _ = _run(
+        _config(tmp_path), _task(max_steps=2), replies=["0 0 0 ;", "NO_OP"]
+    )
+    assert result["budget"]["output_tokens"] == 5
+
+
+def test_a_truncated_turn_still_spends_its_tokens(tmp_path, preparer) -> None:
+    _, result, _ = _run(
+        _config(tmp_path),
+        _task(max_steps=4),
+        replies=[("thinking\n10 10 0 ; +LM", "length")],
+    )
+    assert result["outcome"] == "truncated_action"
+    assert result["budget"]["output_tokens"] == 6
 
 
 def test_the_parse_error_streak_ends_the_episode(tmp_path, preparer) -> None:

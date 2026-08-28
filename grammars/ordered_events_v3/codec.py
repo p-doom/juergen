@@ -23,6 +23,11 @@ types two literal characters instead of pressing Return, a labelling defect that
 reached real training data. Every other backslash escape is rejected at parse
 time.
 
+The payload is non-empty and carries no control character, and ``Primitive``
+enforces both on construction rather than in the parser: a rule the parser alone
+holds lets ``format`` emit ``type("line\\nbreak")``, which this grammar's own
+parser then reads as no action of this grammar at all.
+
 The segment -> primitives extraction (motor-grid accumulation, label policy,
 dead zones) stays in the data pipeline. This codec owns the surface syntax and
 its lowering.
@@ -50,10 +55,19 @@ _PAIR_RE = re.compile(r"\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)")
 _ARG_RE = re.compile(r"\(\s*([^\s(),;]+)\s*\)")
 
 NO_OP = "NO_OP"
+GRID = 1000
 
 
 class OrderedEventsV3Error(ValueError):
     """Malformed ordered-events-v3 action text."""
+
+
+def _pixels_from_norm(value: int, dimension: int) -> int:
+    return round(value / GRID * dimension)
+
+
+def _norm_from_pixel(value: int, dimension: int) -> int:
+    return round(value / dimension * GRID)
 
 
 def escape(text: str) -> str:
@@ -79,11 +93,6 @@ def unescape(body: str) -> str:
             out.append(following)
             index += 2
             continue
-        if char in "\n\r\t":
-            raise OrderedEventsV3Error(
-                "type() payload cannot contain a control character; press Return "
-                "as down(Return); up(Return)"
-            )
         out.append(char)
         index += 1
     return "".join(out)
@@ -107,6 +116,17 @@ class Primitive:
                 f"{self.name!r} is not a name {self.kind}() can spell "
                 f"(must match {NAME_RE.pattern})"
             )
+        if self.kind == "type":
+            if not self.text:
+                raise OrderedEventsV3Error(
+                    "type() payload is empty; the grammar types at least one "
+                    "character, and an empty burst dispatches to the guest"
+                )
+            if any(char in self.text for char in "\n\r\t"):
+                raise OrderedEventsV3Error(
+                    "type() payload cannot contain a control character; press "
+                    "Return as down(Return); up(Return)"
+                )
 
     def render(self) -> str:
         if self.kind in ("move", "scroll"):
@@ -189,8 +209,8 @@ class OrderedEventsV3Codec:
 
     @_support.production("move(dx,dy)")
     def _move(self) -> None:
-        """Move the cursor by (dx, dy) screen pixels RELATIVE to where it is:
-        dx > 0 RIGHT, dx < 0 LEFT; dy > 0 DOWN, dy < 0 UP.
+        """Move the cursor by the relative offset (dx, dy), in thousandths of
+        each screen axis: dx > 0 RIGHT, dx < 0 LEFT; dy > 0 DOWN, dy < 0 UP.
         """
 
     @_support.production("scroll(dx,dy)")
@@ -280,14 +300,21 @@ class OrderedEventsV3Codec:
         geometry: DisplayGeometry,
         cursor: tuple[int, int],
     ) -> tuple[Operation, ...]:
-        """Fold the relative moves onto ``cursor``, emitting absolute pixels."""
+        """Denormalize relative moves and fold them onto ``cursor``."""
         if action.no_op:
             return ()
+        width, height = _support.screen_size(geometry)
         operations: list[Operation] = []
         here = _support.clamp(cursor, geometry)
         for item in action.primitives:
             if item.kind == "move":
-                target = _support.clamp((here[0] + item.dx, here[1] + item.dy), geometry)
+                target = _support.clamp(
+                    (
+                        here[0] + _pixels_from_norm(item.dx, width),
+                        here[1] + _pixels_from_norm(item.dy, height),
+                    ),
+                    geometry,
+                )
                 if target != here:
                     operations.append(_support.move_to(target))
                 here = target
@@ -323,16 +350,21 @@ class OrderedEventsV3Codec:
         geometry: DisplayGeometry,
         cursor: tuple[int, int],
     ) -> _support.IntendedCursor | None:
-        """Every interleaved ``move`` primitive, in order, as pixel deltas.
+        """Every interleaved ``move`` primitive, denormalized in order.
 
         ``None`` for the idle action, and for a turn of keys and clicks alone:
         this is the one grammar where an action can carry no move at all.
         """
         if action.no_op:
             return None
+        width, height = _support.screen_size(geometry)
         return _support.fold_requests(
             tuple(
-                ("rel", item.dx, item.dy)
+                (
+                    "rel",
+                    _pixels_from_norm(item.dx, width),
+                    _pixels_from_norm(item.dy, height),
+                )
                 for item in action.primitives
                 if item.kind == "move"
             ),
@@ -353,21 +385,28 @@ class OrderedEventsV3Codec:
 
         This is the most faithful lift of the seven, because the grammar can
         interleave: several moves per turn, each folded back into its own
-        relative `move(dx,dy)`. A ``glide_to`` becomes a plain `move`, which
-        PRESERVES the drag — the button is held across it — and drops only the
-        stroke's duration, since the grammar has no timing primitive.
+        relative normalized `move(dx,dy)`. A ``glide_to`` becomes a plain
+        `move`, which PRESERVES the drag — the button is held across it — and
+        drops only the stroke's duration, since the grammar has no timing
+        primitive.
         """
         status = _support.terminate_status(terminate, error=OrderedEventsV3Error)
         groups = _support.group_operations(
             operations, geometry=geometry, cursor=cursor, error=OrderedEventsV3Error
         )
+        width, height = _support.screen_size(geometry)
         primitives: list[Primitive] = []
         here = _support.clamp(cursor, geometry)
         for group in groups:
             kind = group.kind
             if kind in ("move", "stroke"):
                 assert group.target is not None
-                delta = (group.target[0] - here[0], group.target[1] - here[1])
+                delta = (
+                    _norm_from_pixel(group.target[0], width)
+                    - _norm_from_pixel(here[0], width),
+                    _norm_from_pixel(group.target[1], height)
+                    - _norm_from_pixel(here[1], height),
+                )
                 if delta != (0, 0):
                     primitives.append(Primitive("move", dx=delta[0], dy=delta[1]))
                 here = group.target
@@ -397,12 +436,6 @@ class OrderedEventsV3Codec:
                 name = "down" if kind == "key_down" else "up"
                 primitives.extend(Primitive(name, name=key) for key in group.keys)
             elif kind == "type":
-                if any(char in group.text for char in "\n\r\t"):
-                    raise OrderedEventsV3Error(
-                        "type() accepts only the escapes \\\\ and \\\" , so a "
-                        "control character cannot be expressed; press Return as "
-                        "down(Return); up(Return)"
-                    )
                 primitives.append(Primitive("type", text=group.text))
             elif kind == "wait":
                 if len(groups) != 1:

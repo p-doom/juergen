@@ -555,7 +555,14 @@ def test_endpoint_first_hop_is_seed_free_while_the_step_persists_the_final_diges
             choice = type(
                 "Choice", (), {"message": message, "finish_reason": "stop"}
             )()
-            return type("Completion", (), {"choices": [choice]})()
+            return type(
+                "Completion",
+                (),
+                {
+                    "choices": [choice],
+                    "usage": type("Usage", (), {"completion_tokens": 4})(),
+                },
+            )()
 
     class Client:
         chat = type("Chat", (), {"completions": Completions()})()
@@ -682,13 +689,37 @@ def test_context_transport_flattens_list_content() -> None:
                 {
                     "message": type("M", (), {"content": [{"text": "a"}, {"text": "b"}]})(),
                     "finish_reason": "stop",
+                    "usage": type("U", (), {"completion_tokens": 2})(),
                 },
             )()
 
     ctx = vf.ModelContext(model="m", client=ListClient(), sampling=vf.Sampling())
     assert asyncio.run(
         ContextTransport().complete(ctx, {"messages": []}, session_id="s")
-    ) == ("ab", "stop")
+    ) == ("ab", "stop", 2)
+
+
+@pytest.mark.parametrize("completion_tokens", [-1, True, 1.5, "2"])
+def test_context_transport_refuses_invalid_token_usage(completion_tokens) -> None:
+    class InvalidUsageClient:
+        async def get_response(self, *args, **kwargs):
+            return type(
+                "R",
+                (),
+                {
+                    "message": type("M", (), {"content": "a"})(),
+                    "finish_reason": "stop",
+                    "usage": type(
+                        "U", (), {"completion_tokens": completion_tokens}
+                    )(),
+                },
+            )()
+
+    ctx = vf.ModelContext(
+        model="m", client=InvalidUsageClient(), sampling=vf.Sampling()
+    )
+    with pytest.raises(ModelCallError, match="non-negative integer"):
+        asyncio.run(ContextTransport().complete(ctx, {"messages": []}, session_id="s"))
 
 
 def test_a_native_tool_call_is_infrastructure_not_an_empty_turn() -> None:

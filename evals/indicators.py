@@ -44,8 +44,9 @@ SUBMIT_KEYS = frozenset({"Return", "Enter", "KpEnter", "NumpadEnter", "ENTER", "
 DIGIT_LATTICE = frozenset({0, 1, 10, 100})
 """The observed output support of the collapsed relative-delta checkpoints:
 `{0, ±1, ±10, ±100}` per axis, 400/400 samples, mode literally `(±10, ±10)` —
-14.1 px = hypot(10, 10). On-lattice rate is therefore a collapse detector: a
-healthy relative policy emits arbitrary integers, a collapsed one emits digits."""
+14.1 raw grammar units = hypot(10, 10). On-lattice rate is therefore a collapse
+detector: a healthy relative policy emits arbitrary integers, a collapsed one
+emits digits."""
 
 _LITERAL_ESCAPES = ("\\n", "\\r", "\\t")
 
@@ -239,11 +240,10 @@ def deltas(parsed: Any) -> list[tuple[int, int]]:
     """Mouse deltas this action requests, in the grammar's own unit.
 
     Only meaningful for relative grammars: `deltatype_v2` / `compact_raw` /
-    `diffabs` in raw pixels on the head, `ordered_events_v3` in raw pixels per
-    `move` primitive, `move_rel` in normalized 0-999. `native_absolute` and
-    `compact_absolute` carry a target rather than a delta and report
-    nothing; differencing consecutive targets to invent one would fabricate a
-    distribution.
+    `diffabs` in raw pixels on the head, and `ordered_events_v3` / `move_rel` in
+    normalized thousandths per axis. `native_absolute` and `compact_absolute`
+    carry a target rather than a delta and report nothing; differencing
+    consecutive targets to invent one would fabricate a distribution.
     """
     out: list[tuple[int, int]] = []
     if isinstance(parsed, dict) and "dx" in parsed and "dy" in parsed:
@@ -266,11 +266,11 @@ def on_lattice(delta: tuple[int, int]) -> bool:
 
 
 def delta_histogram(values: Iterable[tuple[int, int]]) -> dict[str, float]:
-    """log2 magnitude bins of |(dx, dy)|, plus the summary statistics.
+    """Log2 bins and summaries of raw grammar-unit |(dx, dy)| magnitudes.
 
     Bins rather than a mean because the failure mode is bimodal: a collapsed policy
-    piles up at hypot(10,10) = 14.1 px while a working one spreads over hundreds of
-    pixels, and a mean sits between the two describing neither.
+    piles up at hypot(10,10) = 14.1 raw units while a working one spreads over
+    hundreds, and a mean sits between the two describing neither.
     """
     magnitudes = [math.hypot(dx, dy) for dx, dy in values]
     bins: dict[str, float] = {f"delta_bin_{2 ** k}": 0.0 for k in range(0, 12, 2)}

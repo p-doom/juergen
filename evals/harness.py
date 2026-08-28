@@ -919,6 +919,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 if decision is None:
                     outcome = "script_exhausted"
                     break
+                budget.tokens(decision.output_tokens)
                 if decision.truncated:
                     # `max_tokens` is our knob, so this is a measurement that did
                     # not happen: dispatching the fragment, or scoring the rest of

@@ -1,6 +1,6 @@
 {
   "grammar": "ordered_events_v3",
-  "prompt_sha256": "48f9c95dfc22ca462425d6ab67c826d03c73be060a3f3635df0fd66438bb2dc4",
+  "prompt_sha256": "ce1ef849674019c3a365eb5aaf4ddc569084937aea41a54d6ebacd19610245be",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080
@@ -37,7 +37,7 @@
         [
           "move_to",
           [
-            972,
+            983,
             536
           ]
         ],
@@ -86,7 +86,7 @@
         [
           "move_to",
           [
-            972,
+            983,
             536
           ]
         ],
@@ -99,7 +99,7 @@
         [
           "move_to",
           [
-            975,
+            989,
             536
           ]
         ],
@@ -144,7 +144,7 @@
         [
           "move_to",
           [
-            990,
+            1018,
             540
           ]
         ],
@@ -402,7 +402,7 @@
           "move_to",
           [
             960,
-            520
+            518
           ]
         ],
         [
@@ -441,7 +441,7 @@
         [
           "move_to",
           [
-            964,
+            968,
             545
           ]
         ],
@@ -510,6 +510,160 @@
         "no_op": true
       },
       "operations": []
+    },
+    {
+      "name": "corpus_type_lone_backslash",
+      "text": "type(\"\\\\\")",
+      "canonical": "type(\"\\\\\")",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "\\"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "\\"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "corpus_type_lone_quote",
+      "text": "type(\"\\\"\")",
+      "canonical": "type(\"\\\"\")",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "\""
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "\""
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "corpus_type_the_idle_token_as_text",
+      "text": "type(\"NO_OP\")",
+      "canonical": "type(\"NO_OP\")",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "NO_OP"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "NO_OP"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "corpus_type_the_control_token_as_text",
+      "text": "type(\"TERMINATE\")",
+      "canonical": "type(\"TERMINATE\")",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "TERMINATE"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "TERMINATE"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "corpus_type_a_nested_type_call",
+      "text": "type(\"type(\\\"nested\\\")\")",
+      "canonical": "type(\"type(\\\"nested\\\")\")",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "type(\"nested\")"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "type(\"nested\")"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "corpus_type_separator_with_space",
+      "text": "type(\"; \")",
+      "canonical": "type(\"; \")",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "; "
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "; "
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "corpus_type_bare_separator",
+      "text": "type(\";\")",
+      "canonical": "type(\";\")",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": ";"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            ";"
+          ]
+        ]
+      ]
     }
   ],
   "format_only": [
@@ -534,8 +688,798 @@
         "no_op": false
       },
       "canonical": "NO_OP"
+    },
+    {
+      "name": "corpus_move_1_1",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": 1,
+            "dy": 1
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "move(1,1)"
+    },
+    {
+      "name": "corpus_move_m1_m1",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": -1,
+            "dy": -1
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "move(-1,-1)"
+    },
+    {
+      "name": "corpus_move_0_5",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": 0,
+            "dy": 5
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "move(0,5)"
+    },
+    {
+      "name": "corpus_move_m7_0",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": -7,
+            "dy": 0
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "move(-7,0)"
+    },
+    {
+      "name": "corpus_move_123_m456",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": 123,
+            "dy": -456
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "move(123,-456)"
+    },
+    {
+      "name": "corpus_move_99999_m99999",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": 99999,
+            "dy": -99999
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "move(99999,-99999)"
+    },
+    {
+      "name": "corpus_move_m2147483648_2147483647",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": -2147483648,
+            "dy": 2147483647
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "move(-2147483648,2147483647)"
+    },
+    {
+      "name": "corpus_move_0_0",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": 0,
+            "dy": 0
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "move(0,0)"
+    },
+    {
+      "name": "corpus_scroll_0_m3",
+      "action": {
+        "primitives": [
+          {
+            "kind": "scroll",
+            "dx": 0,
+            "dy": -3
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "scroll(0,-3)"
+    },
+    {
+      "name": "corpus_scroll_0_3",
+      "action": {
+        "primitives": [
+          {
+            "kind": "scroll",
+            "dx": 0,
+            "dy": 3
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "scroll(0,3)"
+    },
+    {
+      "name": "corpus_scroll_m2_0",
+      "action": {
+        "primitives": [
+          {
+            "kind": "scroll",
+            "dx": -2,
+            "dy": 0
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "scroll(-2,0)"
+    },
+    {
+      "name": "corpus_scroll_2_0",
+      "action": {
+        "primitives": [
+          {
+            "kind": "scroll",
+            "dx": 2,
+            "dy": 0
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "scroll(2,0)"
+    },
+    {
+      "name": "corpus_scroll_11_m11",
+      "action": {
+        "primitives": [
+          {
+            "kind": "scroll",
+            "dx": 11,
+            "dy": -11
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "scroll(11,-11)"
+    },
+    {
+      "name": "corpus_scroll_m100000_100000",
+      "action": {
+        "primitives": [
+          {
+            "kind": "scroll",
+            "dx": -100000,
+            "dy": 100000
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "scroll(-100000,100000)"
+    },
+    {
+      "name": "corpus_scroll_0_0",
+      "action": {
+        "primitives": [
+          {
+            "kind": "scroll",
+            "dx": 0,
+            "dy": 0
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "scroll(0,0)"
+    },
+    {
+      "name": "corpus_press_release_LMB",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "LMB"
+          },
+          {
+            "kind": "up",
+            "name": "LMB"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(LMB); up(LMB)"
+    },
+    {
+      "name": "corpus_press_release_MMB",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "MMB"
+          },
+          {
+            "kind": "up",
+            "name": "MMB"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(MMB); up(MMB)"
+    },
+    {
+      "name": "corpus_press_release_RMB",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "RMB"
+          },
+          {
+            "kind": "up",
+            "name": "RMB"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(RMB); up(RMB)"
+    },
+    {
+      "name": "corpus_press_release_ControlLeft",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "ControlLeft"
+          },
+          {
+            "kind": "up",
+            "name": "ControlLeft"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(ControlLeft); up(ControlLeft)"
+    },
+    {
+      "name": "corpus_press_release_ControlRight",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "ControlRight"
+          },
+          {
+            "kind": "up",
+            "name": "ControlRight"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(ControlRight); up(ControlRight)"
+    },
+    {
+      "name": "corpus_press_release_ShiftLeft",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "ShiftLeft"
+          },
+          {
+            "kind": "up",
+            "name": "ShiftLeft"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(ShiftLeft); up(ShiftLeft)"
+    },
+    {
+      "name": "corpus_press_release_AltLeft",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "AltLeft"
+          },
+          {
+            "kind": "up",
+            "name": "AltLeft"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(AltLeft); up(AltLeft)"
+    },
+    {
+      "name": "corpus_press_release_MetaLeft",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "MetaLeft"
+          },
+          {
+            "kind": "up",
+            "name": "MetaLeft"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(MetaLeft); up(MetaLeft)"
+    },
+    {
+      "name": "corpus_press_release_Return",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "Return"
+          },
+          {
+            "kind": "up",
+            "name": "Return"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(Return); up(Return)"
+    },
+    {
+      "name": "corpus_press_release_Tab",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "Tab"
+          },
+          {
+            "kind": "up",
+            "name": "Tab"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(Tab); up(Tab)"
+    },
+    {
+      "name": "corpus_press_release_Escape",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "Escape"
+          },
+          {
+            "kind": "up",
+            "name": "Escape"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(Escape); up(Escape)"
+    },
+    {
+      "name": "corpus_press_release_BackSpace",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "BackSpace"
+          },
+          {
+            "kind": "up",
+            "name": "BackSpace"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(BackSpace); up(BackSpace)"
+    },
+    {
+      "name": "corpus_press_release_KeyA",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "KeyA"
+          },
+          {
+            "kind": "up",
+            "name": "KeyA"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(KeyA); up(KeyA)"
+    },
+    {
+      "name": "corpus_press_release_Digit7",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "Digit7"
+          },
+          {
+            "kind": "up",
+            "name": "Digit7"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(Digit7); up(Digit7)"
+    },
+    {
+      "name": "corpus_press_release_F5",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "F5"
+          },
+          {
+            "kind": "up",
+            "name": "F5"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(F5); up(F5)"
+    },
+    {
+      "name": "corpus_press_release_ArrowDown",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "ArrowDown"
+          },
+          {
+            "kind": "up",
+            "name": "ArrowDown"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(ArrowDown); up(ArrowDown)"
+    },
+    {
+      "name": "corpus_press_release_apostrophe",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "'"
+          },
+          {
+            "kind": "up",
+            "name": "'"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down('); up(')"
+    },
+    {
+      "name": "corpus_press_release_backslash",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "\\"
+          },
+          {
+            "kind": "up",
+            "name": "\\"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(\\); up(\\)"
+    },
+    {
+      "name": "corpus_type_hello",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "hello"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "type(\"hello\")"
+    },
+    {
+      "name": "corpus_type_semicolon_infix",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "a; b"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "type(\"a; b\")"
+    },
+    {
+      "name": "corpus_type_a_whole_action_line_as_text",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "move(1,2); down(LMB)"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "type(\"move(1,2); down(LMB)\")"
+    },
+    {
+      "name": "corpus_type_quoted_words",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "she said \"no\""
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "type(\"she said \\\"no\\\"\")"
+    },
+    {
+      "name": "corpus_type_windows_path",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "C:\\Users\\me\\file.txt"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "type(\"C:\\\\Users\\\\me\\\\file.txt\")"
+    },
+    {
+      "name": "corpus_type_backslash_then_quote",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "\\\""
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "type(\"\\\\\\\"\")"
+    },
+    {
+      "name": "corpus_type_backslashes_and_quotes",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "\\\\\"\"\\"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "type(\"\\\\\\\\\\\"\\\"\\\\\")"
+    },
+    {
+      "name": "corpus_type_parens_and_semicolon",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "f(x, y) = (x; y)"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "type(\"f(x, y) = (x; y)\")"
+    },
+    {
+      "name": "corpus_type_trailing_comma",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "commas, everywhere, always,"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "type(\"commas, everywhere, always,\")"
+    },
+    {
+      "name": "corpus_type_leading_and_trailing_space",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": " leading and trailing kept "
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "type(\" leading and trailing kept \")"
+    },
+    {
+      "name": "corpus_type_every_printable_symbol",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "`~!@#$%^&*()-_=+[]{}|;:'<>,./?"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "type(\"`~!@#$%^&*()-_=+[]{}|;:'<>,./?\")"
+    },
+    {
+      "name": "corpus_program_move_click_scroll",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": 4,
+            "dy": -1
+          },
+          {
+            "kind": "down",
+            "name": "LMB"
+          },
+          {
+            "kind": "up",
+            "name": "LMB"
+          },
+          {
+            "kind": "scroll",
+            "dx": 0,
+            "dy": -3
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "move(4,-1); down(LMB); up(LMB); scroll(0,-3)"
+    },
+    {
+      "name": "corpus_program_ctrl_c_chord",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "ControlLeft"
+          },
+          {
+            "kind": "down",
+            "name": "KeyC"
+          },
+          {
+            "kind": "up",
+            "name": "KeyC"
+          },
+          {
+            "kind": "up",
+            "name": "ControlLeft"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(ControlLeft); down(KeyC); up(KeyC); up(ControlLeft)"
+    },
+    {
+      "name": "corpus_program_shell_line_then_return",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "cd \"my dir\"; ls -la"
+          },
+          {
+            "kind": "down",
+            "name": "Return"
+          },
+          {
+            "kind": "up",
+            "name": "Return"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "type(\"cd \\\"my dir\\\"; ls -la\"); down(Return); up(Return)"
+    },
+    {
+      "name": "corpus_program_two_bursts_around_a_scroll",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": -300,
+            "dy": 42
+          },
+          {
+            "kind": "type",
+            "text": "echo \\\"quoted\\\""
+          },
+          {
+            "kind": "scroll",
+            "dx": 0,
+            "dy": 7
+          },
+          {
+            "kind": "type",
+            "text": "second; burst, (with) parens"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "move(-300,42); type(\"echo \\\\\\\"quoted\\\\\\\"\"); scroll(0,7); type(\"second; burst, (with) parens\")"
+    },
+    {
+      "name": "corpus_program_rmb_drag_then_mmb_click",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "RMB"
+          },
+          {
+            "kind": "move",
+            "dx": 15,
+            "dy": 15
+          },
+          {
+            "kind": "up",
+            "name": "RMB"
+          },
+          {
+            "kind": "down",
+            "name": "MMB"
+          },
+          {
+            "kind": "up",
+            "name": "MMB"
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "down(RMB); move(15,15); up(RMB); down(MMB); up(MMB)"
     }
   ],
+  "format_only_note": "corpus_* are the round-trip programs of the second ordered_events_v3 implementation (data_pipeline/tests/test_oev3_port.py on yll/oev3-cuagym), byte-identical through this codec's format. The seven adversarial type() payloads among them are in `cases` instead, where parse and compile are pinned too.",
   "invalid_parse": [
     {
       "name": "escaped_newline_in_type",
@@ -597,6 +1541,21 @@
       "name": "empty",
       "text": "   \n  ",
       "error": "empty action text"
+    },
+    {
+      "name": "empty_type_payload",
+      "text": "type(\"\")",
+      "error": "type() payload is empty"
+    },
+    {
+      "name": "v4_move_to_is_not_this_grammar",
+      "text": "move_to(1,2)",
+      "error": "unknown primitive 'move_to'"
+    },
+    {
+      "name": "v4_single_argument_scroll",
+      "text": "scroll(3)",
+      "error": "scroll() takes two integers"
     }
   ],
   "invalid_compile": [],
@@ -636,7 +1595,7 @@
         "primitives": [
           {
             "kind": "move",
-            "dx": 12,
+            "dx": 6,
             "dy": -4
           },
           {
@@ -645,7 +1604,7 @@
           },
           {
             "kind": "move",
-            "dx": 3,
+            "dx": 2,
             "dy": 0
           },
           {
@@ -655,7 +1614,7 @@
         ],
         "no_op": false
       },
-      "canonical": "move(12,-4); down(LMB); move(3,0); up(LMB)",
+      "canonical": "move(6,-4); down(LMB); move(2,0); up(LMB)",
       "recompiled": [
         [
           "move_to",
@@ -673,7 +1632,7 @@
         [
           "move_to",
           [
-            975,
+            976,
             536
           ]
         ],
@@ -684,7 +1643,7 @@
           ]
         ]
       ],
-      "documents": "the most faithful lift of the seven: this grammar can interleave, so each absolute endpoint folds back into its own relative move."
+      "documents": "Each absolute endpoint is normalized independently, matching the training converter. Recompilation lands one horizontal pixel right of the second endpoint because a thousandths grid is lossy at 1920 pixels."
     },
     {
       "name": "drag_stroke_is_preserved_as_a_drag",
@@ -718,7 +1677,7 @@
           },
           {
             "kind": "move",
-            "dx": 30,
+            "dx": 16,
             "dy": 0
           },
           {
@@ -728,7 +1687,7 @@
         ],
         "no_op": false
       },
-      "canonical": "down(LMB); move(30,0); up(LMB)",
+      "canonical": "down(LMB); move(16,0); up(LMB)",
       "recompiled": [
         [
           "mouse_down",
@@ -739,7 +1698,7 @@
         [
           "move_to",
           [
-            990,
+            991,
             540
           ]
         ],
@@ -750,7 +1709,7 @@
           ]
         ]
       ],
-      "documents": "NOT byte-identical, and legitimately so: the drag is preserved (the button is held across the move) and only the stroke's 0.5 s duration is dropped, because this grammar has no timing primitive. Contrast compact_raw, which cannot express the stroke at all."
+      "documents": "The drag is preserved and only the stroke duration is dropped. The normalized move recompiles one horizontal pixel right of the source endpoint."
     },
     {
       "name": "two_axis_scroll",
@@ -865,7 +1824,7 @@
             1100,
             640,
             1240,
-            700
+            696
           ]
         ]
       ],
@@ -873,8 +1832,8 @@
         "primitives": [
           {
             "kind": "move",
-            "dx": 140,
-            "dy": 100
+            "dx": 73,
+            "dy": 93
           },
           {
             "kind": "down",
@@ -882,8 +1841,8 @@
           },
           {
             "kind": "move",
-            "dx": 140,
-            "dy": 60
+            "dx": 73,
+            "dy": 51
           },
           {
             "kind": "up",
@@ -892,7 +1851,7 @@
         ],
         "no_op": false
       },
-      "canonical": "move(140,100); down(LMB); move(140,60); up(LMB)",
+      "canonical": "move(73,93); down(LMB); move(73,51); up(LMB)",
       "recompiled": [
         [
           "move_to",
@@ -911,7 +1870,7 @@
           "move_to",
           [
             1240,
-            700
+            695
           ]
         ],
         [
@@ -921,7 +1880,7 @@
           ]
         ]
       ],
-      "documents": "the most faithful lift of the seven: the approach move, the press, the stroke as its own relative move INSIDE the held button, and the release. Only the stroke's timing is dropped, because this grammar has no timing primitive."
+      "documents": "The approach and held stroke stay interleaved. Axis-specific normalization is exact at the first endpoint; the second vertical endpoint recompiles one pixel high on a 1080-pixel axis."
     },
     {
       "name": "ascii_type_becomes_one_burst",
@@ -965,7 +1924,7 @@
           ]
         ]
       ],
-      "error": "control character cannot be expressed"
+      "error": "cannot contain a control character"
     },
     {
       "name": "wait_with_other_operations",

@@ -88,7 +88,7 @@ renderer — while a training job was already running on it, so every number it
 produced would have been uncalibrated."""
 
 ORDERED_SYSTEM_PROMPT_SHA256 = (
-    "48f9c95dfc22ca462425d6ab67c826d03c73be060a3f3635df0fd66438bb2dc4"
+    "ce1ef849674019c3a365eb5aaf4ddc569084937aea41a54d6ebacd19610245be"
 )
 """`ordered_events_v3.describe()` — the prompt stage 04 writes into `chat.jsonl`,
 so a checkpoint trained under any other one is refused rather than scored.
