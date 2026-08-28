@@ -102,13 +102,17 @@ OMEGALAX_REPO = "/fast/project/HFMI_SynergyUnit/yll/omegalax"  # needs the measu
 
 TAG = "ccast0618d_v2"
 TRAIN_FPS = 1.0
+HISTORY_FRAMES = 4
 GOALS_DIR = None  # e.g. f"{DATASETS_ROOT}/{TAG}_stage_03b_goals_describe_extract_fps_0.5"
 MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
 
 FILTER_VERSION = f"{TAG}_stage_03_filter"
-CONV_VERSION = f"{TAG}_stage_04_conversations_fps_{TRAIN_FPS}" + ("_goals" if GOALS_DIR else "")
-MEASURE_VERSION = f"{TAG}_stage_05_measure_fps_{TRAIN_FPS}"
-RECORDS_VERSION = f"{TAG}_stage_06_records_fps_{TRAIN_FPS}"
+CONV_VERSION = (
+    f"{TAG}_stage_04_conversations_fps_{TRAIN_FPS}_history_{HISTORY_FRAMES}"
+    + ("_goals" if GOALS_DIR else "")
+)
+MEASURE_VERSION = f"{TAG}_stage_05_measure_fps_{TRAIN_FPS}_history_{HISTORY_FRAMES}"
+RECORDS_VERSION = f"{TAG}_stage_06_records_fps_{TRAIN_FPS}_history_{HISTORY_FRAMES}"
 
 
 def _as_child(child_cfg, trigger: str = "on_complete") -> dict:
@@ -144,6 +148,7 @@ def stage_04_conversations():
     cfg.entrypoint.path = _entrypoint("pipeline/stage_04_build_conversations.py")
     cfg.entrypoint.args.filter_dir = f"{DATASETS_ROOT}/{FILTER_VERSION}"
     cfg.entrypoint.args.fps = TRAIN_FPS
+    cfg.entrypoint.args.history_frames = HISTORY_FRAMES
     cfg.entrypoint.args.action_format = "canonical"
     cfg.entrypoint.args.num_workers = 32
     if GOALS_DIR:

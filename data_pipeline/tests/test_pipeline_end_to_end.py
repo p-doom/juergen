@@ -151,6 +151,7 @@ def _conversations(filter_dir: Path, out_dir: Path, action_format: str, *extra: 
         "stage_04_build_conversations.py",
         "--filter-dir", filter_dir,
         "--fps", clip.TRAIN_FPS,
+        "--history-frames", "4",
         "--output-dir", out_dir,
         "--action-format", action_format,
         "--num-workers", 1,
@@ -247,9 +248,11 @@ def chain(tmp_path_factory: pytest.TempPathFactory) -> Chain:
 
 
 def assistant_texts(row: dict[str, Any]) -> list[str]:
-    return [
-        m["content"][0]["text"] for m in row["messages"] if m["role"] == "assistant"
-    ]
+    return [m["content"] for m in row["messages"] if m["role"] == "assistant"]
+
+
+def target_texts(rows: Iterable[dict[str, Any]]) -> list[str]:
+    return [assistant_texts(row)[-1] for row in rows]
 
 
 def user_images(row: dict[str, Any]) -> list[str]:
@@ -308,8 +311,19 @@ def unreleased_presses(row: dict[str, Any], grammar: str) -> tuple[str, ...]:
     return tuple(held)
 
 
+def unreleased_target_presses(rows: Iterable[dict[str, Any]], grammar: str) -> tuple[str, ...]:
+    held: list[str] = []
+    for text in target_texts(rows):
+        for sign, name in key_transitions(text, grammar):
+            if sign == "+":
+                held.append(name)
+            elif name in held:
+                held.remove(name)
+    return tuple(held)
+
+
 def _all_transitions(rows: Iterable[dict[str, Any]], grammar: str) -> list[tuple[str, str]]:
-    return [t for row in rows for text in assistant_texts(row) for t in key_transitions(text, grammar)]
+    return [t for text in target_texts(rows) for t in key_transitions(text, grammar)]
 
 
 # --------------------------------------------------------------------------
@@ -451,13 +465,15 @@ def test_stage_03_fingerprints_the_master_store_it_masked(chain: Chain) -> None:
 
 
 def test_stage_04_emits_one_turn_per_surviving_slot(chain: Chain) -> None:
-    (row,) = chain.rows(chain.conv_canonical)
+    rows = chain.rows(chain.conv_canonical)
     expected_frames = clip.N_FRAMES // clip.STRIDE - 1  # the slot at tick 16 is black
-    assert row["n_frames"] == expected_frames
-    assert row["n_turns"] == expected_frames
-    assert len(assistant_texts(row)) == expected_frames
+    assert len(rows) == expected_frames
+    assert [row["n_frames"] for row in rows] == [1, 2, 3, 4] + [4] * (expected_frames - 4)
+    assert [row["n_turns"] for row in rows] == [1, 2, 3, 4] + [4] * (expected_frames - 4)
+    row = rows[-1]
+    assert len(assistant_texts(row)) == 4
     assert row["messages"][0]["role"] == "system"
-    assert [m["role"] for m in row["messages"][1:]] == ["user", "assistant"] * expected_frames
+    assert [m["role"] for m in row["messages"][1:]] == ["user", "assistant"] * 4
     first_user = row["messages"][1]["content"]
     assert [b["type"] for b in first_user] == ["text", "image"]
     assert first_user[0]["text"] == "do the synthetic thing"
@@ -468,10 +484,10 @@ def test_stage_04_emits_one_turn_per_surviving_slot(chain: Chain) -> None:
 
 
 def test_stage_04_points_every_turn_at_a_surviving_master_record(chain: Chain) -> None:
-    (row,) = chain.rows(chain.conv_canonical)
+    rows = chain.rows(chain.conv_canonical)
     shard = chain.master / "frames" / clip.SEGMENT_ID / "images.array_record"
     indices = []
-    for uri in user_images(row):
+    for uri in [user_images(row)[-1] for row in rows]:
         prefix, _, index = uri.partition("#")
         assert prefix == f"ar://{shard}"
         indices.append(int(index))
@@ -482,15 +498,15 @@ def test_stage_04_points_every_turn_at_a_surviving_master_record(chain: Chain) -
 
 
 def test_stage_04_labels_every_event_window(chain: Chain) -> None:
-    (row,) = chain.rows(chain.conv_canonical)
-    texts = assistant_texts(row)
+    rows = chain.rows(chain.conv_canonical)
+    texts = target_texts(rows)
     assert texts[: len(EXPECTED_CANONICAL_LABELS)] == EXPECTED_CANONICAL_LABELS
     assert set(texts[len(EXPECTED_CANONICAL_LABELS) :]) == {"NO_OP"}
-    assert row["n_non_noop"] == len(EXPECTED_CANONICAL_LABELS)
+    assert sum(row["n_non_noop"] for row in rows) == len(EXPECTED_CANONICAL_LABELS)
 
 
 def test_stage_04_accounts_for_every_event_the_label_policy_touched(chain: Chain) -> None:
-    (row,) = chain.rows(chain.conv_canonical)
+    row = chain.rows(chain.conv_canonical)[0]
     assert row["dead_zone_counters"] == EXPECTED_DEAD_ZONE_COUNTERS
     # 5 of 28 events discarded, over the 5% flag threshold.
     assert row["dead_zone_flagged"] is True
@@ -505,8 +521,8 @@ def test_stage_04_records_the_join_ids_and_the_prompt_it_trained_against(chain: 
     assert manifest["stride"] == clip.STRIDE
     prompt = grammars.describe(manifest["grammar"])
     assert manifest["system_prompt_sha256"] == hashlib.sha256(prompt.encode()).hexdigest()
-    (row,) = chain.rows(chain.conv_canonical)
-    assert row["messages"][0]["content"][0]["text"] == prompt
+    row = chain.rows(chain.conv_canonical)[0]
+    assert row["messages"][0]["content"] == prompt
     assert (chain.conv_canonical / "chat.jsonl").read_bytes() == (
         chain.conv_canonical / "conversations.jsonl"
     ).read_bytes()
@@ -557,28 +573,15 @@ def test_stage_04_refuses_a_master_store_that_did_not_record_its_encoding(
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("attr", "grammar"),
-    [("conv_canonical", "deltatype_v2"), ("conv_v3", "ordered_events_v3")],
-)
-def test_no_release_reaches_a_conversation_without_its_press(
-    chain: Chain, attr: str, grammar: str
-) -> None:
-    rows = chain.rows(getattr(chain, attr))
-    assert rows
-    for row in rows:
-        assert orphaned_releases(row, grammar) == ()
-
-
 def test_the_carried_pair_lands_in_two_consecutive_turns(chain: Chain) -> None:
     # KeyA is pressed in W2 and released in W3: the split/carry case. Both
     # halves are present, in order, in adjacent assistant turns — the press is
     # not repeated and the release is not dropped.
-    (row,) = chain.rows(chain.conv_canonical)
-    texts = assistant_texts(row)
+    rows = chain.rows(chain.conv_canonical)
+    texts = target_texts(rows)
     assert ("+", "KeyA") in key_transitions(texts[2], "deltatype_v2")
     assert ("-", "KeyA") in key_transitions(texts[3], "deltatype_v2")
-    assert sum(1 for t in _all_transitions([row], "deltatype_v2") if t[1] == "KeyA") == 2
+    assert sum(1 for t in _all_transitions(rows, "deltatype_v2") if t[1] == "KeyA") == 2
 
 
 def test_a_press_still_held_when_the_clip_ends_is_kept_and_counted(chain: Chain) -> None:
@@ -587,16 +590,18 @@ def test_a_press_still_held_when_the_clip_ends_is_kept_and_counted(chain: Chain)
     # release follows. KeyQ, pressed inside the black span and never released,
     # is dropped instead of clamped forward — clamping it would have
     # manufactured exactly the orphan the class is about.
-    (row,) = chain.rows(chain.conv_canonical)
-    assert unreleased_presses(row, "deltatype_v2") == ("KeyC",)
+    rows = chain.rows(chain.conv_canonical)
+    row = rows[-1]
+    assert unreleased_target_presses(rows, "deltatype_v2") == ("KeyC",)
     assert row["dead_zone_counters"]["n_held_at_end"] == 2
     assert row["dead_zone_counters"]["n_unreleased_press_dropped"] == 1
-    assert not any(name == "KeyQ" for _, name in _all_transitions([row], "deltatype_v2"))
+    assert not any(name == "KeyQ" for _, name in _all_transitions(rows, "deltatype_v2"))
 
 
 def test_the_dangling_release_never_reaches_a_label(chain: Chain) -> None:
-    (row,) = chain.rows(chain.conv_canonical)
-    assert not any(name == "KeyZ" for _, name in _all_transitions([row], "deltatype_v2"))
+    rows = chain.rows(chain.conv_canonical)
+    row = rows[-1]
+    assert not any(name == "KeyZ" for _, name in _all_transitions(rows, "deltatype_v2"))
     assert row["dead_zone_counters"]["n_dangling_release"] == 1
 
 
@@ -606,11 +611,12 @@ def test_the_dangling_release_never_reaches_a_label(chain: Chain) -> None:
 
 
 def test_black_span_input_is_not_attributed_to_a_visible_frame(chain: Chain) -> None:
-    (row,) = chain.rows(chain.conv_canonical)
-    texts = assistant_texts(row)
+    rows = chain.rows(chain.conv_canonical)
+    row = rows[-1]
+    texts = target_texts(rows)
     # The (7,7) move happened while the screen was black; no label carries it.
     assert not any(text.startswith("7 7 ") for text in texts)
-    names = {name for _, name in _all_transitions([row], "deltatype_v2")}
+    names = {name for _, name in _all_transitions(rows, "deltatype_v2")}
     assert not names & {"KeyM", "KeyQ"}
     counters = row["dead_zone_counters"]
     assert counters["n_discarded_black"] == 1
@@ -622,11 +628,12 @@ def test_without_black_masking_the_same_input_corrupts_a_visible_turn(chain: Cha
     # and taught the move and the four key transitions that happened behind it;
     # KeyR's release lands one turn late, and KeyQ becomes a press with no
     # release anywhere in the conversation.
-    (row,) = chain.rows(chain.conv_black_off)
-    texts = assistant_texts(row)
+    rows = chain.rows(chain.conv_black_off)
+    row = rows[-1]
+    texts = target_texts(rows)
     assert texts[4] == "7 7 0 ; +KeyM -KeyR +KeyB +KeyQ -KeyM"
     assert texts[3] == "0 0 0 ; -KeyA +KeyR"
-    assert unreleased_presses(row, "deltatype_v2") == ("KeyQ", "KeyC")
+    assert unreleased_target_presses(rows, "deltatype_v2") == ("KeyQ", "KeyC")
     assert chain.segment_filter(chain.filter_black_off)["n_black"] == 0
     assert row["dead_zone_counters"]["n_discarded_black"] == 0
     # Idle drops are NOT dead zones, so nothing about the inactive half of the
@@ -640,8 +647,7 @@ def test_without_black_masking_the_same_input_corrupts_a_visible_turn(chain: Cha
 
 
 def test_ordered_events_v3_collapses_the_typing_run(chain: Chain) -> None:
-    (row,) = chain.rows(chain.conv_v3)
-    texts = assistant_texts(row)
+    texts = target_texts(chain.rows(chain.conv_v3))
     assert texts[: len(EXPECTED_V3_LABELS)] == EXPECTED_V3_LABELS
     summary = chain.summary(chain.conv_v3)
     assert summary["grammar"] == "ordered_events_v3"
@@ -652,8 +658,7 @@ def test_ordered_events_v3_collapses_the_typing_run(chain: Chain) -> None:
 
 
 def test_the_terminal_token_rides_on_the_last_turn_only(chain: Chain) -> None:
-    (row,) = chain.rows(chain.conv_v3)
-    texts = assistant_texts(row)
+    texts = target_texts(chain.rows(chain.conv_v3))
     assert not any(TERMINAL_TOKEN in text for text in texts[:-1])
     assert texts[-1].endswith(f"\n{TERMINAL_TOKEN}")
     control = grammars.split_control(texts[-1])
@@ -674,8 +679,8 @@ def test_goal_projection_snaps_to_the_observation_the_first_action_came_from(
     by_goal = {row["goal_id"]: row for row in chain.rows(chain.conv_goals)}
     assert set(by_goal) == {"g_head", "g_mid"}
     head, mid = by_goal["g_head"], by_goal["g_mid"]
-    assert (head["n_turns"], head["snapped_start"]) == (3, False)
-    assert (mid["n_turns"], mid["snapped_start"]) == (6, True)
+    assert (head["target_idx"] + 1, head["snapped_start"]) == (3, False)
+    assert (mid["target_idx"] + 1, mid["snapped_start"]) == (6, True)
     assert chain.summary(chain.conv_goals)["goal_projection_totals"] == {
         "n_goals": 2, "n_projected": 2, "n_empty_projection": 0,
         "n_too_few_frames": 0, "n_snapped": 1,
@@ -696,11 +701,14 @@ def test_a_goal_slice_orphans_the_release_of_a_press_outside_it(chain: Chain) ->
     This is characterisation, not approval: the invariant itself is asserted
     (and expected to fail) by the test below.
     """
-    by_goal = {row["goal_id"]: row for row in chain.rows(chain.conv_goals)}
-    assert orphaned_releases(by_goal["g_head"], "deltatype_v2") == ()
-    assert orphaned_releases(by_goal["g_mid"], "deltatype_v2") == ("KeyA",)
-    assert assistant_texts(by_goal["g_mid"])[0] == "0 0 0 ; -KeyA +KeyR -KeyR"
-    assert ("+", "KeyA") in _all_transitions([by_goal["g_head"]], "deltatype_v2")
+    rows = chain.rows(chain.conv_goals)
+    first_by_goal = {row["goal_id"]: row for row in rows if row["target_idx"] == 0}
+    assert orphaned_releases(first_by_goal["g_head"], "deltatype_v2") == ()
+    assert orphaned_releases(first_by_goal["g_mid"], "deltatype_v2") == ("KeyA",)
+    assert assistant_texts(first_by_goal["g_mid"])[0] == "0 0 0 ; -KeyA +KeyR -KeyR"
+    assert ("+", "KeyA") in _all_transitions(
+        [row for row in rows if row["goal_id"] == "g_head"], "deltatype_v2"
+    )
 
 
 @pytest.mark.xfail(

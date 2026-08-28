@@ -13,10 +13,11 @@ reruns:
                    ordered mini-program on a --continuous-action-hz motor grid;
                    ``ordered_events_v3`` is that plus ``type("...")`` for
                    balanced typing runs)
+  * history        --history-frames N (the online frame window, replayed once
+                   per assistant target)
   * goals          --goals-dir (a stage-03b artifact; goals are half-open
                    master-tick intervals, projected onto the actual selected
-                   frames — one conversation per goal, instruction on the
-                   first user turn)
+                   frames)
   * plan prose     --use-plans (goal's ``plan`` prefixes the first assistant
                    turn as ``<plan>\\n<action>``; unusable plan_flags fall back
                    to a plan-less first turn)
@@ -40,12 +41,11 @@ Dead-zone accounting: every segment row carries the label-policy counters
 exceeds --dead-zone-flag-frac are flagged (``dead_zone_flagged``) — a
 realignment health signal.
 
-The conversation shape is the canonical chat.jsonl schema: content blocks,
-instruction text before the image on the first user turn, one assistant turn
-per frame. Stages 05/06 consume the output directly.
+Each row is the exact online history window before one assistant target. Stages
+05/06 consume the output directly.
 
 Output (--output-dir):
-  conversations.jsonl          one row per conversation {messages, provenance}.
+  conversations.jsonl          one row per assistant target {messages, provenance}.
   chat.jsonl                   the same rows — the split-agnostic drop-in
                                source_path for stages 05 (measure) and 06
                                (records; split applied there by recording_id).
@@ -58,7 +58,8 @@ Run::
 
     cd <repo root>
     uv run python pipeline/stage_04_build_conversations.py \
-        --filter-dir <stage-03 --output-dir> --fps 1 --output-dir <dest> \
+        --filter-dir <stage-03 --output-dir> --fps 1 --history-frames 4 \
+        --output-dir <dest> \
         [--goals-dir <stage-03b --output-dir> --use-plans --include-variants] \
         [--terminal-token '<terminate>']
 """
@@ -83,6 +84,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import grammars  # noqa: E402
 from image_domain import image_domain  # noqa: E402
+from history_policy import replay_training_messages  # noqa: E402
 
 from pipeline.lib.action_format import (  # noqa: E402
     DEFAULT_CONTINUOUS_ACTION_HZ,
@@ -117,44 +119,66 @@ from pipeline.lib.views import (  # noqa: E402
 DROP_PLAN_FLAGS = frozenset({"empty", "restates_instruction"})
 
 
-def _text_block(text: str) -> dict[str, Any]:
-    return {"type": "text", "text": text}
-
-
 def _image_block(image: str) -> dict[str, Any]:
     return {"type": "image", "image": image}
 
 
-def build_messages(
+def build_training_messages(
     turns: list[tuple[str, str]],  # ordered (image, action) pairs
     *,
+    history_frames: int,
     instruction: str | None,
     system_prompt: str,
     plan: str | None = None,
     terminal_token: str | None = None,
-) -> list[dict[str, Any]]:
-    """Assemble one interleaved conversation. Canonical chat.jsonl schema:
-    instruction text before the image on the first user turn, image-only on
-    later turns, one assistant turn per frame carrying its action. The plan
-    prefixes the first assistant turn (``<plan>\\n<action>``); the terminal
-    token rides at the end of the final assistant message."""
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": [_text_block(system_prompt)]}
-    ]
+) -> list[list[dict[str, Any]]]:
+    """Render one online-equivalent history window per assistant target."""
+    targets = list(turns)
     last = len(turns) - 1
-    for idx, (image, action) in enumerate(turns):
-        content: list[dict[str, Any]] = []
-        if idx == 0 and instruction:
-            content.append(_text_block(instruction))
-        content.append(_image_block(image))
-        messages.append({"role": "user", "content": content})
+    for idx, (image, action) in enumerate(targets):
         text = action
         if idx == 0 and plan:
             text = f"{plan}\n{text}"
         if idx == last and terminal_token:
             text = f"{text}\n{terminal_token}"
-        messages.append({"role": "assistant", "content": [_text_block(text)]})
-    return messages
+        targets[idx] = (image, text)
+    return replay_training_messages(
+        turns=targets,
+        n_history_frames=history_frames,
+        system=system_prompt,
+        instruction=instruction,
+        image_part=_image_block,
+    )
+
+
+def _target_rows(
+    *,
+    conversation_id: str,
+    turns: list[tuple[str, str]],
+    history_frames: int,
+    instruction: str | None,
+    system_prompt: str,
+    plan: str | None = None,
+    terminal_token: str | None = None,
+) -> list[dict[str, Any]]:
+    windows = build_training_messages(
+        turns,
+        history_frames=history_frames,
+        instruction=instruction,
+        system_prompt=system_prompt,
+        plan=plan,
+        terminal_token=terminal_token,
+    )
+    return [
+        {
+            "conversation_id": f"{conversation_id}:{target_idx:06d}",
+            "target_idx": target_idx,
+            "n_frames": min(target_idx + 1, history_frames),
+            "n_turns": min(target_idx + 1, history_frames),
+            "messages": messages,
+        }
+        for target_idx, messages in enumerate(windows)
+    ]
 
 
 def usable_plan(goal: dict[str, Any]) -> str:
@@ -250,22 +274,21 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
                 instruction=task["instruction"],
                 instruction_field=task["instruction_field"],
             )
-            messages = build_messages(
-                turns,
+            for target in _target_rows(
+                conversation_id=seg,
+                turns=turns,
+                history_frames=task["history_frames"],
                 instruction=instruction,
                 system_prompt=task["system_prompt"],
                 terminal_token=task["terminal_token"],
-            )
-            rows.append({
-                "conversation_id": seg,
-                **common,
-                "instruction": instruction,
-                "goal_conditioned": instruction is not None,
-                "n_frames": len(turns),
-                "n_turns": len(turns),
-                "n_non_noop": sum(1 for _, a in turns if a != "NO_OP"),
-                "messages": messages,
-            })
+            ):
+                rows.append({
+                    **target,
+                    **common,
+                    "instruction": instruction,
+                    "goal_conditioned": instruction is not None,
+                    "n_non_noop": int(turns[target["target_idx"]][1] != "NO_OP"),
+                })
             return {
                 **base,
                 "status": "ok",
@@ -288,30 +311,30 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
                 instruction_phrasings(goal, task["include_variants"])
             ):
                 suffix = f"_v{variant_idx}" if variant_idx else ""
-                messages = build_messages(
-                    turns,
+                base_id = f"{seg}:{goal['goal_id']}{suffix}"
+                for target in _target_rows(
+                    conversation_id=base_id,
+                    turns=turns,
+                    history_frames=task["history_frames"],
                     instruction=phrasing,
                     system_prompt=task["system_prompt"],
                     plan=plan or None,
                     terminal_token=task["terminal_token"],
-                )
-                rows.append({
-                    "conversation_id": f"{seg}:{goal['goal_id']}{suffix}",
-                    **common,
-                    "goal_id": goal["goal_id"],
-                    "instruction": phrasing,
-                    "variant_idx": variant_idx,
-                    "goal_conditioned": True,
-                    "plan": plan,
-                    "start_master_idx": int(goal["start_master_idx"]),
-                    "end_master_idx": int(goal["end_master_idx"]),
-                    "snapped_start": proj.snapped_start,
-                    "annotation_method": goal.get("method"),
-                    "n_frames": len(turns),
-                    "n_turns": len(turns),
-                    "n_non_noop": sum(1 for _, a in turns if a != "NO_OP"),
-                    "messages": messages,
-                })
+                ):
+                    rows.append({
+                        **target,
+                        **common,
+                        "goal_id": goal["goal_id"],
+                        "instruction": phrasing,
+                        "variant_idx": variant_idx,
+                        "goal_conditioned": True,
+                        "plan": plan,
+                        "start_master_idx": int(goal["start_master_idx"]),
+                        "end_master_idx": int(goal["end_master_idx"]),
+                        "snapped_start": proj.snapped_start,
+                        "annotation_method": goal.get("method"),
+                        "n_non_noop": int(turns[target["target_idx"]][1] != "NO_OP"),
+                    })
         return {
             **base,
             "status": "ok" if rows else "no_projected_goals",
@@ -346,6 +369,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--fps", type=float, required=True,
                    help="Training frame rate. With --fps-mode exact, master_fps/fps must "
                         "be an integer.")
+    p.add_argument("--history-frames", type=int, required=True,
+                   help="Number of frame turns retained in every training record.")
     p.add_argument("--fps-mode", choices=FPS_MODES, default="exact",
                    help="'exact' (default): fps must divide the master fps; even spacing. "
                         "'nearest': any fps <= master; each slot takes the master tick "
@@ -401,6 +426,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.history_frames < 1:
+        raise SystemExit("--history-frames must be at least 1")
 
     art = FilterArtifact(args.filter_dir)
     stride = art.stride_for(args.fps, args.fps_mode)  # fail fast on invalid rates
@@ -463,6 +490,7 @@ def main() -> None:
             "filter_seg_path": str(art.segment_path(str(row["segment_id"]))),
             "fps": args.fps,
             "fps_mode": args.fps_mode,
+            "history_frames": args.history_frames,
             "action_format": args.action_format,
             "continuous_action_hz": args.continuous_action_hz,
             "goals_by_segment": goals_map,
@@ -529,13 +557,14 @@ def main() -> None:
         "goal_mode": goal_mode,
         "fps": args.fps,
         "fps_mode": args.fps_mode,
+        "history_frames": args.history_frames,
         "stride": stride,
         "master_fps": art.master_fps,
         "action_format": args.action_format,
         "grammar": formatter.grammar,
         "continuous_action_hz": continuous_action_hz,
         "primitive_counts": dict(prim_totals) if prim_totals else None,
-        "n_noop_turns": sum(r["n_turns"] - r["n_non_noop"] for r in records),
+        "n_noop_turns": len(records) - sum(r["n_non_noop"] for r in records),
         "instruction": args.instruction,
         "instruction_field": args.instruction_field,
         "system_prompt_sha256": system_prompt_sha256,

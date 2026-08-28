@@ -7,6 +7,7 @@ import base64
 import pytest
 
 from history_policy import replay_training_messages
+from pipeline.stage_04_build_conversations import build_training_messages
 
 from agent.history import (
     IMAGE_PLACEHOLDER,
@@ -148,6 +149,23 @@ def test_offline_replay_matches_the_online_rendered_messages_exactly() -> None:
         assert offline[index][-1] == {"role": "assistant", "content": target}
         if index + 1 < len(turns):
             history.append(target, turns[index + 1][0])
+
+
+def test_crowdcast_stage_uses_the_same_rendered_messages_as_canonical_replay() -> None:
+    turns = [(f"frame-{index}", f"action-{index}") for index in range(7)]
+    expected = replay_training_messages(
+        turns=turns,
+        n_history_frames=4,
+        system="SYSTEM",
+        instruction="GOAL",
+        image_part=lambda image: {"type": "image", "image": image},
+    )
+    assert build_training_messages(
+        turns,
+        history_frames=4,
+        system_prompt="SYSTEM",
+        instruction="GOAL",
+    ) == expected
 
 
 @pytest.mark.parametrize("n", [1, 2, 3, 16])

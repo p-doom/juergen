@@ -44,7 +44,7 @@ import pytest
 import synthetic_clip as clip
 
 from pipeline.lib.manifest import make_artifact_id
-from pipeline.stage_04_build_conversations import build_messages
+from pipeline.stage_04_build_conversations import build_training_messages
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_PIPELINE_DIR = REPO_ROOT / "data_pipeline"
@@ -125,11 +125,12 @@ def _chat_row(index: int, n_turns: int) -> dict[str, Any]:
         "segment_id": clip.SEGMENT_ID,
         "n_frames": n_turns,
         "n_turns": n_turns,
-        "messages": build_messages(
+        "messages": build_training_messages(
             turns,
+            history_frames=4,
             instruction="do the synthetic thing",
             system_prompt=grammars.describe("deltatype_v2"),
-        ),
+        )[-1],
     }
 
 
