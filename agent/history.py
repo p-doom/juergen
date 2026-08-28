@@ -5,8 +5,8 @@ The four shapes in the tree, and where each came from:
   * `eval/freeroll.py` + `eval/osworld_grounding_runner.py` (via
     `osworld_runtime._interleave_messages` / `append_turn`) — one user turn per
     frame, the model's prior output fed back as the following assistant turn,
-    StreamingLLM *block* eviction at `n_history_frames`, and the goal re-anchored
-    on the earliest in-window user turn every step (`persist_instruction`).
+    slide-by-one eviction at `n_history_frames`, and the goal re-anchored on the
+    earliest in-window user turn every step.
   * `sign_of_life_v2/compact_relative.build_phaseb_messages` — at most five
     images; actions evicted out of the image window survive as prose in a
     `Previous actions:` block on the first user turn; the instruction rides that
@@ -23,11 +23,12 @@ The policy only renders; the window owns append and eviction.
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol, Sequence, runtime_checkable
 
 import verifiers.v1 as vf
 
+from history_policy import History, Turn, render_interleaved
 from image_domain import OSWORLD_CURSOR_JPEG_DOMAIN
 
 __all__ = [
@@ -49,14 +50,7 @@ IMAGE_PLACEHOLDER = "Previous screenshot omitted."
 
 @dataclass(frozen=True)
 class ImageBudget:
-    """How many received desktop images may ride a prompt.
-
-    `max_images` is the hard cap the policy honours; the window's
-    `n_history_frames` is the eviction trigger. They are separate because the
-    Phase-B contract evicts at 5 images while keeping older *actions*, and
-    target_box accumulates turns while sending exactly one image.
-
-    """
+    """How many received desktop images may ride a prompt."""
 
     max_images: int = 16
 
@@ -70,74 +64,6 @@ class ImageBudget:
 
     def image_part(self, image: bytes) -> dict[str, Any]:
         return {"type": "image_url", "image_url": {"url": self.data_url(image)}}
-
-@dataclass
-class Turn:
-    """One completed turn: the frame the model saw, and the text it produced from it."""
-
-    image: bytes
-    output: str | None = None
-
-
-@dataclass
-class History:
-    """The rolling (frame, action) window, with StreamingLLM block eviction.
-
-    Invariant: `turns[-1].output is None` — the newest frame is the current screen
-    and has no action yet. Every earlier turn has the action that followed it.
-    That is exactly `osworld_runtime.append_turn`'s
-    `len(recent_actions) == len(recent_frames) - 1`.
-
-    Eviction is block eviction, not slide-by-one: once the window exceeds
-    `n_history_frames` we keep the newest `n_history_frames // 2`. This preserves
-    the server-side prefix cache — while the window grows the prompt is
-    append-only, and only ~N/2 frames are re-prefilled, roughly once every N/2
-    steps. Slide-by-one invalidates the whole window every step past N.
-    """
-
-    n_history_frames: int = 16
-    turns: list[Turn] = field(default_factory=list)
-    evicted: list[str] = field(default_factory=list)
-    """Outputs that have fallen out of the window, oldest first, in order."""
-    note: str | None = None
-    """Text the driver attached to the newest observation, and only to it: it
-    describes the transition into that frame, so the next `append` clears it. Rendered
-    by `Agent.build_body` rather than by a policy — see there for why."""
-
-    def start(self, frame: bytes) -> None:
-        self.turns = [Turn(frame)]
-        self.evicted = []
-        self.note = None
-
-    def append(self, output: str, frame: bytes, note: str | None = None) -> None:
-        """Record the action taken from the current frame, then the resulting frame."""
-        if not self.turns:
-            raise RuntimeError("History.append before History.start")
-        self.turns[-1].output = output
-        self.turns.append(Turn(frame))
-        self.note = note
-        if len(self.turns) > self.n_history_frames:
-            keep = max(1, self.n_history_frames // 2)
-            self.evicted.extend(
-                turn.output or "" for turn in self.turns[:-keep] if turn.output is not None
-            )
-            self.turns = self.turns[-keep:]
-
-    @property
-    def images(self) -> list[bytes]:
-        return [turn.image for turn in self.turns]
-
-    @property
-    def outputs(self) -> list[str]:
-        return [turn.output for turn in self.turns if turn.output is not None]
-
-    @property
-    def all_outputs(self) -> list[str]:
-        return [*self.evicted, *self.outputs]
-
-    @property
-    def current(self) -> bytes:
-        return self.turns[-1].image
 
 
 @runtime_checkable
@@ -170,16 +96,24 @@ def _interleave(
     so `len(outputs) == len(parts) - 1`. Verbatim structure of
     `osworld_runtime._interleave_messages`.
     """
-    messages: vf.Messages = [vf.SystemMessage(content=system)]
-    for index, part in enumerate(parts):
-        content: list[Any] = []
-        if index == 0 and instruction:
-            content.append({"type": "text", "text": instruction})
-        content.append(part)
-        messages.append(vf.UserMessage(content=content))
-        if index < len(outputs):
-            messages.append(vf.AssistantMessage(content=outputs[index]))
-    return messages
+    history: History[Any] = History(n_history_frames=len(parts))
+    history.start(parts[0])
+    for index, output in enumerate(outputs):
+        history.append(output, parts[index + 1])
+    wire = render_interleaved(
+        history=history,
+        system=system,
+        instruction=instruction,
+        image_part=lambda part: part,
+    )
+    return [
+        vf.SystemMessage(content=message["content"])
+        if message["role"] == "system"
+        else vf.UserMessage(content=message["content"])
+        if message["role"] == "user"
+        else vf.AssistantMessage(content=message["content"])
+        for message in wire
+    ]
 
 
 @dataclass(frozen=True)
@@ -187,12 +121,9 @@ class InterleavedFrames:
     """freeroll / grounding / OSWorld-task shape.
 
     One user turn per in-window frame, the model's prior text as the following
-    assistant turn. `persist_instruction=True` re-anchors the goal on the
-    earliest in-window user turn every step so it survives eviction of the first
-    frame; `False` reverts to goal-on-step-1, which is the training distribution.
+    assistant turn. The goal rides the earliest in-window user turn.
     """
 
-    persist_instruction: bool = True
     name: str = "interleaved_frames"
 
     def render(
@@ -204,12 +135,12 @@ class InterleavedFrames:
         step: int,
         budget: ImageBudget,
     ) -> vf.Messages:
+        del step
         images = history.images[-budget.max_images :]
         outputs = history.outputs[-(len(images) - 1) :] if len(images) > 1 else []
-        goal = instruction if (step == 1 or self.persist_instruction) else None
         return _interleave(
             system=system,
-            instruction=goal,
+            instruction=instruction,
             parts=[budget.image_part(image) for image in images],
             outputs=outputs,
         )
@@ -260,7 +191,7 @@ class ProseSummarisedWindow:
         images = history.images
         outputs = history.all_outputs
         # `images` is the in-window frames; `outputs` is every action ever taken.
-        # The two live in different index spaces the moment `History` block-evicts,
+        # The two live in different index spaces once `History` evicts,
         # and `len(history.evicted)` is exactly the number of frames that left the
         # window (one output per dropped turn). Comparing `outputs` against
         # `images` alone raised for every window past `n_history_frames`, and
@@ -383,7 +314,7 @@ POLICIES: dict[str, Any] = {
 }
 
 
-def history_policy(name: str, **kwargs: Any) -> HistoryPolicy:
+def history_policy(name: str) -> HistoryPolicy:
     """Build a policy by name, so the A/B is a config field
     (`--harness.history.name=prose_summarised_window`) rather than a fork."""
     try:
@@ -392,4 +323,4 @@ def history_policy(name: str, **kwargs: Any) -> HistoryPolicy:
         raise ValueError(
             f"unknown history policy {name!r}; known: {sorted(POLICIES)}"
         ) from exc
-    return factory(**kwargs)
+    return factory()

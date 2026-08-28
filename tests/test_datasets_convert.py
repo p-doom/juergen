@@ -144,6 +144,7 @@ def _run(tmp_path: Path, *extra: str) -> tuple[dict, list[dict]]:
                 "--rollouts_dir", str(rollouts),
                 "--out_dir", str(out),
                 "--codec", "deltatype_v2",
+                "--history_frames", "4",
                 "--prose_divergence", "off",
                 *extra,
             ]
@@ -164,7 +165,7 @@ def _run(tmp_path: Path, *extra: str) -> tuple[dict, list[dict]]:
 def _prompt_of(record: dict) -> str:
     system = record["messages"][0]
     assert system["role"] == "system"
-    return system["content"][0]["text"]
+    return system["content"]
 
 
 @pytest.mark.parametrize("prose", [True, False])
@@ -247,6 +248,7 @@ def _convert(rollouts: Path, out: Path, *extra: str) -> int:
             "--rollouts_dir", str(rollouts),
             "--out_dir", str(out),
             "--codec", "deltatype_v2",
+            "--history_frames", "4",
             "--prose_divergence", "off",
             *extra,
         ]
@@ -305,7 +307,7 @@ def test_min_task_success_filters_on_the_score_the_harness_publishes(tmp_path):
     assert manifest["n_kept"] == 1
     # Two of the three carried a score; only one cleared the bar.
     assert manifest["n_scored"] == 2
-    assert [r["recording_id"] for r in _records(out)] == ["keep_me"]
+    assert {r["recording_id"] for r in _records(out)} == {"keep_me"}
 
 
 def test_the_stop_reason_is_read_in_the_producers_own_spelling(tmp_path):
@@ -318,14 +320,14 @@ def test_the_stop_reason_is_read_in_the_producers_own_spelling(tmp_path):
     _harness_rollout(ours, "mine")
     out_ours = tmp_path / "out_ours"
     assert _convert(ours, out_ours) == 0
-    assert [r["source_stop_reason"] for r in _records(out_ours)] == ["max_steps"]
+    assert {r["source_stop_reason"] for r in _records(out_ours)} == {"max_steps"}
 
     theirs = tmp_path / "theirs"
     theirs.mkdir(parents=True)
     _rollout(theirs, "yours")
     out_theirs = tmp_path / "out_theirs"
     assert _convert(theirs, out_theirs) == 0
-    assert [r["source_stop_reason"] for r in _records(out_theirs)] == ["terminate"]
+    assert {r["source_stop_reason"] for r in _records(out_theirs)} == {"terminate"}
 
 
 def _drop_parsed(run: Path, step_num: int | None = None) -> None:

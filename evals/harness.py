@@ -814,14 +814,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
 
         agent = Agent(
             codec=codec,
-            policy=history_policy(
-                self.config.history.name,
-                **(
-                    {"persist_instruction": self.config.history.persist_instruction}
-                    if self.config.history.name == "interleaved_frames"
-                    else {}
-                ),
-            ),
+            policy=history_policy(self.config.history.name),
             budget=self._budget(),
             transport=build_transport(
                 endpoint=endpoint,

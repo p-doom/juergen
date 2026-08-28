@@ -1041,12 +1041,13 @@ def test_the_rollout_artifact_is_the_layout_labctl_and_convert_both_read(
     # And through the reader, not around it: a rollout of ours is BC input, so every
     # row must convert, not be booked as a parse error for speaking its own grammar.
     target = load_codec("move_rel")
-    record = convert.convert_rollout(
-        run_dir, target, min_valid_actions=0, max_parse_error_frac=1.0
+    records = convert.convert_rollout(
+        run_dir, target, min_valid_actions=0, max_parse_error_frac=1.0,
+        n_history_frames=4,
     )
-    assert record is not None, "convert.py refuses a rollout with no screen_size"
-    assert record["instruction"] == "do the thing"
-    assert record["source_parse_errors"] == 0, (
+    assert records is not None, "convert.py refuses a rollout with no screen_size"
+    assert all(record["instruction"] == "do the thing" for record in records)
+    assert all(record["source_parse_errors"] == 0 for record in records), (
         "the source grammar is declared by result.json['codec'], so none of these "
         "rows is a parse error"
     )
@@ -1057,11 +1058,7 @@ def test_the_rollout_artifact_is_the_layout_labctl_and_convert_both_read(
     # cursor. `10 10 0` in deltatype_v2 and `move_rel [5, 9]` in move_rel are the
     # same move — the encoding changed and the guest-visible effect did not.
     geometry = DisplayGeometry(desktop_width=1920, desktop_height=1080)
-    written = [
-        message["content"][0]["text"]
-        for message in record["messages"]
-        if message["role"] == "assistant"
-    ]
+    written = [record["messages"][-1]["content"] for record in records]
     assert len(written) == 3
     for row, assistant in zip(rows[1:], written, strict=True):
         cursor = tuple(row["info"]["cursor_before"])
@@ -1091,15 +1088,13 @@ def test_our_own_terminate_survives_the_trip_into_another_grammar(
     run_dir = tmp_path / "cell_term"
 
     for name in ("deltatype_v2", "move_rel", "compact_raw", "ordered_events_v3"):
-        record = convert.convert_rollout(
-            run_dir, load_codec(name), min_valid_actions=0, max_parse_error_frac=1.0
+        records = convert.convert_rollout(
+            run_dir, load_codec(name), min_valid_actions=0, max_parse_error_frac=1.0,
+            n_history_frames=4,
         )
-        written = [
-            message["content"][0]["text"]
-            for message in record["messages"]
-            if message["role"] == "assistant"
-        ]
-        assert record["source_parse_errors"] == 0, name
+        assert records is not None
+        written = [record["messages"][-1]["content"] for record in records]
+        assert all(record["source_parse_errors"] == 0 for record in records), name
         assert written[-1].splitlines()[-1] == "TERMINATE: success", (name, written)
 
 
@@ -1929,13 +1924,3 @@ def test_the_image_budget_config_accepts_only_an_image_count() -> None:
     for kwargs in ({"max_images": 0}, {"media": "png"}, {"quality": 85}, {"max_pixels": 0}):
         with pytest.raises(ValidationError):
             ImageBudgetConfig(**kwargs)
-
-
-def test_persist_instruction_is_refused_by_a_policy_that_would_ignore_it() -> None:
-    """Only `InterleavedFrames` implements it; the other three took the field and
-    dropped it."""
-    from pydantic import ValidationError
-
-    assert HistoryConfig(name="prose_summarised_window").persist_instruction is True
-    with pytest.raises(ValidationError, match="interleaved_frames only"):
-        HistoryConfig(name="prose_summarised_window", persist_instruction=False)

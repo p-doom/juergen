@@ -104,6 +104,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import grammars  # noqa: E402
+from history_policy import replay_training_messages  # noqa: E402
 from grammars import _support  # noqa: E402
 from image_domain import OSWORLD_CURSOR_JPEG_DOMAIN  # noqa: E402
 
@@ -530,10 +531,11 @@ def convert_rollout(
     keep_prose: bool = True,
     min_valid_actions: int = 2,
     max_parse_error_frac: float = 0.5,
+    n_history_frames: int,
     min_task_success: float | None = None,
     stats: ConvertStats | None = None,
-) -> dict[str, Any] | None:
-    """One rollout dir -> one chat record in ``codec``'s grammar (or None if unusable)."""
+) -> list[dict[str, Any]] | None:
+    """One rollout dir -> one windowed chat record per valid action."""
     result_path = run_dir / "result.json"
     traj_path = run_dir / "trajectory.jsonl"
     if not result_path.is_file() or not traj_path.is_file():
@@ -624,22 +626,20 @@ def convert_rollout(
     if n_steps and (n_parse_err / n_steps) > max_parse_error_frac:
         return None
 
-    messages: list[dict[str, Any]] = [
-        {
-            "role": "system",
-            "content": [{"type": "text", "text": grammars.system_prompt(codec, thinking=bool(keep_prose))}],
-        }
-    ]
     n_prose_turns = 0
-    for i, (frame_path, text, prose) in enumerate(turns):
-        user_content: list[dict[str, Any]] = [{"type": "image", "image": frame_path}]
-        if i == 0 and instruction:
-            user_content.append({"type": "text", "text": instruction})
-        messages.append({"role": "user", "content": user_content})
+    replay_turns: list[tuple[str, str]] = []
+    for frame_path, text, prose in turns:
         if keep_prose and prose:
             text = f"{prose}\n{text}"
             n_prose_turns += 1
-        messages.append({"role": "assistant", "content": [{"type": "text", "text": text}]})
+        replay_turns.append((frame_path, text))
+    windows = replay_training_messages(
+        turns=replay_turns,
+        n_history_frames=n_history_frames,
+        system=grammars.system_prompt(codec, thinking=bool(keep_prose)),
+        instruction=instruction,
+        image_part=lambda path: {"type": "image", "image": path},
+    )
 
     if stats is not None:
         stats.n_turns += len(turns)
@@ -649,19 +649,22 @@ def convert_rollout(
         stats.n_turns_dropped_by_codec += n_codec_drop
 
     slug = result.get("slug") or run_dir.name
-    return {
-        "sample_id": f"onpol_{slug}",
-        "recording_id": slug,
-        "app": "osworld_onpolicy",
-        "platform": "UBUNTU",
-        "instruction": instruction,
-        "n_frames": len(turns),
-        "subrecord_idx": 0,
-        "n_subrecords": 1,
-        "source_stop_reason": source_stop_reason(result),
-        "source_parse_errors": n_parse_err,
-        "messages": messages,
-    }
+    return [
+        {
+            "sample_id": f"onpol_{slug}_{index:04d}",
+            "recording_id": slug,
+            "app": "osworld_onpolicy",
+            "platform": "UBUNTU",
+            "instruction": instruction,
+            "n_frames": min(index + 1, n_history_frames),
+            "subrecord_idx": index,
+            "n_subrecords": len(windows),
+            "source_stop_reason": source_stop_reason(result),
+            "source_parse_errors": n_parse_err,
+            "messages": messages,
+        }
+        for index, messages in enumerate(windows)
+    ]
 
 
 def discover_run_dirs(roots: str, *, recursive: bool = False) -> list[Path]:
@@ -989,6 +992,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--split_seed", type=int, default=0)
     p.add_argument("--min_valid_actions", type=int, default=2)
     p.add_argument("--max_parse_error_frac", type=float, default=0.5)
+    p.add_argument("--history_frames", type=int, required=True)
     p.add_argument("--no_keep_prose", dest="keep_prose", action="store_false",
                    help="Build a tool-call-only arm (drop the teacher's reasoning). The default "
                         "keeps prose for every codec — see this module's docstring. Such an "
@@ -1008,6 +1012,8 @@ def main(argv: list[str] | None = None) -> int:
                         "the measured legitimate spread between codecs is 0.00%% and the "
                         "smallest real defect instance is 6.25%% (see PROSE_DIVERGENCE_TOL).")
     args = p.parse_args(argv)
+    if args.history_frames < 1:
+        p.error("--history_frames must be at least 1")
 
     if not args.keep_prose and args.prose_divergence not in (None, "off"):
         p.error(
@@ -1042,6 +1048,7 @@ def main(argv: list[str] | None = None) -> int:
             keep_prose=args.keep_prose,
             min_valid_actions=args.min_valid_actions,
             max_parse_error_frac=args.max_parse_error_frac,
+            n_history_frames=args.history_frames,
             min_task_success=args.min_task_success,
             stats=stats,
         )
@@ -1049,10 +1056,10 @@ def main(argv: list[str] | None = None) -> int:
             stats.n_unusable += 1
             continue
         # Leak-drop by recording_id too (belt-and-suspenders vs the dir name).
-        if rec["recording_id"] in drop:
+        if rec[0]["recording_id"] in drop:
             stats.n_dropped_leak += 1
             continue
-        records.append(rec)
+        records.extend(rec)
         stats.n_kept += 1
 
     # Before the prose guard: an all-dropped filter also trips that one, and its
@@ -1098,6 +1105,7 @@ def main(argv: list[str] | None = None) -> int:
         "split_seed": args.split_seed,
         "min_valid_actions": args.min_valid_actions,
         "max_parse_error_frac": args.max_parse_error_frac,
+        "history_frames": args.history_frames,
         "n_seen": stats.n_seen,
         "n_kept": stats.n_kept,
         "n_dropped_by_filter": stats.n_dropped_by_filter,

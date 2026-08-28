@@ -1,15 +1,12 @@
-"""`HistoryPolicy` / `History`.
-
-Block eviction is the new part, so the boundaries are what matters here: the window
-invariant (`turns[-1].output is None`), the block-eviction arithmetic, and that
-every policy respects `ImageBudget.max_images` however long the window has grown.
-"""
+"""`HistoryPolicy` / `History`."""
 
 from __future__ import annotations
 
 import base64
 
 import pytest
+
+from history_policy import replay_training_messages
 
 from agent.history import (
     IMAGE_PLACEHOLDER,
@@ -87,20 +84,70 @@ def test_start_resets_the_window_and_the_evicted_log() -> None:
     assert history.turns == [history.turns[0]] and history.evicted == []
 
 
-def test_eviction_is_block_not_slide_by_one() -> None:
-    """Block eviction keeps the server-side prefix cache: N/2 refills per N/2 steps."""
-    history = History(n_history_frames=8)
+def test_the_window_slides_one_frame_at_a_time() -> None:
+    history = History(n_history_frames=4)
     history.start(_f(0))
-    for step in range(1, 8):
+    sizes = [len(history.turns)]
+    for step in range(1, 9):
         history.append(f"a{step}", _f(step))
-    assert len(history.turns) == 8, "no eviction at exactly n_history_frames"
-    assert history.evicted == []
-    history.append("a8", _f(8))  # ninth frame trips it
-    assert len(history.turns) == 4, "keep the newest n_history_frames // 2"
-    assert history.evicted == [f"a{i}" for i in range(1, 6)], history.evicted
+        sizes.append(len(history.turns))
+    assert sizes == [1, 2, 3, 4, 4, 4, 4, 4, 4]
+    assert history.evicted == [f"a{i}" for i in range(1, 6)]
     assert history.all_outputs == [f"a{i}" for i in range(1, 9)], (
         "no action is ever lost: evicted + in-window is the whole history"
     )
+
+
+def test_offline_replay_matches_the_online_rendered_messages_exactly() -> None:
+    turns = [(f"frame-{index}", f"action-{index}") for index in range(6)]
+    offline = replay_training_messages(
+        turns=turns,
+        n_history_frames=4,
+        system="SYSTEM",
+        instruction="GOAL",
+        image_part=lambda image: {"type": "image_url", "image_url": {"url": image}},
+    )
+    assert [
+        message["content"][-1]["image_url"]["url"]
+        for message in offline[4]
+        if message["role"] == "user"
+    ] == ["frame-1", "frame-2", "frame-3", "frame-4"]
+    history: History = History(n_history_frames=4)
+    history.start(turns[0][0])
+    budget = type(
+        "Budget",
+        (),
+        {
+            "max_images": 4,
+            "image_part": staticmethod(
+                lambda image: {"type": "image_url", "image_url": {"url": image}}
+            ),
+        },
+    )()
+    for index, (_, target) in enumerate(turns):
+        online = InterleavedFrames().render(
+            history=history,
+            system="SYSTEM",
+            instruction="GOAL",
+            step=index + 1,
+            budget=budget,
+        )
+        rendered = [
+            {
+                "role": message.role,
+                "content": [
+                    part.model_dump() if hasattr(part, "model_dump") else part
+                    for part in message.content
+                ]
+                if isinstance(message.content, list)
+                else message.content,
+            }
+            for message in online
+        ]
+        assert rendered == offline[index][:-1]
+        assert offline[index][-1] == {"role": "assistant", "content": target}
+        if index + 1 < len(turns):
+            history.append(target, turns[index + 1][0])
 
 
 @pytest.mark.parametrize("n", [1, 2, 3, 16])
@@ -150,24 +197,13 @@ def test_interleaved_honours_the_image_budget_after_eviction() -> None:
     assert _images(messages) == 2
 
 
-def test_persist_instruction_re_anchors_the_goal_every_step() -> None:
+def test_interleaved_re_anchors_the_goal_every_step() -> None:
     history = History(n_history_frames=16)
     _drive(history, 3)
-    persisted = InterleavedFrames(persist_instruction=True).render(
+    persisted = InterleavedFrames().render(
         history=history, system="S", instruction="GOAL", step=4, budget=ImageBudget()
     )
     assert "GOAL" in _text_of(persisted[1])
-    once = InterleavedFrames(persist_instruction=False).render(
-        history=history, system="S", instruction="GOAL", step=4, budget=ImageBudget()
-    )
-    assert "GOAL" not in _text_of(once[1]), "goal-on-step-1 is the training distribution"
-    fresh = History(n_history_frames=16)
-    fresh.start(_f(0))
-    assert "GOAL" in _text_of(
-        InterleavedFrames(persist_instruction=False).render(
-            history=fresh, system="S", instruction="GOAL", step=1, budget=ImageBudget()
-        )[1]
-    )
 
 
 def test_prose_window_keeps_five_images_and_summarises_the_rest() -> None:
@@ -198,27 +234,17 @@ def test_prose_window_says_none_when_nothing_has_been_evicted() -> None:
 
 
 def test_prose_window_survives_the_window_evicting() -> None:
-    """`all_outputs` is global (evicted + in-window) while `images` is in-window
-    only, so the two live in different index spaces the moment `History`
-    block-evicts. `len(history.evicted)` is the term that reconciles them; without
-    it `outputs[first:]` pairs the wrong action with each visible frame.
-
-    Harmless for the sign-of-life gate, whose `max_steps <= 12` never reaches the
-    default `n_history_frames=16` — so the published Phase-B-compact 2/4 is unaffected.
-    Fatal for any longer rollout under this policy, where it surfaced as
-    `infrastructure_error`.
-    """
     history = History(n_history_frames=8)
     _drive(history, 7)
     ProseSummarisedWindow().render(  # 8 frames, no eviction yet
         history=history, system="S", instruction="G", step=8, budget=ImageBudget(max_images=5)
     )
-    history.append("action 8", _f(8))  # trips block eviction
+    history.append("action 8", _f(8))
     assert history.evicted, "precondition: the window has evicted"
     messages = ProseSummarisedWindow().render(
         history=history, system="S", instruction="G", step=9, budget=ImageBudget(max_images=5)
     )
-    assert _images(messages) == 4, "the window holds 4 frames after eviction"
+    assert _images(messages) == 5
 
 
 def test_prose_window_pairs_the_right_action_with_each_frame_after_eviction() -> None:
@@ -297,7 +323,6 @@ def test_image_budget_refuses_a_non_jpeg_observation() -> None:
 
 def test_history_policy_builds_by_name_and_refuses_an_unknown_one() -> None:
     assert history_policy("interleaved_frames").name == "interleaved_frames"
-    assert history_policy("interleaved_frames", persist_instruction=False).persist_instruction is False
     with pytest.raises(ValueError, match="unknown history policy"):
         history_policy("no_such_shape")
 
@@ -305,4 +330,3 @@ def test_history_policy_builds_by_name_and_refuses_an_unknown_one() -> None:
 def test_every_registered_policy_name_matches_its_key() -> None:
     for name, factory in POLICIES.items():
         assert factory().name == name
-
