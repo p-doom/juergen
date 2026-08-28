@@ -30,6 +30,12 @@ is the prompt the eval harness and the RL rollout put in front of the model. Its
 sha256 is recorded in the manifest as ``system_prompt_sha256``, and the grammar's
 conformance vectors pin the same digest, so neither side can move alone.
 
+Neither are the pixels. A conversation points at stage-01 master records by
+``ar://`` URI and nothing re-encodes them, so the manifest states their encoding
+as ``image_domain`` (e.g. ``jpeg_q80_height_720``) — the field and spelling
+``datasets/convert.py`` also writes and ``evals/harness.py`` refuses a mismatched
+eval arm against.
+
 Dead-zone accounting: every segment row carries the label-policy counters
 (discarded deltas, clamped/dropped pairs); segments whose discard fraction
 exceeds --dead-zone-flag-frac are flagged (``dead_zone_flagged``) — a
@@ -77,6 +83,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import grammars  # noqa: E402
+from image_domain import image_domain  # noqa: E402
 
 from pipeline.lib.action_format import (  # noqa: E402
     DEFAULT_CONTINUOUS_ACTION_HZ,
@@ -399,6 +406,26 @@ def main() -> None:
     art = FilterArtifact(args.filter_dir)
     stride = art.stride_for(args.fps, args.fps_mode)  # fail fast on invalid rates
 
+    # ffmpeg encoded the master frames once in stage 01 and nothing since has
+    # touched them, so the master store's own record of what it asked for
+    # describes the bytes these conversations point at. Its manifest is pinned by
+    # the ``master_store_id`` FilterArtifact just verified.
+    master = json.loads((art.master_dir / "manifest.json").read_text())
+    if not isinstance(master.get("jpeg_quality"), int) or not isinstance(
+        master.get("target_height"), int
+    ):
+        raise SystemExit(
+            f"master store {art.master_dir} records jpeg_quality="
+            f"{master.get('jpeg_quality')!r} target_height={master.get('target_height')!r}; "
+            "the image domain of these conversations cannot be stated"
+        )
+    frames_domain = image_domain(
+        media="jpeg",
+        quality=master["jpeg_quality"],
+        geometry="height",
+        extent=master["target_height"],
+    )
+
     goals_id = None
     goals_map = None
     if args.goals_dir is not None:
@@ -513,6 +540,7 @@ def main() -> None:
         "instruction": args.instruction,
         "instruction_field": args.instruction_field,
         "system_prompt_sha256": system_prompt_sha256,
+        "image_domain": frames_domain,
         "use_plans": args.use_plans,
         "include_variants": args.include_variants,
         "min_frames": args.min_frames,

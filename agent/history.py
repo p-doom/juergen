@@ -29,6 +29,8 @@ from typing import Any, Literal, Protocol, Sequence, runtime_checkable
 
 import verifiers.v1 as vf
 
+from image_domain import image_domain
+
 __all__ = [
     "History",
     "HistoryPolicy",
@@ -65,6 +67,24 @@ class ImageBudget:
     quality: int = 85
     max_pixels: int = 0
     """If > 0, downscale (preserving aspect) until w*h <= max_pixels. 0 = never."""
+
+    @property
+    def domain(self) -> str:
+        """The pixels this budget delivers, as one comparable string.
+
+        `datasets/convert.py` records it for the frames its records point at and
+        `evals/harness.py` refuses to score a checkpoint through a different one: a
+        student trained on the guest's lossless PNG framebuffer and evaluated
+        through JPEG q85 is read through pixels it never saw. `quality` is left out
+        of the PNG form because `_encode` ignores it there, and carrying it would
+        refuse a lossless arm against a lossless dataset.
+        """
+        return image_domain(
+            media=self.media,
+            quality=self.quality,
+            geometry="max_pixels",
+            extent=self.max_pixels,
+        )
 
     def data_url(self, image: bytes) -> str:
         payload, mime = self._encode(image)

@@ -144,13 +144,23 @@ class ScriptedConfig(vf.BaseConfig):
 
 class BudgetConfig(vf.BaseConfig):
     """Hard per-episode ceilings: model turns, dispatched operations, output
-    tokens, wall time.
+    tokens, wall time, consecutive unparseable turns. `0` is off, on all five.
     """
 
     model_turns: int = Field(default=0, ge=0)
     operations: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     wall_time_s: float = Field(default=0.0, ge=0.0)
+    consecutive_parse_errors: int = Field(default=0, ge=0)
+    """Unparseable turns in a row before the episode ends; the streak resets on any
+    turn that parsed.
+
+    Off by default, unlike the other four, and deliberately: `parse_error_rate` is
+    measured over the whole episode, so an arm studying a parse collapse has to be
+    able to run through one. It is the arms that pay for a VM per cell — an OSWorld
+    array, a sign-of-life gate — that set it, because `model_turns` cannot separate
+    a checkpoint that acted for 60 turns from one that emitted 60 turns nothing
+    could read."""
 
 
 class ArtifactConfig(vf.BaseConfig):
@@ -236,6 +246,19 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     can tell one apart from the wrong checkpoint entirely -- only the arm's author
     knows. Stating the reason here makes it data that lands in the record instead
     of a comment nobody can check, and leaves the unjustified case loud."""
+    image_domain: str | None = None
+    """The encoding of the frames in a checkpoint's training records, as
+    `datasets/convert.py` writes it into `convert_manifest.json`. ENFORCED unless a
+    mismatch is justified in writing by `expect_image_mismatch`.
+
+    The prompt failure one domain over: the rollout-BC loop trains on the raw PNG
+    framebuffer this harness writes to `steps/step_NNN.png` and scores through
+    `images.media`/`quality`, so a mismatch does not error -- it reads the
+    checkpoint through pixels it never saw and presents as a weak number rather
+    than as the config mistake it is."""
+    expect_image_mismatch: str | None = None
+    """Why THIS arm's image encoding legitimately differs, or `None` to require a
+    match."""
     history: HistoryConfig = HistoryConfig()
     images: ImageBudgetConfig = ImageBudgetConfig()
     settle: SettleConfig = SettleConfig()
@@ -314,6 +337,7 @@ class _Budget:
     model_turns: int = 0
     operations: int = 0
     output_tokens: int = 0
+    consecutive_parse_errors: int = 0
     failure: str | None = None
 
     def __post_init__(self) -> None:
@@ -330,6 +354,14 @@ class _Budget:
     def tokens(self, count: int) -> None:
         self.output_tokens += count
         self._check("output_tokens", self.output_tokens, self.config.output_tokens)
+
+    def parsed(self, ok: bool) -> None:
+        self.consecutive_parse_errors = 0 if ok else self.consecutive_parse_errors + 1
+        self._check(
+            "consecutive_parse_errors",
+            self.consecutive_parse_errors,
+            self.config.consecutive_parse_errors,
+        )
 
     def _check(self, name: str, used: int, limit: int) -> None:
         if limit and used > limit and self.failure is None:
@@ -349,6 +381,7 @@ class _Budget:
             "model_turns": self.model_turns,
             "operations": self.operations,
             "output_tokens": self.output_tokens,
+            "consecutive_parse_errors": self.consecutive_parse_errors,
             "wall_time_s": round(time.monotonic() - self.started, 3),
             "failure": self.failure,
         }
@@ -720,6 +753,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         # unjustified mismatch must be refused here rather than one boot and one
         # guest setup per task into a 369-cell array.
         trace.info["prompt"] = self._prompt_report(codec)
+        trace.info["images"] = self._image_report()
 
         spec = PoolSpec(
             key=self.config.pool.key,
@@ -803,12 +837,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                     else {}
                 ),
             ),
-            budget=ImageBudget(
-                max_images=self.config.images.max_images,
-                media="png" if self.config.images.media == "png" else "jpeg",
-                quality=self.config.images.quality,
-                max_pixels=self.config.images.max_pixels,
-            ),
+            budget=self._budget(),
             transport=build_transport(
                 endpoint=endpoint,
                 secret=secret,
@@ -943,6 +972,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                         break
                 if decision.parse_error:
                     state.parse_errors += 1
+                budget.parsed(decision.parse_error is None)
                 state.ignored_after_terminate += decision.ignored_after_terminate
 
                 frame = await self._observe(preparer, session, task)
@@ -1095,6 +1125,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             "screen_size": state.screen_size,
             "history_policy": state.history_policy,
             "sampling": sampling,
+            "images": self.config.images.model_dump(),
             "success": state.success,
             "outcome": outcome,
             "steps": state.steps,
@@ -1333,6 +1364,41 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 "Qwen3-VL-8B=33.9% OSWorld-Verified was measured through the sealed "
                 "prompts; describe() is not byte-identical. Re-measure before comparing."
             ),
+        }
+
+    def _budget(self) -> ImageBudget:
+        return ImageBudget(
+            max_images=self.config.images.max_images,
+            media=self.config.images.media,
+            quality=self.config.images.quality,
+            max_pixels=self.config.images.max_pixels,
+        )
+
+    def _image_report(self) -> dict[str, Any]:
+        """The image half of the wire as data, and the one check that must not be skipped.
+
+        `dump_prompt` elides the image bytes and the published result named no
+        encoding, so a train/serve pixel mismatch used to leave no trace in any
+        artifact. Unlike the prompt there is no second accepted form: an arm renders
+        exactly one encoding, so a difference is always the arm's to vouch for.
+        """
+        observed = self._budget().domain
+        expected = self.config.image_domain
+        justification = self.config.expect_image_mismatch
+        matches = None if expected is None else expected == observed
+        if matches is False and justification is None:
+            raise ValueError(
+                f"image_domain={expected!r} is not the encoding this arm renders "
+                f"({observed!r}). This checkpoint was trained on different pixels than "
+                f"this eval sends, so a score from this run would not be the number it "
+                f"looks like. Set expect_image_mismatch=<why> on the arm if the "
+                f"difference is known and intended."
+            )
+        return {
+            "image_domain": observed,
+            "expected_image_domain": expected,
+            "matches_expected": matches,
+            "expect_image_mismatch": justification,
         }
 
     def _control_ok(self, state: DesktopState) -> bool | None:

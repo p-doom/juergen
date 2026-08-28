@@ -790,12 +790,37 @@ def test_the_operations_budget_ends_the_episode(tmp_path, preparer) -> None:
     assert result["outcome"].startswith("budget_operations")
 
 
+def test_the_parse_error_streak_ends_the_episode(tmp_path, preparer) -> None:
+    """`model_turns` cannot separate a checkpoint that acted for nine turns from one
+    that emitted nine turns nothing could read: both spend the cell's whole VM and
+    both publish `max_steps`."""
+    config = _config(tmp_path, budget=BudgetConfig(consecutive_parse_errors=2))
+    _, result, _ = _run(config, _task(max_steps=9), replies=["not an action"] * 9)
+    assert result["outcome"] == "budget_consecutive_parse_errors_exceeded"
+    assert result["steps"] == 3, "the third unreadable turn in a row exceeds a ceiling of 2"
+    assert result["parse_errors"] == 3
+    assert result["budget"]["consecutive_parse_errors"] == 3
+
+
+def test_a_turn_that_parsed_resets_the_parse_error_streak(tmp_path, preparer) -> None:
+    """Half the turns unreadable is a rate, not a collapse, and the ceiling counts
+    only turns in a row — otherwise it would be `parse_errors` with a worse name."""
+    config = _config(tmp_path, budget=BudgetConfig(consecutive_parse_errors=2))
+    _, result, _ = _run(
+        config, _task(max_steps=6), replies=["not an action", "0 0 0 ;"] * 3
+    )
+    assert result["outcome"] == "max_steps"
+    assert result["parse_errors"] == 3
+    assert result["budget"]["consecutive_parse_errors"] == 0
+
+
 def test_an_unset_budget_never_fires() -> None:
     budget = _Budget(BudgetConfig())
     for _ in range(1000):
         budget.turn()
         budget.dispatched(100)
         budget.tokens(1000)
+        budget.parsed(False)
     assert budget.failure is None, "a budget nobody set must never fire"
 
 
@@ -822,6 +847,7 @@ def test_the_budget_snapshot_is_json_serialisable() -> None:
         "model_turns",
         "operations",
         "output_tokens",
+        "consecutive_parse_errors",
         "wall_time_s",
         "failure",
     }
@@ -1278,6 +1304,82 @@ def test_a_system_prompt_override_is_honoured_and_hashed(tmp_path) -> None:
     harness = DesktopHarness(_config(tmp_path, system_prompt_override="SEALED PROMPT"))
     report = harness._prompt_report(load_codec("deltatype_v2"))
     assert report["prompt_sha256"] == hashlib.sha256(b"SEALED PROMPT").hexdigest()
+
+
+def test_a_png_dataset_scored_through_the_jpeg_default_is_refused(tmp_path) -> None:
+    """The defect the gate exists for. `evals/harness.py` writes the guest's raw
+    PNG framebuffer to `steps/step_NNN.png`, `datasets/convert.py` puts that path
+    in the training record, and the eval that produced it sent JPEG q85 -- so a
+    rollout-BC student is scored on pixels it was never trained on, and no
+    published field said so."""
+    from agent.history import ImageBudget
+
+    harness = DesktopHarness(_config(tmp_path, image_domain=ImageBudget(media="png").domain))
+    with pytest.raises(ValueError, match="is not the encoding this arm renders"):
+        harness._image_report()
+
+
+def test_a_justified_image_mismatch_passes_and_the_reason_lands_in_the_record(
+    tmp_path,
+) -> None:
+    from agent.history import ImageBudget
+
+    report = DesktopHarness(
+        _config(
+            tmp_path,
+            image_domain=ImageBudget(media="png").domain,
+            expect_image_mismatch="lossless records, q85 eval, deliberately",
+        )
+    )._image_report()
+    assert report["matches_expected"] is False
+    assert report["expect_image_mismatch"] == "lossless records, q85 eval, deliberately"
+    assert report["image_domain"] == ImageBudget(quality=85).domain
+    assert report["expected_image_domain"] == ImageBudget(media="png").domain
+
+
+def test_an_arm_that_renders_what_it_declares_matches(tmp_path) -> None:
+    from agent.history import ImageBudget
+
+    config = _config(tmp_path, image_domain=ImageBudget(media="png").domain)
+    config.images.media = "png"
+    assert DesktopHarness(config)._image_report()["matches_expected"] is True
+
+
+def test_no_expected_image_domain_reports_none_rather_than_a_false_match(tmp_path) -> None:
+    assert DesktopHarness(_config(tmp_path))._image_report()["matches_expected"] is None
+
+
+def test_a_foreign_image_domain_is_refused_before_a_vm_is_booted(
+    tmp_path, preparer, monkeypatch
+) -> None:
+    """The encoding is resolvable from config alone, so refusing after the boot
+    costs one VM and one guest setup per task across a 369-cell array."""
+    from agent.history import ImageBudget
+
+    captured = _captured_lease(monkeypatch)
+    with pytest.raises(ValueError, match="is not the encoding this arm renders"):
+        _run(
+            _config(tmp_path, image_domain=ImageBudget(media="png").domain),
+            _task(max_steps=1, name="i"),
+            replies=["0 0 0 ;"],
+        )
+    assert captured == [], "no VM may be leased for a run that cannot be scored"
+    assert preparer.prepared == 0
+
+
+def test_every_episode_publishes_the_image_encoding_it_sent(tmp_path, preparer) -> None:
+    """`dump_prompt` elides the image bytes, so this is the only record of which
+    pixels the checkpoint was scored on."""
+    from agent.history import ImageBudget
+
+    trace, result, _ = _run(_config(tmp_path), _task(max_steps=1), replies=["0 0 0 ;"])
+    assert result["images"] == {
+        "max_images": 4,
+        "media": "jpeg",
+        "quality": 85,
+        "max_pixels": 0,
+    }
+    assert trace.info["images"]["image_domain"] == ImageBudget(quality=85).domain
 
 
 def test_the_pool_target_injects_a_fake_and_receives_session_kwargs(tmp_path, preparer) -> None:

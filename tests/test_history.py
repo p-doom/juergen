@@ -24,6 +24,7 @@ from agent.history import (
     history_policy,
     prose_summary,
 )
+from image_domain import image_domain
 from juergen_doubles import png
 
 
@@ -299,6 +300,39 @@ def test_image_budget_downscales_to_max_pixels() -> None:
     with Image.open(io.BytesIO(payload)) as handle:
         assert handle.width * handle.height <= 5000
         assert abs(handle.width / handle.height - 2.0) < 0.1, "aspect is preserved"
+
+
+def test_the_domain_separates_exactly_the_knobs_that_change_the_pixels() -> None:
+    """What `evals/harness.py` refuses on. `quality` moves the JPEG form and must
+    not move the PNG one: PNG bytes pass through untouched, so carrying it there
+    would refuse a lossless arm against a lossless dataset."""
+    assert ImageBudget(media="png").domain != ImageBudget().domain
+    assert ImageBudget(media="png", quality=30).domain == ImageBudget(media="png").domain
+    assert ImageBudget(quality=30).domain != ImageBudget(quality=85).domain
+    assert ImageBudget(max_pixels=5000).domain != ImageBudget().domain
+    assert ImageBudget(max_images=1).domain == ImageBudget(max_images=9).domain, (
+        "how many images ride a prompt is not how they are encoded; a dataset "
+        "record has no per-prompt cap to compare against"
+    )
+
+
+def test_a_height_bounded_corpus_is_not_the_domain_of_a_pixel_bounded_one() -> None:
+    """The crowd-cast pipeline bounds its frames by height (ffmpeg
+    ``scale=-2:H``) and `ImageBudget` by total pixels, so both spell a geometry
+    the other cannot render. `max_pixels_0` and `height_0` in particular both read
+    as "no downscale" over two different sources, and collapsing them would make a
+    real train/serve mismatch match silently."""
+    assert ImageBudget().domain == image_domain(
+        media="jpeg", quality=85, geometry="max_pixels", extent=0
+    ), "the budget must not spell the format a second time"
+    assert ImageBudget().domain != image_domain(
+        media="jpeg", quality=85, geometry="height", extent=0
+    )
+    assert image_domain(
+        media="jpeg", quality=80, geometry="height", extent=720
+    ) != image_domain(media="jpeg", quality=80, geometry="height", extent=1080)
+    with pytest.raises(ValueError, match="image geometry must be one of"):
+        image_domain(media="jpeg", quality=80, geometry="max_height", extent=720)
 
 
 def test_history_policy_builds_by_name_and_refuses_an_unknown_one() -> None:
