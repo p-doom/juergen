@@ -1,13 +1,9 @@
 """The agent layer: what the model sees, how it is sampled, how its text becomes
 operations, and how an episode gets a desktop.
 
-Three concerns, one per module, all injected rather than inherited:
+Two concerns, one per module:
 
-  * `history` — the history policy: freeroll's interleaved window, Phase-B's
-    prose-summarised five-image window, target_box's latest-image-only
-    accumulation, movebox's stateless single turn. Selecting one is a constructor
-    argument.
-  * `agent` — one sampling path. Sampling settings come from `ModelContext`
+  * `agent` — one canonical render and sampling path. Sampling settings come from `ModelContext`
     (`ctx.sampling`), never from a per-harness constant, so there is one
     temperature source and the body we log is the body `Dialect.apply_overrides`
     puts on the wire.
@@ -24,20 +20,9 @@ from agent.agent import (
 )
 from agent.desktop import (
     DesktopLease,
-    LeaseRegistry,
     LeasedDesktopPool,
+    LeaseRegistry,
     lease_for_trace,
-)
-from agent.history import (
-    History,
-    HistoryPolicy,
-    ImageBudget,
-    InterleavedFrames,
-    LatestImageOnly,
-    ProseSummarisedWindow,
-    StatelessSingleTurn,
-    Turn,
-    history_policy,
 )
 
 __all__ = [
@@ -45,18 +30,9 @@ __all__ = [
     "Decision",
     "DesktopLease",
     "EffectiveSampling",
-    "History",
-    "HistoryPolicy",
-    "ImageBudget",
-    "InterleavedFrames",
-    "LatestImageOnly",
     "LeaseRegistry",
     "LeasedDesktopPool",
     "ModelCallError",
-    "ProseSummarisedWindow",
-    "StatelessSingleTurn",
-    "Turn",
-    "history_policy",
     "lease_for_trace",
     "resolve_sampling",
 ]

@@ -5,10 +5,17 @@ description = "Crowd-cast SFT supply-chain monorepo: data pipeline, eval harness
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "desktop",
+    # CUA-Gym clears browser state over Chrome's existing CDP endpoint. The
+    # Python client is sufficient; this package never launches Playwright's
+    # bundled browsers.
+    "playwright==1.62.0",
     "av>=16.1.0",
     "pyarrow>=21.0.0",
     "verifiers==0.2.1",
 ]
+
+[project.scripts]
+juergen-cua-gym-hub-image = "evals.cua_gym.web.image:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
@@ -33,7 +40,7 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.uv.sources]
-desktop = { git = "https://github.com/p-doom/desktop.git", rev = "ba044469669f64a7b9f70224fddae259bf8063e4" }
+desktop = { git = "https://github.com/p-doom/desktop.git", rev = "82874b7a79c170eeb7a8bc38acf2a32e4916312e" }
 torch = { index = "pytorch-cu128" }
 torchaudio = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
@@ -44,10 +51,20 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["cua_gym", "harness_render", "image_domain"]
+py-modules = ["cua_gym", "cua_gym_web", "harness_render"]
 
 [tool.setuptools.packages.find]
-include = ["agent", "agent.*", "evals", "evals.*", "grammars", "grammars.*"]
+include = [
+    "agent",
+    "agent.*",
+    "evals",
+    "evals.*",
+    "grammars",
+    "grammars.*",
+    "stream_cuagym_qwen35",
+]
 
 [tool.setuptools.package-data]
 "evals.cua_gym" = ["compatibility/*.json"]
+"evals.cua_gym.web" = ["compatibility/*.json"]
+"stream_cuagym_qwen35" = ["*.json", "*.txt"]

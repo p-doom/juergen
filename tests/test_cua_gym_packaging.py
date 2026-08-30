@@ -14,11 +14,18 @@ import pytest
 
 _REPO = Path(__file__).resolve().parent.parent
 _MODULES = (
-    "agent.history",
+    "harness_render",
     "cua_gym",
+    "cua_gym_web",
     "evals.cua_gym.manifest",
     "evals.cua_gym.runtime",
+    "evals.cua_gym.web.gateway",
+    "evals.cua_gym.web.hub",
+    "evals.cua_gym.web.image",
+    "evals.cua_gym.web.manifest",
+    "evals.cua_gym.web.runtime",
     "grammars.ordered_events_v3.codec",
+    "stream_cuagym_qwen35",
 )
 _PROBE = """
 import importlib, json, sys
@@ -62,6 +69,7 @@ def built_wheel(
         env=dict(os.environ, PYTHONPATH=str(site)),
         capture_output=True,
         text=True,
+        check=False,
     )
     assert process.returncode == 0, process.stderr
     files = {name: Path(path) for name, path in json.loads(process.stdout).items()}
@@ -83,7 +91,14 @@ def test_wheel_contains_the_pinned_manifest_and_no_excluded_front_doors(
     assert "rl_grounding.py" not in names
     assert "rl_movebox.py" not in names
     assert "rl_target_box.py" not in names
-    assert not any(name.startswith("evals/cua_gym/web/") for name in names)
+    assert f"evals/cua_gym/web/compatibility/{PINNED_REVISION}.json" in names
+    assert "evals/cua_gym/web/gateway.py" in names
+    assert "evals/cua_gym/web/hub.py" in names
+    assert "evals/cua_gym/web/image.py" in names
+    assert "evals/cua_gym/web/runtime.py" in names
+    assert "cua_gym_web.py" in names
+    assert "image_domain.py" not in names
+    assert not any(name.startswith("reinforcement_learning/") for name in names)
 
 
 def test_desktop_dependency_is_pinned_to_the_reviewed_runtime_revision() -> None:
@@ -92,5 +107,11 @@ def test_desktop_dependency_is_pinned_to_the_reviewed_runtime_revision() -> None
     source = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
     assert source["tool"]["uv"]["sources"]["desktop"] == {
         "git": "https://github.com/p-doom/desktop.git",
-        "rev": "ba044469669f64a7b9f70224fddae259bf8063e4",
+        "rev": "82874b7a79c170eeb7a8bc38acf2a32e4916312e",
     }
+
+
+def test_wheel_contains_the_candidate_render_resources(built_wheel) -> None:
+    _, names, _ = built_wheel
+    assert "stream_cuagym_qwen35/render_spec.json" in names
+    assert "stream_cuagym_qwen35/system_prompt.txt" in names

@@ -167,6 +167,7 @@ class HarnessRenderSpec:
 class TrainingTurn[Frame]:
     image: Frame
     assistant: str
+    action: str
 
 
 @dataclass(frozen=True)
@@ -174,7 +175,7 @@ class _CompletedTurn[Frame]:
     step: int
     image: Frame
     history_text: str
-    action: str
+    action: str | None
 
 
 def _prior_assistant(text: str) -> str:
@@ -192,12 +193,16 @@ def _prior_assistant(text: str) -> str:
     return stripped
 
 
-def _history_and_action(text: str) -> tuple[str, str]:
+def _history_text(text: str, action: str | None) -> str:
     history_text = _prior_assistant(text)
+    if action is None:
+        return history_text
+    if not isinstance(action, str) or not action.strip():
+        raise ValueError("completed action must be non-empty text or None")
     lines = [line.strip() for line in history_text.splitlines() if line.strip()]
-    if not lines:
-        raise ValueError("prior assistant response has no action line")
-    return history_text, lines[-1]
+    if not lines or lines[-1] != action:
+        raise ValueError("completed action does not match the assistant's final line")
+    return history_text
 
 
 class HarnessRenderer[Frame]:
@@ -233,14 +238,16 @@ class HarnessRenderer[Frame]:
         self._next_step = 1
         self._started = True
 
-    def complete(self, *, assistant: str, next_image: Frame) -> None:
+    def complete(
+        self, *, assistant: str, action: str | None, next_image: Frame
+    ) -> None:
         if not self._started:
             raise RuntimeError("HarnessRenderer.complete before start")
         if not isinstance(assistant, str) or not assistant.strip():
             raise ValueError("assistant must be non-empty text")
         if next_image is None:
             raise ValueError("next image cannot be None")
-        history_text, action = _history_and_action(assistant)
+        history_text = _history_text(assistant, action)
         self._visible.append(
             _CompletedTurn(
                 step=self._next_step,
@@ -252,7 +259,8 @@ class HarnessRenderer[Frame]:
         self._next_step += 1
         if len(self._visible) > self.spec.max_completed_turns:
             evicted = self._visible.pop(0)
-            self._evicted_actions.append((evicted.step, evicted.action))
+            if evicted.action is not None:
+                self._evicted_actions.append((evicted.step, evicted.action))
         self._current = next_image
 
     def _elide_action(self, action: str) -> str:
@@ -316,7 +324,7 @@ def render_sft_records[Frame](
             raise ValueError("training image cannot be None")
         if not isinstance(turn.assistant, str) or not turn.assistant.strip():
             raise ValueError("training assistant must be non-empty text")
-        _history_and_action(turn.assistant)
+        _history_text(turn.assistant, turn.action)
     renderer.start(turns[0].image)
     records: list[list[dict[str, Any]]] = []
     for index, turn in enumerate(turns):
@@ -334,6 +342,7 @@ def render_sft_records[Frame](
         if index + 1 < len(turns):
             renderer.complete(
                 assistant=turn.assistant,
+                action=turn.action,
                 next_image=turns[index + 1].image,
             )
     return records

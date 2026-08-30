@@ -17,9 +17,9 @@ Both emitters now render through this codec and take this prompt, so v2 is the
 subset of this grammar that never types.
 
 Escaping inside ``type()`` is minimal: only ``\\\\`` and ``\\"``. Return is an
-event — ``down(Return); up(Return)`` — never a character inside ``type()``. The
-executor cannot type a newline inside a burst, and a double-escaped ``\\\\n``
-types two literal characters instead of pressing Return, a labelling defect that
+event; Tab is too — ``down(Return); up(Return)`` and ``down(Tab); up(Tab)`` —
+never a character inside ``type()``. A double-escaped ``\\\\n`` types two
+literal characters instead of pressing Return, a labelling defect that
 reached real training data. Every other backslash escape is rejected at parse
 time.
 
@@ -50,6 +50,27 @@ _PAIR_RE = re.compile(r"\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)")
 _ARG_RE = re.compile(r"\(\s*([^\s(),;]+)\s*\)")
 
 NO_OP = "NO_OP"
+TERMINATE = "TERMINATE"
+GRID_SIZE = 1000
+ACTION_CONTRACT = "ordered_events_v3_relative_1000_grid_v1"
+
+
+def _grid_delta_to_pixels(
+    dx: int, dy: int, geometry: DisplayGeometry
+) -> tuple[int, int]:
+    return (
+        round(dx / GRID_SIZE * geometry.desktop_width),
+        round(dy / GRID_SIZE * geometry.desktop_height),
+    )
+
+
+def _pixel_delta_to_grid(
+    dx: int, dy: int, geometry: DisplayGeometry
+) -> tuple[int, int]:
+    return (
+        round(dx / geometry.desktop_width * GRID_SIZE),
+        round(dy / geometry.desktop_height * GRID_SIZE),
+    )
 
 
 class OrderedEventsV3Error(ValueError):
@@ -71,18 +92,19 @@ def unescape(body: str) -> str:
             if index + 1 >= len(body):
                 raise OrderedEventsV3Error("trailing backslash in type() payload")
             following = body[index + 1]
-            if following not in ('\\', '"'):
+            if following not in ("\\", '"'):
                 raise OrderedEventsV3Error(
-                    f"type() accepts only the escapes \\\\ and \\\" , got "
+                    f'type() accepts only the escapes \\\\ and \\" , got '
                     f"'\\{following}'. Press Return as down(Return); up(Return)."
                 )
             out.append(following)
             index += 2
             continue
         if char in "\n\r\t":
+            event = "Tab" if char == "\t" else "Return"
             raise OrderedEventsV3Error(
-                "type() payload cannot contain a control character; press Return "
-                "as down(Return); up(Return)"
+                f"type() payload cannot contain a control character; press {event} "
+                f"as down({event}); up({event})"
             )
         out.append(char)
         index += 1
@@ -136,14 +158,38 @@ def primitive_from_dict(value: dict[str, Any]) -> Primitive:
     raise OrderedEventsV3Error(f"unknown primitive kind: {kind!r}")
 
 
+def _lift_typed_text(text: str) -> tuple[Primitive, ...]:
+    if "\r" in text:
+        raise OrderedEventsV3Error("carriage return cannot be expressed")
+    primitives: list[Primitive] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        if run:
+            primitives.append(Primitive("type", text="".join(run)))
+            run.clear()
+
+    for char in text:
+        event = {"\n": "Return", "\t": "Tab"}.get(char)
+        if event is None:
+            run.append(char)
+            continue
+        flush()
+        primitives.append(Primitive("down", name=event))
+        primitives.append(Primitive("up", name=event))
+    flush()
+    if not primitives:
+        primitives.append(Primitive("type", text=""))
+    return tuple(primitives)
+
+
 @dataclass(frozen=True)
 class OrderedEventsV3Action:
     """An ordered primitive program, or NO_OP."""
 
     primitives: tuple[Primitive, ...] = ()
     no_op: bool = False
-    #: The episode-control status this turn declares, from ``_support.CONTROL_SPEC``.
-    #: Set by the lift only; ``parse`` never sees a control line.
+    #: The episode-control status this turn declares.
     terminate: str | None = None
     prompt_digest: str = field(default="", compare=False)
 
@@ -182,6 +228,7 @@ class OrderedEventsV3Codec:
     """
 
     name = "ordered_events_v3"
+    action_contract = ACTION_CONTRACT
 
     #: Empty by design: a `<think>` block legally precedes the action line, so
     #: no newline or token sequence ends the turn early.
@@ -189,8 +236,8 @@ class OrderedEventsV3Codec:
 
     @_support.production("move(dx,dy)")
     def _move(self) -> None:
-        """Move the cursor by (dx, dy) screen pixels RELATIVE to where it is:
-        dx > 0 RIGHT, dx < 0 LEFT; dy > 0 DOWN, dy < 0 UP.
+        """Move the cursor by (dx, dy) units on a 1000x1000 grid RELATIVE to
+        where it is: dx > 0 RIGHT, dx < 0 LEFT; dy > 0 DOWN, dy < 0 UP.
         """
 
     @_support.production("scroll(dx,dy)")
@@ -218,7 +265,8 @@ class OrderedEventsV3Codec:
     def _type(self) -> None:
         """Type TEXT as one burst. Inside the quotes only two escapes exist:
         `\\\\` for a backslash and `\\"` for a quote. TEXT cannot contain a
-        newline — press Return as `down(Return); up(Return)`.
+        newline or tab — press it as `down(Return); up(Return)` or
+        `down(Tab); up(Tab)`.
         """
 
     @_support.production("NO_OP")
@@ -252,19 +300,23 @@ class OrderedEventsV3Codec:
         digest = self.digest
         if line == NO_OP:
             return OrderedEventsV3Action(no_op=True, prompt_digest=digest)
-        return OrderedEventsV3Action(
-            primitives=self._scan(line), prompt_digest=digest
-        )
+        if line == TERMINATE:
+            return OrderedEventsV3Action(terminate="success", prompt_digest=digest)
+        return OrderedEventsV3Action(primitives=self._scan(line), prompt_digest=digest)
 
     def format(self, action: OrderedEventsV3Action) -> str:
+        if action.terminate is not None:
+            if action.terminate != "success" or action.primitives:
+                raise OrderedEventsV3Error(
+                    "ordered-events-v3 termination must be a bare TERMINATE"
+                )
+            return TERMINATE
         body = (
             NO_OP
             if action.no_op or not action.primitives
             else "; ".join(item.render() for item in action.primitives)
         )
-        return _support.with_control(
-            body, action.terminate, error=OrderedEventsV3Error
-        )
+        return body
 
     def compile(
         self,
@@ -280,14 +332,15 @@ class OrderedEventsV3Codec:
         geometry: DisplayGeometry,
         cursor: tuple[int, int],
     ) -> tuple[Operation, ...]:
-        """Fold the relative moves onto ``cursor``, emitting absolute pixels."""
+        """Scale relative 1000-grid moves onto ``cursor``, emitting pixels."""
         if action.no_op:
             return ()
         operations: list[Operation] = []
         here = _support.clamp(cursor, geometry)
         for item in action.primitives:
             if item.kind == "move":
-                target = _support.clamp((here[0] + item.dx, here[1] + item.dy), geometry)
+                dx, dy = _grid_delta_to_pixels(item.dx, item.dy, geometry)
+                target = _support.clamp((here[0] + dx, here[1] + dy), geometry)
                 if target != here:
                     operations.append(_support.move_to(target))
                 here = target
@@ -323,7 +376,7 @@ class OrderedEventsV3Codec:
         geometry: DisplayGeometry,
         cursor: tuple[int, int],
     ) -> _support.IntendedCursor | None:
-        """Every interleaved ``move`` primitive, in order, as pixel deltas.
+        """Every interleaved ``move`` primitive, scaled to pixel deltas.
 
         ``None`` for the idle action, and for a turn of keys and clicks alone:
         this is the one grammar where an action can carry no move at all.
@@ -332,7 +385,10 @@ class OrderedEventsV3Codec:
             return None
         return _support.fold_requests(
             tuple(
-                ("rel", item.dx, item.dy)
+                (
+                    "rel",
+                    *_grid_delta_to_pixels(item.dx, item.dy, geometry),
+                )
                 for item in action.primitives
                 if item.kind == "move"
             ),
@@ -367,15 +423,17 @@ class OrderedEventsV3Codec:
             kind = group.kind
             if kind in ("move", "stroke"):
                 assert group.target is not None
-                delta = (group.target[0] - here[0], group.target[1] - here[1])
+                delta = _pixel_delta_to_grid(
+                    group.target[0] - here[0],
+                    group.target[1] - here[1],
+                    geometry,
+                )
                 if delta != (0, 0):
                     primitives.append(Primitive("move", dx=delta[0], dy=delta[1]))
                 here = group.target
             elif kind == "scroll":
                 if group.dx or group.dy:
-                    primitives.append(
-                        Primitive("scroll", dx=group.dx, dy=group.dy)
-                    )
+                    primitives.append(Primitive("scroll", dx=group.dx, dy=group.dy))
             elif kind == "click":
                 token = self._button_token(group.button)
                 for _ in range(group.repeats):
@@ -397,13 +455,7 @@ class OrderedEventsV3Codec:
                 name = "down" if kind == "key_down" else "up"
                 primitives.extend(Primitive(name, name=key) for key in group.keys)
             elif kind == "type":
-                if any(char in group.text for char in "\n\r\t"):
-                    raise OrderedEventsV3Error(
-                        "type() accepts only the escapes \\\\ and \\\" , so a "
-                        "control character cannot be expressed; press Return as "
-                        "down(Return); up(Return)"
-                    )
-                primitives.append(Primitive("type", text=group.text))
+                primitives.extend(_lift_typed_text(group.text))
             elif kind == "wait":
                 if len(groups) != 1:
                     raise OrderedEventsV3Error(
@@ -443,7 +495,7 @@ class OrderedEventsV3Codec:
                 # this grammar at all, which a terminating turn is allowed.
                 error = OrderedEventsV3Error if primitives else _support.NoAction
                 raise error(
-                    f"expected a primitive call, got {line[index:index + 24]!r}"
+                    f"expected a primitive call, got {line[index : index + 24]!r}"
                 )
             kind = call[1]
             open_paren = call.end() - 1
@@ -470,7 +522,7 @@ class OrderedEventsV3Codec:
                 break
             if line[index] != ";":
                 raise OrderedEventsV3Error(
-                    f"primitives are separated by '; ', got {line[index:index + 12]!r}"
+                    f"primitives are separated by '; ', got {line[index : index + 12]!r}"
                 )
             index += 1
         if not primitives:

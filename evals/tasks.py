@@ -128,7 +128,7 @@ class DesktopState(vf.State):
     infra_valid: bool = True
     infra_error: dict[str, str] | None = None
     codec: str | None = None
-    history_policy: str | None = None
+    render_spec_id: str | None = None
     temperature: float | None = None
     temperature_source: str | None = None
     reach_frame: int = -1

@@ -56,6 +56,7 @@ def _turns():
                 f"<think>reason {index}</think>\n\n"
                 f"Action: synthetic {index}\nmove({index},0)"
             ),
+            action=f"move({index},0)",
         )
         for index in range(7)
     ]
@@ -93,6 +94,7 @@ def test_online_and_offline_prompts_are_byte_equivalent(tmp_path):
         if index + 1 < len(turns):
             online_renderer.complete(
                 assistant=turn.assistant,
+                action=turn.action,
                 next_image=turns[index + 1].image,
             )
 
@@ -152,5 +154,12 @@ def test_spec_shape_and_history_invariants_fail_fast(tmp_path):
     with pytest.raises(ValueError, match="unterminated <think>"):
         renderer.complete(
             assistant="<think>unterminated",
+            action="NO_OP",
+            next_image="frame-1",
+        )
+    with pytest.raises(ValueError, match="does not match"):
+        renderer.complete(
+            assistant="<think>done</think>\nNO_OP",
+            action="move(1,0)",
             next_image="frame-1",
         )

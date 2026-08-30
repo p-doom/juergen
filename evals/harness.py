@@ -2,7 +2,7 @@
 
 The loop:
 
-    screenshot -> prompt from codec.describe() + history policy -> sample
+    screenshot -> shared render contract -> sample
     -> codec.parse -> codec.compile -> desktop executes -> oracle -> repeat
 
 A task family is a taskset plus a `Preparer`; an arm is a `DesktopHarnessConfig`.
@@ -24,16 +24,17 @@ import os
 import socket
 import tempfile
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Protocol
+from typing import Any, Protocol
 
 import verifiers.v1 as vf
-from pydantic import Field, model_validator
+from desktop.execute.guest_program import HeldStateError
+from pydantic import Field, SecretStr, model_validator
 
 import grammars
-from desktop.execute.guest_program import HeldStateError
-
+import stream_cuagym_qwen35 as stream_render
 from agent.agent import (
     Agent,
     Decision,
@@ -44,7 +45,7 @@ from agent.agent import (
     load_codec,
 )
 from agent.desktop import DEFAULT_SLOT_DIR, PoolSpec, default_pool_factory, pool_for
-from agent.history import History, ImageBudget, history_policy
+from evals.cua_gym.web.runtime import CuaGymWebPreparer, CuaGymWebTaskData
 from evals.tasks import (
     FULL_SUCCESS_THRESHOLD,
     RESULT_KEY,
@@ -55,11 +56,11 @@ from evals.tasks import (
     in_bbox,
     preparer_for,
 )
-from image_domain import OSWORLD_CURSOR_JPEG_DOMAIN
+from harness_render import HarnessRenderer
 
 _LOGGER = logging.getLogger(__name__)
 
-__all__ = ["DesktopHarness", "DesktopHarnessConfig"]
+__all__ = ["CuaGymWebConfig", "DesktopHarness", "DesktopHarnessConfig"]
 
 
 class Desktop(Protocol):
@@ -72,7 +73,7 @@ class Desktop(Protocol):
     def screen_size(self) -> tuple[int, int]: ...
     def cursor_position(self) -> tuple[int, int]: ...
     def screenshot(self) -> bytes: ...
-    def execute_atomic(self, operations: Any) -> "Receipt": ...
+    def execute_atomic(self, operations: Any) -> Receipt: ...
 
 
 class Receipt(Protocol):
@@ -90,28 +91,6 @@ class Receipt(Protocol):
     failure_kind: str | None
     cursor_before: tuple[int, int]
     cursor_after: tuple[int, int]
-
-
-class HistoryConfig(vf.BaseConfig):
-    """The injected history policy."""
-
-    name: str = "interleaved_frames"
-    n_history_frames: int = Field(default=16, ge=1)
-    persist_instruction: bool = True
-    """`InterleavedFrames` is the only policy that implements this."""
-
-    @model_validator(mode="after")
-    def _persist_instruction_is_implemented(self) -> "HistoryConfig":
-        if self.name != "interleaved_frames" and not self.persist_instruction:
-            raise ValueError(
-                f"persist_instruction=False is implemented by interleaved_frames only; "
-                f"policy {self.name!r} would ignore it"
-            )
-        return self
-
-
-class ImageBudgetConfig(vf.BaseConfig):
-    max_images: int = Field(default=16, ge=1)
 
 
 class SettleConfig(vf.BaseConfig):
@@ -180,7 +159,7 @@ class ArtifactConfig(vf.BaseConfig):
     write_result_json: bool = True
 
     @model_validator(mode="after")
-    def _the_artifact_needs_its_frames(self) -> "ArtifactConfig":
+    def _the_artifact_needs_its_frames(self) -> ArtifactConfig:
         if self.write_result_json and not self.save_frames:
             raise ValueError(
                 "write_result_json emits the trajectory labctl reads, and every row "
@@ -215,42 +194,42 @@ class DesktopPoolConfig(vf.BaseConfig):
     wedge the allocation."""
 
 
+class CuaGymWebConfig(vf.BaseConfig):
+    hub_image: str = ""
+    apptainer_binary: str = "/usr/bin/apptainer"
+    port_lock_dir: str = ""
+    guest_password: SecretStr = SecretStr("")
+
+    def runtime_values(self) -> tuple[Path, Path, Path, str]:
+        values: list[Path] = []
+        for name in ("hub_image", "apptainer_binary", "port_lock_dir"):
+            raw = getattr(self, name)
+            if not raw:
+                raise ValueError(f"web.{name} is required for a CUA-Gym web task")
+            path = Path(raw)
+            if not path.is_absolute():
+                raise ValueError(f"web.{name} must be an absolute path")
+            values.append(path)
+        hub_image, apptainer_binary, port_lock_dir = values
+        if not hub_image.is_file():
+            raise FileNotFoundError(f"CUA-Gym Hub image is missing: {hub_image}")
+        if not apptainer_binary.is_file() or not os.access(apptainer_binary, os.X_OK):
+            raise FileNotFoundError(
+                f"CUA-Gym apptainer executable is missing: {apptainer_binary}"
+            )
+        password = self.guest_password.get_secret_value()
+        if not password or any(character in password for character in "\0\r\n"):
+            raise ValueError("web.guest_password must be non-empty and single-line")
+        return hub_image, apptainer_binary, port_lock_dir, password
+
+
 class DesktopHarnessConfig(vf.HarnessConfig):
-    codec: str
-    """Grammar entry-point name. The one field a grammar A/B changes.
-
-    Required, with no default. A codec decides how the model's output is parsed and
-    how it compiles to operations, so the wrong one does not error — it scores the
-    checkpoint under a grammar it was never trained on, and presents as a
-    parse-failure collapse rather than as the config mistake it is. A digest
-    mismatch against `system_prompt_sha256` catches most of that, but an
-    off-the-shelf model has no recorded digest, so the backstop is missing exactly
-    where a default would be doing the guessing."""
-    system_prompt_override: str | None = None
-    system_prompt_sha256: str | None = None
-    """A checkpoint's training-prompt digest. ENFORCED unless a mismatch is
-    justified in writing by `expect_prompt_mismatch`.
-
-    Accepted without a justification are exactly the two prompts this codec can
-    legitimately produce: the bare `describe()` and `THINKING_PREAMBLE +
-    describe()`, which is what `datasets/convert.py` writes under `--keep_prose`.
-    Anything else means the checkpoint was trained on a different grammar
-    revision or a different prompt, and evaluating it here would produce a number
-    that looks comparable and is not."""
-    expect_prompt_mismatch: str | None = None
-    """Why THIS arm's digest legitimately differs, or `None` to require a match.
-
-    A sealed historical prompt cannot be derived from any codec, so no predicate
-    can tell one apart from the wrong checkpoint entirely -- only the arm's author
-    knows. Stating the reason here makes it data that lands in the record instead
-    of a comment nobody can check, and leaves the unjustified case loud."""
-    history: HistoryConfig = HistoryConfig()
-    images: ImageBudgetConfig = ImageBudgetConfig()
     settle: SettleConfig = SettleConfig()
     scripted: ScriptedConfig = ScriptedConfig()
     budget: BudgetConfig = BudgetConfig()
     artifacts: ArtifactConfig = ArtifactConfig()
     pool: DesktopPoolConfig = DesktopPoolConfig()
+    web: CuaGymWebConfig = CuaGymWebConfig()
     max_steps: int = Field(default=0, ge=0)
     """Overrides the task's own `max_steps` when > 0."""
     max_tokens: int = Field(default=256, ge=1, strict=True)
@@ -282,17 +261,6 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     """`temperature`'s sibling, same contract. 1.0 is the no-op value, not the
     absence: an arm names it so the wire body carries the arm's nucleus setting and
     not the server's."""
-    parse_error_notice: str = ""
-    """What to tell the model after a turn it could not have executed, or `""` to
-    tell it nothing.
-
-    Empty is the default and is what every recorded arm ran: an unparseable turn is
-    counted, the screen is re-observed, and the model sees only its own output
-    followed by an unchanged frame — indistinguishable from an action that
-    dispatched and did nothing. That indistinguishability is a live hypothesis for
-    the 1-pixel-move collapse and the reflexive Return, so it has to be an arm.
-    The notice rides the user turn carrying the next frame; it never enters the
-    assistant channel, which is what training targets are built from."""
     stop_on_click: bool = False
     """End the episode at the first left-button press, turning a free rollout into
     a single-decision probe."""
@@ -305,8 +273,10 @@ class DesktopHarnessConfig(vf.HarnessConfig):
     """Sample through `ctx.client` instead of posting to `endpoint`."""
 
     @model_validator(mode="after")
-    def _a_scripted_arm_names_no_sampling(self) -> "DesktopHarnessConfig":
-        if self.scripted.enabled and (self.temperature is not None or self.top_p is not None):
+    def _a_scripted_arm_names_no_sampling(self) -> DesktopHarnessConfig:
+        if self.scripted.enabled and (
+            self.temperature is not None or self.top_p is not None
+        ):
             raise ValueError(
                 "a scripted arm renders its own action and never calls a model, so a "
                 "temperature or top_p here would be published as the run's sampling "
@@ -392,7 +362,7 @@ async def _to_thread(function: Any, *args: Any) -> Any:
             await asyncio.shield(task)
         except asyncio.CancelledError as exc:
             cancelled = exc
-        except BaseException:  # noqa: BLE001 - owned by the task, re-raised below
+        except BaseException:  # noqa: BLE001,S110 - owned by the task, re-raised below
             pass
     if cancelled is not None:
         raise cancelled from task.exception()
@@ -477,7 +447,9 @@ def _atomic_json(path: Path, value: Any) -> None:
     try:
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True, default=str)
+            json.dump(
+                value, handle, ensure_ascii=False, indent=2, sort_keys=True, default=str
+            )
             handle.write("\n")
         os.replace(raw, path)
     finally:
@@ -501,7 +473,12 @@ def _write_gif(frames: list[bytes], path: Path) -> None:
                 )
             images.append(frame)
     images[0].save(
-        path, save_all=True, append_images=images[1:], duration=300, loop=0, optimize=True
+        path,
+        save_all=True,
+        append_images=images[1:],
+        duration=300,
+        loop=0,
+        optimize=True,
     )
 
 
@@ -579,7 +556,9 @@ def _trajectory_rows(
         }
     ]
     for step in steps_detail[: max(0, n_frames - 1)]:
-        info = {key: value for key, value in step.items() if key not in _PROMOTED_STEP_KEYS}
+        info = {
+            key: value for key, value in step.items() if key not in _PROMOTED_STEP_KEYS
+        }
         info["parsed"] = info.pop("parsed_action")
         info["frame"] = _FRAME.format(index=step["step"])
         rows.append(
@@ -645,17 +624,16 @@ def _succeeded(outcome: str, task_reward: float | None) -> bool:
     return task_reward >= FULL_SUCCESS_THRESHOLD
 
 
-_CODECS: dict[str, Any] = {}
+_CODEC: Any | None = None
 
 
-def _codec(name: str) -> Any:
+def _codec() -> Any:
     """Process-level codec cache. Not on the harness instance: one `Harness` serves
     every rollout, so instance state is shared state."""
-    codec = _CODECS.get(name)
-    if codec is None:
-        codec = load_codec(name)
-        _CODECS[name] = codec
-    return codec
+    global _CODEC
+    if _CODEC is None:
+        _CODEC = load_codec(grammars.GRAMMAR_NAME)
+    return _CODEC
 
 
 class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
@@ -725,8 +703,20 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         # an unknown grammar, an unregistered task kind and a scripted arm on a
         # family with no gold plan are config errors, and discovering one at step 1
         # has already cost a boot and the cell's whole guest setup.
-        codec = _codec(self.config.codec)
+        codec = _codec()
+        renderer = stream_render.renderer()
         preparer = preparer_for(task.kind)
+        web_values: tuple[Path, Path, Path, str] | None = None
+        if isinstance(preparer, CuaGymWebPreparer) and not isinstance(
+            task, CuaGymWebTaskData
+        ):
+            raise TypeError("CUA-Gym web preparer requires CuaGymWebTaskData")
+        if isinstance(task, CuaGymWebTaskData):
+            if not isinstance(preparer, CuaGymWebPreparer):
+                raise TypeError("CUA-Gym web task resolved to another preparer")
+            if not self.config.evaluate_on_finish:
+                raise ValueError("CUA-Gym web tasks require evaluate_on_finish=True")
+            web_values = self.config.web.runtime_values()
         if self.config.scripted.enabled and not callable(
             getattr(preparer, "script_plan", None)
         ):
@@ -734,11 +724,9 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 f"task kind {task.kind!r} has no scripted arm; scripted.enabled "
                 "requires a preparer implementing script_plan() + render_step()"
             )
-        # Same reason: the digest gate needs the codec and nothing else, so an
-        # unjustified mismatch must be refused here rather than one boot and one
-        # guest setup per task into a 369-cell array.
-        trace.info["prompt"] = self._prompt_report(codec)
-        trace.info["images"] = self._image_report()
+        render_metadata = stream_render.metadata()
+        trace.info["render"] = render_metadata
+        trace.info["images"] = self._image_report(render_metadata)
 
         spec = PoolSpec(
             key=self.config.pool.key,
@@ -769,8 +757,33 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             with _hidden_gpu(self.config.pool.hide_gpu_during_boot):
                 await _to_thread(acquire)
             trace.info["desktop_session"] = getattr(lease.session, "session_id", None)
+            artifacts = self._artifact_dir(task)
+            cleanup = None
+            if web_values is not None:
+                hub_image, apptainer_binary, port_lock_dir, guest_password = web_values
+                preparer = preparer.episode(
+                    session=lease.session,
+                    task=task,
+                    episode_id=hashlib.sha256(trace.id.encode("utf-8")).hexdigest(),
+                    artifacts=artifacts,
+                    hub_image=hub_image,
+                    apptainer_binary=apptainer_binary,
+                    port_lock_dir=port_lock_dir,
+                    guest_password=guest_password,
+                )
+                cleanup = preparer.close
             await self._run(
-                ctx, trace, task, lease.session, endpoint, secret, codec, preparer
+                ctx,
+                trace,
+                task,
+                lease.session,
+                endpoint,
+                secret,
+                codec,
+                renderer,
+                preparer,
+                artifacts,
+                cleanup,
             )
             failed = False
             return vf.ProgramResult(0, "", "")
@@ -788,7 +801,9 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 published = trace.info.get(RESULT_KEY) or {}
                 if published.get("validity") == "infra_invalid":
                     failed = True
-                    error = error or json.dumps(published.get("infra_error"), default=str)
+                    error = error or json.dumps(
+                        published.get("infra_error"), default=str
+                    )
                 # Hand the VM to the scoring phase, then let the reaper release it.
                 lease.finish(
                     failed=failed, error=error, grace_s=self.config.pool.scoring_grace_s
@@ -803,39 +818,30 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         endpoint: str,
         secret: str,
         codec: Any,
+        renderer: HarnessRenderer[bytes],
         preparer: Any,
+        artifacts: Path,
+        cleanup: Any,
     ) -> None:
         state = trace.state
         assert isinstance(state, DesktopState)
         budget = _Budget(self.config.budget)
         max_steps = self.config.max_steps or task.max_steps
-        artifacts = self._artifact_dir(task)
-        notice = self.config.parse_error_notice or None
-
         agent = Agent(
             codec=codec,
-            policy=history_policy(
-                self.config.history.name,
-                **(
-                    {"persist_instruction": self.config.history.persist_instruction}
-                    if self.config.history.name == "interleaved_frames"
-                    else {}
-                ),
-            ),
-            budget=self._budget(),
+            renderer=renderer,
             transport=build_transport(
                 endpoint=endpoint,
                 secret=secret,
                 prefer_context=self.config.prefer_context_transport,
                 timeout_s=self.config.model_request_timeout_s,
             ),
-            system_prompt=self.config.system_prompt_override,
             max_tokens=self.config.max_tokens,
             temperature=self.config.temperature,
             top_p=self.config.top_p,
         )
-        state.codec = self.config.codec
-        state.history_policy = agent.policy.name
+        state.codec = codec.name
+        state.render_spec_id = renderer.spec.spec_id
         state.scripted = self.config.scripted.enabled
         state.negative_control = self.config.scripted.negative
 
@@ -859,13 +865,16 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
 
             frame = await self._observe(preparer, session, task)
             frames.append(frame)
-            history = History(n_history_frames=self.config.history.n_history_frames)
-            history.start(frame)
+            renderer.start(frame)
             if self.config.artifacts.save_frames:
                 (artifacts / "steps").mkdir(parents=True, exist_ok=True)
                 (artifacts / "steps" / "step_000.jpg").write_bytes(frame)
 
-            script = self._script_plan(preparer, task) if self.config.scripted.enabled else None
+            script = (
+                self._script_plan(preparer, task)
+                if self.config.scripted.enabled
+                else None
+            )
             reach_frame = -1
             best_distance = -1.0
             probe = initial
@@ -891,7 +900,6 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                     ctx,
                     trace,
                     task,
-                    history=history,
                     step=step,
                     geometry=geometry,
                     cursor=cursor,
@@ -952,7 +960,9 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                         }
                         outcome = "executor_error"
                         steps_detail.append(
-                            self._record(decision, step, cursor, cursor, None, None, action_error)
+                            self._record(
+                                decision, step, cursor, cursor, None, None, action_error
+                            )
                         )
                         break
                 if decision.parse_error:
@@ -964,8 +974,15 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 frames.append(frame)
                 if self.config.artifacts.save_frames:
                     (artifacts / "steps" / f"step_{step:03d}.jpg").write_bytes(frame)
-                history.append(
-                    decision.text, frame, notice if decision.parse_error else None
+                action_line = (
+                    codec.format(decision.action)
+                    if decision.parse_error is None and decision.action is not None
+                    else None
+                )
+                renderer.complete(
+                    assistant=decision.text.strip() or "NO_OP",
+                    action=action_line,
+                    next_image=frame,
                 )
                 cursor_after = tuple(await _to_thread(session.cursor_position))
                 probe = await _to_thread(preparer.probe, session, task)
@@ -987,7 +1004,9 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                     reach_frame = step
                 if task.bbox is not None:
                     distance = distance_to_box(cursor_after, task.bbox)
-                    best_distance = distance if best_distance < 0 else min(best_distance, distance)
+                    best_distance = (
+                        distance if best_distance < 0 else min(best_distance, distance)
+                    )
 
                 verdict = self._postcondition_reached(task, probe)
                 if verdict:
@@ -1042,7 +1061,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 outcome = "model_error"
             else:
                 outcome = f"framework_stop_{trace.stop_condition}"
-        except Exception as exc:  # noqa: BLE001 - published as infra-invalid
+        except Exception as exc:
             infra_error = {
                 "stage": "episode",
                 "type": type(exc).__name__,
@@ -1051,7 +1070,23 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             outcome = "infrastructure_error"
             _LOGGER.exception("episode %s failed", task.name)
         finally:
-            await agent.close()
+            try:
+                await agent.close()
+            finally:
+                if cleanup is not None:
+                    try:
+                        await _to_thread(cleanup)
+                    except Exception as exc:
+                        if infra_error is None:
+                            infra_error = {
+                                "stage": "cleanup",
+                                "type": type(exc).__name__,
+                                "message": str(exc),
+                            }
+                        else:
+                            infra_error["message"] += f"; cleanup also failed: {exc}"
+                        outcome = "infrastructure_error"
+                        _LOGGER.exception("episode %s cleanup failed", task.name)
 
         self._publish(
             trace,
@@ -1105,15 +1140,12 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         trace.info[RESULT_KEY] = {
             "schema_version": RESULT_SCHEMA_VERSION,
             "validity": "valid" if infra_error is None else "infra_invalid",
-            "codec": self.config.codec,
+            "codec": grammars.GRAMMAR_NAME,
             "instruction": task.instruction,
             "screen_size": state.screen_size,
-            "history_policy": state.history_policy,
+            "render": trace.info["render"],
             "sampling": sampling,
-            "images": {
-                "image_domain": OSWORLD_CURSOR_JPEG_DOMAIN,
-                **self.config.images.model_dump(),
-            },
+            "images": trace.info["images"],
             "success": state.success,
             "outcome": outcome,
             "steps": state.steps,
@@ -1140,12 +1172,6 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
             "labctl_run_id": os.environ.get("LABCTL_RUN_ID"),
         }
-        if self.config.parse_error_notice:
-            # Only when configured, like `control_conformant`: an arm whose prompts
-            # carry a notice is not comparable to one whose prompts do not, and a key
-            # written unconditionally would change the bytes of every result that has
-            # already been published without one.
-            trace.info[RESULT_KEY]["parse_error_notice"] = self.config.parse_error_notice
         self._persist(artifacts, trace, frames)
         trace.stop(outcome)
 
@@ -1156,7 +1182,6 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         trace: vf.Trace,
         task: DesktopTaskData,
         *,
-        history: History,
         step: int,
         geometry: Any,
         cursor: tuple[int, int],
@@ -1190,13 +1215,14 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             return decision, sampling.as_dict()
 
         if self.config.artifacts.save_prompts:
-            body = agent.build_body(history=history, instruction=task.instruction, step=step)
+            body = agent.build_body(instruction=task.instruction)
             (artifacts / "steps").mkdir(parents=True, exist_ok=True)
-            (artifacts / "steps" / f"prompt_{step:03d}.json").write_text(dump_prompt(body))
+            (artifacts / "steps" / f"prompt_{step:03d}.json").write_text(
+                dump_prompt(body)
+            )
         decision = await agent.step(
             ctx,
-            history=history,
-            instruction=task.instruction or None,
+            instruction=task.instruction,
             step=step,
             geometry=geometry,
             cursor=cursor,
@@ -1239,9 +1265,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         task; threading it through the session would mean mutating a shared,
         concurrently-checked-out object.
         """
-        frame = await _to_thread(
-            _screenshot, session, self.config.settle, task.kind
-        )
+        frame = await _to_thread(_screenshot, session, self.config.settle, task.kind)
         observe = getattr(preparer, "observe", None)
         if callable(observe):
             frame = await _to_thread(observe, frame, task)
@@ -1259,7 +1283,12 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         return list(preparer.script_plan(task, negative=self.config.scripted.negative))
 
     def _render_step(
-        self, preparer: Any, session: Any, task: DesktopTaskData, codec: Any, intent: Any
+        self,
+        preparer: Any,
+        session: Any,
+        task: DesktopTaskData,
+        codec: Any,
+        intent: Any,
     ) -> str:
         """Render one intent into codec text, reading the cursor now.
 
@@ -1268,7 +1297,9 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         """
         return preparer.render_step(session, task, codec=codec, intent=intent)
 
-    def _postcondition_reached(self, task: DesktopTaskData, probe: dict[str, Any]) -> bool:
+    def _postcondition_reached(
+        self, task: DesktopTaskData, probe: dict[str, Any]
+    ) -> bool:
         """Early stop when the family's postcondition is observable in-loop.
 
         The authoritative verdict is still the oracle reward; this only decides
@@ -1284,7 +1315,9 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         if probe.get("postcondition_status") not in (None, "ok"):
             raise RuntimeError("task reset/setup produced unreadable initial state")
         if probe.get("postcondition_success") is True:
-            raise RuntimeError("task reset/setup did not begin in a valid unsolved state")
+            raise RuntimeError(
+                "task reset/setup did not begin in a valid unsolved state"
+            )
         if task.bbox is not None and in_bbox(
             tuple(probe.get("cursor") or (-1, -1)), task.bbox
         ):
@@ -1293,72 +1326,21 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             # and a refusal there would silently drop the hardest targets.
             _LOGGER.warning("grounding cell %s starts inside its bbox", task.name)
 
-    def _prompt_report(self, codec: Any) -> dict[str, Any]:
-        """Prompt provenance as data, and the one check that must not be skipped.
-
-        A digest mismatch means the checkpoint was trained under a prompt this run
-        does not render, so its score is not the number it appears to be. That is
-        refused here rather than recorded, with two exceptions and no others:
-
-        * the thinking form. `datasets/convert.py --keep_prose` writes
-          `THINKING_PREAMBLE + describe()`, and eval renders the bare
-          `describe()`. Both are prompts THIS codec produces, so both are computed
-          and accepted with no configuration.
-        * an arm that states in `expect_prompt_mismatch` why its own digest cannot
-          match -- a prompt sealed before `describe()` existed cannot be recomputed
-          from anything, so only the arm's author can vouch for it.
-
-        Baseline warning, recorded on every run: the off-the-shelf Qwen3-VL-8B =
-        33.9% OSWorld-Verified figure is our only calibrated reference and was
-        measured through the old sealed prompts. `native_absolute`, `move_rel` and
-        `compact_absolute` now describe themselves from docstrings and are
-        not byte-identical to those prompts, so numbers must not be compared across
-        that boundary and the baseline needs re-measuring through the new prompt.
-        """
-        override = self.config.system_prompt_override
-        rendered = codec.describe() if override is None else override
-        observed = hashlib.sha256(rendered.encode()).hexdigest()
-        # Both renderings of THIS codec's prompt, so a thinking checkpoint needs no
-        # flag. An override is taken verbatim: the caller supplied the exact bytes.
-        accepted = {observed}
-        if override is None:
-            accepted.add(
-                hashlib.sha256(
-                    grammars.system_prompt(codec, thinking=True).encode()
-                ).hexdigest()
-            )
-        expected = self.config.system_prompt_sha256
-        justification = self.config.expect_prompt_mismatch
-        matches = None if expected is None else expected in accepted
-        if matches is False and justification is None:
-            raise ValueError(
-                f"system_prompt_sha256={expected} is not a prompt the {self.config.codec!r} "
-                f"codec renders (accepted: {sorted(accepted)}). This checkpoint was "
-                f"trained under a different prompt, so a score from this run would not "
-                f"be the number it looks like. Set expect_prompt_mismatch=<why> on the "
-                f"arm if the difference is known and intended."
-            )
-        report = getattr(codec, "report", None)
+    def _image_report(self, render_metadata: dict[str, Any]) -> dict[str, Any]:
         return {
-            "codec": self.config.codec,
-            "prompt_sha256": observed,
-            "expected_prompt_sha256": expected,
-            "matches_expected": matches,
-            "accepted_prompt_sha256": sorted(accepted),
-            "expect_prompt_mismatch": justification,
-            "codec_report": report() if callable(report) else None,
-            "comparable_to_sealed_baseline": False,
-            "baseline_note": (
-                "Qwen3-VL-8B=33.9% OSWorld-Verified was measured through the sealed "
-                "prompts; describe() is not byte-identical. Re-measure before comparing."
-            ),
+            "image_domain": stream_render.OBSERVATION_CONTRACT,
+            **{
+                key: render_metadata[key]
+                for key in (
+                    "media_type",
+                    "jpeg_quality",
+                    "color_mode",
+                    "chroma_subsampling",
+                    "width",
+                    "height",
+                )
+            },
         }
-
-    def _budget(self) -> ImageBudget:
-        return ImageBudget(max_images=self.config.images.max_images)
-
-    def _image_report(self) -> dict[str, Any]:
-        return {"image_domain": OSWORLD_CURSOR_JPEG_DOMAIN}
 
     def _control_ok(self, state: DesktopState) -> bool | None:
         """Calibration conformance for a control arm; `None` for a model arm.

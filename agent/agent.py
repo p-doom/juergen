@@ -20,20 +20,20 @@ on the wire.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
-import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol
 
 import verifiers.v1 as vf
 from verifiers.v1.dialects import ChatDialect, Dialect
 from verifiers.v1.dialects.chat import message_to_wire
 
 import grammars
-
-from agent.history import History, HistoryPolicy, ImageBudget
+from harness_render import HarnessRenderer
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -143,9 +143,7 @@ def _eval_set(sampling: vf.Sampling, key: str) -> bool:
     return extra.get(key) is not None
 
 
-def program_sampling(
-    ctx: vf.ModelContext, defaults: dict[str, Any]
-) -> dict[str, Any]:
+def program_sampling(ctx: vf.ModelContext, defaults: dict[str, Any]) -> dict[str, Any]:
     """Only the knobs the eval left unset. Anything the eval set is dropped here:
     `apply_overrides` would overwrite it anyway, and sending it would misrepresent
     the recorded request."""
@@ -206,7 +204,9 @@ def resolve_sampling(
         top_p=wire.get("top_p"),
         stop=tuple(stop),
         temperature_source=(
-            "ctx.sampling" if _eval_set(ctx.sampling, "temperature") else "harness_default"
+            "ctx.sampling"
+            if _eval_set(ctx.sampling, "temperature")
+            else "harness_default"
         ),
         wire_body_keys=tuple(sorted(k for k in wire if k != "messages")),
         seed=wire.get("seed"),
@@ -286,7 +286,7 @@ class EndpointTransport:
             completion = await self._client.chat.completions.create(
                 messages=[message_to_wire(m) for m in body["messages"]], **payload
             )
-        except Exception as exc:  # noqa: BLE001 - surfaced as infrastructure
+        except Exception as exc:
             raise ModelCallError(f"{type(exc).__name__}: {exc}") from exc
         choice = completion.choices[0]
         return _content(choice.message), choice.finish_reason
@@ -323,7 +323,7 @@ class ContextTransport:
                 ctx.sampling,
                 session_id=session_id,
             )
-        except Exception as exc:  # noqa: BLE001 - surfaced as infrastructure
+        except Exception as exc:
             raise ModelCallError(f"{type(exc).__name__}: {exc}") from exc
         finish_reason = getattr(response, "finish_reason", None)
         return _content(getattr(response, "message", None)), finish_reason
@@ -337,8 +337,7 @@ class Decision:
     """One model turn, all the way through to executable operations.
 
     `control` names a non-dispatching outcome, and an empty `operations` always
-    carries one: `terminate` / `fail` come from the grammar-independent control
-    channel (`grammars.split_control`), and `no_op` is every other way a turn
+    carries one: `terminate` comes from the codec, and `no_op` is every other way a turn
     dispatched nothing — an action that compiled to nothing, one that could not be
     read at all, or a reply cut off at `max_tokens`. WHY it dispatched nothing is
     `parse_error` and `truncated`; THAT it dispatched nothing must not depend on
@@ -358,17 +357,7 @@ class Decision:
     """The turn hit `max_tokens`. Neither a parse failure nor a model decision:
     `max_tokens` is ours, so the action was never finished being emitted."""
     ignored_after_terminate: int = 0
-    """Actions the turn placed after its own termination, and which were therefore
-    neither parsed nor dispatched. Only the vendor tool-call spelling can have any
-    — the control line has to be last — so a non-zero value means an off-the-shelf
-    model kept acting after declaring it was done."""
     control_error: dict[str, Any] | None = None
-    """A control line `split_control` refused, on a turn whose action still ran.
-
-    The two channels are independent, so a defect in one costs that channel and
-    not the turn: the refused line is recorded here, does NOT end the episode, and
-    the action on the lines above it is parsed and dispatched as if it stood
-    alone."""
     intended_cursor: Any = None
     """Where the turn asked the cursor to go, before the display clamped it
     (`grammars._support.IntendedCursor`), or None when it named no position.
@@ -405,48 +394,6 @@ class Decision:
         }
 
 
-#: The control channel's status -> the name published as `control`. Two
-#: vocabularies exist by contract: `datasets/convert.py::_TERMINAL_CONTROL` maps
-#: this name back to the status when it builds a training target from a rollout.
-_TERMINAL = {"success": "terminate", "failure": "fail"}
-
-
-def _split_refused_control(body: str) -> tuple[str, dict[str, Any] | None]:
-    """A refused control line, taken off the end of the body the codec will read.
-
-    `grammars.split_control` accepts only `CONTROL_SPEC`'s exact line and leaves a
-    near-miss — a mistyped token, an unknown status — in the body on purpose, so a
-    malformed termination scores as a defect instead of silently ending the
-    episode. That part is deliberate and is kept.
-
-    What was never argued is the collateral. Five of the seven codecs read the LAST
-    non-empty line as the action, so the refused line BECAME the action and the
-    well-formed one above it was never parsed: `0 0 0 ; +LMB -LMB` dispatches two
-    operations, and the same reply with `TERMINATE` underneath it dispatches none.
-    Splitting them here keeps the refusal and drops the collateral. The other two
-    scan for `<tool_call>` blocks and were never affected; they gain the record.
-
-    Only a near-miss of the CURRENT control token is separated. A retired token
-    from an older vocabulary is not a misspelling of this one, and rescuing it
-    would be reviving the second spelling this grammar removed on purpose.
-    """
-    lines = body.splitlines()
-    for index in range(len(lines) - 1, -1, -1):
-        line = lines[index].strip()
-        if not line:
-            continue
-        if re.split(r"[\s:]", line, maxsplit=1)[0] != grammars.CONTROL_TOKEN:
-            return body, None
-        return "\n".join(lines[:index]), {
-            "type": "RefusedControlLine",
-            "message": (
-                f"{line!r} is not {grammars.CONTROL_TOKEN}: success|failure; "
-                "it does not end the episode and it does not consume the action"
-            ),
-        }
-    return body, None
-
-
 def _action_record(action: Any) -> Any:
     """`parsed_action`, straight from the grammar's own serialiser.
 
@@ -474,56 +421,57 @@ def _operation_record(operation: Any) -> Any:
     return repr(operation)
 
 
+def _online_messages(messages: list[dict[str, Any]]) -> vf.Messages:
+    rendered: vf.Messages = []
+    for message in messages:
+        role = message["role"]
+        content = message["content"]
+        if role == "assistant":
+            if len(content) != 1 or content[0].get("type") != "text":
+                raise ValueError("assistant render content must be one text block")
+            rendered.append(vf.AssistantMessage(content=content[0]["text"]))
+            continue
+        parts: list[Any] = []
+        for part in content:
+            if part.get("type") == "text":
+                parts.append(vf.TextContentPart(text=part["text"]))
+                continue
+            if part.get("type") != "image":
+                raise ValueError(f"unsupported render content block {part!r}")
+            image = part.get("image")
+            if not isinstance(image, bytes) or not image.startswith(b"\xff\xd8\xff"):
+                raise ValueError("online render images must be JPEG bytes")
+            encoded = base64.b64encode(image).decode("ascii")
+            parts.append(
+                vf.ImageUrlContentPart(
+                    image_url=vf.ImageUrlSource(url=f"data:image/jpeg;base64,{encoded}")
+                )
+            )
+        if role == "system":
+            rendered.append(vf.SystemMessage(content=parts))
+        elif role == "user":
+            rendered.append(vf.UserMessage(content=parts))
+        else:
+            raise ValueError(f"unsupported render message role {role!r}")
+    return rendered
+
+
 @dataclass
 class Agent:
-    """screenshot window -> prompt -> sample -> parse -> compile.
-
-    The prompt is `codec.describe()` plus whatever the injected `HistoryPolicy`
-    renders. An explicit `system_prompt` override exists only for replaying a
-    checkpoint whose sealed training prompt differs from the codec's current
-    description — pass its sha256 alongside so the drift is visible.
-    """
+    """Canonical render -> sample -> parse -> compile."""
 
     codec: Codec
-    policy: HistoryPolicy
-    budget: ImageBudget
+    renderer: HarnessRenderer[bytes]
     transport: Transport
-    system_prompt: str | None = None
     max_tokens: int | None = 256
     temperature: float | None = None
     top_p: float | None = None
     include_stop_sequences: bool = True
 
-    @property
-    def system(self) -> str:
-        return self.system_prompt if self.system_prompt is not None else self.codec.describe()
-
-    def build_body(
-        self,
-        *,
-        history: History,
-        instruction: str | None,
-        step: int,
-    ) -> dict[str, Any]:
-        messages = self.policy.render(
-            history=history,
-            system=self.system,
-            instruction=instruction,
-            step=step,
-            budget=self.budget,
+    def build_body(self, *, instruction: str) -> dict[str, Any]:
+        messages = _online_messages(
+            self.renderer.render_prompt(instruction=instruction)
         )
-        if history.note is not None:
-            # Here, not in a policy: every policy ends on the user turn carrying the
-            # newest frame (the newest window turn has no output, so no assistant
-            # message follows it), so one append covers all four instead of four
-            # implementations of one thing. The user channel, never the assistant one:
-            # `datasets/convert.py` builds training targets out of the recorded model
-            # output, and a note in there would be trained on as the model's own words.
-            last = messages[-1]
-            assert isinstance(last, vf.UserMessage) and isinstance(last.content, list)
-            messages[-1] = vf.UserMessage(
-                content=[*last.content, vf.TextContentPart(text=history.note)]
-            )
         body: dict[str, Any] = {"messages": messages}
         defaults = {
             "max_tokens": self.max_tokens,
@@ -541,16 +489,17 @@ class Agent:
         self,
         ctx: vf.ModelContext,
         *,
-        history: History,
-        instruction: str | None,
+        instruction: str,
         step: int,
         geometry: Any,
         cursor: tuple[int, int],
         session_id: str | None = None,
     ) -> Decision:
-        body = self.build_body(history=history, instruction=instruction, step=step)
+        body = self.build_body(instruction=instruction)
         program = {k: v for k, v in body.items() if k == "messages"}
-        program.update(program_sampling(ctx, {k: v for k, v in body.items() if k != "messages"}))
+        program.update(
+            program_sampling(ctx, {k: v for k, v in body.items() if k != "messages"})
+        )
         _, effective = resolve_sampling(ctx, body)
         text, finish_reason = await self.transport.complete(
             ctx, program, session_id=session_id
@@ -589,43 +538,13 @@ class Agent:
         scripted oracle cell, and a live episode. A parse failure is a result of
         the system under test, not an exception.
 
-        The control channel is read FIRST and exactly once, and the codec is given
-        only the body before the termination — so a turn like
-        `[move_rel, left_click, TERMINATE: success]` still dispatches its work,
-        while nothing on the far side of the termination can be parsed at all. A
-        control line the channel REFUSED is taken off that body too
-        (`_split_refused_control`): it does not end the episode, and it no longer
-        consumes the action it happened to sit under.
+        The candidate codec owns the action and termination spelling together.
         """
-        control = grammars.split_control(text)
-        body, control_error = _split_refused_control(control.body)
-        terminal = _TERMINAL[control.status] if control.status else None
+        body = text
+        terminal = None
         try:
             action = self.codec.parse(body)
         except (TypeError, ValueError) as exc:
-            if terminal is not None and isinstance(exc, grammars.NoAction):
-                # A turn that only ends the episode has no action of the grammar
-                # to parse — prose and a control line, or the control line alone —
-                # and that is not a parse error. Only `NoAction`: a MALFORMED
-                # action line alongside a termination is still one. The action the
-                # turn amounts to is the grammar's own empty one, and the codec is
-                # asked for it rather than left null: `parsed_action` is a
-                # published field, and `datasets/convert.py:567` drops every turn
-                # whose value is falsy — which would delete exactly the terminal
-                # turns from any dataset built off these rollouts.
-                return Decision(
-                    step=step,
-                    text=text,
-                    action=self.codec.action_from_operations(
-                        (), geometry=geometry, cursor=cursor, terminate=control.status
-                    ),
-                    operations=(),
-                    control=terminal,
-                    parse_error=None,
-                    sampling=sampling,
-                    ignored_after_terminate=control.ignored,
-                    control_error=control_error,
-                )
             return Decision(
                 step=step,
                 text=text,
@@ -634,9 +553,9 @@ class Agent:
                 control=terminal,
                 parse_error={"type": type(exc).__name__, "message": str(exc)},
                 sampling=sampling,
-                ignored_after_terminate=control.ignored,
-                control_error=control_error,
             )
+        if getattr(action, "terminate", None) == "success":
+            terminal = "terminate"
         try:
             operations = tuple(self.codec.compile(body, geometry, cursor))
         except (TypeError, ValueError) as exc:
@@ -648,8 +567,6 @@ class Agent:
                 control=terminal,
                 parse_error={"type": type(exc).__name__, "message": str(exc)},
                 sampling=sampling,
-                ignored_after_terminate=control.ignored,
-                control_error=control_error,
             )
         return Decision(
             step=step,
@@ -659,8 +576,6 @@ class Agent:
             control=terminal,
             parse_error=None,
             sampling=sampling,
-            ignored_after_terminate=control.ignored,
-            control_error=control_error,
             # Resolved from the same three inputs as `operations`, and only here:
             # a "cursor_before + parsed delta" reconstruction downstream is wrong
             # by a grid step for `move_rel`, whose deltas are thousandths of an
@@ -700,7 +615,11 @@ def dump_prompt(body: dict[str, Any]) -> str:
         return value
 
     messages = [
-        m.model_dump() if hasattr(m, "model_dump") else m for m in body.get("messages", [])
+        m.model_dump() if hasattr(m, "model_dump") else m
+        for m in body.get("messages", [])
     ]
-    payload = {**{k: v for k, v in body.items() if k != "messages"}, "messages": scrub(messages)}
+    payload = {
+        **{k: v for k, v in body.items() if k != "messages"},
+        "messages": scrub(messages),
+    }
     return json.dumps(payload, indent=2, default=str)

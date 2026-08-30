@@ -66,7 +66,11 @@ class DesktopFacade:
     """
 
     def __init__(
-        self, checkout: Any, session: Any, *, osworld_cache_dir: str | Path | None = None
+        self,
+        checkout: Any,
+        session: Any,
+        *,
+        osworld_cache_dir: str | Path | None = None,
     ) -> None:
         self._checkout = checkout
         self._session = session
@@ -145,14 +149,27 @@ class DesktopFacade:
         finally:
             self._touch()
 
-    def write_guest_file(self, path: str, content: bytes) -> None:
+    def write_file(self, path: str, content: bytes) -> None:
         self._touch()
         try:
             self._session.client.write_file(path, content)
         finally:
             self._touch()
 
-    def run_guest_command(
+    def execute(
+        self,
+        argv: list[str],
+        *,
+        check: bool = True,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
+        self._touch()
+        try:
+            return self._session.client.execute(argv, check=check, timeout_s=timeout_s)
+        finally:
+            self._touch()
+
+    def execute_detached(
         self,
         argv: Sequence[str],
         *,
@@ -166,6 +183,9 @@ class DesktopFacade:
             )
         finally:
             self._touch()
+
+    def chromium_debugging_url(self) -> str:
+        return f"http://127.0.0.1:{self._guest_ports()['chromium_port']}"
 
     def screenshot(self) -> bytes:
         self._touch()
@@ -231,10 +251,7 @@ class DesktopFacade:
         the wrong guest and scores the task on whatever answers.
         """
         ports = self._session.runtime.state().ports
-        return {
-            f"{key}_port": int(getattr(ports, key))
-            for key in ("chromium", "vlc")
-        }
+        return {f"{key}_port": int(getattr(ports, key)) for key in ("chromium", "vlc")}
 
     def setup(self, task_config: dict[str, Any]) -> int:
         """Run an OSWorld task JSON's `config` steps, and bind it for scoring.

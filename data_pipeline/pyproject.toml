@@ -45,7 +45,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 # Not a published package — pyproject anchors a uv venv at this directory.
-packages = ["annotation_pipeline", "configs"]
+packages = ["annotation_pipeline", "configs", "cuagym_pipeline"]
 py-modules = []
 
 [tool.ruff]
@@ -81,6 +81,7 @@ ignore = [
 known-first-party = [
     "_manifest",
     "configs",
+    "cuagym_pipeline",
     "annotation_pipeline",
     "filter_truncated",
     "generate_onpolicy_completions",

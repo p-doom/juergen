@@ -241,7 +241,7 @@ def _bundle_for_task(
 
 
 def _require_guest_modules(session: DesktopFacade) -> None:
-    result = session.run_guest_command(
+    result = session.execute_detached(
         ["python3", "-c", "import " + ", ".join(_GUEST_MODULES)],
         timeout_s=_COMMAND_TIMEOUT_S,
     )
@@ -301,8 +301,8 @@ def _offline_upload(entry: object, staged: Mapping[str, Path]) -> dict[str, str]
 
 
 def _run_reward(session: DesktopFacade, bundle: TaskBundle) -> GuestCommandResult:
-    session.write_guest_file(_REWARD_SCRIPT_PATH, bundle.reward_source.encode("utf-8"))
-    return session.run_guest_command(
+    session.write_file(_REWARD_SCRIPT_PATH, bundle.reward_source.encode("utf-8"))
+    return session.execute_detached(
         ["python3", _REWARD_SCRIPT_PATH], timeout_s=_COMMAND_TIMEOUT_S
     )
 
