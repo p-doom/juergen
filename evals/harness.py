@@ -179,7 +179,7 @@ class DesktopPoolConfig(vf.BaseConfig):
     """How often the reaper looks for an idle pool."""
     session_kwargs: dict[str, Any] = Field(default_factory=dict)
     """Passed verbatim to the session-pool constructor named by `pool_target`."""
-    pool_target: str = "desktop.vm.pool:DesktopSessionPool"
+    pool_target: str = "evals.vm:kvm_desktop_pool"
     """The session-pool constructor, as `module:attribute`.
 
     A constructor, not a provider name. Override it to inject a fake pool, not to
