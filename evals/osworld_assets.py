@@ -182,7 +182,9 @@ def _stage_cloud_files(value: Any, asset_bundle: Path, task_id: str) -> Any:
             f"{sorted(set(value) - allowed)}"
         )
     multi = value.get("multi", False)
-    if not isinstance(multi, bool):
+    if multi == "true":
+        multi = True
+    elif not isinstance(multi, bool):
         raise TypeError(f"OSWorld task {task_id!r} has invalid cloud_file multi")
     raw_paths, raw_dests = value.get("path"), value.get("dest")
     paths = raw_paths if isinstance(raw_paths, list) else [raw_paths]

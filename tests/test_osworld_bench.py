@@ -745,7 +745,7 @@ def test_cloud_file_destinations_are_safe_at_both_boundaries(
         )
 
 
-def test_cloud_file_multi_requires_a_boolean(tmp_path: Path) -> None:
+def test_cloud_file_multi_accepts_the_upstream_true_string(tmp_path: Path) -> None:
     from evals.tasks import OSWorldTaskset, OSWorldTasksetConfig
 
     root, bundle = _offline_osworld_tree(tmp_path)
@@ -754,6 +754,34 @@ def test_cloud_file_multi_requires_a_boolean(tmp_path: Path) -> None:
     )
     payload = json.loads(task_path.read_text())
     payload["evaluator"]["result"]["multi"] = "true"
+    task_path.write_text(json.dumps(payload))
+
+    task = next(
+        iter(
+            OSWorldTaskset(
+                OSWorldTasksetConfig(
+                    osworld_root=str(root),
+                    split_path=str(root / "split.json"),
+                    asset_bundle=str(bundle),
+                )
+            ).load()
+        )
+    )
+
+    assert task.data.setup["task_config"]["evaluator"]["result"]["type"] == (
+        "offline_file"
+    )
+
+
+def test_cloud_file_multi_rejects_other_strings(tmp_path: Path) -> None:
+    from evals.tasks import OSWorldTaskset, OSWorldTasksetConfig
+
+    root, bundle = _offline_osworld_tree(tmp_path)
+    task_path = (
+        root / "evaluation_examples" / "examples" / "writer" / "task-1.json"
+    )
+    payload = json.loads(task_path.read_text())
+    payload["evaluator"]["result"]["multi"] = "TRUE"
     task_path.write_text(json.dumps(payload))
 
     with pytest.raises(TypeError, match="invalid cloud_file multi"):
