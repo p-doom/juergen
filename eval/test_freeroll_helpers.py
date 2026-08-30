@@ -1,34 +1,13 @@
 from __future__ import annotations
 
 import sys
-import types
 import unittest
 from pathlib import Path
 
-
-def _install_import_stubs() -> None:
-    """Let these helper tests run without syncing the heavy eval venv."""
-    if "PIL" not in sys.modules:
-        pil = types.ModuleType("PIL")
-        image = types.ModuleType("PIL.Image")
-        image.Image = object
-        pil.Image = image
-        sys.modules["PIL"] = pil
-        sys.modules["PIL.Image"] = image
-    if "requests" not in sys.modules:
-        requests = types.ModuleType("requests")
-        requests.RequestException = Exception
-        requests.Session = lambda: None
-        requests.get = lambda *args, **kwargs: None
-        requests.post = lambda *args, **kwargs: None
-        sys.modules["requests"] = requests
-
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-_install_import_stubs()
 
-import freeroll  # noqa: E402
-import osworld_vm_client  # noqa: E402
+import freeroll
+import osworld_vm_client
 
 
 class FreerollHelperTests(unittest.TestCase):
