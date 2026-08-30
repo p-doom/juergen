@@ -301,8 +301,12 @@ def main(_) -> None:
                 log.info("step %d actions: %s", step_idx + 1, actions)
 
                 if not actions:
-                    log.warning("step %d: no actions parsed from response", step_idx + 1)
-                    stop_reason = "no_actions_parsed"
+                    if response == "<truncated_think>":
+                        log.warning("step %d: truncated think twice", step_idx + 1)
+                        stop_reason = "truncated_think"
+                    else:
+                        log.warning("step %d: no actions parsed from response", step_idx + 1)
+                        stop_reason = "no_actions_parsed"
                     break
 
                 for action in actions:

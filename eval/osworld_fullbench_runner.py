@@ -85,6 +85,13 @@ flags.DEFINE_integer("chunked_prefill_size", None, "SGLang --chunked-prefill-siz
 flags.DEFINE_string(
     "cache_dir", "cache", "OSWorld task asset cache dir (default: 'cache' relative to cwd)."
 )
+flags.DEFINE_bool(
+    "retry_on_env_error",
+    False,
+    "On env death (evaluate() exception or trailing missing-screenshot streak) "
+    "write result_enverror.json instead of result.json so an outer attempt loop "
+    "re-runs the sample; a second env death writes result.json as before.",
+)
 
 
 def _load_task_list(split_path: str) -> list[tuple[str, str]]:
@@ -197,6 +204,8 @@ def main(_) -> None:
     final_reward: float = float("nan")
     n_steps_taken = 0
     stop_reason = "max_steps"
+    env_error = ""
+    missing_streak = 0
 
     with sglang_server(
         model_path=FLAGS.model_path,
@@ -275,12 +284,17 @@ def main(_) -> None:
                     log.info("step %d actions: %s", step_idx + 1, actions)
 
                     if not actions:
-                        log.warning("step %d: no actions parsed", step_idx + 1)
-                        stop_reason = "no_actions_parsed"
+                        if response == "<truncated_think>":
+                            log.warning("step %d: truncated think twice", step_idx + 1)
+                            stop_reason = "truncated_think"
+                        else:
+                            log.warning("step %d: no actions parsed", step_idx + 1)
+                            stop_reason = "no_actions_parsed"
                         break
 
                     for action in actions:
                         obs, reward, done, info = env.step(action, FLAGS.sleep_after_execution)
+                        missing_streak = missing_streak + 1 if not obs.get("screenshot") else 0
                         img = _save_step_artifacts(
                             step_idx=step_idx + 1,
                             obs=obs,
@@ -306,7 +320,10 @@ def main(_) -> None:
             except Exception as e:
                 log.exception("env.evaluate raised: %s", e)
                 final_reward = float("nan")
+                env_error = f"evaluate_exception: {e}"
             log.info("env.evaluate -> %.4f", final_reward)
+            if not env_error and missing_streak >= 8:
+                env_error = f"missing_screenshot_streak: {missing_streak}"
         finally:
             try:
                 env.close()
@@ -321,8 +338,12 @@ def main(_) -> None:
     except Exception as e:
         log.warning("GIF write failed: %s", e)
 
+    enverror_path = output_dir / "result_enverror.json"
+    write_target = result_path
+    if FLAGS.retry_on_env_error and env_error and not enverror_path.exists():
+        write_target = enverror_path
     write_result(
-        result_path,
+        write_target,
         task="osworld_fullbench",
         scores={
             "reward": final_reward,
@@ -349,6 +370,7 @@ def main(_) -> None:
             "screen_height": FLAGS.screen_height,
             "sleep_after_execution": FLAGS.sleep_after_execution,
             "stop_reason": stop_reason,
+            "env_error": env_error,
         },
         inputs={
             "model_path": FLAGS.model_path,
@@ -360,6 +382,8 @@ def main(_) -> None:
         elapsed_s=elapsed_s,
         extra={"gif_path": str(gif_path), "traj_path": str(traj_path)},
     )
+    if write_target is not result_path:
+        log.error("env death (%s): wrote %s; result.json withheld for retry", env_error, enverror_path)
     log.info(
         "done in %ds task_index=%d sample_index=%d app=%s task_id=%s reward=%.4f",
         elapsed_s,

@@ -23,6 +23,8 @@ SYSTEM_PROMPT_PATH = (
     / "cua_v3_cuagym.txt"
 )
 
+FAIL_SYSTEM_PROMPT_PATH = SYSTEM_PROMPT_PATH.with_name("cua_v3_cuagym_fail.txt")
+
 INSTRUCTION_TEMPLATE = """
 Please generate the next move according to the UI screenshot, instruction and previous actions.
 
@@ -171,7 +173,12 @@ class Oev3Agent:
         self.temperature = temperature
         self.history_n = history_n
         self.screen_size = screen_size
-        self.system_prompt = SYSTEM_PROMPT_PATH.read_text().strip()
+        prompt_path = (
+            FAIL_SYSTEM_PROMPT_PATH
+            if os.environ.get("OEV3_PROMPT_FAIL") == "1"
+            else SYSTEM_PROMPT_PATH
+        )
+        self.system_prompt = prompt_path.read_text().strip()
         self.screenshots: list[str] = []
         self.stripped_responses: list[str] = []
         self.action_lines: list[str] = []
@@ -230,7 +237,7 @@ class Oev3Agent:
         messages.append({"role": "user", "content": content})
         return messages
 
-    def _call_llm(self, messages: list[dict]) -> str:
+    def _call_llm(self, messages: list[dict]) -> tuple[str, str]:
         base_url = os.environ.get("OPENAI_BASE_URL", "")
         api_key = os.environ.get("OPENAI_API_KEY", "sk-123")
         client = openai.OpenAI(base_url=base_url, api_key=api_key)
@@ -248,12 +255,13 @@ class Oev3Agent:
                     top_p=self.top_p,
                     **extra,
                 )
-                return response.choices[0].message.content or ""
+                choice = response.choices[0]
+                return choice.message.content or "", choice.finish_reason or ""
             except Exception as exc:
                 self.logger.error("oev3 llm call failed (attempt %d): %s", attempt, exc)
                 if attempt < MAX_RETRY_TIMES:
                     time.sleep(5)
-        return ""
+        return "", ""
 
     def predict(self, instruction: str, obs: dict) -> tuple[str, list[str]]:
         if not obs.get("screenshot"):
@@ -261,7 +269,13 @@ class Oev3Agent:
             return "<screenshot_missing>", ["WAIT"]
         screenshot_b64 = _to_jpeg_b64(obs["screenshot"])
         messages = self._build_messages(instruction, screenshot_b64)
-        response = self._call_llm(messages)
+        response, finish_reason = self._call_llm(messages)
+        if finish_reason == "length" and "</think>" not in response:
+            self.logger.warning("truncated think (%d chars), retrying once", len(response))
+            response, finish_reason = self._call_llm(messages)
+            if finish_reason == "length" and "</think>" not in response:
+                self.logger.warning("truncated think on retry, stopping episode")
+                return "<truncated_think>", []
         if not response:
             return response, []
         try:
@@ -270,6 +284,8 @@ class Oev3Agent:
             return response, []
         if line == "TERMINATE":
             actions = ["DONE"]
+        elif line == "FAIL":
+            actions = ["FAIL"]
         elif line == "NO_OP":
             actions = ["WAIT"]
         else:

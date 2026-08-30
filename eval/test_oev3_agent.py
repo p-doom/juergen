@@ -1,3 +1,4 @@
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -114,3 +115,68 @@ class ElideTests(unittest.TestCase):
         out = elide_step_line(line)
         self.assertLessEqual(len(out), 175)
         self.assertIn("chars]", out)
+
+
+def _png_bytes():
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+class FailTerminalTests(unittest.TestCase):
+    def _agent(self, replies):
+        a = Oev3Agent(model="m", history_n=4)
+        a.reset()
+        a._call_llm = lambda messages: replies.pop(0)
+        return a
+
+    def test_fail_line_maps_to_fail_action(self):
+        a = self._agent([("done</think>\nFAIL", "stop")])
+        response, actions = a.predict("goal", {"screenshot": _png_bytes()})
+        self.assertEqual(actions, ["FAIL"])
+
+
+class FailPromptSelectionTests(unittest.TestCase):
+    FAIL_LINE = "* FAIL: the task is impossible to complete; give up and report failure."
+
+    def setUp(self):
+        self._old = os.environ.pop("OEV3_PROMPT_FAIL", None)
+
+    def tearDown(self):
+        if self._old is None:
+            os.environ.pop("OEV3_PROMPT_FAIL", None)
+        else:
+            os.environ["OEV3_PROMPT_FAIL"] = self._old
+
+    def test_env_set_selects_fail_prompt(self):
+        os.environ["OEV3_PROMPT_FAIL"] = "1"
+        a = Oev3Agent(model="m")
+        self.assertIn(self.FAIL_LINE, a.system_prompt)
+
+    def test_env_unset_selects_base_prompt(self):
+        a = Oev3Agent(model="m")
+        self.assertNotIn(self.FAIL_LINE, a.system_prompt)
+
+
+class TruncatedThinkTests(unittest.TestCase):
+    def _agent(self, replies):
+        a = Oev3Agent(model="m", history_n=4)
+        a.reset()
+        a._call_llm = lambda messages: replies.pop(0)
+        return a
+
+    def test_double_truncation_stops_episode(self):
+        a = self._agent(
+            [("prose without close", "length"), ("prose without close", "length")]
+        )
+        result = a.predict("goal", {"screenshot": _png_bytes()})
+        self.assertEqual(result, ("<truncated_think>", []))
+
+    def test_retry_recovers(self):
+        a = self._agent([("prose", "length"), ("ok</think>\n\nNO_OP", "stop")])
+        response, actions = a.predict("goal", {"screenshot": _png_bytes()})
+        self.assertEqual(actions, ["WAIT"])
