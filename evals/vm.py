@@ -366,6 +366,7 @@ def kvm_desktop_pool(
     checkout_timeout_s: float = 1800.0,
     lease_timeout_s: float = 1800.0,
     startup_timeout_s: float = 1200.0,
+    status_dir: str | Path | None = None,
     reset_on_reuse: bool = True,
     osworld_cache_dir: str | Path | None = None,
 ) -> _AdaptedPool:
@@ -402,6 +403,7 @@ def kvm_desktop_pool(
         checkout_timeout_s=checkout_timeout_s,
         lease_timeout_s=lease_timeout_s,
         startup_timeout_s=startup_timeout_s,
+        status_dir=Path(status_dir) if status_dir is not None else None,
     )
     runtime_options: dict[str, Any] = {"transport_timeout_s": transport_timeout_s}
     if qemu_binary is not None:
