@@ -16,12 +16,11 @@ v3 adds two things:
 Both emitters now render through this codec and take this prompt, so v2 is the
 subset of this grammar that never types.
 
-Escaping inside ``type()`` is minimal: only ``\\\\`` and ``\\"``. Return is an
-event — ``down(Return); up(Return)`` — never a character inside ``type()``. The
-executor cannot type a newline inside a burst, and a double-escaped ``\\\\n``
-types two literal characters instead of pressing Return, a labelling defect that
-reached real training data. Every other backslash escape is rejected at parse
-time.
+Escaping inside ``type()`` is minimal: only ``\\\\`` and ``\\"``. Return and Tab
+are events — ``down(Return); up(Return)`` and ``down(Tab); up(Tab)`` — never
+characters inside ``type()``. A double-escaped ``\\\\n`` types two literal
+characters instead of pressing Return, a labelling defect that reached real
+training data. Every other backslash escape is rejected at parse time.
 
 The segment -> primitives extraction (motor-grid accumulation, label policy,
 dead zones) stays in the data pipeline. This codec owns the surface syntax and
@@ -80,9 +79,10 @@ def unescape(body: str) -> str:
             index += 2
             continue
         if char in "\n\r\t":
+            event = "Tab" if char == "\t" else "Return"
             raise OrderedEventsV3Error(
-                "type() payload cannot contain a control character; press Return "
-                "as down(Return); up(Return)"
+                f"type() payload cannot contain a control character; press {event} "
+                f"as down({event}); up({event})"
             )
         out.append(char)
         index += 1
@@ -134,6 +134,31 @@ def primitive_from_dict(value: dict[str, Any]) -> Primitive:
     if kind == "type":
         return Primitive("type", text=str(value["text"]))
     raise OrderedEventsV3Error(f"unknown primitive kind: {kind!r}")
+
+
+def _lift_typed_text(text: str) -> tuple[Primitive, ...]:
+    if "\r" in text:
+        raise OrderedEventsV3Error("carriage return cannot be expressed")
+    primitives: list[Primitive] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        if run:
+            primitives.append(Primitive("type", text="".join(run)))
+            run.clear()
+
+    for char in text:
+        event = {"\n": "Return", "\t": "Tab"}.get(char)
+        if event is None:
+            run.append(char)
+            continue
+        flush()
+        primitives.append(Primitive("down", name=event))
+        primitives.append(Primitive("up", name=event))
+    flush()
+    if not primitives:
+        primitives.append(Primitive("type", text=""))
+    return tuple(primitives)
 
 
 @dataclass(frozen=True)
@@ -218,7 +243,8 @@ class OrderedEventsV3Codec:
     def _type(self) -> None:
         """Type TEXT as one burst. Inside the quotes only two escapes exist:
         `\\\\` for a backslash and `\\"` for a quote. TEXT cannot contain a
-        newline — press Return as `down(Return); up(Return)`.
+        newline or tab — press it as `down(Return); up(Return)` or
+        `down(Tab); up(Tab)`.
         """
 
     @_support.production("NO_OP")
@@ -397,13 +423,7 @@ class OrderedEventsV3Codec:
                 name = "down" if kind == "key_down" else "up"
                 primitives.extend(Primitive(name, name=key) for key in group.keys)
             elif kind == "type":
-                if any(char in group.text for char in "\n\r\t"):
-                    raise OrderedEventsV3Error(
-                        "type() accepts only the escapes \\\\ and \\\" , so a "
-                        "control character cannot be expressed; press Return as "
-                        "down(Return); up(Return)"
-                    )
-                primitives.append(Primitive("type", text=group.text))
+                primitives.extend(_lift_typed_text(group.text))
             elif kind == "wait":
                 if len(groups) != 1:
                     raise OrderedEventsV3Error(

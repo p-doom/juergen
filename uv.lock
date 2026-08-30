@@ -929,7 +929,7 @@ wheels = [
 [[package]]
 name = "desktop"
 version = "0.1.0"
-source = { git = "https://github.com/p-doom/desktop.git?rev=ba044469669f64a7b9f70224fddae259bf8063e4#ba044469669f64a7b9f70224fddae259bf8063e4" }
+source = { git = "https://github.com/p-doom/desktop.git?rev=4b66c8fd7dc0539742c0a97056496bc05fe39240#4b66c8fd7dc0539742c0a97056496bc05fe39240" }
 dependencies = [
     { name = "pillow" },
 ]
@@ -1927,7 +1927,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "av", specifier = ">=16.1.0" },
-    { name = "desktop", git = "https://github.com/p-doom/desktop.git?rev=ba044469669f64a7b9f70224fddae259bf8063e4" },
+    { name = "desktop", git = "https://github.com/p-doom/desktop.git?rev=4b66c8fd7dc0539742c0a97056496bc05fe39240" },
     { name = "pyarrow", specifier = ">=21.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "verifiers", specifier = "==0.2.1" },
