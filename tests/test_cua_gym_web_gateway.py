@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import socket
 import threading
+import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -27,6 +28,9 @@ from evals.cua_gym.web.manifest import (
     CuaGymWebRuntimeManifest,
 )
 
+_MAX_RAW_HTTP_BYTES = 1024 * 1024
+_RAW_HTTP_TIMEOUT_S = 2.0
+
 
 @dataclass(frozen=True)
 class _RecordedRequest:
@@ -47,6 +51,7 @@ class _Backend:
         self.oversized_response: bytes | None = None
         self.response_written = threading.Event()
         self.release_response = threading.Event()
+        self.expose_admin = False
         backend = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -133,13 +138,12 @@ class _Backend:
             handler.end_headers()
             handler.wfile.write(payload)
             return
+        payload = {"ok": True, "target": handler.path}
+        if self.expose_admin:
+            payload["received_admin"] = request.headers.get("x-cua-admin-token")
         self._json(
             handler,
-            {
-                "ok": True,
-                "target": handler.path,
-                "received_admin": request.headers.get("x-cua-admin-token"),
-            },
+            payload,
             extra_headers=(
                 ("Authorization", "backend-secret"),
                 ("X-CUA-Admin-Token", "backend-admin"),
@@ -267,6 +271,34 @@ def _request(
     return response, response_body
 
 
+def _raw_request(gateway: CuaGymEpisodeGateway, request: bytes) -> tuple[int, bytes]:
+    if len(request) > _MAX_RAW_HTTP_BYTES:
+        raise ValueError("raw test request is too large")
+    deadline = time.monotonic() + _RAW_HTTP_TIMEOUT_S
+    with socket.create_connection(
+        (gateway.config.bind_host, gateway.config.port),
+        timeout=_RAW_HTTP_TIMEOUT_S,
+    ) as connection:
+        connection.settimeout(max(0.001, deadline - time.monotonic()))
+        connection.sendall(request)
+        response = bytearray()
+        while len(response) <= _MAX_RAW_HTTP_BYTES:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("raw test response timed out")
+            connection.settimeout(remaining)
+            chunk = connection.recv(
+                min(65_536, _MAX_RAW_HTTP_BYTES + 1 - len(response))
+            )
+            if not chunk:
+                break
+            response.extend(chunk)
+    if len(response) > _MAX_RAW_HTTP_BYTES:
+        raise RuntimeError("raw test response is too large")
+    status = int(response.split(b"\r\n", 1)[0].split()[1])
+    return status, bytes(response)
+
+
 def _setup_launch(
     gateway: CuaGymEpisodeGateway,
     backend: _Backend,
@@ -303,6 +335,15 @@ def test_gateway_enforces_setup_rollout_and_evaluation(
     gateway.start()
     try:
         gateway.assert_healthy()
+        empty_sid, _ = _request(
+            gateway,
+            "POST",
+            "/post?sid=",
+            endpoint=endpoint,
+            body={"action": "set", "state": {}},
+        )
+        assert empty_sid.status == 400
+        assert backend.requests == []
         response, body = _request(
             gateway,
             "POST",
@@ -344,6 +385,20 @@ def test_gateway_enforces_setup_rollout_and_evaluation(
         )
         assert navigation.status == 302
         assert navigation.getheader("Location") == f"/_cua_session?token={token}"
+        aliased_exchange, _ = _request(
+            gateway,
+            "GET",
+            f"/_cua_session?token={token}&extra=1",
+            endpoint=endpoint,
+        )
+        assert aliased_exchange.status == 403
+        wrong_method, _ = _request(
+            gateway,
+            "POST",
+            f"/_cua_session?token={token}",
+            endpoint=endpoint,
+        )
+        assert wrong_method.status == 405
         exchange, _ = _request(
             gateway,
             "GET",
@@ -479,6 +534,106 @@ def test_endpoint_topology_is_exact_and_routes_by_host(
         gateway.close()
 
 
+def test_host_authority_is_unambiguous(
+    backends: tuple[_Backend, _Backend],
+    tmp_path: Path,
+) -> None:
+    endpoint = EndpointName("gmail")
+    backend = backends[0]
+    manifest = _manifest(endpoint)
+    gateway = _gateway(
+        tmp_path,
+        manifest,
+        {endpoint: backend.url},
+        episode_id="host-canonicalization",
+    )
+    gateway.start()
+    expected = urlsplit(gateway.gateway_urls[endpoint]).netloc
+    try:
+        accepted, _ = _request(
+            gateway, "GET", "/", endpoint=endpoint, host=expected.upper()
+        )
+        assert accepted.status == 200
+
+        for invalid in (
+            expected.rsplit(":", 1)[0],
+            expected.rsplit(":", 1)[0] + ":1",
+            f"[::1]:{gateway.config.port}",
+            expected + ".",
+        ):
+            rejected, _ = _request(gateway, "GET", "/", endpoint=endpoint, host=invalid)
+            assert rejected.status == 401
+
+        missing_status, _ = _raw_request(
+            gateway,
+            b"GET / HTTP/1.1\r\nConnection: close\r\n\r\n",
+        )
+        assert missing_status == 401
+
+        for first, second in (
+            (expected, "attacker.invalid"),
+            ("attacker.invalid", expected),
+        ):
+            duplicate_status, _ = _raw_request(
+                gateway,
+                (
+                    "GET / HTTP/1.1\r\n"
+                    f"Host: {first}\r\n"
+                    f"Host: {second}\r\n"
+                    "Connection: close\r\n\r\n"
+                ).encode("ascii"),
+            )
+            assert duplicate_status == 401
+
+        assert len(backend.requests) == 1
+    finally:
+        gateway.close()
+
+
+def test_request_framing_is_unambiguous_and_rejected_before_body_or_backend(
+    backends: tuple[_Backend, _Backend],
+    tmp_path: Path,
+) -> None:
+    endpoint = EndpointName("gmail")
+    manifest = _manifest(endpoint)
+    gateway = _gateway(
+        tmp_path,
+        manifest,
+        {endpoint: backends[0].url},
+        episode_id="request-framing",
+    )
+    gateway.start()
+    host = urlsplit(gateway.gateway_urls[endpoint]).netloc
+    try:
+        for first, second in (("0", "1"), ("1", "0")):
+            duplicate_status, _ = _raw_request(
+                gateway,
+                (
+                    "POST /post?sid=raw HTTP/1.1\r\n"
+                    f"Host: {host}\r\n"
+                    f"Content-Length: {first}\r\n"
+                    f"Content-Length: {second}\r\n"
+                    "Connection: close\r\n\r\n"
+                ).encode("ascii"),
+            )
+            assert duplicate_status == 400
+
+        transfer_status, _ = _raw_request(
+            gateway,
+            (
+                "POST /post?sid=raw HTTP/1.1\r\n"
+                f"Host: {host}\r\n"
+                "Transfer-Encoding: chunked\r\n"
+                "Content-Length: 4\r\n"
+                "Connection: close\r\n\r\n"
+            ).encode("ascii"),
+        )
+        assert transfer_status == 400
+        assert backends[0].requests == []
+    finally:
+        gateway.close()
+
+
 def test_private_session_namespaces_differ_across_episodes(
     backends: tuple[_Backend, _Backend],
     tmp_path: Path,
@@ -575,6 +730,13 @@ def test_secondary_endpoint_claims_the_selected_session(
         )
         gateway.transition(GatewayPhase.ROLLOUT)
 
+        wrong_endpoint, _ = _request(
+            gateway,
+            "GET",
+            f"/_cua_session?token={distractor_token}",
+            endpoint=gmail,
+        )
+        assert wrong_endpoint.status == 403
         primary_navigation, _ = _request(
             gateway,
             "GET",
@@ -661,6 +823,38 @@ def test_private_sid_in_opaque_backend_data_is_not_exposed(
         assert response.status == 502
         assert b"__cua_session__" not in body
         assert b"gateway backend failure" in body
+    finally:
+        gateway.close()
+
+
+def test_admin_token_in_backend_payload_is_not_exposed(
+    backends: tuple[_Backend, _Backend],
+    tmp_path: Path,
+) -> None:
+    endpoint = EndpointName("gmail")
+    backend = backends[0]
+    backend.expose_admin = True
+    manifest = _manifest(endpoint)
+    gateway = _gateway(
+        tmp_path,
+        manifest,
+        {endpoint: backend.url},
+        episode_id="admin-token-redaction",
+    )
+    gateway.start()
+    try:
+        gateway.transition(GatewayPhase.ROLLOUT)
+        gateway.transition(GatewayPhase.EVALUATE)
+        response, body = _request(
+            gateway,
+            "GET",
+            "/go?sid=raw-sid",
+            endpoint=endpoint,
+        )
+        assert response.status == 502
+        assert body == b'{"error": "gateway backend failure"}'
+        assert gateway.config.hub.admin_token.encode() not in body
+        assert backend.requests[-1].headers["x-cua-admin-token"] == "a" * 64
     finally:
         gateway.close()
 
@@ -851,6 +1045,42 @@ def test_close_disconnects_keepalive_clients_and_releases_the_port(
         assert response.status == 200
 
 
+def test_close_interrupts_a_client_stalled_in_the_request_body(
+    backends: tuple[_Backend, _Backend],
+    tmp_path: Path,
+) -> None:
+    endpoint = EndpointName("gmail")
+    manifest = _manifest(endpoint)
+    gateway = _gateway(
+        tmp_path,
+        manifest,
+        {endpoint: backends[0].url},
+        episode_id="stalled-body",
+    )
+    gateway.start()
+    client = socket.create_connection(
+        (gateway.config.bind_host, gateway.config.port), timeout=2.0
+    )
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        host = urlsplit(gateway.gateway_urls[endpoint]).netloc
+        client.sendall(
+            (
+                "POST /post?sid=raw HTTP/1.1\r\n"
+                f"Host: {host}\r\n"
+                "Content-Length: 100\r\n\r\n"
+                "{"
+            ).encode("ascii")
+        )
+        close = executor.submit(gateway.close)
+        close.result(timeout=2.0)
+        assert backends[0].requests == []
+    finally:
+        client.close()
+        executor.shutdown(wait=True)
+        gateway.close()
+
+
 def test_invalid_configuration_fails_before_socket_open(
     backends: tuple[_Backend, _Backend],
     tmp_path: Path,
@@ -905,6 +1135,38 @@ def test_oversized_requests_are_rejected_before_body_read(
         response.read()
         connection.close()
         assert response.status == 400
+        assert backends[0].requests == []
+    finally:
+        gateway.close()
+
+
+def test_unauthorized_phase_requests_are_rejected_before_body_read(
+    backends: tuple[_Backend, _Backend],
+    tmp_path: Path,
+) -> None:
+    endpoint = EndpointName("gmail")
+    manifest = _manifest(endpoint)
+    gateway = _gateway(
+        tmp_path,
+        manifest,
+        {endpoint: backends[0].url},
+        episode_id="request-framing",
+    )
+    gateway.start()
+    host = urlsplit(gateway.gateway_urls[endpoint]).netloc
+    try:
+        gateway.transition(GatewayPhase.ROLLOUT)
+        gateway.transition(GatewayPhase.EVALUATE)
+        denied_status, _ = _raw_request(
+            gateway,
+            (
+                "POST /post?sid=raw HTTP/1.1\r\n"
+                f"Host: {host}\r\n"
+                "Content-Length: 67108864\r\n"
+                "Connection: close\r\n\r\n"
+            ).encode("ascii"),
+        )
+        assert denied_status == 403
         assert backends[0].requests == []
     finally:
         gateway.close()

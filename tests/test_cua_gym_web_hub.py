@@ -7,6 +7,7 @@ import signal
 import socket
 import stat
 import textwrap
+from dataclasses import replace
 from pathlib import Path
 from typing import Self
 from urllib.request import Request
@@ -78,6 +79,11 @@ def _fake_apptainer(tmp_path: Path, *, revision: str = _HUB_REVISION) -> Path:
                 }}}}}}}}))
                 raise SystemExit(0)
 
+            assert "--contain" in sys.argv
+            assert "--writable-tmpfs" in sys.argv
+            assert sys.argv[sys.argv.index("--cwd") + 1] == "/opt/cua-gym-hub"
+            assert "REVIEW_SECRET" not in os.environ
+            assert "APPTAINER_BIND" not in os.environ
             assert "APPTAINERENV_CUA_GYM_LEGACY_COMPAT" not in os.environ
             port = int(sys.argv[sys.argv.index("--port") + 1])
             token = os.environ["APPTAINERENV_CUA_GYM_ADMIN_TOKEN"]
@@ -126,7 +132,10 @@ def _config(tmp_path: Path, port: int, apptainer: Path) -> CuaGymHubConfig:
 
 def test_hub_runs_real_children_publishes_descriptor_and_releases_everything(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("REVIEW_SECRET", "must-not-reach-hub")
+    monkeypatch.setenv("APPTAINER_BIND", "/:/host")
     port = _free_port()
     config = _config(tmp_path, port, _fake_apptainer(tmp_path))
     supervisor = CuaGymHubSupervisor(config=config, manifest=_manifest())
@@ -134,7 +143,16 @@ def test_hub_runs_real_children_publishes_descriptor_and_releases_everything(
     descriptor = supervisor.start()
     processes = tuple(supervisor._processes.values())
     assert supervisor.assert_healthy() is None
+    assert config.descriptor_path.stat().st_uid == os.getuid()
     assert stat.S_IMODE(config.descriptor_path.stat().st_mode) == 0o600
+    assert config.state_root.stat().st_uid == os.getuid()
+    assert stat.S_IMODE(config.state_root.stat().st_mode) == 0o700
+    assert config.log_root.stat().st_uid == os.getuid()
+    assert stat.S_IMODE(config.log_root.stat().st_mode) == 0o700
+    assert config.port_lock_dir.stat().st_uid == os.getuid()
+    assert stat.S_IMODE(config.port_lock_dir.stat().st_mode) == 0o700
+    assert (config.log_root / "gmail_mock.log").stat().st_uid == os.getuid()
+    assert stat.S_IMODE((config.log_root / "gmail_mock.log").stat().st_mode) == 0o600
     assert (
         CuaGymHubDescriptor.read(config.descriptor_path, manifest=_manifest())
         == descriptor
@@ -162,6 +180,28 @@ def test_hub_runs_real_children_publishes_descriptor_and_releases_everything(
     with (config.port_lock_dir / f"port-{port}.lock").open("a+") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
         fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
+def test_hub_config_keeps_private_outputs_outside_the_guest_mount(
+    tmp_path: Path,
+) -> None:
+    port = _free_port()
+    config = _config(tmp_path, port, _fake_apptainer(tmp_path))
+
+    with pytest.raises(ValueError, match="descriptor_path must not overlap"):
+        replace(config, descriptor_path=config.state_root / "hub.json")
+    with pytest.raises(ValueError, match="log_root must not overlap"):
+        replace(config, log_root=config.state_root / "logs")
+    with pytest.raises(ValueError, match="port_lock_dir must not overlap"):
+        replace(config, port_lock_dir=config.state_root / "locks")
+    with pytest.raises(ValueError, match="log_root must not overlap"):
+        replace(config, state_root=config.log_root / "state")
+    with pytest.raises(ValueError, match="port_lock_dir must not overlap"):
+        replace(config, state_root=config.port_lock_dir / "state")
+    with pytest.raises(ValueError, match="descriptor_path must not overlap"):
+        replace(config, state_root=config.descriptor_path / "state")
+    with pytest.raises(ValueError, match="must not contain"):
+        replace(config, state_root=tmp_path / "state,extra")
 
 
 def test_hub_health_fails_when_a_child_dies(tmp_path: Path) -> None:

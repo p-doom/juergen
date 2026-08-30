@@ -74,6 +74,17 @@ class CuaGymHubConfig:
             if not path.is_absolute():
                 raise ValueError(f"{name} must be absolute")
             object.__setattr__(self, name, path)
+        if any(character in str(self.state_root) for character in ",:"):
+            raise ValueError("state_root must not contain ',' or ':'")
+        resolved_state_root = self.state_root.resolve(strict=False)
+        for name in ("descriptor_path", "log_root", "port_lock_dir"):
+            resolved = getattr(self, name).resolve(strict=False)
+            if (
+                resolved == resolved_state_root
+                or resolved_state_root in resolved.parents
+                or resolved in resolved_state_root.parents
+            ):
+                raise ValueError(f"{name} must not overlap state_root")
         if (
             type(self.port_range_start) is not int
             or type(self.port_range_end) is not int
@@ -361,8 +372,12 @@ class CuaGymHubSupervisor:
             raise RuntimeError("CUA-Gym-Hub supervisor has already been started")
         self._validate_inputs()
         self._validate_image()
-        self.config.state_root.mkdir(parents=True)
-        self.config.log_root.mkdir(parents=True)
+        self.config.state_root.mkdir(parents=True, mode=0o700)
+        self.config.state_root.chmod(0o700)
+        self.config.log_root.mkdir(parents=True, mode=0o700)
+        self.config.log_root.chmod(0o700)
+        self.config.port_lock_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+        self.config.port_lock_dir.chmod(0o700)
         self.config.descriptor_path.parent.mkdir(parents=True, exist_ok=True)
 
         apps = self.manifest.apps
@@ -555,26 +570,27 @@ class CuaGymHubSupervisor:
         port = urlsplit(app_url).port
         if port is None:
             raise RuntimeError(f"Hub app URL has no port: {app_url}")
-        log = (self.config.log_root / f"{app}.log").open("xb", buffering=0)
+        log_path = self.config.log_root / f"{app}.log"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+        log_descriptor = os.open(log_path, flags, 0o600)
+        os.fchmod(log_descriptor, 0o600)
+        log = os.fdopen(log_descriptor, "wb", buffering=0)
         self._logs.append(log)
         environment = {
-            name: value
-            for name, value in os.environ.items()
-            if not name.startswith("APPTAINERENV_")
+            "PATH": os.defpath,
+            "APPTAINERENV_CUA_GYM_ADMIN_TOKEN": admin_token,
+            "APPTAINERENV_CUA_GYM_HARDENED": "1",
+            "APPTAINERENV_NODE_ENV": "production",
         }
-        environment.update(
-            {
-                "APPTAINERENV_CUA_GYM_ADMIN_TOKEN": admin_token,
-                "APPTAINERENV_CUA_GYM_HARDENED": "1",
-                "APPTAINERENV_NODE_ENV": "production",
-            }
-        )
         process = subprocess.Popen(
             [
                 str(self.config.apptainer_binary),
                 "exec",
+                "--contain",
                 "--cleanenv",
                 "--writable-tmpfs",
+                "--cwd",
+                "/opt/cua-gym-hub",
                 "--bind",
                 f"{self.config.state_root}:/var/lib/cua-gym",
                 str(self.config.image_path),

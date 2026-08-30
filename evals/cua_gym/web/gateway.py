@@ -311,16 +311,19 @@ class CuaGymEpisodeGateway:
         with self._condition:
             previous = self._phase
             self._phase = GatewayPhase.CLOSED
-            while (
-                previous is not GatewayPhase.CLOSED
-                and self._active_requests[previous] > 0
-            ):
-                self._condition.wait()
+            self._condition.notify_all()
         server = self._server
         thread = self._thread
         if server is not None:
             server.shutdown()
             server.disconnect_clients()
+        with self._condition:
+            while (
+                previous is not GatewayPhase.CLOSED
+                and self._active_requests[previous] > 0
+            ):
+                self._condition.wait()
+        if server is not None:
             server.server_close()
             self._server = None
         if thread is not None:
@@ -373,7 +376,12 @@ class CuaGymEpisodeGateway:
         handler: BaseHTTPRequestHandler,
         phase: GatewayPhase,
     ) -> _GatewayResponse:
-        endpoint = self._endpoint_for_host(handler.headers.get("Host", ""))
+        original_close_connection = handler.close_connection
+        handler.close_connection = True
+        host_headers = handler.headers.get_all("Host", [])
+        endpoint = (
+            self._endpoint_for_host(host_headers[0]) if len(host_headers) == 1 else None
+        )
         if endpoint is None:
             return self._error(
                 HTTPStatus.UNAUTHORIZED,
@@ -384,27 +392,30 @@ class CuaGymEpisodeGateway:
             raise ValueError("gateway request target must be an origin-form path")
         if phase is GatewayPhase.CLOSED:
             return self._error(HTTPStatus.GONE, "episode is closed")
-        content_length = self._content_length(handler)
-        body = handler.rfile.read(content_length) if content_length else b""
         raw_sid = self._query_sid(split.query)
+        content_length = self._content_length(handler)
         if phase in {GatewayPhase.SETUP, GatewayPhase.ROLLOUT} and self._is_navigation(
             handler
         ):
+            if content_length:
+                return self._error(
+                    HTTPStatus.BAD_REQUEST,
+                    "navigation requests must not contain a body",
+                )
             bootstrap: _GatewayResponse | None = None
             if raw_sid is not None and raw_sid != _PLACEHOLDER_SID:
                 bootstrap = self._bootstrap_raw_navigation(endpoint, raw_sid, split)
             elif raw_sid == _PLACEHOLDER_SID:
                 bootstrap = self._bootstrap_placeholder_navigation(endpoint, split)
             if bootstrap is not None:
+                handler.close_connection = original_close_connection
                 return bootstrap
 
         pending_launch_token = (
             self._launch_token(handler.path) if split.path == "/_cua_session" else None
         )
         if phase is GatewayPhase.ROLLOUT and pending_launch_token is None:
-            denied = self._rollout_denial(
-                handler.command, split.path, split.query, body
-            )
+            denied = self._rollout_denial(handler.command, split.path, split.query)
             if denied is not None:
                 return denied
         elif phase is GatewayPhase.EVALUATE:
@@ -416,11 +427,40 @@ class CuaGymEpisodeGateway:
 
         claimed_launch: _PendingLaunch | None = None
         if split.path == "/_cua_session":
+            if handler.command != "GET":
+                return self._error(
+                    HTTPStatus.METHOD_NOT_ALLOWED,
+                    "session exchange requires GET",
+                )
+            if content_length:
+                return self._error(
+                    HTTPStatus.BAD_REQUEST,
+                    "session exchange must not contain a body",
+                )
             if pending_launch_token is None:
                 return self._error(HTTPStatus.FORBIDDEN, "unknown setup session token")
             claimed_launch = self._claim_launch(endpoint, pending_launch_token)
             if claimed_launch is None:
                 return self._error(HTTPStatus.FORBIDDEN, "unknown setup session token")
+
+        body = handler.rfile.read(content_length) if content_length else b""
+        if len(body) != content_length:
+            raise ValueError("request body ended before its declared length")
+        handler.close_connection = original_close_connection
+        if (
+            phase is GatewayPhase.ROLLOUT
+            and pending_launch_token is None
+            and split.path == "/post"
+        ):
+            try:
+                payload = json.loads(body)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return self._error(HTTPStatus.BAD_REQUEST, "invalid state update")
+            if not isinstance(payload, dict) or payload.get("action") != "set_current":
+                return self._error(
+                    HTTPStatus.FORBIDDEN,
+                    "only current-state updates are allowed during rollout",
+                )
 
         rewritten = self._rewrite_request_target(endpoint, split)
         inject_admin = split.path in _PRIVILEGED_PATHS and (
@@ -481,7 +521,6 @@ class CuaGymEpisodeGateway:
         method: str,
         path: str,
         query: str,
-        body: bytes,
     ) -> _GatewayResponse | None:
         if path in _INSPECTOR_PATHS or path == "/_cua_session":
             return self._error(HTTPStatus.FORBIDDEN, "verifier endpoint is unavailable")
@@ -490,20 +529,8 @@ class CuaGymEpisodeGateway:
             return self._error(HTTPStatus.FORBIDDEN, "raw session IDs are unavailable")
         if path == "/state" and method != "GET":
             return self._error(HTTPStatus.METHOD_NOT_ALLOWED, "state is read-only")
-        if path == "/post":
-            if method != "POST":
-                return self._error(
-                    HTTPStatus.METHOD_NOT_ALLOWED, "invalid state method"
-                )
-            try:
-                payload = json.loads(body)
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                return self._error(HTTPStatus.BAD_REQUEST, "invalid state update")
-            if not isinstance(payload, dict) or payload.get("action") != "set_current":
-                return self._error(
-                    HTTPStatus.FORBIDDEN,
-                    "only current-state updates are allowed during rollout",
-                )
+        if path == "/post" and method != "POST":
+            return self._error(HTTPStatus.METHOD_NOT_ALLOWED, "invalid state method")
         return None
 
     def _rewrite_request_target(
@@ -554,6 +581,7 @@ class CuaGymEpisodeGateway:
                 _ADMIN_HEADER,
                 "accept-encoding",
                 "authorization",
+                "content-length",
                 "host",
             }
         )
@@ -564,6 +592,7 @@ class CuaGymEpisodeGateway:
         }
         headers["Host"] = backend.netloc
         headers["Accept-Encoding"] = "identity"
+        headers["Content-Length"] = str(len(body))
         if inject_admin:
             headers["X-CUA-Admin-Token"] = self.config.hub.admin_token
         connection = http.client.HTTPConnection(
@@ -600,6 +629,16 @@ class CuaGymEpisodeGateway:
             ]
             if any(value.lower() != "identity" for value in content_encodings):
                 raise RuntimeError("Hub backend returned an encoded response")
+            admin_token = self.config.hub.admin_token
+            if (
+                admin_token.encode("ascii") in response_body
+                or (
+                    backend_response.reason is not None
+                    and admin_token in backend_response.reason
+                )
+                or any(admin_token in value for _, value in response_headers)
+            ):
+                raise RuntimeError("Hub backend exposed the admin token")
             return _GatewayResponse(
                 status=backend_response.status,
                 reason=backend_response.reason,
@@ -848,6 +887,8 @@ class CuaGymEpisodeGateway:
         )
 
     def _endpoint_for_host(self, host_header: str) -> EndpointName | None:
+        if not host_header.isascii():
+            return None
         for endpoint in self.config.endpoints:
             expected = f"{self.gateway_hostnames[endpoint]}:{self.config.port}"
             if hmac.compare_digest(host_header.lower(), expected):
@@ -856,15 +897,19 @@ class CuaGymEpisodeGateway:
 
     @staticmethod
     def _content_length(handler: BaseHTTPRequestHandler) -> int:
-        if handler.headers.get("Transfer-Encoding") is not None:
+        if handler.headers.get_all("Transfer-Encoding", []):
             raise ValueError("chunked requests are unsupported")
-        raw_length = handler.headers.get("Content-Length")
-        if raw_length is None:
+        raw_lengths = handler.headers.get_all("Content-Length", [])
+        if not raw_lengths:
             return 0
-        try:
-            length = int(raw_length)
-        except ValueError as error:
-            raise ValueError("invalid request content length") from error
+        if len(raw_lengths) != 1:
+            raise ValueError("requests must contain at most one content length")
+        raw_length = raw_lengths[0]
+        if not raw_length or any(
+            character not in "0123456789" for character in raw_length
+        ):
+            raise ValueError("invalid request content length")
+        length = int(raw_length)
         if not 0 <= length <= _MAX_REQUEST_BYTES:
             raise ValueError("request body is too large")
         return length
@@ -880,6 +925,8 @@ class CuaGymEpisodeGateway:
             return None
         if len(values) != 1:
             raise ValueError("requests must contain at most one sid")
+        if not values[0]:
+            raise ValueError("session IDs must not be empty")
         return values[0]
 
     @staticmethod
@@ -904,12 +951,13 @@ class CuaGymEpisodeGateway:
             or split.fragment
         ):
             return None
-        tokens = [value for key, value in parse_qsl(split.query) if key == "token"]
-        if len(tokens) != 1 or len(tokens[0]) != 64:
+        pairs = parse_qsl(split.query, keep_blank_values=True)
+        if len(pairs) != 1 or pairs[0][0] != "token" or len(pairs[0][1]) != 64:
             return None
-        if any(character not in "0123456789abcdef" for character in tokens[0]):
+        token = pairs[0][1]
+        if any(character not in "0123456789abcdef" for character in token):
             return None
-        return tokens[0]
+        return token
 
     @staticmethod
     def _placeholder_target(split: SplitResult) -> str:
