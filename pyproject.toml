@@ -5,10 +5,17 @@ description = "Crowd-cast SFT supply-chain monorepo: data pipeline, eval harness
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "desktop",
+    # CUA-Gym clears browser state over Chrome's existing CDP endpoint. The
+    # Python client is sufficient; this package never launches Playwright's
+    # bundled browsers.
+    "playwright==1.62.0",
     "av>=16.1.0",
     "pyarrow>=21.0.0",
     "verifiers==0.2.1",
 ]
+
+[project.scripts]
+juergen-cua-gym-hub-image = "evals.cua_gym.web.image:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
@@ -51,3 +58,4 @@ include = ["agent", "agent.*", "evals", "evals.*", "grammars", "grammars.*"]
 
 [tool.setuptools.package-data]
 "evals.cua_gym" = ["compatibility/*.json"]
+"evals.cua_gym.web" = ["compatibility/*.json"]

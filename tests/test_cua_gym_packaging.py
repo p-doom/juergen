@@ -18,6 +18,10 @@ _MODULES = (
     "cua_gym",
     "evals.cua_gym.manifest",
     "evals.cua_gym.runtime",
+    "evals.cua_gym.web.gateway",
+    "evals.cua_gym.web.hub",
+    "evals.cua_gym.web.image",
+    "evals.cua_gym.web.manifest",
     "grammars.ordered_events_v3.codec",
 )
 _PROBE = """
@@ -83,7 +87,11 @@ def test_wheel_contains_the_pinned_manifest_and_no_excluded_front_doors(
     assert "rl_grounding.py" not in names
     assert "rl_movebox.py" not in names
     assert "rl_target_box.py" not in names
-    assert not any(name.startswith("evals/cua_gym/web/") for name in names)
+    assert f"evals/cua_gym/web/compatibility/{PINNED_REVISION}.json" in names
+    assert "evals/cua_gym/web/gateway.py" in names
+    assert "evals/cua_gym/web/hub.py" in names
+    assert "evals/cua_gym/web/image.py" in names
+    assert not any(name.startswith("reinforcement_learning/") for name in names)
 
 
 def test_desktop_dependency_is_pinned_to_the_reviewed_runtime_revision() -> None:

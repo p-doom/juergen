@@ -1,0 +1,72 @@
+{
+  "manifest_version": 1,
+  "dataset_revision": "3c021d06e2b01bbb6ad28cfddec41d856e4a78c5",
+  "hub_revision": "53205689c3d88078c1375f76466d5bd799478828",
+  "endpoints": {
+    "asana": "asana_mock",
+    "discord": "discord_mock",
+    "docusign": "docusign_mock",
+    "facebook": "facebook_mock",
+    "github": "github_mock",
+    "gitlab": "gitlab_mock",
+    "gmail": "gmail_mock",
+    "google_calendar": "google_calendar_mock",
+    "google_docs": "google_docs_mock",
+    "google_drive": "google_drive_mock",
+    "google_sheets": "google_sheets_mock",
+    "hubspot": "hubspot_mock",
+    "instacart": "instacart_mock",
+    "instagram": "instagram_mock",
+    "jira": "jira_mock",
+    "linkedin": "linkedin_mock",
+    "microsoft_teams": "microsoft_teams_mock",
+    "monday": "monday_mock",
+    "notion": "notion_mock",
+    "notion_mock": "notion_mock",
+    "outlook_web": "outlook_web_mock",
+    "pinterest": "pinterest_mock",
+    "postman": "postman_mock",
+    "reddit": "reddit_mock",
+    "salesforce": "salesforce_mock",
+    "shopify_admin": "shopify_admin_mock",
+    "slack": "slack_mock",
+    "stripe_dashboard": "stripe_dashboard_mock",
+    "trello": "trello_mock",
+    "twitter": "twitter_mock",
+    "uber_eats": "uber_eats_mock",
+    "wechat": "wechat_mock"
+  },
+  "writable_directories": [
+    ".mock-files",
+    ".mock-secure-states",
+    ".mock-state",
+    ".mock-states",
+    ".mock-uploads"
+  ],
+  "unsupported_endpoints": {
+    "outlook_web": "The pinned Hub MailRoute initializes selectedFolder as 'inbox' while injected state uses 'folder-inbox', so 57 tasks cannot render injected mail.",
+    "uber_eats": "The pinned Hub app mixes incompatible StoreContext and AppContext implementations and renders a blank page."
+  },
+  "unsupported_tasks": {
+    "0a3eadb8-768f-5b5c-ace7-90c30f4d7665": "The verifier requires /tmp/task_web_golden_sid, which is only created by the unavailable golden-environment patch.",
+    "230eb83b-db20-5e84-8734-32e133dbf9af": "The verifier requires /tmp/task_web_sid, which this task deliberately creates only through the unavailable golden-environment patch.",
+    "7f7bc269-8fd2-5595-b6fc-3accf3e4b442": "The verifier requires /tmp/task_web_sid_golden, which is only created by the unavailable golden-environment patch."
+  },
+  "task_scratch_paths": [
+    "/tmp/golden_state.json",
+    "/tmp/state_check.json",
+    "/tmp/task_golden_sid",
+    "/tmp/task_jira_sid",
+    "/tmp/task_reward",
+    "/tmp/task_web_golden_sid",
+    "/tmp/task_web_initial_sid",
+    "/tmp/task_web_sid",
+    "/tmp/task_web_sid_golden",
+    "/tmp/task_web_sid_gsheets",
+    "/tmp/task_web_sid_info",
+    "/tmp/task_web_sid_initial",
+    "/tmp/task_web_sid_local",
+    "/tmp/task_web_sid_notion"
+  ],
+  "supported_task_count": 966
+}
