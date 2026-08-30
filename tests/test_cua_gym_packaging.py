@@ -107,7 +107,7 @@ def test_desktop_dependency_is_pinned_to_the_reviewed_runtime_revision() -> None
     source = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
     assert source["tool"]["uv"]["sources"]["desktop"] == {
         "git": "https://github.com/p-doom/desktop.git",
-        "rev": "82874b7a79c170eeb7a8bc38acf2a32e4916312e",
+        "rev": "47c08a7379c0fe3d7589298207cd2ff49182d645",
     }
 
 

@@ -169,6 +169,21 @@ class DesktopFacade:
         finally:
             self._touch()
 
+    def execute_with_secret_stdin(
+        self,
+        argv: Sequence[str],
+        *,
+        secret: bytes,
+        timeout_s: float | None = None,
+    ) -> None:
+        self._touch()
+        try:
+            self._session.client.execute_with_secret_stdin(
+                argv, secret=secret, timeout_s=timeout_s
+            )
+        finally:
+            self._touch()
+
     def execute_detached(
         self,
         argv: Sequence[str],

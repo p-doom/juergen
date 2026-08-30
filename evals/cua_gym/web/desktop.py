@@ -140,6 +140,14 @@ class GuestClient(Protocol):
         timeout_s: float | None = None,
     ) -> dict[str, Any]: ...
 
+    def execute_with_secret_stdin(
+        self,
+        argv: Sequence[str],
+        *,
+        secret: bytes,
+        timeout_s: float | None = None,
+    ) -> None: ...
+
     def execute_detached(
         self,
         argv: Sequence[str],
@@ -205,23 +213,21 @@ class CuaGymDesktopBrowser:
         self.config = config
 
     def configure_guest_hosts(self) -> None:
-        result = self.guest.execute(
+        self.guest.execute_with_secret_stdin(
             [
-                "bash",
-                "-c",
-                'printf "%s\\n" "$1" | sudo --stdin --prompt= -- "${@:2}"',
-                "cua-gym-sudo",
-                self.config.guest_password,
+                "sudo",
+                "--stdin",
+                "--prompt=",
+                "--",
                 "python3",
                 "-c",
                 _CONFIGURE_CUA_HOSTS_SOURCE,
                 self.config.guest_gateway_host,
                 *self.config.guest_hostnames,
             ],
-            check=False,
+            secret=(self.config.guest_password + "\n").encode("utf-8"),
             timeout_s=self.config.browser_ready_timeout_s,
         )
-        _require_execute_result(result, allowed_returncodes={0}, operation="host setup")
 
     def browser_identity(self) -> str:
         url = self.config.browser_debugging_url + "/json/version"

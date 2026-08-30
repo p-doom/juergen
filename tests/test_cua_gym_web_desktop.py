@@ -42,6 +42,7 @@ class _Guest:
             "error": "",
         }
         self.execute_results: list[dict[str, Any]] = []
+        self.secret_error: BaseException | None = None
         self.detached_result = _Result(0)
         self.on_detached = lambda: None
 
@@ -60,6 +61,17 @@ class _Guest:
             self.execute_results.pop(0) if self.execute_results else self.execute_result
         )
         return dict(result)
+
+    def execute_with_secret_stdin(
+        self,
+        argv: Sequence[str],
+        *,
+        secret: bytes,
+        timeout_s: float | None = None,
+    ) -> None:
+        self.calls.append(("execute_with_secret_stdin", tuple(argv), secret, timeout_s))
+        if self.secret_error is not None:
+            raise self.secret_error
 
     def execute_detached(
         self,
@@ -164,35 +176,37 @@ def test_guest_hosts_use_one_fixed_privileged_operation(
     version_server: _VersionServer,
 ) -> None:
     guest = _Guest()
-    guest.execute_result["returncode"] = 0
     browser = CuaGymDesktopBrowser(guest=guest, config=_config(version_server))
 
     browser.configure_guest_hosts()
 
     assert len(guest.calls) == 1
-    _, argv, check, timeout_s = guest.calls[0]
-    assert check is False
+    operation, argv, secret, timeout_s = guest.calls[0]
+    assert operation == "execute_with_secret_stdin"
+    assert secret == b"password\n"
     assert timeout_s == 1.0
-    assert argv[:5] == [
-        "bash",
+    assert list(argv[:6]) == [
+        "sudo",
+        "--stdin",
+        "--prompt=",
+        "--",
+        "python3",
         "-c",
-        'printf "%s\\n" "$1" | sudo --stdin --prompt= -- "${@:2}"',
-        "cua-gym-sudo",
-        "password",
     ]
-    assert argv[-3:] == [
+    assert list(argv[-3:]) == [
         "10.0.2.2",
         _DOCS_HOST,
         _GMAIL_HOST,
     ]
+    assert "password" not in argv
 
 
 def test_guest_host_failure_is_not_ignored(version_server: _VersionServer) -> None:
     guest = _Guest()
-    guest.execute_result.update(returncode=4, error="sudo denied")
+    guest.secret_error = RuntimeError("sudo denied")
     browser = CuaGymDesktopBrowser(guest=guest, config=_config(version_server))
 
-    with pytest.raises(RuntimeError, match="host setup failed with 4"):
+    with pytest.raises(RuntimeError, match="sudo denied"):
         browser.configure_guest_hosts()
 
 
