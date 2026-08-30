@@ -587,6 +587,33 @@ def _osworld_tree(tmp_path: Path, *, evaluator: dict[str, Any] | None = None) ->
     return root
 
 
+@pytest.mark.parametrize(
+    "asset_bundle",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("relative-assets", id="relative"),
+        pytest.param(None, id="missing"),
+    ],
+)
+def test_an_asset_free_task_refuses_an_invalid_bundle_before_yield(
+    tmp_path: Path,
+    asset_bundle: str | None,
+) -> None:
+    from evals.tasks import OSWorldTaskset, OSWorldTasksetConfig
+
+    root = _osworld_tree(tmp_path)
+    bundle = str(tmp_path / "missing-assets") if asset_bundle is None else asset_bundle
+    tasks = OSWorldTaskset(
+        OSWorldTasksetConfig(
+            osworld_root=str(root),
+            split_path=str(root / "split.json"),
+            asset_bundle=bundle,
+        )
+    ).load()
+    with pytest.raises(ValueError, match="absolute existing asset_bundle directory"):
+        next(iter(tasks))
+
+
 _ASSET_PREFIX = (
     "https://huggingface.co/datasets/xlangai/ubuntu_osworld_file_cache/resolve/main/"
 )
@@ -791,7 +818,11 @@ def test_the_benchmark_taskset_yields_rows_that_carry_the_reward(tmp_path) -> No
     root = _osworld_tree(tmp_path, evaluator={"func": "truthy"})
     tasks = list(
         OSWorldBenchTaskset(
-            OSWorldTasksetConfig(osworld_root=str(root), split_path=str(root / "split.json"))
+            OSWorldTasksetConfig(
+                osworld_root=str(root),
+                split_path=str(root / "split.json"),
+                asset_bundle=str(tmp_path),
+            )
         ).load()
     )
     assert [type(task) for task in tasks] == [OSWorldBenchTask]
@@ -811,7 +842,11 @@ def test_the_taskset_carries_the_whole_task_json_not_just_its_config(tmp_path) -
     task = next(
         iter(
             OSWorldTaskset(
-                OSWorldTasksetConfig(osworld_root=str(root), split_path=str(root / "split.json"))
+                OSWorldTasksetConfig(
+                    osworld_root=str(root),
+                    split_path=str(root / "split.json"),
+                    asset_bundle=str(tmp_path),
+                )
             ).load()
         )
     )
@@ -829,7 +864,11 @@ def test_the_preparer_and_the_facade_meet(tmp_path) -> None:
     task = next(
         iter(
             OSWorldTaskset(
-                OSWorldTasksetConfig(osworld_root=str(root), split_path=str(root / "split.json"))
+                OSWorldTasksetConfig(
+                    osworld_root=str(root),
+                    split_path=str(root / "split.json"),
+                    asset_bundle=str(tmp_path),
+                )
             ).load()
         )
     ).data

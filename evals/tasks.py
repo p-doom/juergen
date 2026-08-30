@@ -421,7 +421,7 @@ class OSWorldTasksetConfig(vf.TasksetConfig):
     osworld_root: str = ""
     split_path: str = ""
     task_paths: list[str] = []
-    asset_bundle: str = ""
+    asset_bundle: str
     max_steps: int = 15
     max_tasks: int = 0
     resume_dir: str = ""
@@ -431,6 +431,13 @@ class OSWorldTasksetConfig(vf.TasksetConfig):
 
 class OSWorldTaskset(vf.Taskset[DesktopTask, OSWorldTasksetConfig]):
     def load(self) -> Iterable[DesktopTask]:
+        raw_bundle = Path(self.config.asset_bundle)
+        if not raw_bundle.is_absolute() or not raw_bundle.is_dir():
+            raise ValueError(
+                "OSWorld taskset needs an absolute existing asset_bundle directory"
+            )
+        asset_bundle = raw_bundle.resolve()
+
         root = Path(self.config.osworld_root or os.environ.get("OSWORLD_ROOT", ""))
         paths: list[tuple[str | None, Path]] = []
         if self.config.split_path:
@@ -453,7 +460,7 @@ class OSWorldTaskset(vf.Taskset[DesktopTask, OSWorldTasksetConfig]):
                 continue
             if self.config.max_tasks and len(rows) >= self.config.max_tasks:
                 break
-            payload = stage_offline_task(payload, self.config.asset_bundle)
+            payload = stage_offline_task(payload, asset_bundle)
             rows.append(DesktopTask(
                 DesktopTaskData(
                     idx=idx,

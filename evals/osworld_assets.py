@@ -14,7 +14,7 @@ _OFFLINE_FILE_TYPE = "offline_file"
 
 
 def stage_offline_task(
-    task_config: dict[str, Any], asset_bundle: str
+    task_config: dict[str, Any], asset_bundle: Path
 ) -> dict[str, Any]:
     """Resolve every network-backed task asset before a desktop is acquired."""
     task_id = str(task_config.get("id") or "task")
@@ -95,7 +95,7 @@ def get_offline_file(_env: Any, config: dict[str, Any]) -> str | list[str]:
 
 def _stage_setup_step(
     step: object,
-    asset_bundle: str,
+    asset_bundle: Path,
     task_id: str,
     index: int,
 ) -> dict[str, Any]:
@@ -119,7 +119,7 @@ def _stage_setup_step(
 
 def _stage_download(
     entry: object,
-    asset_bundle: str,
+    asset_bundle: Path,
     task_id: str,
     step_index: int,
 ) -> dict[str, str]:
@@ -136,7 +136,7 @@ def _stage_download(
     return {"local_path": str(source), "path": guest_path}
 
 
-def _stage_cloud_files(value: Any, asset_bundle: str, task_id: str) -> Any:
+def _stage_cloud_files(value: Any, asset_bundle: Path, task_id: str) -> Any:
     if isinstance(value, list):
         return [_stage_cloud_files(item, asset_bundle, task_id) for item in value]
     if not isinstance(value, dict):
@@ -186,13 +186,7 @@ def _stage_cloud_files(value: Any, asset_bundle: str, task_id: str) -> Any:
     }
 
 
-def _bundle_file(url: str, asset_bundle: str, task_id: str) -> Path:
-    root = Path(asset_bundle)
-    if not root.is_absolute() or not root.is_dir():
-        raise ValueError(
-            f"OSWorld task {task_id!r} needs an absolute asset_bundle directory"
-        )
-    root = root.resolve()
+def _bundle_file(url: str, asset_bundle: Path, task_id: str) -> Path:
     split = urlsplit(url)
     stripped = split._replace(query="", fragment="").geturl()
     if not stripped.startswith(OSWORLD_ASSET_PREFIX):
@@ -207,8 +201,8 @@ def _bundle_file(url: str, asset_bundle: str, task_id: str) -> Path:
     ):
         raise ValueError(f"OSWorld task {task_id!r} has an unsafe asset URL: {url!r}")
     try:
-        source = (root / Path(*relative.parts)).resolve(strict=True)
-        source.relative_to(root)
+        source = (asset_bundle / Path(*relative.parts)).resolve(strict=True)
+        source.relative_to(asset_bundle)
     except (FileNotFoundError, ValueError) as exc:
         raise FileNotFoundError(
             f"OSWorld task {task_id!r} asset is absent from the bundle: {relative}"
