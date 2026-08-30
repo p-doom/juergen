@@ -11,7 +11,9 @@ pinned by value.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -55,7 +57,11 @@ class _Metrics:
 
     @staticmethod
     def file_bytes(result: str, **options: Any) -> float:
-        return 1.0 if Path(result).read_bytes() == options["content"].encode() else 0.0
+        path = Path(result)
+        return float(
+            path.name == options["name"]
+            and path.read_bytes() == options["content"].encode()
+        )
 
     @staticmethod
     def infeasible() -> float:
@@ -626,7 +632,7 @@ def _offline_osworld_tree(tmp_path: Path) -> tuple[Path, Path]:
     task_id = "task-1"
     input_relative = f"writer/{task_id}/input.txt"
     ignored_relative = f"writer/{task_id}/ignored.txt"
-    expected_relative = f"writer/{task_id}/expected.txt"
+    expected_relative = f"writer/{task_id}/expected.bin"
     post_relative = f"writer/{task_id}/post.txt"
     payload = {
         "id": task_id,
@@ -657,7 +663,7 @@ def _offline_osworld_tree(tmp_path: Path) -> tuple[Path, Path]:
                 "multi": True,
                 "gives": [1],
             },
-            "options": {"content": "expected"},
+            "options": {"content": "expected", "name": "expected.txt"},
             "postconfig": [
                 {
                     "type": "download",
@@ -682,6 +688,168 @@ def _offline_osworld_tree(tmp_path: Path) -> tuple[Path, Path]:
     (bundle / expected_relative).write_bytes(b"expected")
     (bundle / post_relative).write_bytes(b"post")
     return root, bundle
+
+
+def _offline_file_config(source: Path, dest: str) -> dict[str, Any]:
+    return {
+        "type": "offline_file",
+        "path": [str(source)],
+        "dest": [dest],
+        "gives": [0],
+    }
+
+
+@pytest.mark.parametrize(
+    "dest",
+    [
+        "",
+        ".",
+        "..",
+        "../file.txt",
+        "/tmp/file.txt",
+        "nested/file.txt",
+        "nested\\file.txt",
+    ],
+)
+def test_cloud_file_destinations_are_safe_at_both_boundaries(
+    tmp_path: Path,
+    dest: str,
+) -> None:
+    from evals.osworld_assets import get_offline_file
+    from evals.tasks import OSWorldTaskset, OSWorldTasksetConfig
+
+    root, bundle = _offline_osworld_tree(tmp_path)
+    task_path = (
+        root / "evaluation_examples" / "examples" / "writer" / "task-1.json"
+    )
+    payload = json.loads(task_path.read_text())
+    payload["evaluator"]["result"]["dest"][1] = dest
+    task_path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="invalid cloud_file entries"):
+        list(
+            OSWorldTaskset(
+                OSWorldTasksetConfig(
+                    osworld_root=str(root),
+                    split_path=str(root / "split.json"),
+                    asset_bundle=str(bundle),
+                )
+            ).load()
+        )
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"payload")
+    with pytest.raises(ValueError, match="invalid staged OSWorld asset destination"):
+        get_offline_file(
+            SimpleNamespace(cache_dir=str(tmp_path / "cache")),
+            _offline_file_config(source, dest),
+        )
+
+
+def test_cloud_file_multi_requires_a_boolean(tmp_path: Path) -> None:
+    from evals.tasks import OSWorldTaskset, OSWorldTasksetConfig
+
+    root, bundle = _offline_osworld_tree(tmp_path)
+    task_path = (
+        root / "evaluation_examples" / "examples" / "writer" / "task-1.json"
+    )
+    payload = json.loads(task_path.read_text())
+    payload["evaluator"]["result"]["multi"] = "true"
+    task_path.write_text(json.dumps(payload))
+
+    with pytest.raises(TypeError, match="invalid cloud_file multi"):
+        list(
+            OSWorldTaskset(
+                OSWorldTasksetConfig(
+                    osworld_root=str(root),
+                    split_path=str(root / "split.json"),
+                    asset_bundle=str(bundle),
+                )
+            ).load()
+        )
+
+
+def test_the_offline_getter_leaves_an_existing_final_untouched(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import evals.osworld_assets as assets
+
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"new")
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    final = cache_dir / "renamed.txt"
+    final.write_bytes(b"existing")
+
+    def fail_mkstemp(**_kwargs: Any) -> tuple[int, str]:
+        raise AssertionError("an existing final must not create a temporary file")
+
+    monkeypatch.setattr(assets.tempfile, "mkstemp", fail_mkstemp)
+    result = assets.get_offline_file(
+        SimpleNamespace(cache_dir=str(cache_dir)),
+        _offline_file_config(source, final.name),
+    )
+
+    assert Path(result) == final
+    assert final.read_bytes() == b"existing"
+
+
+def test_the_offline_getter_atomically_replaces_a_cache_local_temporary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import evals.osworld_assets as assets
+
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"payload")
+    cache_dir = tmp_path / "cache"
+    final = cache_dir / "renamed.txt"
+    real_replace = os.replace
+    replaced: list[Path] = []
+
+    def record_replace(source_path: str | Path, target_path: str | Path) -> None:
+        temporary = Path(source_path)
+        assert temporary.parent == cache_dir
+        assert temporary != final
+        assert temporary.read_bytes() == b"payload"
+        assert Path(target_path) == final
+        replaced.append(temporary)
+        real_replace(source_path, target_path)
+
+    monkeypatch.setattr(assets.os, "replace", record_replace)
+    result = assets.get_offline_file(
+        SimpleNamespace(cache_dir=str(cache_dir)),
+        _offline_file_config(source, final.name),
+    )
+
+    assert Path(result) == final
+    assert final.read_bytes() == b"payload"
+    assert len(replaced) == 1
+    assert not replaced[0].exists()
+
+
+def test_the_offline_getter_cleans_a_failed_temporary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import evals.osworld_assets as assets
+
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"payload")
+    cache_dir = tmp_path / "cache"
+
+    def fail_copy(_source: str | Path, temporary: str | Path) -> None:
+        Path(temporary).write_bytes(b"partial")
+        raise RuntimeError("copy failed")
+
+    monkeypatch.setattr(assets.shutil, "copyfile", fail_copy)
+    with pytest.raises(RuntimeError, match="copy failed"):
+        assets.get_offline_file(
+            SimpleNamespace(cache_dir=str(cache_dir)),
+            _offline_file_config(source, "renamed.txt"),
+        )
+
+    assert list(cache_dir.iterdir()) == []
 
 
 def test_the_taskset_stages_one_local_bundle_through_the_real_consumer(
@@ -710,7 +878,15 @@ def test_the_taskset_stages_one_local_bundle_through_the_real_consumer(
         "type": "launch",
         "parameters": {"command": ["writer"]},
     }
-    assert task_config["evaluator"]["result"]["type"] == "offline_file"
+    assert task_config["evaluator"]["result"] == {
+        "type": "offline_file",
+        "path": [
+            str(bundle / "writer/task-1/ignored.txt"),
+            str(bundle / "writer/task-1/expected.bin"),
+        ],
+        "dest": ["ignored.txt", "expected.txt"],
+        "gives": [1],
+    }
     post_upload = task_config["evaluator"]["postconfig"][0]
     assert post_upload["type"] == "upload_file"
     assert Path(post_upload["parameters"]["files"][0]["local_path"]).read_bytes() == b"post"

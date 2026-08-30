@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import copy
+import os
+import shutil
+import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -72,14 +75,22 @@ def assert_offline_task(task_config: dict[str, Any]) -> None:
         )
 
 
-def get_offline_file(_env: Any, config: dict[str, Any]) -> str | list[str]:
+def get_offline_file(env: Any, config: dict[str, Any]) -> str | list[str]:
     """OSWorld getter for files already validated in the local asset bundle."""
-    raw_paths = config.get("path")
-    paths = raw_paths if isinstance(raw_paths, list) else [raw_paths]
-    if not paths or not all(
-        isinstance(path, str) and Path(path).is_file() for path in paths
+    paths, dests = config.get("path"), config.get("dest")
+    if (
+        set(config) != {"type", "path", "dest", "gives"}
+        or config.get("type") != _OFFLINE_FILE_TYPE
+        or not isinstance(paths, list)
+        or not isinstance(dests, list)
+        or not paths
+        or len(paths) != len(dests)
     ):
-        raise FileNotFoundError(f"invalid staged OSWorld asset paths: {raw_paths!r}")
+        raise ValueError(f"invalid staged OSWorld asset config: {config!r}")
+    if not all(_safe_filename(dest) for dest in dests):
+        raise ValueError(f"invalid staged OSWorld asset destination: {dests!r}")
+    if not all(isinstance(path, str) and Path(path).is_file() for path in paths):
+        raise FileNotFoundError(f"invalid staged OSWorld asset paths: {paths!r}")
     gives = config.get("gives", [0])
     if not isinstance(gives, list) or not all(
         isinstance(index, int)
@@ -88,8 +99,25 @@ def get_offline_file(_env: Any, config: dict[str, Any]) -> str | list[str]:
         for index in gives
     ):
         raise ValueError(f"invalid staged OSWorld asset selection: {gives!r}")
+    cache_dir = Path(env.cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached: list[str] = []
+    for source, dest in zip(paths, dests, strict=True):
+        target = cache_dir / dest
+        if not target.exists():
+            descriptor, raw_temporary = tempfile.mkstemp(
+                dir=cache_dir, prefix=f".{dest}."
+            )
+            os.close(descriptor)
+            temporary = Path(raw_temporary)
+            try:
+                shutil.copyfile(source, temporary)
+                os.replace(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
+        cached.append(str(target))
     selected_indices = set(gives)
-    selected = [path for index, path in enumerate(paths) if index in selected_indices]
+    selected = [path for index, path in enumerate(cached) if index in selected_indices]
     return selected[0] if len(selected) == 1 else selected
 
 
@@ -165,7 +193,7 @@ def _stage_cloud_files(value: Any, asset_bundle: Path, task_id: str) -> Any:
         not paths
         or len(paths) != len(dests)
         or not all(
-            isinstance(path, str) and isinstance(dest, str) and dest
+            isinstance(path, str) and _safe_filename(dest)
             for path, dest in zip(paths, dests, strict=True)
         )
     ):
@@ -181,7 +209,8 @@ def _stage_cloud_files(value: Any, asset_bundle: Path, task_id: str) -> Any:
         raise ValueError(f"OSWorld task {task_id!r} has invalid cloud_file gives")
     return {
         "type": _OFFLINE_FILE_TYPE,
-        "path": local_paths if multi else local_paths[0],
+        "path": local_paths,
+        "dest": dests,
         "gives": sorted(set(gives)),
     }
 
@@ -212,6 +241,16 @@ def _bundle_file(url: str, asset_bundle: Path, task_id: str) -> Path:
             f"OSWorld task {task_id!r} asset is not a file: {relative}"
         )
     return source
+
+
+def _safe_filename(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and value not in {"", ".", ".."}
+        and "/" not in value
+        and "\\" not in value
+        and not Path(value).is_absolute()
+    )
 
 
 def _contains_type(value: Any, expected: str) -> bool:
