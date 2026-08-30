@@ -172,6 +172,7 @@ _DIRECTIONS = (
 _FIXTURE_GUEST_PATH = "/tmp/cua_micro_fixture.py"
 _FIXTURE_STATE_PATH = "/tmp/cua_micro_fixture_state.json"
 _NATIVE_TERMINAL_STATE_PATH = "/tmp/cua_native_terminal_state.json"
+_NATIVE_TERMINAL_RC_PATH = "/tmp/cua_terminal_rc"
 _NATIVE_EDITOR_PATH = "/tmp/cua_native_editor.txt"
 _DEFAULT_SUITE = Path(__file__).with_name("cua_micro_tasks.json")
 _REL_STEP_FORMAT = "computer_use_rel_step_v1"
@@ -1461,9 +1462,24 @@ def _launch_native_app(client: OSWorldClient, app: str) -> dict[str, Any]:
         # whatever commands it wants and we only check the resulting outcome
         # afterward via a separate run_command call, not the terminal's own
         # scrollback.
+        #
+        # --title only sets the *initial* title, and VTE hands the child
+        # TERM=xterm-256color, so /etc/bash.bashrc prefixes PS1 with its own
+        # "\e]0;\u@\h: \w\a" title escape and the first prompt paint renames
+        # the window to "user@host: ~". That left the title matchable for
+        # only ~0.3s, which the wait below (0.25s sleep plus a run_command
+        # round-trip per poll) stepped over ~84% of the time -- and once
+        # missed it can never match again, so setup died on a 30s timeout.
+        # The rcfile re-asserts the title from PS1 itself, after ~/.bashrc
+        # has had its say, so it holds for the whole attempt. The other two
+        # gnome-terminal launchers below are safe as-is: they run a python
+        # script, which emits no title escape.
         "terminal": (
             "rm -f ~/hello_world.py; "
-            "nohup env DISPLAY=:0 gnome-terminal --title='CUA Terminal' -- bash -i "
+            f"printf '%s\\n' '[ -f ~/.bashrc ] && . ~/.bashrc' "
+            f"'PS1=\"$PS1\\[\\e]0;CUA Terminal\\a\\]\"' > {_NATIVE_TERMINAL_RC_PATH}; "
+            "nohup env DISPLAY=:0 gnome-terminal --title='CUA Terminal' "
+            f"-- bash --rcfile {_NATIVE_TERMINAL_RC_PATH} -i "
             ">/tmp/cua_native_terminal_open.log 2>&1 &"
         ),
     }
@@ -1730,11 +1746,18 @@ def verifier_passed(client: OSWorldClient, verifier: dict[str, Any]) -> tuple[bo
         return None
 
     try:
-        # 20s matches the app-launch waits used elsewhere in this file (e.g.
-        # _launch_chrome, _launch_native_app) -- a cold LibreOffice launch can
-        # take close to 8-10s in the VM, so the old 8s ceiling produced false
-        # negatives on a correct click that was simply still loading.
-        matched = _wait_until(check, timeout_s=20)
+        # This is a per-TURN cost, and _wait_until only exits early on success:
+        # a turn whose action misses pays the whole budget. At 20s (sized for a
+        # cold LibreOffice launch) that was 81% of all VM-slot time in job
+        # 146303 -- 416 turns, 0 verifier passes, 20s burned every time, on a
+        # ~66-iteration poll loop that spawns a guest login shell per iteration.
+        # The caller has already waited for the framebuffer to stop repainting
+        # (screenshot_settled) before we get here, so for anything that is not
+        # an app launch the outcome is settled by the time this loop starts.
+        # NOTE: 2s is below a cold app launch (8-10s in the VM), so a correct
+        # click that only *starts* LibreOffice/a terminal now reads as a miss;
+        # the launch waits in prepare_task keep their own longer budgets.
+        matched = _wait_until(check, timeout_s=2)
     except TimeoutError:
         state = read_verifier_state(client, verifier)
         return False, state
@@ -2884,7 +2907,11 @@ def _preflight_ports(ports: list[int], *, job_mod: int) -> None:
     ``job_mod`` hashes SLURM_JOB_ID into a 10-wide window, so two concurrently
     scheduled jobs on the same node whose ids are congruent mod 200 land on
     identical ports. Without this check the collision only surfaces as every
-    attempt timing out in wait_ready() after 300s apiece.
+    attempt timing out in wait_ready() after 300s apiece -- or, for the sglang
+    port, not at all: the squatting server answers /health_generate, our own
+    launch_server dies on 'address already in use', and the whole run is scored
+    against a FOREIGN model (seen 2026-08-24, job 143034 on hai007). The
+    ``ports`` list therefore covers the sglang port too, not just qemu's.
     """
     busy = _wait_ports_free(ports, timeout_s=5.0)
     if not busy:
@@ -2892,9 +2919,38 @@ def _preflight_ports(ports: list[int], *, job_mod: int) -> None:
     raise SystemExit(
         f"port collision: {busy} already bound on this node "
         f"(job_mod={job_mod}, from SLURM_JOB_ID % 200 * 10). Another eval job "
-        "with a congruent job id, or a leftover qemu, holds this window -- "
-        "resubmit for a different job id or kill the stale qemu."
+        "with a congruent job id, or a leftover qemu/sglang, holds this window "
+        "-- resubmit for a different job id or kill the stale process."
     )
+
+
+def _assert_serving_model(
+    *, port: int, api_key: str, model_path: str, timeout_s: float = 30.0
+) -> None:
+    """Fail loudly unless the server on ``port`` serves ``model_path``.
+
+    The preflight above closes the window between *our* startup and a colliding
+    job's, but not the reverse race (their server binds the port while ours is
+    still loading weights). This is the backstop: sglang's /get_model_info
+    reports the checkpoint it actually loaded, so a hijacked port -- or a
+    hand-passed --sglang_url pointing at the wrong checkpoint -- is caught
+    before a single request is scored instead of showing up as inexplicably
+    off-policy replies (the tell-tale being reasoning the checkpoint was never
+    trained to emit).
+    """
+    r = requests.get(
+        f"http://localhost:{port}/get_model_info",
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=timeout_s,
+    )
+    r.raise_for_status()
+    served = str(r.json().get("model_path", ""))
+    if os.path.realpath(served) != os.path.realpath(model_path):
+        raise SystemExit(
+            f"sglang on port {port} serves {served!r}, not {model_path!r} -- "
+            "another job's server holds this port. Every reply would be scored "
+            "against the wrong model; refusing to run."
+        )
 
 
 def _terminate(proc: subprocess.Popen, *, label: str) -> None:
@@ -3292,9 +3348,14 @@ def main() -> int:
     # Every port this job will ever bind, checked once up front so a window
     # collision costs 5s here instead of 300s per attempt in wait_ready().
     _n_slots = 1 if args.validate_setups_only else args.vms_per_sglang
+    # harvest mode drives the loop with the local oracle and --sglang_url points
+    # at a server somebody else owns, so neither one binds a port here.
+    _launches_sglang = args.mode != "harvest" and not args.sglang_url
+    sglang_port = args.sglang_port if args.sglang_port != 30000 else 30000 + job_mod
     _preflight_ports(
         [5000 + job_mod + i for i in range(_n_slots)]
-        + [5900 + job_mod + i for i in range(_n_slots)],
+        + [5900 + job_mod + i for i in range(_n_slots)]
+        + ([sglang_port] if _launches_sglang else []),
         job_mod=job_mod,
     )
     if args.validate_setups_only:
@@ -3422,7 +3483,6 @@ def main() -> int:
         sglang_url = args.sglang_url.rstrip("/")
         _LOGGER.info("using existing sglang endpoint (not launching one): %s", sglang_url)
     else:
-        sglang_port = args.sglang_port if args.sglang_port != 30000 else 30000 + job_mod
         sglang_log = (output_dir / "sglang.log").open("w")
         sglang_proc = subprocess.Popen(
             [
@@ -3458,6 +3518,11 @@ def main() -> int:
             poll_s=10,
             max_polls=180,
             label="sglang",
+        )
+        _assert_serving_model(
+            port=sglang_port,
+            api_key=args.sglang_api_key,
+            model_path=args.model_path,
         )
         sglang_url = f"http://localhost:{sglang_port}/v1"
 

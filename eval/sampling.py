@@ -88,6 +88,7 @@ class SamplingParams:
     presence_penalty: float
     max_tokens: int
     greedy: bool = False
+    enable_thinking: bool | None = None
 
     def as_request_json(self) -> dict[str, Any]:
         """Flat payload merge for sglang's OpenAI-compatible /chat/completions.
@@ -98,15 +99,18 @@ class SamplingParams:
         deterministically.
         """
         if self.greedy:
-            return {"max_tokens": self.max_tokens, "temperature": 0.0}
-        return {
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-            "top_k": self.top_k,
-            "repetition_penalty": self.repetition_penalty,
-            "presence_penalty": self.presence_penalty,
-        }
+            body = {"max_tokens": self.max_tokens, "temperature": 0.0}
+        else:
+            body = {
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "top_k": self.top_k,
+                "repetition_penalty": self.repetition_penalty,
+                "presence_penalty": self.presence_penalty,
+            }
+        body.update(self._chat_template_kwargs())
+        return body
 
     def as_openai_kwargs(self) -> dict[str, Any]:
         """kwargs for the stock OpenAI client ``chat.completions.create``.
@@ -116,17 +120,37 @@ class SamplingParams:
         OpenAI schema rejects them at the top level.
         """
         if self.greedy:
-            return {"max_tokens": self.max_tokens, "temperature": 0.0}
-        return {
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-            "extra_body": {
-                "top_k": self.top_k,
-                "repetition_penalty": self.repetition_penalty,
-                "presence_penalty": self.presence_penalty,
-            },
-        }
+            kwargs: dict[str, Any] = {
+                "max_tokens": self.max_tokens, "temperature": 0.0}
+        else:
+            kwargs = {
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "extra_body": {
+                    "top_k": self.top_k,
+                    "repetition_penalty": self.repetition_penalty,
+                    "presence_penalty": self.presence_penalty,
+                },
+            }
+        template = self._chat_template_kwargs()
+        if template:
+            kwargs.setdefault("extra_body", {}).update(template)
+        return kwargs
+
+    def _chat_template_kwargs(self) -> dict[str, Any]:
+        """``chat_template_kwargs`` payload, or ``{}`` when unset.
+
+        ``enable_thinking`` is a *chat-template* knob, not a sampler knob, but it
+        rides the same request as the sampling tuple and has to be threaded
+        through both wire formats -- so it lives here for the same reason the
+        tuple does: one place, and it lands in ``to_dict`` so a ``result.json``
+        records whether thinking was on. ``None`` sends nothing and leaves the
+        template's own default alone.
+        """
+        if self.enable_thinking is None:
+            return {}
+        return {"chat_template_kwargs": {"enable_thinking": bool(self.enable_thinking)}}
 
     def to_dict(self) -> dict[str, Any]:
         """Full param set for logging into ``result.json`` (audit trail)."""
@@ -173,6 +197,7 @@ def qwen_sampling(
     top_k: int | None = None,
     repetition_penalty: float | None = None,
     presence_penalty: float | None = None,
+    enable_thinking: bool | None = None,
 ) -> SamplingParams:
     """Build a :class:`SamplingParams` from the Qwen tuple for ``mode``.
 
@@ -197,7 +222,23 @@ def qwen_sampling(
         presence_penalty=pick(presence_penalty, "presence_penalty"),
         max_tokens=DEFAULT_MAX_TOKENS if max_tokens is None else int(max_tokens),
         greedy=greedy,
+        enable_thinking=enable_thinking,
     )
+
+
+def _parse_bool(text: str) -> bool:
+    """argparse type for an explicit true/false value.
+
+    A value-taking flag rather than ``store_true`` so the knob can be expressed
+    as a plain ``key = "value"`` pair in a labctl recipe's ``[args]`` table,
+    like every other flag here.
+    """
+    t = text.strip().lower()
+    if t in ("true", "1", "yes", "on"):
+        return True
+    if t in ("false", "0", "no", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"expected true or false, got {text!r}")
 
 
 def add_sampling_cli(
@@ -234,6 +275,14 @@ def add_sampling_cli(
     g.add_argument("--max_tokens", type=int, default=default_max_tokens,
                    help="Max new tokens per turn.")
     g.add_argument(
+        "--enable_thinking", type=_parse_bool, default=None,
+        metavar="{true,false}",
+        help="Send chat_template_kwargs={'enable_thinking': <bool>} with every "
+             "request, forcing a hybrid-reasoning checkpoint (Qwen3.5) into "
+             "thinking or non-thinking mode. Unset leaves the chat template's "
+             "own default. Non-thinking Qwen3.5 wants the Instruct tuple "
+             "(--sampling_mode instruct), thinking wants the Thinking tuple.")
+    g.add_argument(
         "--greedy", action="store_true",
         help="Decode greedily (temperature 0, no sampling). DISCOURAGED — the "
              "Qwen cards ship greedy=false; use only for deterministic monitors.")
@@ -263,6 +312,7 @@ def from_cli(
         top_k=args.top_k,
         repetition_penalty=args.repetition_penalty,
         presence_penalty=args.presence_penalty,
+        enable_thinking=getattr(args, "enable_thinking", None),
     )
 
 

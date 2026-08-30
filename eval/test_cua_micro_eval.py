@@ -816,5 +816,39 @@ class ResultPersistenceTests(unittest.TestCase):
         self.assertEqual(len(tasks), len(raw["tasks"]))
 
 
+class ServerIdentityTests(unittest.TestCase):
+    """A colliding job's sglang answers our health probe on the same port."""
+
+    @staticmethod
+    def _reply(model_path: str) -> mock.Mock:
+        reply = mock.Mock()
+        reply.json.return_value = {"model_path": model_path, "is_generation": True}
+        return reply
+
+    def test_accepts_the_server_that_serves_our_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(
+                micro.requests, "get", return_value=self._reply(directory)
+            ):
+                micro._assert_serving_model(
+                    port=30340, api_key="osworld", model_path=directory
+                )
+
+    def test_rejects_a_server_serving_another_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            ours = Path(directory) / "ours"
+            theirs = Path(directory) / "theirs"
+            ours.mkdir()
+            theirs.mkdir()
+            with mock.patch.object(
+                micro.requests, "get", return_value=self._reply(str(theirs))
+            ):
+                with self.assertRaises(SystemExit) as caught:
+                    micro._assert_serving_model(
+                        port=30340, api_key="osworld", model_path=str(ours)
+                    )
+        self.assertIn("another job's server holds this port", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
