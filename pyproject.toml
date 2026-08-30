@@ -51,7 +51,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["cua_gym", "cua_gym_web", "harness_render"]
+py-modules = ["cua_gym", "cua_gym_web", "harness_render", "rl_target_box"]
 
 [tool.setuptools.packages.find]
 include = [
@@ -61,6 +61,8 @@ include = [
     "evals.*",
     "grammars",
     "grammars.*",
+    "rl",
+    "rl.*",
     "stream_cuagym_qwen35",
 ]
 
