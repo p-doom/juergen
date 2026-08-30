@@ -11,8 +11,10 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import re
 import subprocess
 import time
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -32,11 +34,58 @@ _DEFAULT_QEMU_BIN = "/fast/project/HFMI_SynergyUnit/p-doom_shared/franz/qemu/bin
 _EVAL_DIR = Path(__file__).resolve().parent
 
 
+def parse_resolution(value: str | None) -> tuple[int, int] | None:
+    """Parse a ``WIDTHxHEIGHT`` string (e.g. ``1280x720``) into a (w, h) tuple.
+
+    ``None``/empty means "native" (no resizing) and returns ``None``. Usable as
+    an argparse ``type=`` callable — argparse turns the ValueError into a clean
+    usage error.
+    """
+    if not value:
+        return None
+    m = re.fullmatch(r"(\d+)\s*[xX]\s*(\d+)", value.strip())
+    if not m:
+        raise ValueError(f"resolution must look like 1280x720, got {value!r}")
+    return int(m.group(1)), int(m.group(2))
+
+
 def _pil_to_data_url(img: Image.Image, *, quality: int = 85) -> str:
     """Encode a PIL image as a base64 JPEG data URL for the chat API."""
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=quality, optimize=False)
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
+
+
+def evict_history(
+    recent_frames: list[Image.Image],
+    recent_actions: list[str],
+    *,
+    n_history_frames: int,
+) -> None:
+    """Block-evict ``recent_frames``/``recent_actions`` in place once the
+    window exceeds ``n_history_frames``.
+
+    The invariant maintained is ``len(recent_actions) == len(recent_frames) - 1``
+    — every frame except the latest (unpaired, action-less) one has an action
+    that followed it. Callers must only invoke this when that invariant
+    already holds (e.g. right after appending a new, as-yet-unpaired frame, or
+    right after ``append_turn`` below).
+
+    Eviction is StreamingLLM-style *block* eviction rather than slide-by-one:
+    once the window exceeds ``n_history_frames`` we keep only the newest
+    ``n_history_frames // 2`` frames (and their aligned actions). This preserves
+    sglang's RadixAttention prefix cache — while the window grows the prompt is
+    append-only (full cache reuse) and only the ~``N/2`` frames retained on a
+    slide are re-prefilled, roughly once every ``N/2`` steps. Slide-by-one would
+    instead invalidate the whole window on every step past ``N``.
+    """
+    if len(recent_frames) > n_history_frames:
+        keep = max(1, n_history_frames // 2)
+        recent_frames[:] = recent_frames[-keep:]
+        # Actions align to every frame but the latest.
+        recent_actions[:] = (
+            recent_actions[-(len(recent_frames) - 1) :] if len(recent_frames) > 1 else []
+        )
 
 
 def append_turn(
@@ -51,25 +100,11 @@ def append_turn(
 
     A "turn" is ``(frame, action_text)`` where ``action_text`` is the action the
     model produced *from the previous* current frame; ``frame`` is the resulting
-    new screen. The invariant maintained is
-    ``len(recent_actions) == len(recent_frames) - 1`` — every frame except the
-    latest has an action that followed it.
-
-    Eviction is StreamingLLM-style *block* eviction rather than slide-by-one:
-    once the window exceeds ``n_history_frames`` we keep only the newest
-    ``n_history_frames // 2`` frames (and their aligned actions). This preserves
-    sglang's RadixAttention prefix cache — while the window grows the prompt is
-    append-only (full cache reuse) and only the ~``N/2`` frames retained on a
-    slide are re-prefilled, roughly once every ``N/2`` steps. Slide-by-one would
-    instead invalidate the whole window on every step past ``N``.
+    new screen. See ``evict_history`` for the eviction policy this then applies.
     """
     recent_actions.append(action_text)
     recent_frames.append(frame)
-    if len(recent_frames) > n_history_frames:
-        keep = max(1, n_history_frames // 2)
-        recent_frames[:] = recent_frames[-keep:]
-        # Actions align to every frame but the latest.
-        recent_actions[:] = recent_actions[-(len(recent_frames) - 1):] if len(recent_frames) > 1 else []
+    evict_history(recent_frames, recent_actions, n_history_frames=n_history_frames)
 
 
 def _interleave_messages(
@@ -77,6 +112,7 @@ def _interleave_messages(
     instruction: str | None,
     image_parts: list[Any],
     recent_actions: list[str] | None,
+    current_message: str | None = None,
 ) -> list[dict[str, Any]]:
     """Assemble the interleaved chat message list from per-frame ``image_parts``.
 
@@ -86,14 +122,21 @@ def _interleave_messages(
     sent — only the image representation differs. ``image_parts[i]`` is the
     representation of ``recent_frames[i]``; ``recent_actions[i]`` is the action
     that followed it (``len(recent_actions) == len(image_parts) - 1``).
+
+    ``current_message`` (optional) is extra user text attached to the LAST
+    (current) frame's user turn — a message sent to the model alongside the
+    current screenshot. ``None`` leaves the turn image-only (default).
     """
     recent_actions = recent_actions or []
     messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    n = len(image_parts)
     for i, part in enumerate(image_parts):
         content: list[Any] = []
         if i == 0 and instruction:
             content.append({"type": "text", "text": instruction})
         content.append(part)
+        if i == n - 1 and current_message:
+            content.append({"type": "text", "text": current_message})
         messages.append({"role": "user", "content": content})
         if i < len(recent_actions):
             messages.append({"role": "assistant", "content": recent_actions[i]})
@@ -119,6 +162,7 @@ def build_loggable_messages(
     instruction: str | None,
     recent_actions: list[str] | None,
     frame_labels: list[str],
+    current_message: str | None = None,
 ) -> list[dict[str, Any]]:
     """The message list as sent, but with each image replaced by ``<image name>``.
 
@@ -128,7 +172,39 @@ def build_loggable_messages(
     image bytes — the referenced ``step_NNN.png`` files already hold the pixels.
     """
     parts = [{"type": "image", "image": f"<image {lbl}>"} for lbl in frame_labels]
-    return _interleave_messages(system_prompt, instruction, parts, recent_actions)
+    return _interleave_messages(system_prompt, instruction, parts, recent_actions, current_message)
+
+
+@dataclass(frozen=True)
+class SamplingOverrides:
+    """Optional sampling knobs sent alongside ``max_tokens``/``temperature``.
+
+    Every field is tri-state: ``None`` means "do not put this key in the request
+    body", which is *not* the same as sending the OpenAI default. sglang resolves
+    an omitted key as ``user value > the model's generation_config.json > OpenAI
+    default`` (``ChatCompletionRequest.to_sampling_params``), and the server-side
+    ``--sampling-defaults`` defaults to ``model``, so omitting ``top_p``/``top_k``/
+    ``repetition_penalty``/``min_p`` inherits the checkpoint's own recommended
+    values (Qwen3-VL ships top_p=0.8, top_k=20, repetition_penalty=1.0). Sending
+    an explicit value pins it instead, which is what makes runs comparable across
+    lineages whose exports carry different generation_configs.
+
+    ``presence_penalty``/``frequency_penalty`` are the exception: sglang reads
+    those straight off the request and never consults generation_config for them,
+    so they are 0.0 unless set here. Qwen3-VL's recommended
+    ``presence_penalty=1.5`` is only reachable this way.
+    """
+
+    top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
+    repetition_penalty: float | None = None
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+
+    def to_request_fields(self) -> dict[str, Any]:
+        """The subset to merge into the chat-completions body (drops ``None``)."""
+        return {k: v for k, v in asdict(self).items() if v is not None}
 
 
 def _call_model(
@@ -142,6 +218,8 @@ def _call_model(
     recent_actions: list[str] | None = None,
     max_tokens: int,
     temperature: float,
+    sampling: SamplingOverrides | None = None,
+    current_message: str | None = None,
     request_timeout_s: float = 120.0,
 ) -> str:
     """One chat-completion call, interleaving frames and the model's prior actions.
@@ -171,7 +249,8 @@ def _call_model(
         {"type": "image_url", "image_url": {"url": _pil_to_data_url(f)}}
         for f in recent_frames
     ]
-    messages = _interleave_messages(system_prompt, instruction, image_parts, recent_actions)
+    messages = _interleave_messages(
+        system_prompt, instruction, image_parts, recent_actions, current_message)
     r = requests.post(
         sglang_url.rstrip("/") + "/chat/completions",
         headers={"Authorization": f"Bearer {api_key}"},
@@ -180,6 +259,7 @@ def _call_model(
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
+            **(sampling.to_request_fields() if sampling else {}),
         },
         timeout=request_timeout_s,
     )

@@ -54,6 +54,70 @@ Pass several datasets and switch between them in the UI's "dataset" dropdown;
 each is built lazily on first selection (a build failure — e.g. an empty or
 not-yet-generated dir — is reported inline, the others keep working).
 
+A store too big to browse whole is sampled: ``--limit N`` loads N samples (default
+100, blank N in the UI loads every one), and the header's **samples** control picks
+WHICH N — ``first N`` in store order
+(cheap: the loader stops at N+1) or ``random N`` under a **seed**. A random draw
+is deterministic in ``(seed, N, store)``: the same seed always yields the same N
+samples, so a finding stays reachable and shareable ("dataset X, random 500, seed
+7"). Only the membership is random — the list stays in store order. Mode, N and
+seed are switchable per dataset in the UI without a restart (``--sample-mode`` /
+``--seed`` just set the initial state); each sampling is one cached build, so
+toggling back to one you already looked at doesn't re-read the store.
+
+Because the loaded set is a *sample*, a segment is shown with its neighbours
+missing. The sidebar's **provenance box** (under the mode banner) says where the
+open segment physically came from -- its segment id, the recording (parent
+capture) it was cut from, the record file + row it was read out of, and the
+stage-01a master ``frames/<segment_id>/`` store its images resolve from -- each
+copyable with one click (``i`` copies the segment id). One level further up, the
+clips manifest behind the dataset (followed automatically through the manifest
+chain -- stage 04 -> 03 -> the master -> stage 00 -- or given by
+``--clips-manifest``) names the ORIGINAL recording: the source mp4, its keylog,
+the uploading user and the **upload folder** they were captured into.
+
+From there, three loaders widen what's browsable without restarting under a
+different sampling. ``⇊ recording`` loads N more segments of the SAME recording,
+centred on this one (the ones before AND after it; N=0 = all of them) and narrows
+the segment list to that recording, so a run reads in order. ``⇊ folder`` widens
+to the whole upload folder, pulling in the neighbouring recordings' segments.
+``▤ recordings in this folder`` lists every recording uploaded alongside this one
+-- id, clip count, how many are already loaded -- and a click loads that
+recording's first N. The folder listing comes from the clips manifest, i.e. the
+SOURCE corpus, so it also shows recordings this dataset filtered out; those load
+nothing and are reported as "not in this dataset". Everything is added to the open
+build. None of it is available for stage-06 inline records (a sibling scan would
+have to decode every ArrayRecord). The whole panel toggles from the header
+(``◱ source`` / ``p``) and stays hidden until you want it again.
+
+Knowing who recorded what also drives a **users** control in the filter panel:
+every uploader seen so far with their segment count, ticked one by one. What the
+ticks do is a choice:
+
+* *filter the loaded list* (default) — client-side and live: keep only the ticked
+  users, or exclude them.
+* *sample from ticked users* — server-side, on ``⟳ apply sampling``: the store is
+  re-read with the population narrowed to those users BEFORE the draw, so the
+  header's N (first or random+seed) is spent on their recordings — either N over
+  the whole selection or N per ticked user. This is the only way to get a real
+  sample of a user who is a small minority of the store; a live filter can only
+  show the few of theirs a global draw happened to include. Nothing re-reads until
+  the button is pressed (it highlights while the ticks are unapplied), and the
+  scope rides along with the sampling on every request, so each user selection is
+  its own cached build. Not available for stage-06 inline records, whose segment
+  ids don't resolve to a clip.
+
+Each row reads ``<loaded>/<total>`` — how many of that user's segments the current
+draw holds, over how many they have in the whole store — and the list is sorted by
+that store total, biggest recorder first. The totals come from one id-peeking census
+pass per store (cached server-side, fetched in the background, so the panel is
+usable before it lands), and they put EVERY user of the store in the list, including
+those the current draw missed entirely — which is exactly who you'd want to sample
+from. Ticks survive sibling/folder loads and a user stays listed once seen, so a
+scoped load never strands you with a list you can't untick; switching dataset (or
+``reset``) clears them. Both side panels are drag-resizable — the filter panel by
+the handle on its right edge, the HUD sidebar by the one on its left.
+
 ``--dataset`` may point at the 01b output directory (a ``frame_records.jsonl``
 at its root or one level down is discovered), or directly at a
 ``frame_records.jsonl`` file.
@@ -71,16 +135,58 @@ action — so the same frame/action/HUD/timeline UI applies, plus a banner with 
 system prompt and (if goal-conditioned) the instruction. The images are ``ar://``
 refs into the same stage-01a master, so frames and the black-frame flag resolve
 just as in the 01b view.
+
+Conversations may also carry **native computer_use actions** (manifest
+``action_format: computer_use_rel_v1`` — Qwen tool-call SFT): each assistant turn
+is an optional ``<think>…</think>`` block plus one or more
+``<tool_call>{"name": "computer_use", "arguments": {…}}</tool_call>`` blocks.
+Detected per turn and translated once at load time into (a) an equivalent
+``format_action`` string (``hud``) that drives the keyboard/mouse HUD, typed-text
+reconstruction and filter metrics unchanged, and (b) a compact summary (``disp``,
+e.g. ``💭 move(205,-105) · click · type("hi")``) shown in the action rows /
+status line / timeline tooltips. The verbatim native text stays in ``action``
+(full-chat window + "conversation contains" search).
+
+They may instead carry **ordered-events actions** (manifest ``action_format:
+ordered_events_v2`` / ``…_v3`` — the thinking SFT): each assistant turn is an
+optional ``<think>…</think>`` block plus one action line — ``NO_OP``,
+``TERMINATE``, or ``"; "``-separated primitives in performed order:
+``move(dx,dy)``, ``scroll(dx,dy)`` (horizontal, vertical), ``down(EV)``,
+``up(EV)`` and (v3) ``type("…")``. Same treatment, translated per turn at load:
+``hud`` passes the events through verbatim (EV names are already rdev, the
+HUD's namespace) with movement/scroll summed into the ``format_action`` head —
+the radar shows one pointer state per bin, and that sum exists for it alone.
+``disp`` is the action line AS IS: every primitive, in performed order, nothing
+coalesced or abbreviated, because in this format the sequence IS the label.
+The raw text (thinking included) stays in ``action``, one hover away.
+
+Any turn can be found by substring — "action contains" in the filter panel
+searches every turn of every segment (``down(LMB)``, ``move(-100,``, ``type("``),
+narrows the segment list to those that have it, marks the matching turns in the
+timeline and the rows list, and ``n``/``N`` step through them.
+
+Finally it opens a stage-04 → stage-06 **inline SFT records** store (auto-detected
+by a ``manifest.json`` marking stage ``inline_records`` / a ``train``+``val`` layout
+of ArrayRecord shards): each record is one tokenized training example — a
+``<= max_length`` chunk of a conversation, still carrying its ``ar://`` frame refs —
+so it browses exactly like the stage-04 view, plus a banner showing the train/val
+split and how full the token budget is. Since only the KEPT records survive stage
+06's overflow drop/truncate, this is literally the dataset fed to the model.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
+import random
+import re
 import sys
 from collections import OrderedDict
+from datetime import datetime, timezone
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterable
 from urllib.parse import parse_qs, urlparse
 
 # Make the ``realigned_pipeline`` package importable when run directly
@@ -90,7 +196,11 @@ if str(DATA_PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(DATA_PIPELINE_DIR))
 
 from realigned_pipeline.lib import config  # noqa: E402
-from realigned_pipeline.lib import realign_lib as R  # noqa: E402  (keylog_to_video)
+from realigned_pipeline.lib.image_store import (  # noqa: E402
+    is_arrayrecord_image_uri,
+    parse_arrayrecord_image_uri,
+    read_jpeg_bytes,
+)
 from realigned_pipeline.lib.common import (  # noqa: E402
     aggregate_actions,
     format_action,
@@ -98,37 +208,153 @@ from realigned_pipeline.lib.common import (  # noqa: E402
     resolve_button_name,
     resolve_key_name,
 )
-from realigned_pipeline.lib.image_store import (  # noqa: E402
-    is_arrayrecord_image_uri,
-    parse_arrayrecord_image_uri,
-    read_jpeg_bytes,
-)
+from realigned_pipeline.lib import realign_lib as R  # noqa: E402  (keylog_to_video)
 
 # Image ref field, tried in order (stage 01 rewrites ``image_path`` to ar://;
 # the grain manifests / stage 02 use ``image``).
 _IMAGE_KEYS = ("image_path", "image", "image_uri")
 
-# Dataset registry: display-name -> {"path": Path, "mode": str, "obj": built|None}.
+# Dataset registry: display-name -> {"path": Path, "mode": str, "objs": {samp_key: built}}.
 # Datasets are built lazily on first access — a frames-master build is cheap, but a
 # frame_records build eager-loads every row, so we defer it until the dataset is
-# actually selected in the UI.
-DATASETS: OrderedDict[str, dict[str, Any]] = OrderedDict()
+# actually selected in the UI. One dataset can be built under several samplings
+# (first N vs random N with a seed); each build is cached under its sampling key.
+DATASETS: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+
+# How many builds of ONE dataset (distinct samplings) stay in memory. Toggling
+# first/random or trying seeds shouldn't re-read the store every time, but each
+# build holds its own segments, so the per-dataset cache is small and LRU.
+_SAMPLING_CACHE_CAP = 4
 
 # Fallback keylog source for overlaying raw actions on frames-master datasets (a
 # stage-00 clips_manifest.jsonl mapping segment_id -> keylog_path). Normally each
 # master is auto-linked via its manifest.json "source_clips_manifest"; this only
 # covers masters that don't record it.
-CLIPS_MANIFEST_OVERRIDE: str | None = None
+CLIPS_MANIFEST_OVERRIDE: "str | None" = None
 
 # Optional stage-00 alignment source (an alignment.jsonl file or the realign
 # clip-manifest dir containing it). When set/discovered, master datasets get the
 # dual-clock event table + the "aligned + trims" timeline. Applies to master only.
-ALIGNMENT_OVERRIDE: str | None = None
+ALIGNMENT_OVERRIDE: "str | None" = None
+
+# Optional per-dataset load cap. For eager trajectory stores this means the first
+# K segments/conversations/records; for frames-master it caps the listed segments.
+DATASET_SAMPLE_LIMIT: "int | None" = None
+
+# Default sampling the UI starts with ("first" K in file order, or K drawn at
+# random under DATASET_SAMPLE_SEED). Both are overridden per request, so the UI
+# can switch without a restart; these only seed the controls.
+DATASET_SAMPLE_MODE = "first"
+DATASET_SAMPLE_SEED = 0
 
 _COALESCE_MOVES = 4
 
 
-def _resolve_alignment_path(clips_manifest: str | Path | None) -> Path | None:
+class Sampling:
+    """WHICH K samples of a dataset to load — the first K in file order, or K drawn
+    at random.
+
+    Random draws are fully deterministic: ``(seed, n, population size)`` decides the
+    index set, so the same seed on the same store always yields the same K samples
+    (and the same UI list, in file order — only the *membership* is random, not the
+    ordering). ``mode="first"`` keeps the old behaviour, including the cheap early
+    break that never reads past sample K; a random draw has to see the whole
+    population first, so it costs one extra enumeration pass — free for inline
+    records (ArrayRecord footers) and a frames-master (its segment index), a line
+    count for a conversations file, a full scan for a multi-file frame_records store
+    (~100s over 30k per-clip files). Each build is cached per (mode, n, seed), so
+    that pass is paid once.
+
+    A sampling can also be scoped to a set of ``users`` (the uploaders ticked in
+    the filter panel): the population is narrowed to what those users recorded
+    BEFORE the draw, so "random 50" means 50 of theirs rather than 50 of the whole
+    store, of which a few happen to be theirs. ``per_user`` then decides whether N
+    is the size of the whole draw or of EACH ticked user's draw."""
+
+    __slots__ = ("mode", "n", "seed", "users", "per_user")
+
+    def __init__(
+        self, mode: str = "first", n: "int | None" = None, seed: int = 0,
+        users: "Iterable[str] | None" = None, per_user: bool = False,
+    ) -> None:
+        # A random draw without a size is just "everything" — fall back to first/all
+        # rather than silently sampling nothing.
+        self.mode = "random" if (mode == "random" and n is not None) else "first"
+        self.n = n
+        self.seed = seed
+        self.users: "frozenset[str]" = frozenset(u for u in (users or ()) if u)
+        self.per_user = bool(per_user) and bool(self.users)
+
+    @property
+    def is_random(self) -> bool:
+        return self.mode == "random"
+
+    @property
+    def scoped(self) -> bool:
+        """Whether the population is narrowed to a user selection (which means the
+        loader must enumerate it before drawing, even in ``first`` mode)."""
+        return bool(self.users)
+
+    def key(self) -> str:
+        """Cache key: the seed only matters for a random draw, and a user scope is
+        part of WHICH samples get loaded, so it belongs in the key."""
+        who = ",".join(sorted(self.users)) if self.users else ""
+        return (f"{self.mode}:{self.n}:{self.seed if self.is_random else 0}"
+                f":{'per' if self.per_user else 'all'}:{who}")
+
+    def select(self, total: int) -> list[int]:
+        """The sample indices to keep out of ``total``, ascending (file order)."""
+        if self.n is None or self.n >= total:
+            return list(range(total))
+        if self.is_random:
+            return sorted(random.Random(self.seed).sample(range(total), self.n))
+        return list(range(self.n))
+
+    def select_items(
+        self, items: list, user_of: "Callable[[Any], str | None] | None" = None
+    ) -> list:
+        """Which of ``items`` (segment ids / row numbers, in store order) this
+        sampling keeps.
+
+        Unscoped this is just ``select`` over the whole list. Scoped to users, the
+        pool is narrowed to theirs first and then drawn from — as one draw of N, or
+        (``per_user``) as one draw of N per user, unioned back into store order."""
+        if not self.users or user_of is None:
+            return [items[i] for i in self.select(len(items))]
+        pool = [it for it in items if user_of(it) in self.users]
+        if not self.per_user:
+            return [pool[i] for i in self.select(len(pool))]
+        by_user: "OrderedDict[str, list]" = OrderedDict()
+        for it in pool:
+            by_user.setdefault(str(user_of(it)), []).append(it)
+        keep: set = set()
+        for group in by_user.values():
+            keep.update(group[i] for i in self.select(len(group)))
+        return [it for it in pool if it in keep]
+
+    def public(self) -> dict[str, Any]:
+        """The sampling as the UI sees it (echoed back so the controls show what the
+        server actually did, not what was asked for)."""
+        return {
+            "mode": self.mode, "n": self.n, "seed": self.seed,
+            "users": sorted(self.users), "per_user": self.per_user,
+        }
+
+    def note(self, *, kept: int, total: "int | None", limited: bool, noun: str) -> str:
+        """The load-banner suffix describing what this sampling kept."""
+        who = (f", {len(self.users)} user{'s' if len(self.users) != 1 else ''} selected"
+               f"{', N each' if self.per_user else ''}") if self.users else ""
+        if self.is_random:
+            return (
+                f" (random {kept} of {total if total is not None else '?'} {noun}"
+                f", seed {self.seed}{who})"
+            )
+        if limited and self.n is not None:
+            return f" (limited to first {self.n} {noun}{who})"
+        return f" ({kept} {noun}{who})" if who else ""
+
+
+def _resolve_alignment_path(clips_manifest: "str | Path | None") -> "Path | None":
     """Locate an ``alignment.jsonl``: ``--alignment`` (a file or a dir holding one),
     else a ``*realign*`` sibling of the (raw) clips_manifest dir that belongs to the
     SAME dataset family (matched by the manifest dir's distinctive prefix, so e.g. an
@@ -155,8 +381,8 @@ def _resolve_alignment_path(clips_manifest: str | Path | None) -> Path | None:
 
 def _raw_events(
     keylog_path: Path,
-    splices: list[dict] | None = None,
-    video_end: float | None = None,
+    splices: "list[dict] | None" = None,
+    video_end: "float | None" = None,
 ) -> list[list[Any]]:
     """Keylog events as table rows.
 
@@ -238,6 +464,281 @@ def _image_ref(rec: dict[str, Any]) -> str | None:
     return None
 
 
+_SID_RES = (
+    re.compile(r'"segment_id"\s*:\s*"([^"\\]*)"'),
+    re.compile(r'"clip_id"\s*:\s*"([^"\\]*)"'),
+)
+
+
+def _peek_segment_id(line: str) -> str:
+    """One frame_records line's grouping key, WITHOUT parsing the whole record — a
+    random draw has to see every line, and these files run to millions of them.
+
+    Mirrors the loader's own ``segment_id or clip_id or "unknown"`` precedence
+    (each key tried in turn, so field order in the JSON doesn't matter), falling
+    back to a real parse when the cheap scan misses (escaped or non-string id)."""
+    for rx in _SID_RES:
+        m = rx.search(line)
+        if m and m.group(1):
+            return m.group(1)
+    try:
+        rec = json.loads(line)
+    except json.JSONDecodeError:
+        return "unknown"
+    return str(rec.get("segment_id") or rec.get("clip_id") or "unknown")
+
+
+_RID_RE = re.compile(r'"recording_id"\s*:\s*"([^"\\]*)"')
+_SEG_SUFFIX_RE = re.compile(r"(.+)_seg\d+$")
+
+
+def _recording_of_sid(segment_id: str) -> str:
+    """The recording (parent capture) a segment id belongs to: stage-01+ names a
+    segment ``<recording_id>_segNNNN``, so the prefix IS the recording. Inline-record
+    keys carry a ``<split>/`` prefix and a ``#n`` chunk suffix — both stripped first.
+    An id that doesn't look like that is its own recording."""
+    sid = segment_id.rsplit("/", 1)[-1].split("#", 1)[0]
+    m = _SEG_SUFFIX_RE.match(sid)
+    return m.group(1) if m else sid
+
+
+def _peek_recording_id(line: str, segment_id: str) -> str:
+    """One record line's recording id, WITHOUT parsing the whole record (the sibling
+    scan sees every line of a store that runs to millions of them). Falls back to the
+    segment id's own ``<recording_id>_segNNNN`` prefix where the field is absent."""
+    m = _RID_RE.search(line)
+    if m and m.group(1):
+        return m.group(1)
+    return _recording_of_sid(segment_id)
+
+
+# Resolved clips manifests, shared by every dataset build (the scan is the same
+# file for all of them): manifest path -> ClipsIndex.
+_CLIPS_INDEXES: "dict[str, ClipsIndex]" = {}
+# Dataset dirs whose manifest chain has already been walked: start dir -> manifest.
+_CLIPS_MANIFEST_FOR: "dict[str, Path | None]" = {}
+# manifest.json keys naming the UPSTREAM dataset a store was built from — followed
+# in turn until one of them names the clips manifest itself.
+_UPSTREAM_KEYS = ("sample_dir", "frames_master_dir", "master_dir", "source_dir", "input_dir")
+_CLIPS_KEYS = ("source_clips_manifest", "clips_manifest")
+
+
+def _resolve_clips_manifest(*starts: "Path | str | None") -> "Path | None":
+    """Locate the stage-00/02 ``clips_manifest.jsonl`` behind a dataset.
+
+    That manifest is the only place the ORIGINAL recording is named — the source
+    mp4 and keylog, the uploading user, and the upload folder the clip sits in —
+    so it's what turns a segment id back into "where on disk did this come from,
+    and what else was recorded alongside it".
+
+    ``--clips-manifest`` wins. Otherwise each start dir's ``manifest.json`` is
+    read: it either names the manifest outright (``source_clips_manifest``) or
+    names the upstream dataset it was built from (``sample_dir``,
+    ``frames_master_dir``, …), which is followed in turn — a stage-04
+    conversations dir reaches it via stage 03, and a frames-master directly."""
+    if CLIPS_MANIFEST_OVERRIDE:
+        p = Path(CLIPS_MANIFEST_OVERRIDE).expanduser()
+        if p.is_dir():
+            p = p / "clips_manifest.jsonl"
+        if p.exists():
+            return p
+    queue = [Path(s).expanduser() for s in starts if s]
+    seen: set[str] = set()
+    while queue:
+        d = queue.pop(0)
+        if d.is_file():
+            d = d.parent
+        key = str(d)
+        if key in seen or len(seen) > 8:
+            continue
+        seen.add(key)
+        direct = d / "clips_manifest.jsonl"
+        if direct.exists():
+            return direct
+        mf = d / "manifest.json"
+        if not mf.exists():
+            continue
+        try:
+            meta = json.loads(mf.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        for k in _CLIPS_KEYS:
+            v = meta.get(k)
+            if v and Path(v).exists():
+                return Path(v)
+        for k in _UPSTREAM_KEYS:
+            v = meta.get(k)
+            if v:
+                queue.append(Path(v))
+    return None
+
+
+class ClipsIndex:
+    """A clips manifest indexed for provenance: which source mp4 / keylog a segment
+    was cut from, who uploaded it, and which upload folder that clip sits in —
+    plus, per folder, the other recordings and segments that were uploaded with it.
+
+    The manifest is one row per clip (tens of thousands, not millions), so it is
+    read whole, once per path, and shared by every dataset build (``clips_index``)."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.rows: "dict[str, dict[str, Any]]" = {}
+        # upload folder -> its segment ids in manifest order
+        self.folders: "OrderedDict[str, list[str]]" = OrderedDict()
+        self._recordings: "dict[str, list[dict[str, Any]]]" = {}
+        with path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                sid = str(row.get("segment_id") or "")
+                if not sid:
+                    continue
+                video = row.get("video_path")
+                folder = str(Path(video).parent) if video else None
+                self.rows[sid] = {
+                    "video_path": video,
+                    "keylog_path": row.get("keylog_path"),
+                    "user_id": row.get("user_id"),
+                    "version": row.get("version"),
+                    "upload_dir": folder,
+                    "recording_id": row.get("recording_id") or _recording_of_sid(sid),
+                }
+                if folder:
+                    self.folders.setdefault(folder, []).append(sid)
+        print(
+            f"  clips index: {len(self.rows)} clips in {len(self.folders)} upload "
+            f"folders (from {path})",
+            flush=True,
+        )
+
+    def folder_of(self, segment_id: str) -> "str | None":
+        return (self.rows.get(segment_id) or {}).get("upload_dir")
+
+    def segments_in(self, folder: str) -> list[str]:
+        return self.folders.get(folder, [])
+
+    def recordings_in(self, folder: str) -> "list[dict[str, Any]]":
+        """The recordings uploaded to one folder, in manifest order: id, how many
+        clips it has, and the first of them (the anchor a "load this one" click
+        needs). Rolled up once per folder."""
+        cached = self._recordings.get(folder)
+        if cached is not None:
+            return cached
+        out: "list[dict[str, Any]]" = []
+        by_rec: "dict[str, dict[str, Any]]" = {}
+        for sid in self.folders.get(folder, []):
+            rec = str(self.rows[sid].get("recording_id") or _recording_of_sid(sid))
+            e = by_rec.get(rec)
+            if e is None:
+                e = {"recording_id": rec, "n_segments": 0, "first_segment": sid,
+                     "segment_ids": []}
+                by_rec[rec] = e
+                out.append(e)
+            e["n_segments"] += 1
+            e["segment_ids"].append(sid)
+        self._recordings[folder] = out
+        return out
+
+
+def clips_index(*starts: "Path | str | None") -> "ClipsIndex | None":
+    """The ClipsIndex behind a dataset (resolve + read once, then cached), or None
+    where no clips manifest can be reached — provenance below the segment id simply
+    isn't recorded then, and the UI leaves those rows out."""
+    key = "|".join(str(s) for s in starts if s)
+    path = _CLIPS_MANIFEST_FOR.get(key, ...)  # type: ignore[arg-type]
+    if path is ...:
+        path = _resolve_clips_manifest(*starts)
+        _CLIPS_MANIFEST_FOR[key] = path
+    if path is None:
+        return None
+    idx = _CLIPS_INDEXES.get(str(path))
+    if idx is None:
+        try:
+            idx = ClipsIndex(path)
+        except OSError:
+            return None
+        _CLIPS_INDEXES[str(path)] = idx
+    return idx
+
+
+# Per-user segment totals for a whole store, keyed by the files they were counted
+# over. Independent of the sampling, so every build of a dataset shares one census.
+_USER_CENSUS: "dict[str, dict[str, int]]" = {}
+
+
+def _user_census(
+    paths: "list[Path]", user_of: "Callable[[str], str | None]"
+) -> dict[str, int]:
+    """How many distinct segments EACH user has in the whole store.
+
+    The loaded set is a sample, so its per-user counts say nothing about how much
+    a user actually recorded — this is the denominator behind the filter panel's
+    ``loaded/total`` (and what it sorts by), and it's also what tells you whether
+    sampling from a user is worth it. One id-peeking pass over the store (no JSON
+    parse), cached per file set."""
+    key = "|".join(str(p) for p in paths)
+    hit = _USER_CENSUS.get(key)
+    if hit is not None:
+        return hit
+    counts: dict[str, int] = {}
+    seen: set[str] = set()
+    for path in paths:
+        try:
+            f = Path(path).open()
+        except OSError:
+            continue
+        with f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                sid = _peek_segment_id(line)
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                user = user_of(sid)
+                if user:
+                    counts[user] = counts.get(user, 0) + 1
+    _USER_CENSUS[key] = counts
+    return counts
+
+
+def _window(items: list[str], pos: int, k: "int | None") -> list[str]:
+    """``k`` items of ``items`` centred on index ``pos`` (clamped at both ends) —
+    the neighbours before AND after the segment you are looking at. ``k`` >= len or
+    <= 0 means all of them."""
+    n = len(items)
+    if k is None or k <= 0 or k >= n:
+        return list(items)
+    lo = min(max(0, pos - k // 2), n - k)
+    return list(items[lo:lo + k])
+
+
+def _ref_paths(ref: "str | None") -> dict[str, Any]:
+    """Where a frame ref physically lives: its ArrayRecord shard, the per-segment
+    directory holding it (``<master>/frames/<segment_id>``) and the master store
+    root. Empty for a plain-file / missing ref."""
+    out: dict[str, Any] = {"frames_shard": None, "frames_dir": None, "master_dir": None}
+    if not ref or not is_arrayrecord_image_uri(str(ref)):
+        return out
+    try:
+        shard, _ = parse_arrayrecord_image_uri(str(ref))
+    except ValueError:
+        return out
+    shard = Path(shard)
+    out["frames_shard"] = str(shard)
+    out["frames_dir"] = str(shard.parent)
+    if shard.parent.parent.name == "frames":
+        out["master_dir"] = str(shard.parent.parent.parent)
+    return out
+
+
 def _is_noop(action: Any) -> bool:
     return not action or str(action).strip().upper() == "NO_OP"
 
@@ -254,6 +755,641 @@ def _is_black(mean_luma: Any, frac_dark: Any) -> bool:
     )
 
 
+# --------------------------------------------------------------------------- #
+# Per-trajectory metrics (mouse travel, clicks, scroll, typed-text stats, and the
+# per-TURN action counts — how many primitives / tool calls one turn performs).
+# These power the left filter panel (alongside the always-present "segment id
+# contains" box, the way to reach a known segment id without scrolling the
+# dropdown): the client filters the segment list on them,
+# so they must be computed for EVERY segment up front. The action-parse and
+# typed-text reconstruction mirror the front-end's parseAction/stateAt/keyToChar
+# exactly, so a segment's metrics match what the HUD reconstructs when you open it.
+# --------------------------------------------------------------------------- #
+_PUNCT = {
+    "BackQuote": ("`", "~"), "Minus": ("-", "_"), "Equal": ("=", "+"),
+    "BracketLeft": ("[", "{"), "BracketRight": ("]", "}"), "BackSlash": ("\\", "|"),
+    "SemiColon": (";", ":"), "Quote": ("'", '"'), "Comma": (",", "<"),
+    "Dot": (".", ">"), "Slash": ("/", "?"),
+}
+_SHIFTNUM = {"Num1": "!", "Num2": "@", "Num3": "#", "Num4": "$", "Num5": "%",
+             "Num6": "^", "Num7": "&", "Num8": "*", "Num9": "(", "Num0": ")"}
+
+
+def _key_to_char(name: str, shift: bool) -> str | None:
+    """One rdev key name -> the character it types, or None for modifiers / arrows /
+    F-keys (Backspace is handled by the caller). Mirrors the front-end keyToChar."""
+    if len(name) == 4 and name.startswith("Key") and name[3].isalpha():
+        c = name[3].upper()
+        return c if shift else c.lower()
+    if len(name) == 4 and name.startswith("Num") and name[3].isdigit():
+        return _SHIFTNUM[name] if (shift and name in _SHIFTNUM) else name[3]
+    if name == "Space":
+        return " "
+    if name in ("Return", "Enter", "NumpadEnter"):
+        return "\n"
+    if name == "Tab":
+        return "\t"
+    if name in _PUNCT:
+        return _PUNCT[name][1 if shift else 0]
+    return None
+
+
+def _parse_action_str(
+    action: Any,
+) -> tuple[float, float, float, float, list[tuple[str, str]]]:
+    """Parse a ``format_action`` string into
+    ``(dx, dy, scroll, hscroll, [(sign, name), ...])``.
+
+    Tolerates a conversation assistant turn that prefixes the action with a
+    natural-language plan (``"plan text\\n<dx> <dy> <scroll> ; +Key... -Key..."``):
+    the movement is read as the trailing numeric run of the last line before the
+    ``" ; "`` separator, and the press/release tokens from after it. A movement
+    line of EXACTLY four numbers is the extended ``<dx> <dy> <scroll> <hscroll>``
+    form emitted by the native computer_use translation; otherwise hscroll is 0."""
+    if not action:
+        return (0.0, 0.0, 0.0, 0.0, [])
+    s = str(action)
+    if s.strip().upper() == "NO_OP":
+        return (0.0, 0.0, 0.0, 0.0, [])
+    parts = s.split(" ; ")
+    last_line = parts[0].splitlines()[-1] if parts[0] else ""
+    toks = last_line.split()
+    hscroll = 0.0
+    vals: list[float] = []
+    try:
+        vals = [float(t) for t in toks]
+    except ValueError:
+        vals = []
+    if len(vals) == 4:
+        dx, dy, scroll, hscroll = vals
+    else:
+        nums: list[float] = []
+        for tok in reversed(toks):
+            try:
+                nums.append(float(tok))
+            except ValueError:
+                break
+            if len(nums) == 3:
+                break
+        nums.reverse()
+        dx = nums[0] if len(nums) >= 1 else 0.0
+        dy = nums[1] if len(nums) >= 2 else 0.0
+        scroll = nums[2] if len(nums) >= 3 else 0.0
+    events: list[tuple[str, str]] = []
+    if len(parts) > 1:
+        for tok in " ; ".join(parts[1:]).split():
+            if len(tok) > 1 and tok[0] in "+-":
+                events.append((tok[0], tok[1:]))
+    return (dx, dy, scroll, hscroll, events)
+
+
+# --------------------------------------------------------------------------- #
+# Native computer_use (Qwen tool-call) actions — ``action_format:
+# computer_use_rel_v1`` conversations, whose assistant turns are an optional
+# ``<think>…</think>`` block plus ``<tool_call>{JSON}</tool_call>`` blocks
+# instead of format_action strings. Each turn is translated once at load time:
+#   hud  — an equivalent format_action string ("<dx> <dy> <scroll>[ <hscroll>]
+#          ; +Key -Key …") consumed unchanged by compute_metrics and the
+#          front-end HUD/typed-text parsers;
+#   disp — the calls spelled out one-for-one for the rows / status line /
+#          tooltips (the JSON is what is unreadable, not the gestures), each
+#          rendered in full — no elision, no merging of calls.
+# The verbatim native text stays in the frame's ``action``.
+# --------------------------------------------------------------------------- #
+_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
+
+# Qwen lowercase key names -> the rdev names the keyboard HUD / typed-text
+# reconstruction know. Unknown names pass through and render as chips.
+_QWEN_KEY_TO_RDEV = {
+    "shift": "ShiftLeft", "ctrl": "ControlLeft", "control": "ControlLeft",
+    "alt": "Alt", "option": "Alt", "altgr": "AltGr",
+    "command": "MetaLeft", "cmd": "MetaLeft", "meta": "MetaLeft",
+    "win": "MetaLeft", "super": "MetaLeft",
+    "enter": "Return", "return": "Return", "space": "Space",
+    "backspace": "Backspace", "tab": "Tab", "esc": "Escape", "escape": "Escape",
+    "capslock": "CapsLock", "delete": "Delete", "insert": "Insert",
+    "home": "Home", "end": "End", "pageup": "PageUp", "pagedown": "PageDown",
+    "left": "LeftArrow", "right": "RightArrow", "up": "UpArrow", "down": "DownArrow",
+    "leftbracket": "BracketLeft", "rightbracket": "BracketRight",
+    "-": "Minus", "=": "Equal", "\\": "BackSlash", ";": "SemiColon",
+    "'": "Quote", ",": "Comma", ".": "Dot", "/": "Slash", "`": "BackQuote",
+}
+
+
+def _qwen_key(name: Any) -> str:
+    s = str(name)
+    low = s.lower()
+    if len(low) == 1 and "a" <= low <= "z":
+        return f"Key{low.upper()}"
+    if len(low) == 1 and low.isdigit():
+        return f"Num{low}"
+    if low in _QWEN_KEY_TO_RDEV:
+        return _QWEN_KEY_TO_RDEV[low]
+    if re.fullmatch(r"f[0-9]{1,2}", low):
+        return low.upper()
+    return s
+
+
+# char -> (rdev key name, needs shift); the inverse of _key_to_char, so a
+# ``type`` action reconstructs to exactly its text in the typed-text panel.
+_CHAR_TO_KEY: dict[str, tuple[str, bool]] = {}
+for _name, (_plain, _shifted) in _PUNCT.items():
+    _CHAR_TO_KEY[_plain] = (_name, False)
+    _CHAR_TO_KEY[_shifted] = (_name, True)
+for _name, _ch in _SHIFTNUM.items():
+    _CHAR_TO_KEY[_ch] = (_name, True)
+_CHAR_TO_KEY.update({" ": ("Space", False), "\n": ("Return", False), "\t": ("Tab", False)})
+
+
+def _char_key(ch: str) -> "tuple[str, bool] | None":
+    low = ch.lower()
+    if len(low) == 1 and "a" <= low <= "z":
+        return (f"Key{low.upper()}", ch.isupper())
+    if ch.isdigit() and ord(ch) < 128:
+        return (f"Num{ch}", False)
+    return _CHAR_TO_KEY.get(ch)
+
+
+def _type_events(text: str) -> list[tuple[str, str]]:
+    """A ``type`` action as press/release events, with ShiftLeft held around
+    shifted runs. Characters with no key mapping (unicode, …) are skipped."""
+    events: list[tuple[str, str]] = []
+    shifted = False
+    for ch in text:
+        ck = _char_key(ch)
+        if ck is None:
+            continue
+        name, need_shift = ck
+        if need_shift != shifted:
+            events.append(("+", "ShiftLeft") if need_shift else ("-", "ShiftLeft"))
+            shifted = need_shift
+        events.append(("+", name))
+        events.append(("-", name))
+    if shifted:
+        events.append(("-", "ShiftLeft"))
+    return events
+
+
+_CLICK_EVENTS = {
+    "left_click": ("LMB", 1, "click"), "right_click": ("RMB", 1, "rclick"),
+    "middle_click": ("MMB", 1, "mclick"), "double_click": ("LMB", 2, "dblclick"),
+    "triple_click": ("LMB", 3, "triclick"),
+}
+_QWEN_BTN = {"left": "LMB", "right": "RMB", "middle": "MMB"}
+
+
+def _fmt_num(v: Any) -> str:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "0"
+    return str(int(f)) if f == int(f) else f"{f:g}"
+
+
+def _signed(v: float) -> str:
+    return ("+" if v > 0 else "") + _fmt_num(v)
+
+
+def parse_native_action(text: str) -> "tuple[str, str] | None":
+    """Translate one native computer_use assistant turn into ``(hud, disp)``,
+    or None when ``text`` carries no ``<tool_call>`` block (not native format).
+
+    Mirrors the binning semantics of ``format_action``: movement/scroll summed
+    over the turn, press/release events in call order (clicks become +/- pairs,
+    ``key`` presses in order then releases in reverse, ``button_down``/``key_down``
+    stay held across turns until their up). ``wait`` contributes nothing (a
+    wait-only turn is a NO_OP); ``terminate`` becomes a +Terminate -Terminate
+    chip so the HUD marks the turn.
+
+    Covers the ``computer_use_rel_v1`` vocabulary and the ``pyautogui_gestures``/
+    ``pyautogui_primitives`` variants: ``move``/``mouse_move`` (arg ``offset``),
+    ``scroll`` with an ``offset`` [h, v] vector, clicks with an optional pre-move
+    ``offset``, ``left_click_drag``, and ``down``/``up`` (whose ``key`` may be an
+    rdev name like ``KeyC``/``LMB`` — passed through — or a lowercase Qwen name)."""
+    calls = _TOOL_CALL_RE.findall(text)
+    if not calls:
+        return None
+    dx = dy = scroll = hscroll = 0.0
+    events: list[tuple[str, str]] = []
+    disp: list[str] = []
+    for raw in calls:
+        try:
+            args = json.loads(raw).get("arguments") or {}
+        except json.JSONDecodeError:
+            disp.append("?")
+            continue
+        act = str(args.get("action") or "")
+
+        def _vec2(keys: tuple[str, ...] = ("delta", "offset")) -> tuple[float, float]:
+            for k in keys:
+                v = args.get(k)  # noqa: B023 — consumed within this iteration
+                if isinstance(v, (list, tuple)) and v:
+                    return (
+                        float(v[0]) if len(v) >= 1 else 0.0,
+                        float(v[1]) if len(v) >= 2 else 0.0,
+                    )
+            return (0.0, 0.0)
+
+        if act in ("mouse_move_rel", "mouse_move", "move"):
+            mdx, mdy = _vec2()
+            dx += mdx
+            dy += mdy
+            disp.append(f"move({_fmt_num(mdx)},{_fmt_num(mdy)})")
+        elif act == "scroll":
+            if args.get("offset") is not None:  # pyautogui variants: [h, v]
+                h, v = _vec2(("offset",))
+                hscroll += h
+                scroll += v
+                disp.append(f"scroll({_fmt_num(h)},{_fmt_num(v)})")
+            else:
+                v = float(args.get("pixels") or 0.0)
+                scroll += v
+                disp.append(f"scroll({_signed(v)})")
+        elif act == "hscroll":
+            v = float(args.get("pixels") or 0.0)
+            hscroll += v
+            disp.append(f"hscroll({_signed(v)})")
+        elif act in _CLICK_EVENTS:
+            mdx, mdy = _vec2(("offset",))  # optional pre-move (pyautogui gestures)
+            dx += mdx
+            dy += mdy
+            btn, n, label = _CLICK_EVENTS[act]
+            events.extend([("+", btn), ("-", btn)] * n)
+            disp.append(label if mdx == mdy == 0 else f"{label}({_fmt_num(mdx)},{_fmt_num(mdy)})")
+        elif act == "left_click_drag":
+            mdx, mdy = _vec2(("offset",))
+            dx += mdx
+            dy += mdy
+            events.extend([("+", "LMB"), ("-", "LMB")])
+            disp.append(f"drag({_fmt_num(mdx)},{_fmt_num(mdy)})")
+        elif act in ("button_down", "button_up"):
+            raw_btn = str(args.get("button") or "left")
+            btn = _QWEN_BTN.get(raw_btn.lower(), "LMB")
+            if act == "button_down":
+                events.append(("+", btn))
+                disp.append(f"hold({raw_btn})")
+            else:
+                events.append(("-", btn))
+                disp.append(f"release({raw_btn})")
+        elif act == "key":
+            names = [_qwen_key(k) for k in (args.get("keys") or [])]
+            events.extend(("+", k) for k in names)
+            events.extend(("-", k) for k in reversed(names))
+            disp.append("key(" + "+".join(str(k) for k in (args.get("keys") or [])) + ")")
+        elif act in ("key_down", "down"):
+            events.append(("+", _qwen_key(args.get("key") or "")))
+            disp.append(f"down({args.get('key')})")
+        elif act in ("key_up", "up"):
+            events.append(("-", _qwen_key(args.get("key") or "")))
+            disp.append(f"up({args.get('key')})")
+        elif act == "type":
+            t = str(args.get("text") or "")
+            events.extend(_type_events(t))
+            disp.append("type(" + json.dumps(t) + ")")   # verbatim, never elided
+        elif act == "wait":
+            disp.append(f"wait({_fmt_num(args.get('time') or 0)}s)")
+        elif act == "terminate":
+            events.extend([("+", "Terminate"), ("-", "Terminate")])
+            disp.append(f"terminate({args.get('status') or '?'})")
+        else:
+            disp.append(act or "?")
+    if dx == 0 and dy == 0 and scroll == 0 and hscroll == 0 and not events:
+        hud = "NO_OP"
+    else:
+        head = f"{round(dx)} {round(dy)} {round(scroll)}"
+        if round(hscroll):
+            head += f" {round(hscroll)}"
+        hud = head if not events else head + " ; " + " ".join(f"{s}{n}" for s, n in events)
+    d = " · ".join(disp) or "∅"
+    if "<think>" in text:
+        d = "💭 " + d
+    return hud, d
+
+
+# --------------------------------------------------------------------------- #
+# Ordered-events actions — ``action_format: ordered_events_v2`` / ``…_v3``
+# (thinking SFT, lib/action_format.py of the thinking pipeline): each assistant
+# turn is an optional ``<think>…</think>`` block plus one action line —
+# ``NO_OP``, ``TERMINATE``, or ``"; "``-separated primitives in performed
+# order: ``move(dx,dy)``, ``scroll(dx,dy)`` (horizontal, vertical),
+# ``down(EV)``, ``up(EV)`` and (v3) ``type("…")``. EV names are already rdev
+# (``KeyA``, ``ShiftLeft``, ``LMB`` …) — the HUD's native namespace — so the
+# ``hud`` translation passes events through verbatim and only sums the
+# movement/scroll into the ``format_action`` head (that sum is the radar's
+# semantics, nothing more); ``disp`` is the action line AS IS, primitive for
+# primitive, since that sequence is what the dataset teaches.
+# --------------------------------------------------------------------------- #
+_THINK_RE = re.compile(r"<think>.*?</think>", re.S)
+_ORDERED_PRIM_RE = re.compile(
+    r"(?P<mk>move|scroll)\((?P<mdx>-?\d+),(?P<mdy>-?\d+)\)"
+    r"|(?P<ud>down|up)\((?P<name>[^\s(),;]+)\)"
+    r'|type\("(?P<text>(?:[^"\\]|\\.)*)"\)'
+)
+_ORDERED_BUTTONS = frozenset({"LMB", "RMB", "MMB"})
+
+
+def _ordered_primitives(payload: str) -> "list[tuple[Any, ...]] | None":
+    """Parse the (think-stripped) payload of an ordered_events_v2/v3 turn into
+    ``("move"|"scroll", dx, dy) | ("down"|"up", name) | ("type", text) |
+    ("terminate",)`` tuples, or None when any line deviates from the grammar
+    (not this format — e.g. a ``format_action`` string or free prose)."""
+    prims: list[tuple[Any, ...]] = []
+    saw_line = False
+    for line in payload.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        saw_line = True
+        if line == "NO_OP":
+            continue
+        if line == "TERMINATE":  # stage 04's goal-done turn / suffix line
+            prims.append(("terminate",))
+            continue
+        pos = 0
+        while True:
+            m = _ORDERED_PRIM_RE.match(line, pos)
+            if m is None:
+                return None
+            if m.group("mk") is not None:
+                prims.append((m.group("mk"), int(m.group("mdx")), int(m.group("mdy"))))
+            elif m.group("ud") is not None:
+                prims.append((m.group("ud"), m.group("name")))
+            else:
+                prims.append(("type", re.sub(r'\\(["\\])', r"\1", m.group("text"))))
+            pos = m.end()
+            if pos == len(line):
+                break
+            if not line.startswith("; ", pos):
+                return None
+            pos += 2
+    return prims if saw_line else None
+
+
+def parse_ordered_action(text: str) -> "tuple[str, str] | None":
+    """Translate one ordered_events_v2/v3 assistant turn into ``(hud, disp)``,
+    or None when ``text`` is not that format (tried after
+    ``parse_native_action``; a plain ``format_action`` string or prose never
+    matches the primitive grammar).
+
+    hud mirrors ``format_action``: movement and scroll summed over the turn
+    (``scroll(dx,dy)`` splits into vertical ``<scroll>`` + horizontal
+    ``<hscroll>``), every ``down``/``up`` a ``+Name``/``-Name`` event verbatim
+    (the names are already rdev) — so held keys, clicks and typed text
+    reconstruct exactly in the HUD and metrics. ``type("…")`` (v3) expands to
+    per-char press/release via ``_type_events``; ``TERMINATE`` becomes the same
+    ``+Terminate -Terminate`` chip as the native translation. This summing is
+    the HUD's own semantics (one radar vector + one keyboard state per bin) and
+    goes no further than that.
+
+    disp is the action line VERBATIM — the primitives in performed order,
+    exactly as the label spells them. Nothing is coalesced, folded or
+    abbreviated: an eleven-move turn reads as eleven moves, because the whole
+    point of the ordered format is that the sequence is the label. Only the
+    ``<think>`` block is lifted out (marked 💭; the full raw text stays one hover
+    away in the row title and in the chat window)."""
+    body = _THINK_RE.sub("", text).strip()
+    if not body:
+        return None
+    prims = _ordered_primitives(body)
+    if prims is None:
+        return None
+    dx = dy = scroll = hscroll = 0
+    events: list[tuple[str, str]] = []
+    for p in prims:
+        if p[0] == "move":
+            dx += p[1]
+            dy += p[2]
+        elif p[0] == "scroll":
+            hscroll += p[1]
+            scroll += p[2]
+        elif p[0] == "down":
+            events.append(("+", p[1]))
+        elif p[0] == "up":
+            events.append(("-", p[1]))
+        elif p[0] == "type":
+            events.extend(_type_events(p[1]))
+        else:  # terminate
+            events.extend([("+", "Terminate"), ("-", "Terminate")])
+    if dx == 0 and dy == 0 and scroll == 0 and hscroll == 0 and not events:
+        hud = "NO_OP"
+    else:
+        head = f"{dx} {dy} {scroll}"
+        if hscroll:
+            head += f" {hscroll}"
+        hud = head if not events else head + " ; " + " ".join(f"{s}{n}" for s, n in events)
+    # Verbatim, single-line (a turn is one action line; a stage-04 TERMINATE
+    # suffix is a second one, joined with the same "; " the grammar uses).
+    d = "; ".join(ln.strip() for ln in body.splitlines() if ln.strip()) or "NO_OP"
+    if "<think>" in text:
+        d = "💭 " + d
+    return hud, d
+
+
+# Tool-call actions that drive the pointer (the ``mouse`` half of the per-turn
+# counts); everything else in the vocabulary is typing / keys / wait / terminate.
+_MOUSE_TOOL_ACTIONS = frozenset({
+    "mouse_move_rel", "mouse_move", "move", "scroll", "hscroll",
+    "left_click_drag", "button_down", "button_up", *_CLICK_EVENTS,
+})
+
+
+def turn_action_counts(text: str, hud: "str | None" = None) -> tuple[int, int]:
+    """``(actions, mouse actions)`` performed in ONE assistant turn.
+
+    What counts as "an action" follows the turn's own format, because that is
+    what the label teaches the model:
+
+      * **ordered_events_v2/v3** — one per PRIMITIVE (``move``/``scroll``/
+        ``down``/``up``/``type``). This is the format where a turn is a
+        mini-program, so ``move(4,-1); move(6,0); down(LMB); up(LMB)`` is 4
+        actions — the line is rendered verbatim, and this count is what makes
+        its length filterable. ``TERMINATE`` is not an action.
+      * **native computer_use** — one per tool call (one gesture each).
+      * **plain ``format_action``** — a turn IS one binned action, so this
+        counts what that bin does: its movement, its scroll, and each
+        press/release event.
+
+    ``mouse`` is the subset that drives the pointer — movement, scrolling and
+    button transitions; typing and other keys are excluded."""
+    body = _THINK_RE.sub("", text or "").strip()
+    prims = _ordered_primitives(body) if body else None
+    if prims is not None:
+        prims = [p for p in prims if p[0] != "terminate"]
+        mouse = sum(
+            1 for p in prims
+            if p[0] in ("move", "scroll")
+            or (p[0] in ("down", "up") and p[1] in _ORDERED_BUTTONS)
+        )
+        return len(prims), mouse
+    calls = _TOOL_CALL_RE.findall(text or "")
+    if calls:
+        mouse = 0
+        for raw in calls:
+            try:
+                act = str((json.loads(raw).get("arguments") or {}).get("action") or "")
+            except json.JSONDecodeError:
+                continue
+            if act in _MOUSE_TOOL_ACTIONS:
+                mouse += 1
+        return len(calls), mouse
+    dx, dy, scr, hscr, events = _parse_action_str(hud or text or "")
+    moved = 1 if (dx or dy) else 0
+    scrolled = 1 if (scr or hscr) else 0
+    buttons = sum(1 for _sign, name in events if name in ("LMB", "RMB", "MMB"))
+    return moved + scrolled + len(events), moved + scrolled + buttons
+
+
+def find_actions(ds: Any, query: str) -> dict[str, Any]:
+    """Segments whose turns contain ``query`` (case-insensitive substring).
+
+    Searching happens HERE rather than over the segment list the client already
+    holds, because the per-segment action text is exactly what that list must
+    not carry: tens of thousands of segments × a full trajectory of primitives
+    is a payload, not a filter. What comes back is only ``{segment_id: hits}``,
+    which the sidebar intersects with its other predicates; the client then
+    re-finds the matching turns inside the segment it opens (it has those
+    frames) to highlight and step through them.
+
+    Both the raw turn text and its ``disp`` rendering are searched, so
+    ``down(LMB)`` reaches an ordered turn's primitives and ``click`` reaches a
+    native tool call's readable form. A turn counts once however many times it
+    matches."""
+    q = (query or "").strip().lower()
+    out: dict[str, Any] = {"query": query, "segments": {}, "n_turns": 0,
+                           "n_segments": 0}
+    if not q:
+        return out
+    hits: dict[str, int] = {}
+    n_turns = 0
+    for sid, seg in (getattr(ds, "segments", {}) or {}).items():
+        # A frames-master store keeps its frames on disk (loaded per segment on
+        # demand) and carries no actions of its own — nothing to search.
+        frames = getattr(seg, "frames", None)
+        if not frames:
+            continue
+        n = 0
+        for f in frames:
+            if q in str(f.get("action") or "").lower() or q in str(f.get("disp") or "").lower():
+                n += 1
+        if n:
+            hits[str(sid)] = n
+            n_turns += n
+    out.update({"segments": hits, "n_segments": len(hits), "n_turns": n_turns})
+    return out
+
+
+def compute_metrics(frames: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate mouse travel / scroll / clicks / key presses and typed-text stats
+    over a trajectory's per-frame action strings. ``typed`` is the reconstructed
+    typed string (for the "typed text contains" filter); the counts are derived
+    from it so letters+digits+special+whitespace add up to ``chars``.
+
+    Also annotates every frame with its per-turn action counts (``n_act`` /
+    ``n_mouse``, see ``turn_action_counts``) and reduces them to the four
+    filter-panel metrics ``acts_max`` / ``acts_mean`` / ``mouse_max`` /
+    ``mouse_mean``. The means are per ACTING turn (a segment of mostly NO_OPs
+    would otherwise read as sparse for the wrong reason), the maxima are over
+    the whole segment — so "acts_max ≥ 20" finds the segments that CONTAIN a
+    dense turn, and the annotation then says which turn it is.
+
+    ``stuck_key_frames`` is the longest keyboard-only press->release gap in frame
+    units. If a key never releases, the gap is measured through the segment's last
+    frame. The UI applies the requested strict ``> T`` threshold against this value."""
+    mouse = scroll_total = 0.0
+    clicks = keys = 0
+    acts_total = acts_max = mouse_total = mouse_max = n_acting = 0
+    down: set[str] = set()
+    down_since: dict[str, int] = {}
+    chars: list[str] = []
+    max_hold = 0
+    max_hold_key: str | None = None
+    max_hold_start: int | None = None
+    max_hold_end: int | None = None
+    max_hold_unreleased = False
+    key_hold_ranges: list[dict[str, Any]] = []
+
+    def note_hold(name: str, start: int, end: int, unreleased: bool) -> None:
+        nonlocal max_hold, max_hold_key, max_hold_start, max_hold_end, max_hold_unreleased
+        held = max(0, end - start)
+        key_hold_ranges.append({
+            "key": name,
+            "start": start,
+            "end": end,
+            "frames": held,
+            "unreleased": unreleased,
+        })
+        if held > max_hold:
+            max_hold = held
+            max_hold_key = name
+            max_hold_start = start
+            max_hold_end = end
+            max_hold_unreleased = unreleased
+
+    for frame_idx, f in enumerate(frames):
+        # ``hud`` is the format_action translation of a native computer_use turn
+        # (parse that, not the raw tool-call text); plain datasets have no hud.
+        dx, dy, scr, hscr, events = _parse_action_str(f.get("hud") or f.get("action", ""))
+        # The turn's own length, BEFORE the hud/disp collapse (an 11-move turn
+        # sums to one vector above but is 11 actions here).
+        n_act, n_mouse = turn_action_counts(f.get("action") or "", f.get("hud"))
+        f["n_act"], f["n_mouse"] = n_act, n_mouse
+        acts_total += n_act
+        mouse_total += n_mouse
+        acts_max = max(acts_max, n_act)
+        mouse_max = max(mouse_max, n_mouse)
+        if n_act:
+            n_acting += 1
+        mouse += math.hypot(dx, dy)
+        scroll_total += abs(scr) + abs(hscr)
+        for sign, name in events:
+            if name in ("LMB", "RMB", "MMB"):
+                if sign == "+":
+                    clicks += 1
+                continue
+            if sign == "+":
+                keys += 1
+                down.add(name)
+                down_since.setdefault(name, frame_idx)
+                shift = "ShiftLeft" in down or "ShiftRight" in down
+                if name == "Backspace":
+                    if chars:
+                        chars.pop()
+                else:
+                    ch = _key_to_char(name, shift)
+                    if ch is not None:
+                        chars.append(ch)
+            else:
+                start = down_since.pop(name, None)
+                if start is not None:
+                    note_hold(name, start, frame_idx, False)
+                down.discard(name)
+    last_frame = len(frames) - 1
+    for name, start in down_since.items():
+        note_hold(name, start, last_frame, True)
+    text = "".join(chars)
+    return {
+        "mouse_px": round(mouse),
+        "scroll": round(scroll_total),
+        "clicks": clicks,
+        "keys": keys,
+        "acts_max": acts_max,
+        "acts_mean": round(acts_total / n_acting, 2) if n_acting else 0.0,
+        "mouse_max": mouse_max,
+        "mouse_mean": round(mouse_total / n_acting, 2) if n_acting else 0.0,
+        "chars": len(text),
+        "letters": sum(c.isalpha() for c in text),
+        "digits": sum(c.isdigit() for c in text),
+        "special": sum((not c.isalnum()) and (not c.isspace()) for c in text),
+        "typed": text,
+        "stuck_key_frames": max_hold,
+        "stuck_key": max_hold_key,
+        "stuck_key_start": max_hold_start,
+        "stuck_key_end": max_hold_end,
+        "stuck_key_unreleased": max_hold_unreleased,
+        "key_hold_ranges": key_hold_ranges,
+    }
+
+
 class Segment:
     """One trajectory: the ordered kept frames of a single ``segment_id``."""
 
@@ -266,15 +1402,31 @@ class Segment:
         n = len(self.frames)
         n_non_noop = sum(1 for f in self.frames if not f["is_noop"])
         dur = self.frames[-1]["t"] if self.frames else 0.0
+        metrics = {
+            k: v for k, v in self.metrics().items()
+            if k != "key_hold_ranges"
+        }
         return {
             "segment_id": self.segment_id,
             "recording_id": self.recording_id,
             "n_frames": n,
             "n_non_noop": n_non_noop,
             "duration_s": round(dur, 2),
+            **metrics,
         }
 
+    def metrics(self) -> dict[str, Any]:
+        """Filter-panel metrics (mouse travel, clicks, scroll, key presses, typed
+        text + char class counts), computed once from the action strings and cached
+        so repeated ``info()`` builds are cheap."""
+        m = getattr(self, "_metrics", None)
+        if m is None:
+            m = compute_metrics(self.frames)
+            self._metrics = m  # type: ignore[attr-defined]
+        return m
+
     def detail(self) -> dict[str, Any]:
+        metrics = self.metrics()
         return {
             "segment_id": self.segment_id,
             "recording_id": self.recording_id,
@@ -284,6 +1436,12 @@ class Segment:
             # from the master frame_manifest); absent -> 0.
             "n_black": sum(1 for f in self.frames if f.get("is_black")),
             "n_black_act": sum(1 for f in self.frames if f.get("is_black") and not f["is_noop"]),
+            "stuck_key_frames": metrics.get("stuck_key_frames"),
+            "stuck_key": metrics.get("stuck_key"),
+            "stuck_key_start": metrics.get("stuck_key_start"),
+            "stuck_key_end": metrics.get("stuck_key_end"),
+            "stuck_key_unreleased": metrics.get("stuck_key_unreleased"),
+            "key_hold_ranges": metrics.get("key_hold_ranges"),
             # Drop the internal image ref from the payload; the client fetches
             # frames by (segment, index) via /frame instead.
             "frames": [{k: v for k, v in f.items() if k != "ref"} for f in self.frames],
@@ -293,14 +1451,34 @@ class Segment:
 class FrameRecordsDataset:
     """All segments loaded from one or more ``frame_records.jsonl`` files."""
 
-    def __init__(self, jsonl_paths: list[Path]) -> None:
-        self.segments: OrderedDict[str, Segment] = OrderedDict()
+    def __init__(
+        self, jsonl_paths: list[Path], sampling: "Sampling | None" = None
+    ) -> None:
+        self.segments: "OrderedDict[str, Segment]" = OrderedDict()
+        self.sampling = sampling or Sampling()
+        self.limit = self.sampling.n
+        self._limited = False
         self._missing_ref = 0
+        # The files this build was read from — re-scanned by the sibling loader to
+        # pull in segments the sampling left out.
+        self.source_paths: list[Path] = [Path(p) for p in jsonl_paths]
+        # Segment ids a random draw keeps (None = take them in file order under
+        # ``limit``). Chosen up front from the full population, so the loader can
+        # skip a record by its id alone.
+        self._keep_ids: "set[str] | None" = None
+        self.total_available: "int | None" = None
         # Per-master-shard {record_index -> is_black}, read lazily from the shard's
         # sibling frame_manifest.jsonl the first time a segment on it is viewed.
-        self._black_luts: dict[str, dict[int, bool]] = {}
+        self._black_luts: "dict[str, dict[int, bool]]" = {}
+        # A user-scoped draw has to know every segment's uploader before it can
+        # pick, so it enumerates the store like a random draw does.
+        if self.sampling.is_random or self.sampling.scoped:
+            self._keep_ids = self._draw_segment_ids(jsonl_paths)
         total = 0
         for p in jsonl_paths:
+            if self._keep_ids is None and self._limit_reached():
+                self._limited = True
+                break
             total += self._load_file(p)
         if not self.segments:
             raise SystemExit(
@@ -308,9 +1486,39 @@ class FrameRecordsDataset:
             )
         print(
             f"loaded {total} frame records across {len(self.segments)} segments"
+            + self.sampling.note(
+                kept=len(self.segments), total=self.total_available,
+                limited=self._limited, noun="segments",
+            )
             + (f" ({self._missing_ref} without an image ref)" if self._missing_ref else ""),
             flush=True,
         )
+
+    def _draw_segment_ids(self, jsonl_paths: list[Path]) -> set[str]:
+        """The segment ids this sampling keeps: enumerate every segment in file order
+        (one cheap pass — ids are scanned out of the raw line, no full parse), then
+        draw from that population (narrowed to the selected users, if any)."""
+        ids: list[str] = []
+        seen: set[str] = set()
+        for p in jsonl_paths:
+            with p.open() as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    sid = _peek_segment_id(line)
+                    if sid not in seen:
+                        seen.add(sid)
+                        ids.append(sid)
+        pool = ([i for i in ids if self.user_of(i) in self.sampling.users]
+                if self.sampling.scoped else ids)
+        self.total_available = len(pool)
+        keep = self.sampling.select_items(ids, self.user_of)
+        self._limited = len(keep) < len(pool)
+        return set(keep)
+
+    def _limit_reached(self) -> bool:
+        return self.limit is not None and len(self.segments) >= self.limit
 
     def _load_file(self, path: Path) -> int:
         n = 0
@@ -319,11 +1527,17 @@ class FrameRecordsDataset:
                 line = line.strip()
                 if not line:
                     continue
+                if self._keep_ids is not None and _peek_segment_id(line) not in self._keep_ids:
+                    continue   # not in this draw — skip without parsing the record
                 rec = json.loads(line)
                 sid = str(rec.get("segment_id") or rec.get("clip_id") or "unknown")
                 seg = self.segments.get(sid)
                 if seg is None:
+                    if self._keep_ids is None and self._limit_reached():
+                        self._limited = True
+                        break
                     seg = Segment(sid, rec.get("recording_id"))
+                    seg.source_file = str(path)  # type: ignore[attr-defined]
                     self.segments[sid] = seg
                 ref = _image_ref(rec)
                 if ref is None:
@@ -403,13 +1617,197 @@ class FrameRecordsDataset:
         if seg is None:
             return None
         self._ensure_black(seg)
-        return seg.detail()
+        d = seg.detail()
+        d.update(self.source_info(seg))
+        return d
+
+    # -- provenance + siblings ------------------------------------------------
+    # A segment is one slice of a much longer recording, and a sampled dataset
+    # shows it with its neighbours missing. These two answer "where did this come
+    # from" (the real paths, copyable in the UI) and "give me the rest of its
+    # recording" (load the run around it so it can be judged in context).
+
+    def _clips_starts(self) -> list[Path]:
+        """Where to start looking for this dataset's clips manifest: the dir the
+        records were read from, then the stage-01a master its frames resolve from
+        (a derived store's manifest.json chains back to one of the two)."""
+        starts = [p.parent for p in getattr(self, "source_paths", [])]
+        root = getattr(self, "root", None)
+        if root:
+            starts.append(Path(root))
+        for seg in self.segments.values():
+            ref = next((f.get("ref") for f in seg.frames if f.get("ref")), None)
+            master = _ref_paths(ref)["master_dir"]
+            if master:
+                starts.append(Path(master))
+                break
+        return starts
+
+    def clips(self) -> "ClipsIndex | None":
+        """This dataset's clips manifest, resolved + read on first use, then held on
+        the build (``user_of`` hits it once per listed segment)."""
+        ci = getattr(self, "_clips_idx", ...)
+        if ci is ...:
+            ci = clips_index(*self._clips_starts())
+            self._clips_idx = ci  # type: ignore[attr-defined]
+        return ci
+
+    def user_of(self, segment_id: str) -> "str | None":
+        """Who recorded a segment (the uploading user), from the clips manifest —
+        None where no manifest is reachable. Carried in the segment list so the
+        filter panel can include/exclude whole users."""
+        ci = self.clips()
+        return (ci.rows.get(segment_id) or {}).get("user_id") if ci else None
+
+    def source_info(self, seg: Segment) -> dict[str, Any]:
+        """Where ``seg`` came from, at all three levels: the record file (and row)
+        it was read out of, the recording it is a slice of and that recording's
+        master frame store, and — via the clips manifest — the original mp4/keylog
+        and the upload folder they were captured into."""
+        ref = next((f.get("ref") for f in seg.frames if f.get("ref")), None)
+        ci = self.clips()
+        clip = (ci.rows.get(seg.segment_id) if ci else None) or {}
+        return {
+            "source_file": getattr(seg, "source_file", None),
+            "source_row": getattr(seg, "source_row", None),
+            "recording_id": seg.recording_id or _recording_of_sid(seg.segment_id),
+            "first_frame_ref": ref,
+            **_ref_paths(ref),
+            "video_path": clip.get("video_path"),
+            "keylog_path": clip.get("keylog_path"),
+            "upload_dir": clip.get("upload_dir"),
+            "user_id": clip.get("user_id"),
+            "upload_version": clip.get("version"),
+        }
+
+    def user_census(self) -> dict[str, int]:
+        """Every user in the STORE with their segment total (see ``_user_census``)."""
+        return _user_census(self.source_paths, self.user_of)
+
+    def folder_listing(self, segment_id: str) -> dict[str, Any]:
+        """The upload folder ``segment_id``'s clip sits in, and every recording
+        uploaded into it — with how many of each recording's clips this build has
+        loaded, so the UI can show what's already browsable and what a click would
+        pull in."""
+        ci = self.clips()
+        folder = ci.folder_of(segment_id) if ci else None
+        if not folder:
+            raise ValueError(
+                "no clips manifest reachable from this dataset — the upload folder "
+                "a segment was recorded into isn't known (pass --clips-manifest)"
+            )
+        clip = ci.rows.get(segment_id) or {}
+        recs = ci.recordings_in(folder)
+        return {
+            "folder": folder,
+            "user_id": clip.get("user_id"),
+            "version": clip.get("version"),
+            "recording_id": clip.get("recording_id"),
+            "n_recordings": len(recs),
+            "n_segments": len(ci.segments_in(folder)),
+            "clips_manifest": str(ci.path),
+            "recordings": [
+                {
+                    "recording_id": r["recording_id"],
+                    "n_segments": r["n_segments"],
+                    "first_segment": r["first_segment"],
+                    "n_loaded": sum(1 for s in r["segment_ids"] if s in self.segments),
+                }
+                for r in recs
+            ],
+        }
+
+    def family(self, recording_id: str) -> list[str]:
+        """Every segment id of ``recording_id`` in the SOURCE store, in store order
+        — including the ones this build's sampling skipped. One cheap scan (ids
+        peeked out of the raw line, no JSON parse)."""
+        out: list[str] = []
+        seen: set[str] = set()
+        for path in self.source_paths:
+            with path.open() as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    sid = _peek_segment_id(line)
+                    if sid in seen:
+                        continue
+                    seen.add(sid)
+                    if _peek_recording_id(line, sid) == recording_id:
+                        out.append(sid)
+        return out
+
+    def _load_selection(self, segment_ids: list[str]) -> int:
+        """Load exactly these segment ids into this build (ignoring its sampling),
+        leaving the already-loaded ones untouched. Returns how many were added."""
+        keep, lim = self._keep_ids, self.limit
+        self._keep_ids, self.limit = set(segment_ids), None
+        before = len(self.segments)
+        try:
+            for path in self.source_paths:
+                self._load_file(path)
+        finally:
+            self._keep_ids, self.limit = keep, lim
+        return len(self.segments) - before
+
+    def load_siblings(
+        self, segment_id: str, k: "int | None", scope: str = "recording"
+    ) -> dict[str, Any]:
+        """Pull up to ``k`` segments related to ``segment_id`` — centred on it, so
+        both the ones before and the ones after — into this build.
+
+        ``scope="recording"`` takes them from the recording this segment was cut
+        from; ``scope="folder"`` widens to the whole upload folder that recording
+        was captured into (its neighbouring recordings included). The new segments
+        are appended to the loaded set (filter the segment list by the recording id
+        to see one run); a sibling already loaded is left as it is. ``k`` <= 0 takes
+        the whole family.
+
+        A folder family is listed from the clips manifest, which covers the SOURCE
+        corpus — segments this dataset filtered out simply never load, so ``added``
+        can be smaller than ``n_selected``."""
+        seg = self.segments.get(segment_id)
+        rec = str((seg.recording_id if seg else None) or _recording_of_sid(segment_id))
+        folder = None
+        if scope == "folder":
+            ci = self.clips()
+            folder = ci.folder_of(segment_id) if ci else None
+            if not folder:
+                raise ValueError(
+                    "no clips manifest reachable from this dataset — the upload "
+                    "folder a segment was recorded into isn't known "
+                    "(pass --clips-manifest)"
+                )
+            fam = ci.segments_in(folder)
+        else:
+            fam = self.family(rec)
+        pos = fam.index(segment_id) if segment_id in fam else 0
+        picked = _window(fam, pos, k)
+        want = [s for s in picked if s not in self.segments]
+        added = self._load_selection(want) if want else 0
+        return {
+            "scope": scope,
+            "recording_id": rec,
+            "folder": folder,
+            "n_family": len(fam),
+            "n_selected": len(picked),
+            "added": added,
+            "n_missing": len(want) - added,
+            "segment_ids": picked,
+        }
 
     def info(self) -> dict[str, Any]:
         return {
             "n_segments": len(self.segments),
             "mode": "frame_records",
-            "segments": [s.summary() for s in self.segments.values()],
+            "limit": self.limit,
+            "limited": self._limited,
+            "sampling": self.sampling.public(),
+            "total_available": self.total_available,
+            "segments": [
+                {**s.summary(), "user_id": self.user_of(s.segment_id)}
+                for s in self.segments.values()
+            ],
         }
 
 
@@ -449,43 +1847,154 @@ class ConversationsDataset(FrameRecordsDataset):
 
     mode = "conversations"
 
-    def __init__(self, conversations_path: Path) -> None:
-        self.segments: OrderedDict[str, Segment] = OrderedDict()
+    def __init__(
+        self, conversations_path: Path, sampling: "Sampling | None" = None
+    ) -> None:
+        self.segments: "OrderedDict[str, Segment]" = OrderedDict()
+        self.sampling = sampling or Sampling()
+        self.limit = self.sampling.n
+        self._limited = False
         self._missing_ref = 0
-        self._black_luts: dict[str, dict[int, bool]] = {}
+        self._black_luts: "dict[str, dict[int, bool]]" = {}
+        # The one file this build was read from + the row each family member sits on
+        # (filled by ``family()``, consumed by ``_load_selection``).
+        self.source_path = conversations_path
+        self.source_paths = [conversations_path]
+        # Row numbers a random draw keeps (None = first ``limit`` rows in file order).
+        self._keep_rows: "set[int] | None" = None
+        self.total_available: "int | None" = None
+        if self.sampling.is_random or self.sampling.scoped:
+            self._keep_rows = self._draw_rows(conversations_path)
         n = self._load_file(conversations_path)
         if not self.segments:
             raise SystemExit(f"No conversations found in {conversations_path}")
         print(
             f"loaded {n} conversations across {len(self.segments)} segments"
+            + self.sampling.note(
+                kept=n, total=self.total_available,
+                limited=self._limited, noun="conversations",
+            )
             + (f" ({self._missing_ref} turns without an image)" if self._missing_ref else ""),
             flush=True,
         )
 
+    def _draw_rows(self, path: Path) -> set[int]:
+        """The row numbers this sampling keeps: one conversation per line, so
+        counting the non-empty lines is the whole population pass — a user-scoped
+        draw also peeks each line's segment id (still no JSON parse) to know whose
+        recording it is."""
+        rows: list[int] = []
+        user_by_row: dict[int, "str | None"] = {}
+        scoped = self.sampling.scoped
+        row = -1
+        with path.open() as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                row += 1
+                rows.append(row)
+                if scoped:
+                    user_by_row[row] = self.user_of(_peek_segment_id(line))
+        pool = ([r for r in rows if user_by_row.get(r) in self.sampling.users]
+                if scoped else rows)
+        self.total_available = len(pool)
+        keep = self.sampling.select_items(rows, user_by_row.get if scoped else None)
+        self._limited = len(keep) < len(pool)
+        return set(keep)
+
     def _load_file(self, path: Path) -> int:  # type: ignore[override]
         n = 0
+        row = -1
         with path.open() as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
+                row += 1
+                if self._keep_rows is not None:
+                    if row not in self._keep_rows:
+                        continue   # not in this draw — skip without parsing the row
+                elif self._limit_reached():
+                    self._limited = True
+                    break
                 seg = self._parse_conversation(json.loads(line))
                 if seg is not None:
+                    seg.source_file = str(path)  # type: ignore[attr-defined]
+                    seg.source_row = row  # type: ignore[attr-defined]
                     self.segments[seg.segment_id] = seg
                     n += 1
         return n
 
-    def _parse_conversation(self, rec: dict[str, Any]) -> Segment | None:
-        sid = str(rec.get("segment_id") or rec.get("conversation_id") or f"conv{len(self.segments)}")
+    def family(self, recording_id: str) -> list[str]:  # type: ignore[override]
+        """One conversation per row, so the family is just the rows whose recording
+        matches, in file order."""
+        out: list[str] = []
+        seen: set[str] = set()
+        with self.source_path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                sid = _peek_segment_id(line)
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                if _peek_recording_id(line, sid) == recording_id:
+                    out.append(sid)
+        return out
+
+    def _load_selection(self, segment_ids: list[str]) -> int:  # type: ignore[override]
+        """Conversations are keyed by ROW, so the wanted ids are turned back into
+        row numbers by one id-peeking scan (no JSON parse until a row is kept)."""
+        want = set(segment_ids)
+        rows: set[int] = set()
+        row = -1
+        with self.source_path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                row += 1
+                if _peek_segment_id(line) in want:
+                    rows.add(row)
+        if not rows:
+            return 0
+        keep, lim = self._keep_rows, self.limit
+        self._keep_rows, self.limit = rows, None
+        before = len(self.segments)
+        try:
+            self._load_file(self.source_path)
+        finally:
+            self._keep_rows, self.limit = keep, lim
+        return len(self.segments) - before
+
+    def _parse_conversation(self, rec: dict[str, Any]) -> "Segment | None":
+        # external goal-SFT rows carry no segment_id/conversation_id — fall back to
+        # sample_id (e.g. u02171b00_20260417_g003), a meaningful per-goal label.
+        sid = str(rec.get("segment_id") or rec.get("conversation_id")
+                  or rec.get("sample_id") or f"conv{len(self.segments)}")
         seg = Segment(sid, rec.get("recording_id"))
         # Conversation-level metadata, read back in segment_detail()/info().
         seg.conversation_id = rec.get("conversation_id")  # type: ignore[attr-defined]
-        seg.instruction = rec.get("instruction")  # type: ignore[attr-defined]
+        # goal-window builders (e.g. the native computer_use SFT) carry the goal
+        # as ``goal_text`` instead of ``instruction``
+        seg.instruction = rec.get("instruction") or rec.get("goal_text")  # type: ignore[attr-defined]
+        # Self-compaction ``[CONTEXT]…[/CONTEXT]`` rolling summary, present on non-first
+        # chunks of a split goal (carried as a top-level field by stage 04). Surfaced as
+        # its own banner note; also fused into the first user turn by the builder.
+        seg.context = rec.get("context")  # type: ignore[attr-defined]
         seg.goal_conditioned = bool(rec.get("goal_conditioned"))  # type: ignore[attr-defined]
+        seg.action_format = rec.get("action_format")  # type: ignore[attr-defined]
         seg.target_fps = rec.get("target_fps")  # type: ignore[attr-defined]
         seg.alignment_status = rec.get("alignment_status")  # type: ignore[attr-defined]
         seg.split = rec.get("split")  # type: ignore[attr-defined]
         seg.system_prompt = None  # type: ignore[attr-defined]
+        # Verbatim text of the FIRST user turn -- what the model actually reads before
+        # the first screenshot. For a goal-conditioned segment this is the goal AND
+        # (selfcompact sets) the fused ``[CONTEXT]`` block, which the top-level
+        # ``instruction`` field alone doesn't show; read straight from ``messages`` so
+        # it stays faithful even where stage 06 has dropped that field.
+        seg.first_user_text = None  # type: ignore[attr-defined]
         fps = float(rec.get("target_fps") or 0.0)
         pending_ref: str | None = None
         for m in rec.get("messages") or []:
@@ -496,26 +2005,58 @@ class ConversationsDataset(FrameRecordsDataset):
             if role == "system":
                 seg.system_prompt = _first_text(content)  # type: ignore[attr-defined]
             elif role == "user":
-                # A goal-conditioned first turn puts the instruction text before the
-                # image; we take the image (top-level ``instruction`` already has the text).
+                # A goal-conditioned first turn puts the instruction (+ any [CONTEXT])
+                # text before the image; keep the FIRST user turn's text verbatim for
+                # the banner, and take the image as this frame's ref.
+                if seg.first_user_text is None:  # type: ignore[attr-defined]
+                    seg.first_user_text = _first_text(content)  # type: ignore[attr-defined]
                 pending_ref = _first_image(content)
                 if pending_ref is None:
                     self._missing_ref += 1
             elif role == "assistant":
                 action = _first_text(content) or ""
+                # Native computer_use tool-call turn, else an ordered-events
+                # (thinking SFT) turn -> hud (format_action translation, drives
+                # HUD + metrics) and disp (compact summary); the raw text stays
+                # in ``action``. None for plain-format turns.
+                native = parse_native_action(action)
+                if native is None:
+                    native = parse_ordered_action(action)
                 i = len(seg.frames)
                 t = (i / fps) if fps > 0 else float(i)
-                seg.frames.append({
+                frame = {
                     "i": i,
                     "bin": i,
                     "t": round(t, 3),
                     "src": None,  # source_frame_idx isn't carried into the conversation
                     "action": action,
-                    "is_noop": _is_noop(action),
+                    "is_noop": (native[0] == "NO_OP") if native else _is_noop(action),
                     "ref": pending_ref,  # internal; stripped before it hits the client
-                })
+                }
+                if native is not None:
+                    frame["hud"], frame["disp"] = native
+                seg.frames.append(frame)
                 pending_ref = None
         return seg
+
+    @staticmethod
+    def _conv_text(seg: Segment) -> str:
+        """Full searchable text of one conversation: the first user turn (goal + any
+        ``[CONTEXT]``) followed by every assistant turn's action/plan string. Powers
+        the left panel's 'conversation contains' filter (so search reaches the plans
+        and actions, not just the goal), and mirrors the front-end's 'full
+        conversation' note. One string per segment, sent with the segment list."""
+        parts: list[str] = []
+        fut = getattr(seg, "first_user_text", None)
+        if fut:
+            parts.append(str(fut))
+        for f in seg.frames:
+            parts.append(str(f.get("action") or ""))
+            # native turns: also search the readable summary ("click",
+            # "terminate(success)", …), not just the raw tool-call JSON
+            if f.get("disp"):
+                parts.append(str(f["disp"]))
+        return "\n".join(parts)
 
     def segment_detail(self, segment_id: str) -> dict[str, Any] | None:
         d = super().segment_detail(segment_id)  # runs _ensure_black + Segment.detail()
@@ -526,7 +2067,10 @@ class ConversationsDataset(FrameRecordsDataset):
             "mode": "conversations",
             "conversation_id": getattr(seg, "conversation_id", None),
             "instruction": getattr(seg, "instruction", None),
+            "context": getattr(seg, "context", None),
+            "first_user_text": getattr(seg, "first_user_text", None),
             "goal_conditioned": getattr(seg, "goal_conditioned", False),
+            "action_format": getattr(seg, "action_format", None),
             "system_prompt": getattr(seg, "system_prompt", None),
             "target_fps": getattr(seg, "target_fps", None),
             "alignment_status": getattr(seg, "alignment_status", None),
@@ -540,15 +2084,239 @@ class ConversationsDataset(FrameRecordsDataset):
         return {
             "n_segments": len(segs),
             "mode": "conversations",
+            "limit": self.limit,
+            "limited": self._limited,
+            "sampling": self.sampling.public(),
+            "total_available": self.total_available,
             "goal_conditioned": any(getattr(s, "goal_conditioned", False) for s in segs),
+            "action_format": next(
+                (getattr(s, "action_format", None) for s in segs
+                 if getattr(s, "action_format", None)), None
+            ),
             "has_system_prompt": any(getattr(s, "system_prompt", None) for s in segs),
             "target_fps": next(
                 (getattr(s, "target_fps", None) for s in segs if getattr(s, "target_fps", None)), None
             ),
             "segments": [
-                {**s.summary(), "instruction": getattr(s, "instruction", None)} for s in segs
+                {
+                    **s.summary(),
+                    "user_id": self.user_of(s.segment_id),
+                    "instruction": getattr(s, "instruction", None),
+                    "conv_text": self._conv_text(s),
+                }
+                for s in segs
             ],
         }
+
+
+class InlineRecordsDataset(ConversationsDataset):
+    """A stage-06 *inline SFT records* store — the tokenized training examples,
+    browsed as trajectories.
+
+    Payload-free records built by omegalax ``build_records_from_chat``: each
+    ArrayRecord entry across the ``train/`` and ``val/`` splits IS one training
+    example — a ``<= max_length`` token chunk of a stage-04 conversation with its
+    ``ar://`` image refs into the SAME stage-01a master preserved (message slices,
+    not pre-encoded pixels). So every record is shaped exactly like a stage-04
+    conversation row, and the frame / action / HUD / system-prompt rendering is
+    inherited verbatim from ``ConversationsDataset`` — only the *source* differs
+    (ArrayRecord shards instead of a ``conversations.jsonl``).
+
+    Only KEPT records are present (overflow-dropped / -truncated conversations are
+    already gone), so browsing them is literally the model's training input. On top
+    of the conversation view it surfaces what stage 06 adds: the ``train``/``val``
+    split, the measured token length vs the ``max_length`` budget, the overflow
+    mode, and the tokenizer/model the lengths were measured against.
+
+    ``--dataset`` may point at the stage-06 root (``train/`` + ``val/`` subdirs) or
+    straight at a single split dir. Each record becomes one browsable chunk, keyed
+    ``<split>/<segment_id>`` (a ``#n`` suffix disambiguates a segment that ``split``
+    overflow-mode broke into several chunks)."""
+
+    mode = "inline_records"
+
+    def __init__(self, root: Path, sampling: "Sampling | None" = None) -> None:
+        self.segments: "OrderedDict[str, Segment]" = OrderedDict()
+        self.sampling = sampling or Sampling()
+        self.limit = self.sampling.n
+        self._limited = False
+        self._missing_ref = 0
+        self._black_luts: "dict[str, dict[int, bool]]" = {}
+        self.root = root
+        self.max_length: int | None = None
+        self.model_id: str | None = None
+        self.overflow_mode: str | None = None
+        self.total_available: "int | None" = None
+        total = 0
+        for split_name, split_dir, shard_name, idxs in self._plan(root):
+            total += self._load_shard(split_name, split_dir, shard_name, idxs)
+        if not self.segments:
+            raise SystemExit(f"No inline records found under {root}")
+        print(
+            f"loaded {total} inline records across {len(self.segments)} chunks "
+            f"(max_length={self.max_length}, model={self.model_id})"
+            + self.sampling.note(
+                kept=total, total=self.total_available,
+                limited=self._limited, noun="records",
+            )
+            + (f" ({self._missing_ref} turns without an image)" if self._missing_ref else ""),
+            flush=True,
+        )
+
+    @staticmethod
+    def _discover_splits(root: Path) -> "list[tuple[str, Path]]":
+        """The split dirs to read: ``train``/``val`` subdirs of a stage-06 root, or
+        the root itself when it is already a single split dir (has ``metadata.json``)."""
+        splits = [
+            (name, root / name)
+            for name in ("train", "val")
+            if (root / name / "metadata.json").exists()
+        ]
+        if splits:
+            return splits
+        if (root / "metadata.json").exists():
+            return [(root.name, root)]
+        raise SystemExit(f"no train/ or val/ split (metadata.json) found under {root}")
+
+    @staticmethod
+    def _reader(shard: Path):
+        from array_record.python.array_record_module import (  # noqa: PLC0415
+            ArrayRecordReader,
+        )
+
+        return ArrayRecordReader(str(shard))
+
+    def _split_shards(self, split_dir: Path) -> list[str]:
+        """One split's shard names, reading its ``metadata.json`` (and picking up the
+        store-level max_length / overflow mode / tokenizer on the way)."""
+        meta = json.loads((split_dir / "metadata.json").read_text())
+        if self.max_length is None:
+            self.max_length = meta.get("max_length")
+        if self.overflow_mode is None:
+            self.overflow_mode = meta.get("overflow_mode")
+        if self.model_id is None:
+            self.model_id = (meta.get("profile_metadata") or {}).get("model_id")
+        return meta.get("shard_paths") or sorted(
+            p.name for p in split_dir.glob("*.array_record")
+        )
+
+    def _plan(self, root: Path) -> "list[tuple[str, Path, str, list[int]]]":
+        """Which records to read, as ``(split, split_dir, shard, record_idxs)`` in
+        store order.
+
+        Shard sizes come from the ArrayRecord footers — metadata, no payload read —
+        so the whole population is known before a single record is parsed: "first"
+        takes the leading K, a random draw picks K positions out of every record in
+        every shard of every split."""
+        shards: "list[tuple[str, Path, str, int]]" = []
+        for split_name, split_dir in self._discover_splits(root):
+            for shard_name in self._split_shards(split_dir):
+                num = self._reader(split_dir / shard_name).num_records()
+                shards.append((split_name, split_dir, shard_name, num))
+        total = sum(num for *_, num in shards)
+        self.total_available = total
+        picked = self.sampling.select(total)   # ascending global record indices
+        self._limited = len(picked) < total
+        plan: "list[tuple[str, Path, str, list[int]]]" = []
+        base, pos = 0, 0
+        for split_name, split_dir, shard_name, num in shards:
+            idxs: list[int] = []
+            while pos < len(picked) and picked[pos] < base + num:
+                idxs.append(picked[pos] - base)
+                pos += 1
+            if idxs:
+                plan.append((split_name, split_dir, shard_name, idxs))
+            base += num
+        return plan
+
+    def _load_shard(
+        self, split_name: str, split_dir: Path, shard_name: str, idxs: list[int]
+    ) -> int:
+        reader = self._reader(split_dir / shard_name)
+        n = 0
+        # Records are small (message slices with ar:// refs, no pixels), but read
+        # in bounded batches so a big shard doesn't materialize all at once.
+        for start in range(0, len(idxs), 512):
+            batch = idxs[start:start + 512]
+            for payload in reader.read(batch):
+                rec = json.loads(payload)
+                seg = self._parse_conversation(rec)
+                seg.split = split_name  # type: ignore[attr-defined]
+                seg.measured_length = rec.get("_omegalax_measured_length")  # type: ignore[attr-defined]
+                seg.omega_session_id = rec.get("_omegalax_session_id")  # type: ignore[attr-defined]
+                seg.max_length = self.max_length  # type: ignore[attr-defined]
+                seg.shard = shard_name  # type: ignore[attr-defined]
+                seg.source_file = str(split_dir / shard_name)  # type: ignore[attr-defined]
+                key = self._unique_key(f"{split_name}/{seg.segment_id}")
+                seg.segment_id = key
+                self.segments[key] = seg
+                n += 1
+        return n
+
+    def _unique_key(self, base: str) -> str:
+        key, k = base, 2
+        while key in self.segments:
+            key, k = f"{base}#{k}", k + 1
+        return key
+
+    def user_census(self) -> dict[str, int]:
+        """Empty: a record's key (``<split>/<segment_id>#n``) doesn't resolve to a
+        clip, so inline records carry no user at all."""
+        return {}
+
+    def load_siblings(
+        self, segment_id: str, k: "int | None", scope: str = "recording"
+    ) -> dict[str, Any]:
+        """Not available here: a record is a tokenized CHUNK inside an ArrayRecord
+        shard, so a sibling scan would have to decode every record of every shard.
+        Browse the stage-04 conversations these records were built from instead."""
+        raise ValueError(
+            "sibling loading isn't supported for stage-06 inline records — open the "
+            "stage-04 conversations dataset the records were built from"
+        )
+
+    def segment_detail(self, segment_id: str) -> dict[str, Any] | None:
+        d = super().segment_detail(segment_id)  # Conversations detail + _ensure_black
+        if d is None:
+            return None
+        seg = self.segments[segment_id]
+        d.update({
+            "mode": "inline_records",
+            "split": getattr(seg, "split", None),
+            "measured_length": getattr(seg, "measured_length", None),
+            "max_length": self.max_length,
+            "overflow_mode": self.overflow_mode,
+            "model_id": self.model_id,
+            "omega_session_id": getattr(seg, "omega_session_id", None),
+        })
+        return d
+
+    def info(self) -> dict[str, Any]:
+        d = super().info()  # conversation-level goal/system/fps rollup
+        segs = list(self.segments.values())
+        d.update({
+            "mode": "inline_records",
+            "limit": self.limit,
+            "limited": self._limited,
+            "max_length": self.max_length,
+            "model_id": self.model_id,
+            "overflow_mode": self.overflow_mode,
+            "splits": sorted(
+                {getattr(s, "split", None) for s in segs if getattr(s, "split", None)}
+            ),
+            "segments": [
+                {
+                    **s.summary(),
+                    "user_id": self.user_of(s.segment_id),
+                    "instruction": getattr(s, "instruction", None),
+                    "conv_text": self._conv_text(s),
+                    "split": getattr(s, "split", None),
+                    "measured_length": getattr(s, "measured_length", None),
+                }
+                for s in segs
+            ],
+        })
+        return d
 
 
 class FramesMasterDataset:
@@ -565,11 +2333,19 @@ class FramesMasterDataset:
 
     mode = "frames_master"
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, sampling: "Sampling | None" = None) -> None:
         self.root = root
+        self.sampling = sampling or Sampling()
+        self.limit = self.sampling.n
+        self._limited = False
+        self.total_available: "int | None" = None
         self.master_fps: float | None = None
-        self.segments: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self.segments: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
         index_path = root / "segment_index.jsonl"
+        # The index is one row per segment and the per-frame rows are read lazily,
+        # so a random draw can read the whole index (cheap) and keep the sampled
+        # rows; "first" still stops at row K.
+        rows: "list[dict[str, Any]]" = []
         with index_path.open() as f:
             for line in f:
                 line = line.strip()
@@ -578,14 +2354,29 @@ class FramesMasterDataset:
                 row = json.loads(line)
                 if not row.get("num_records"):
                     continue  # skip empty/failed segments (no usable frame store)
-                sid = str(row.get("segment_id"))
-                self.master_fps = row.get("master_fps", self.master_fps)
-                self.segments[sid] = {
-                    "recording_id": row.get("recording_id"),
-                    "num_records": int(row["num_records"]),
-                    "duration_s": float(row.get("video_duration_s") or 0.0),
-                    "manifest": row.get("frame_manifest"),
-                }
+                if not (self.sampling.is_random or self.sampling.scoped) \
+                        and self.limit is not None and len(rows) >= self.limit:
+                    self._limited = True
+                    break
+                rows.append(row)
+        if self.sampling.is_random or self.sampling.scoped:
+            by_id = {str(r.get("segment_id")): r for r in rows}
+            ids = list(by_id)
+            pool = ([i for i in ids if self.user_of(i) in self.sampling.users]
+                    if self.sampling.scoped else ids)
+            self.total_available = len(pool)
+            keep = self.sampling.select_items(ids, self.user_of)
+            self._limited = len(keep) < len(pool)
+            rows = [by_id[i] for i in keep]
+        for row in rows:
+            sid = str(row.get("segment_id"))
+            self.master_fps = row.get("master_fps", self.master_fps)
+            self.segments[sid] = {
+                "recording_id": row.get("recording_id"),
+                "num_records": int(row["num_records"]),
+                "duration_s": float(row.get("video_duration_s") or 0.0),
+                "manifest": row.get("frame_manifest"),
+            }
         if not self.segments:
             raise SystemExit(f"no usable segments in {index_path}")
         # Optional keylog overlay: raw events placed by timestamp onto the master
@@ -636,10 +2427,14 @@ class FramesMasterDataset:
                             "splices": row.get("splices") or [],
                         }
             print(f"  alignment overlay: {len(self.align)} segments (from {align_path})", flush=True)
-        self._cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._cache: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
         self._cache_cap = 6
         print(
-            f"frames-master: {len(self.segments)} segments, master_fps={self.master_fps}",
+            f"frames-master: {len(self.segments)} segments, master_fps={self.master_fps}"
+            + self.sampling.note(
+                kept=len(self.segments), total=self.total_available,
+                limited=self._limited, noun="segments",
+            ),
             flush=True,
         )
 
@@ -735,7 +2530,7 @@ class FramesMasterDataset:
                     }
                 else:
                     events = _raw_events(Path(keylog))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — keep frames if keylog unreadable
                 print(f"  keylog read failed for {segment_id}: {exc}", flush=True)
                 keylog = None
         entry = {"frames": frames, "events": events, "has_keylog": bool(keylog),
@@ -750,13 +2545,102 @@ class FramesMasterDataset:
         entry = self._load(segment_id)
         return entry["frames"] if entry else None
 
+    def clips(self) -> "ClipsIndex | None":
+        return clips_index(self.root)
+
+    folder_listing = FrameRecordsDataset.folder_listing
+    user_of = FrameRecordsDataset.user_of
+
+    def user_census(self) -> dict[str, int]:
+        return _user_census([self.root / "segment_index.jsonl"], self.user_of)
+
+    def load_siblings(
+        self, segment_id: str, k: "int | None", scope: str = "recording"
+    ) -> dict[str, Any]:
+        """Add up to ``k`` segments of the same recording (or, ``scope="folder"``,
+        of the whole upload folder it was captured into), centred on ``segment_id``,
+        to the listed set. Per-frame rows stay lazy (as for every listed segment),
+        so this only re-reads the index."""
+        rec = str((self.segments.get(segment_id) or {}).get("recording_id")
+                  or _recording_of_sid(segment_id))
+        folder, want_ids = None, None
+        if scope == "folder":
+            ci = self.clips()
+            folder = ci.folder_of(segment_id) if ci else None
+            if not folder:
+                raise ValueError(
+                    "no clips manifest reachable from this master — the upload "
+                    "folder a segment was recorded into isn't known "
+                    "(pass --clips-manifest)"
+                )
+            want_ids = set(ci.segments_in(folder))
+        rows: "dict[str, dict[str, Any]]" = {}
+        order: list[str] = []
+        with (self.root / "segment_index.jsonl").open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                sid = _peek_segment_id(line)
+                if want_ids is not None:
+                    if sid not in want_ids:
+                        continue
+                elif _peek_recording_id(line, sid) != rec:
+                    continue
+                row = json.loads(line)
+                if not row.get("num_records"):
+                    continue  # skip empty/failed segments, as the initial listing does
+                if sid not in rows:
+                    rows[sid] = row
+                    order.append(sid)
+        pos = order.index(segment_id) if segment_id in order else 0
+        picked = _window(order, pos, k)
+        want = [sid for sid in picked if sid not in self.segments]
+        added = 0
+        for sid in picked:
+            if sid in self.segments:
+                continue
+            row = rows[sid]
+            self.master_fps = row.get("master_fps", self.master_fps)
+            self.segments[sid] = {
+                "recording_id": row.get("recording_id"),
+                "num_records": int(row["num_records"]),
+                "duration_s": float(row.get("video_duration_s") or 0.0),
+                "manifest": row.get("frame_manifest"),
+            }
+            added += 1
+        return {
+            "scope": scope,
+            "recording_id": rec,
+            "folder": folder,
+            "n_family": len(order),
+            "n_selected": len(picked),
+            "added": added,
+            "n_missing": len(want) - added,
+            "segment_ids": picked,
+        }
+
     def segment_detail(self, segment_id: str) -> dict[str, Any] | None:
         entry = self._load(segment_id)
         if entry is None:
             return None
         frames = entry["frames"]
         meta = self.segments[segment_id]
+        ref = next((fr.get("ref") for fr in frames if fr.get("ref")), None)
+        paths = _ref_paths(ref)
+        ci = self.clips()
+        clip = (ci.rows.get(segment_id) if ci else None) or {}
         return {
+            "source_file": str(self.root / "segment_index.jsonl"),
+            "video_path": clip.get("video_path"),
+            "keylog_path": clip.get("keylog_path"),
+            "upload_dir": clip.get("upload_dir"),
+            "user_id": clip.get("user_id"),
+            "upload_version": clip.get("version"),
+            "first_frame_ref": ref,
+            "frames_shard": paths["frames_shard"],
+            "frames_dir": paths["frames_dir"] or str(self.root / "frames" / segment_id),
+            "master_dir": paths["master_dir"] or str(self.root),
             "segment_id": segment_id,
             "recording_id": meta.get("recording_id"),
             "n_frames": len(frames),
@@ -783,11 +2667,16 @@ class FramesMasterDataset:
             "n_segments": len(self.segments),
             "mode": self.mode,
             "master_fps": self.master_fps,
+            "limit": self.limit,
+            "limited": self._limited,
+            "sampling": self.sampling.public(),
+            "total_available": self.total_available,
             "has_keylog": bool(self.keylogs),
             "has_alignment": bool(self.align),
             "segments": [
                 {
                     "segment_id": sid,
+                    "user_id": self.user_of(sid),
                     "recording_id": m.get("recording_id"),
                     "n_frames": m.get("num_records"),
                     "n_non_noop": 0,
@@ -828,7 +2717,37 @@ class Handler(BaseHTTPRequestHandler):
             return vals[0]
         return next(iter(DATASETS), "")
 
-    def do_GET(self) -> None:
+    @staticmethod
+    def _sampling(q: dict[str, list[str]]) -> Sampling:
+        """The sampling the client asked for: ``sm`` (first|random), ``n`` samples
+        (``n=0`` = every sample, i.e. the UI's blank N), ``seed``. Every route
+        carries it, so one dataset can be browsed under several samplings at once;
+        anything missing or unparseable falls back to the CLI defaults rather than
+        failing the request."""
+        def _int(key: str, default: "int | None") -> "int | None":
+            raw = (q.get(key) or [""])[0].strip()
+            if not raw:
+                return default
+            try:
+                return int(raw)
+            except ValueError:
+                return default
+
+        mode = (q.get("sm") or [DATASET_SAMPLE_MODE])[0]
+        if mode not in ("first", "random"):
+            mode = DATASET_SAMPLE_MODE
+        n = _int("n", DATASET_SAMPLE_LIMIT)
+        if n is not None and n <= 0:
+            n = None   # explicit "no cap" — overrides --limit for this request
+        # ``users`` narrows the population to those uploaders before the draw;
+        # ``usmode=per`` makes N a per-user count instead of the whole draw's size.
+        users = [u for u in (q.get("users") or [""])[0].split(",") if u]
+        per_user = (q.get("usmode") or ["total"])[0] == "per"
+        return Sampling(
+            mode, n, _int("seed", DATASET_SAMPLE_SEED) or 0, users, per_user
+        )
+
+    def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         route = parsed.path
         q = parse_qs(parsed.query)
@@ -840,6 +2759,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({
                     "datasets": [{"name": n, "mode": DATASETS[n]["mode"]} for n in names],
                     "default": names[0] if names else None,
+                    # initial state of the sampling controls (--limit/--sample-mode/--seed)
+                    "sampling": Sampling(
+                        DATASET_SAMPLE_MODE, DATASET_SAMPLE_LIMIT, DATASET_SAMPLE_SEED
+                    ).public(),
                 })
             elif route == "/api/segments":
                 name = self._dsname(q)
@@ -847,26 +2770,147 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({"error": f"unknown dataset {name!r}"}, 404)
                 else:
                     try:
-                        self._send_json(get_dataset(name).info())
-                    except Exception as exc:
+                        self._send_json(get_dataset(name, self._sampling(q)).info())
+                    except Exception as exc:  # noqa: BLE001 — report, keep UI alive
                         self._send_json({"error": f"failed to load {name!r}: {exc}"}, 500)
             elif route == "/api/segment":
                 name = self._dsname(q)
                 sid = (q.get("id") or [""])[0]
-                ds = get_dataset(name) if name in DATASETS else None
+                ds = get_dataset(name, self._sampling(q)) if name in DATASETS else None
                 detail = ds.segment_detail(sid) if ds is not None else None
                 if detail is None:
                     self._send_json({"error": f"unknown segment {sid!r}"}, 404)
                 else:
                     self._send_json(detail)
+            elif route == "/api/siblings":
+                # Load this segment's recording-mates into the open build, so an
+                # interesting segment can be read with what came before and after it.
+                name = self._dsname(q)
+                sid = (q.get("id") or [""])[0]
+                try:
+                    k = int((q.get("k") or ["10"])[0])
+                except ValueError:
+                    k = 10
+                if name not in DATASETS:
+                    self._send_json({"error": f"unknown dataset {name!r}"}, 404)
+                else:
+                    scope = (q.get("scope") or ["recording"])[0]
+                    try:
+                        self._send_json(
+                            get_dataset(name, self._sampling(q))
+                            .load_siblings(sid, k, scope)
+                        )
+                    except Exception as exc:  # noqa: BLE001 — report, keep UI alive
+                        self._send_json({"error": f"{exc}"}, 500)
+            elif route == "/api/users":
+                # Every user in the STORE with their segment total — the filter
+                # panel's denominator, and the users it can sample from even when
+                # the current draw holds none of theirs.
+                name = self._dsname(q)
+                if name not in DATASETS:
+                    self._send_json({"error": f"unknown dataset {name!r}"}, 404)
+                else:
+                    try:
+                        census = get_dataset(name, self._sampling(q)).user_census()
+                        self._send_json({
+                            "users": [
+                                {"user_id": u, "n_segments": n}
+                                for u, n in sorted(
+                                    census.items(), key=lambda kv: (-kv[1], kv[0])
+                                )
+                            ],
+                            "n_users": len(census),
+                            "n_segments": sum(census.values()),
+                        })
+                    except Exception as exc:  # noqa: BLE001 — report, keep UI alive
+                        self._send_json({"error": f"{exc}"}, 500)
+            elif route == "/api/folder":
+                # The upload folder this segment was recorded into + every recording
+                # captured alongside it (read-only; loading is /api/siblings).
+                name = self._dsname(q)
+                sid = (q.get("id") or [""])[0]
+                if name not in DATASETS:
+                    self._send_json({"error": f"unknown dataset {name!r}"}, 404)
+                else:
+                    try:
+                        self._send_json(
+                            get_dataset(name, self._sampling(q)).folder_listing(sid)
+                        )
+                    except Exception as exc:  # noqa: BLE001 — report, keep UI alive
+                        self._send_json({"error": f"{exc}"}, 500)
+            elif route == "/api/marks":
+                name = self._dsname(q)
+                mid = (q.get("mid") or [""])[0]
+                if name not in DATASETS:
+                    self._send_json({"error": f"unknown dataset {name!r}"}, 404)
+                else:
+                    marks = _load_marks(name, mid)
+                    self._send_json({
+                        "marks": marks, "n_marked": len(marks), "path": str(_marks_path(name, mid)),
+                    })
+            elif route == "/api/find":
+                name = self._dsname(q)
+                if name not in DATASETS:
+                    self._send_json({"error": f"unknown dataset {name!r}"}, 404)
+                else:
+                    try:
+                        self._send_json(find_actions(
+                            get_dataset(name, self._sampling(q)),
+                            (q.get("q") or [""])[0],
+                        ))
+                    except Exception as exc:  # noqa: BLE001 — report, keep UI alive
+                        self._send_json({"error": f"search failed: {exc}"}, 500)
             elif route == "/frame":
                 self._serve_frame(q)
             else:
                 self._send(404, b"not found", "text/plain")
         except BrokenPipeError:
             pass
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — surface as 500, keep server up
             self._send(500, f"{type(exc).__name__}: {exc}".encode(), "text/plain")
+
+    def do_POST(self) -> None:  # noqa: N802
+        route = urlparse(self.path).path
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b""
+            try:
+                body = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                self._send_json({"error": "invalid JSON body"}, 400)
+                return
+            if route == "/api/mark":
+                self._set_mark(body)
+            else:
+                self._send(404, b"not found", "text/plain")
+        except BrokenPipeError:
+            pass
+        except Exception as exc:  # noqa: BLE001 — surface as 500, keep server up
+            self._send(500, f"{type(exc).__name__}: {exc}".encode(), "text/plain")
+
+    def _set_mark(self, body: dict[str, Any]) -> None:
+        """Toggle one segment's golden-trace mark on/off and persist immediately —
+        marking happens one segment at a time while browsing, so there is no
+        "unsaved" state to lose track of. Re-reads the file fresh (see
+        ``_load_marks``) so a second server process / browser tab open on the same
+        dataset+marks_id doesn't clobber marks made from here, or vice versa."""
+        name = str(body.get("ds") or "")
+        sid = str(body.get("id") or "")
+        mid = str(body.get("mid") or "")
+        if name not in DATASETS or not sid:
+            self._send_json({"error": f"unknown dataset/segment: {name!r} / {sid!r}"}, 404)
+            return
+        marks = _load_marks(name, mid)
+        marked = bool(body.get("marked"))
+        if marked:
+            marks[sid] = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        else:
+            marks.pop(sid, None)
+        _save_marks(name, marks, mid)
+        self._send_json({
+            "ok": True, "id": sid, "marked": marked,
+            "n_marked": len(marks), "path": str(_marks_path(name, mid)),
+        })
 
     def _serve_frame(self, q: dict[str, list[str]]) -> None:
         name = self._dsname(q)
@@ -878,14 +2922,14 @@ class Handler(BaseHTTPRequestHandler):
             idx = int((q.get("i") or ["-1"])[0])
         except ValueError:
             idx = -1
-        ds = get_dataset(name)
+        ds = get_dataset(name, self._sampling(q))
         ref = ds.frame_ref(sid, idx) if ds is not None else None
         if ref is None:
             self._send(404, b"no such frame", "text/plain")
             return
         try:
             jpeg = read_jpeg_bytes(ref)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             self._send(502, f"frame read failed: {exc}".encode(), "text/plain")
             return
         self._send(200, jpeg, "image/jpeg", cache=True)
@@ -907,18 +2951,31 @@ INDEX_HTML = r"""<!doctype html>
                   border-radius:4px; padding:3px 8px; font:inherit; cursor:pointer; }
   button:hover { border-color:#5b9dd9; }
   button.on { background:#2d4a75; border-color:#5b9dd9; }
+  button#markgood.on { background:#5a4a1a; border-color:#d9b95b; color:#ffd580; }
+  /* sampling controls (first N / random N + seed) */
+  header input { background:#22262e; color:#d7dae0; border:1px solid #343a44;
+                 border-radius:4px; padding:2px 6px; font:inherit; }
+  header input:focus { outline:none; border-color:#5b9dd9; }
+  .snum { width:76px; }
+  #sampinfo.busy { color:#e8c877; }
   .hint { margin-left:auto; color:#6b7280; font-size:12px; }
   kbd { background:#22262e; border:1px solid #343a44; border-radius:3px; padding:0 4px; }
   main { flex:1; display:flex; min-height:0; }
-  #resizer { width:6px; flex:none; cursor:col-resize; background:#20242b;
+  #resizer, #lresizer { width:6px; flex:none; cursor:col-resize; background:#20242b;
              border-left:1px solid #2a2e36; border-right:1px solid #2a2e36; }
-  #resizer:hover, #resizer.drag { background:#5b9dd9; }
+  #resizer:hover, #resizer.drag, #lresizer:hover, #lresizer.drag { background:#5b9dd9; }
+  /* the left handle only exists while the filter panel is open */
+  #lresizer { display:none; }
+  #filters.show ~ #lresizer { display:block; }
   #screen { flex:1; min-width:0; padding:10px; display:flex; flex-direction:column; gap:6px; overflow:hidden; }
   #frameimg { flex:1 1 auto; min-height:0; width:100%; object-fit:contain;
               background:#000; border-radius:4px; }
   #status { display:flex; gap:14px; color:#aeb6c2; flex-wrap:wrap; align-items:center; }
   #status b { color:#fff; }
-  #rawaction { color:#6b7280; font-size:11px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* the verbatim action line — wraps rather than eliding, so a long primitive
+     sequence is readable in full instead of ending in "…" */
+  #rawaction { color:#8b93a1; font-size:11px; max-width:100%; white-space:pre-wrap;
+               word-break:break-word; }
   .badge { display:inline-block; padding:0 6px; border-radius:3px; font-size:11px; }
   .badge.noop { background:#26292f; color:#8b93a1; }
   .badge.act  { background:#1e3a2a; color:#7fd6a2; }
@@ -962,6 +3019,8 @@ INDEX_HTML = r"""<!doctype html>
   .cell.black { background:#3b2f5e; box-shadow:inset 0 0 0 1px rgba(167,139,250,.7); }
   /* black frame that ALSO has an action: keep the violet fill, swap the border to a green glow. */
   .cell.black.act { box-shadow:inset 0 0 0 1.5px rgba(127,214,162,.95), 0 0 5px rgba(127,214,162,.5); }
+  .cell.stuck { box-shadow:inset 0 0 0 2px #f59e0b, 0 0 5px rgba(245,158,11,.45); }
+  .cell.match { background:#c08a2a; box-shadow:0 0 5px rgba(245,181,68,.55); }
   .cell.cur { outline:2px solid #5b9dd9; outline-offset:1px; }
   #strip2wrap { flex:none; }
   #striplabels { display:flex; justify-content:space-between; align-items:baseline; }
@@ -971,12 +3030,114 @@ INDEX_HTML = r"""<!doctype html>
   #strip2 .cell { height:16px; }
   .cell.col { background:#7a2633; box-shadow:0 0 5px rgba(255,120,140,.55); }
 
+  /* left filter sidebar — hidden until toggled */
+  #filters { width:262px; flex:none; display:none; flex-direction:column; gap:8px;
+             min-height:0; overflow-y:auto; padding:9px 11px;
+             background:#191c21; border-right:1px solid #2a2e36; }
+  #filters.show { display:flex; }
+  #filters .fhead { color:#8b93a1; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+                    display:flex; align-items:center; gap:8px; margin-top:4px; }
+  #filters .fhead:first-child { margin-top:0; }
+  #filters .fhead button { margin-left:auto; padding:1px 7px; font-size:11px; text-transform:none; letter-spacing:0; }
+  #fcount { color:#7fd6a2; font-size:12px; }
+  #filters input, #filters select { background:#22262e; color:#d7dae0; border:1px solid #343a44;
+                                     border-radius:4px; padding:2px 6px; font:inherit; min-width:0; }
+  #filters input:focus, #filters select:focus { outline:none; border-color:#5b9dd9; }
+  .frow2 { display:flex; flex-direction:column; gap:3px; color:#aeb6c2; font-size:11px; }
+  .frow2 input { width:100%; }
+  .frow { display:grid; grid-template-columns:1fr 58px 58px; gap:5px; align-items:center; }
+  .flab { color:#aeb6c2; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fnum { width:100%; }
+  #fsort { display:flex; gap:5px; }
+  #fsort select { flex:1; }
+  .fnote { color:#6b7280; font-size:11px; }
+
   #panel { width:430px; flex:none; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
   #modenote { display:none; padding:6px 10px; background:#3a2f14; color:#e8c877;
               font-size:11px; border-bottom:1px solid #2a2e36; }
   #modenote.show { display:block; }
   #modenote .cnote-goal { color:#7fd6a2; font-weight:600; }
+  #modenote .cnote-context { color:#c9a0e8; font-weight:600; }
   #modenote .cnote-sys { color:#b9a06a; }
+  #modenote details { margin-top:4px; }
+  #modenote summary { cursor:pointer; user-select:none; }
+  #modenote .cnote-fixed { margin-top:4px; }
+  #modenote .cnote-text { margin-top:3px; white-space:pre-wrap; color:#e4d7a6; }
+
+  /* provenance box: which recording/file this segment came from, + the loader
+     that pulls its neighbouring segments in */
+  #srcbox { display:none; flex:none; padding:6px 10px; font-size:11px; color:#aeb6c2;
+            background:#1b1f26; border-bottom:1px solid #2a2e36; max-height:32vh; overflow:auto; }
+  #srcbox.show { display:block; }
+  #srcbox .srow { display:flex; gap:6px; align-items:baseline; margin-top:2px; }
+  #srcbox .slab { flex:none; width:64px; color:#6b7280; }
+  #srcbox .sval { flex:1; min-width:0; color:#d7dae0; word-break:break-all; user-select:all; }
+  #srcbox .cp { flex:none; padding:0 5px; font-size:10px; line-height:16px; }
+  #srcbox .sibrow { display:flex; gap:6px; align-items:center; flex-wrap:wrap;
+                    margin-top:7px; padding-top:6px; border-top:1px solid #2a2e36; }
+  #srcbox .sibrow button { padding:1px 7px; font-size:11px; }
+  #srcbox input.sibn { width:58px; background:#22262e; color:#d7dae0; border:1px solid #343a44;
+                       border-radius:4px; padding:1px 5px; font:inherit; }
+  #sibinfo, #folderinfo { color:#7fd6a2; }
+  #sibinfo.warn, #folderinfo.warn { color:#e8a877; }
+  /* upload-folder level: the recordings captured alongside this one */
+  #folderbox { margin-top:5px; }
+  #folderbox .fhdr { display:flex; gap:6px; align-items:center; flex-wrap:wrap; color:#8b93a1; }
+  #folderbox input.recfilt { flex:1; min-width:80px; background:#22262e; color:#d7dae0;
+                             border:1px solid #343a44; border-radius:4px; padding:1px 5px; font:inherit; }
+  #reclist { margin-top:4px; max-height:190px; overflow:auto; border:1px solid #2a2e36; border-radius:4px; }
+  #reclist .rec { display:flex; gap:6px; align-items:baseline; padding:2px 5px; cursor:pointer;
+                  border-bottom:1px solid #22262b; }
+  #reclist .rec:hover { background:#22262e; }
+  #reclist .rec.cur { background:#233043; }
+  #reclist .rid { flex:1; min-width:0; color:#d7dae0; word-break:break-all; }
+  #reclist .rn { flex:none; color:#6b7280; }
+  #reclist .rl { flex:none; color:#7fd6a2; }
+
+  /* user filter: tick whole uploaders in or out of the segment list */
+  #fusers .fnote button { padding:0 6px; font-size:10px; }
+  #fusers select { width:100%; margin-top:3px; }
+  #fuapply.on { background:#2d4a75; border-color:#5b9dd9; color:#eaf3ff; }
+  #fulist { max-height:34vh; overflow:auto; border:1px solid #2a2e36; border-radius:4px; }
+  .urow { display:flex; gap:5px; align-items:center; padding:1px 5px; font-size:11px;
+          cursor:pointer; border-bottom:1px solid #22262b; }
+  .urow:hover { background:#22262e; }
+  .urow input { margin:0; }
+  /* one line per user, ellipsised — widen the panel (left drag handle) for the full id */
+  .urow .uid { flex:1; min-width:0; color:#d7dae0; white-space:nowrap; overflow:hidden;
+               text-overflow:ellipsis; }
+  .urow .un { flex:none; color:#6b7280; }
+  .urow .un b { color:#7fd6a2; font-weight:600; }
+  .urow.none .uid { color:#8b93a1; }
+  #chatbtn { margin-top:6px; display:inline-block; cursor:pointer; background:#2a3550;
+             color:#cfe0ff; border:1px solid #3a4a6a; border-radius:4px; padding:3px 9px;
+             font-size:11px; font-weight:600; }
+  #chatbtn:hover { background:#33436a; }
+  /* Dedicated, collapsible full-chat window (overlay docked to the right edge). */
+  #chatwin { position:fixed; top:0; right:0; height:100vh; width:min(680px,62vw);
+             background:#12151b; border-left:1px solid #2a2e36; box-shadow:-8px 0 24px rgba(0,0,0,.45);
+             z-index:50; display:none; flex-direction:column; }
+  #chatwin.show { display:flex; }
+  #chatwin-head { flex:none; display:flex; align-items:center; gap:10px; padding:10px 14px;
+                  border-bottom:1px solid #2a2e36; background:#171b22; }
+  #chatwin-head .ttl { font-weight:600; color:#e8eef7; font-size:13px; }
+  #chatwin-head .sub { color:#8b93a1; font-size:11px; }
+  #chatclose { cursor:pointer; background:#2a2e36; color:#cbd3df; border:none; border-radius:4px;
+               padding:4px 10px; font-size:12px; }
+  #chatclose:hover { background:#39404c; }
+  #chatbody { flex:1; overflow:auto; padding:14px 16px; }
+  .turn { margin-bottom:9px; border-radius:8px; padding:8px 11px; }
+  .turn .role { font-size:10px; text-transform:uppercase; letter-spacing:.08em; font-weight:700; margin-bottom:4px; }
+  .turn.sys  { background:#1c1a12; }         .turn.sys  .role { color:#b9a06a; }
+  .turn.user { background:#141c26; }         .turn.user .role { color:#8fc8e8; }
+  .turn.asst { background:#131f18; }         .turn.asst .role { color:#7fd6a2; }
+  .turn .body { white-space:pre-wrap; word-break:break-word; color:#d7dde6; font-size:12.5px; line-height:1.45; }
+  .turn .act  { font-family:ui-monospace,Menlo,Consolas,monospace; color:#e6d39a; }
+  .turn .shot { color:#7f8794; font-style:italic; font-size:11.5px; }
+  .turn .goal { color:#9be3b6; font-weight:600; margin-bottom:6px; }
+  .turn .ctx  { margin-top:6px; padding:7px 9px; background:#0e1520; border:1px solid #24314a;
+                border-radius:6px; color:#c6b8e6; font-size:11.5px; white-space:pre-wrap; word-break:break-word; }
+  #chatbody details.syswrap > summary { cursor:pointer; color:#b9a06a; font-size:11px; }
   .phead { padding:6px 12px; border-bottom:1px solid #2a2e36; border-top:1px solid #2a2e36;
            color:#8b93a1; font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
   #typed { flex:1 1 40%; min-height:70px; overflow-y:auto; padding:10px 12px; white-space:pre-wrap; word-break:break-word;
@@ -986,12 +3147,17 @@ INDEX_HTML = r"""<!doctype html>
   #typed .caret { border-left:2px solid #5b9dd9; margin-left:1px; animation:blink 1s steps(2) infinite; }
   @keyframes blink { 50% { opacity:0; } }
   #rows { overflow-y:auto; flex:1 1 45%; min-height:80px; }
-  .row { display:grid; grid-template-columns:46px 54px 1fr; gap:8px; padding:2px 12px; cursor:pointer; border-left:2px solid transparent; }
+  .row { display:grid; grid-template-columns:46px 54px 34px 1fr; gap:8px; padding:2px 12px; cursor:pointer; border-left:2px solid transparent; }
+  .row .n { color:#7fa8d6; text-align:right; }
+  .row .n.hi { color:#f5b544; }
   .row:hover { background:#1c2027; }
   .row.cur { background:#232a35; border-left-color:#5b9dd9; }
   .row.noop { color:#6b7280; }
   .row .t { color:#8b93a1; }
-  .row .a { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row .a { white-space:pre-wrap; word-break:break-word; }
+  .row .a mark { background:#5a4a1a; color:#ffd580; border-radius:2px; padding:0 1px; }
+  .row.match { background:#1e2530; }
+  .row.match.cur { background:#2a3444; }
   .erow { display:grid; grid-template-columns:58px 92px 1fr; gap:8px; padding:2px 12px; cursor:pointer; border-left:2px solid transparent; }
   .erow:hover { background:#1c2027; }
   .erow.now { background:#243a2c; border-left-color:#7fd6a2; }
@@ -1006,16 +3172,41 @@ INDEX_HTML = r"""<!doctype html>
   .seginfo { color:#8b93a1; }
 </style></head><body>
 <header>
+  <button id="filttoggle" title="show/hide filters (f)">⚙ filters</button>
   <label>dataset <select id="ds"></select></label>
+  <label title="which N samples of the dataset to load: the first N in store order, or N drawn at random (deterministic for a given seed)">samples
+    <select id="smode"><option value="first">first N</option><option value="random">random N</option></select></label>
+  <label title="how many samples to load (blank = all)">N <input id="sn" class="snum" type="number" min="1" step="1" placeholder="all"></label>
+  <label id="sseedwrap" title="the same seed + N always draws the same samples from this dataset">seed <input id="sseed" class="snum" type="number" step="1" value="0"></label>
+  <span id="sampinfo" class="seginfo"></span>
   <label>segment <select id="seg"></select></label>
   <button id="prev" title="←">◀</button>
   <button id="play">▶ play</button>
   <button id="next" title="→">▶</button>
   <button id="clocktoggle" title="raw vs realigned keylog for the HUD" style="display:none">keys: raw</button>
+  <button id="prevmatch" title="previous matching turn (N)" style="display:none">◂ match</button>
+  <button id="nextmatch" title="next matching turn (n)" style="display:none">match ▸</button>
+  <span id="matchinfo" class="seginfo"></span>
   <span id="seginfo" class="seginfo"></span>
-  <span class="hint"><kbd>←</kbd>/<kbd>→</kbd> step · <kbd>space</kbd> play · <kbd>a</kbd>/<kbd>d</kbd> prev/next active · <kbd>,</kbd>/<kbd>.</kbd> prev/next black · <kbd>⇧,</kbd>/<kbd>⇧.</kbd> black w/ action</span>
+  <button id="copyseg" title="copy the open segment id to the clipboard (i)">⧉ id</button>
+  <button id="srctoggle" title="show/hide the source / recording / upload-folder panel (p)">◱ source</button>
+  <button id="markgood" title="mark this segment a golden/good trace (m)">☆ mark good</button>
+  <label title="optional: give this review pass its own marks file (golden_marks_&lt;id&gt;.json) instead of the dataset's shared golden_marks.json — so independent sessions never overwrite each other's marks. Remembered per-browser; blank = shared file.">marks id <input id="marksid" type="text" placeholder="(shared)" size="8"></label>
+  <span id="markinfo" class="seginfo"></span>
+  <span class="hint"><kbd>←</kbd>/<kbd>→</kbd>/<kbd>a</kbd>/<kbd>d</kbd> step · <kbd>↑</kbd>/<kbd>↓</kbd>/<kbd>w</kbd>/<kbd>s</kbd> prev/next segment · <kbd>space</kbd> play · <kbd>n</kbd>/<kbd>N</kbd> prev/next action match · <kbd>,</kbd>/<kbd>.</kbd> prev/next black · <kbd>⇧,</kbd>/<kbd>⇧.</kbd> black w/ action · <kbd>m</kbd> mark good · <kbd>c</kbd> chat · <kbd>i</kbd> copy segment id · <kbd>p</kbd> source panel</span>
 </header>
 <main>
+  <aside id="filters">
+    <div class="fhead">filters <button id="fclear" title="clear all filters">reset</button></div>
+    <div id="fcount"></div>
+    <div id="ftext"></div>
+    <div id="fusers"></div>
+    <div class="fhead">ranges (min / max)</div>
+    <div id="fnums"></div>
+    <div class="fhead">sort</div>
+    <div id="fsort"></div>
+  </aside>
+  <div id="lresizer" title="drag to resize the filter panel"></div>
   <div id="screen">
     <img id="frameimg" alt="frame">
     <div id="status">
@@ -1038,6 +3229,7 @@ INDEX_HTML = r"""<!doctype html>
   <div id="resizer" title="drag to resize the sidebar"></div>
   <div id="panel">
     <div id="modenote"></div>
+    <div id="srcbox"></div>
     <div id="hud">
       <div id="mousebox">
         <svg id="radar" viewBox="0 0 100 100">
@@ -1066,6 +3258,15 @@ INDEX_HTML = r"""<!doctype html>
     <div id="rows"></div>
   </div>
 </main>
+<div id="chatwin">
+  <div id="chatwin-head">
+    <span class="ttl">full chat</span>
+    <span class="sub" id="chatsub"></span>
+    <span style="flex:1"></span>
+    <button id="chatclose" title="collapse (Esc)">✕ collapse</button>
+  </div>
+  <div id="chatbody"></div>
+</div>
 <script>
 const $ = s => document.querySelector(s);
 let DS=null, SEG=null, FR=[], PARSED=[], cur=0, playing=false, timer=null;
@@ -1073,8 +3274,58 @@ let MODE='frame_records'; const EMPTYSET=new Set(); let _lastCell=null, _lastRow
 let MASTER_FPS=15, EV=null, EVT=[], HAS_ACTIONS=false, _evLo=-1, _evHi=-1;
 let ALN=null, DUAL=false, ALNACT=null;   // alignment overlay (master + --alignment)
 let CLOCK='raw';                         // which keylog drives the HUD: 'raw' | 'aligned'
-// Per-frame action for the HUD on the selected clock (falls back to raw).
-function curActions(){ return FR.map(f => (CLOCK==='aligned' && f.action_aln!=null) ? f.action_aln : f.action); }
+let ALL_SEGMENTS=[];                      // full segment list for DS (pre-filter)
+let MARKS={}, MARKS_PATH='';              // golden-trace marks for DS: segment_id -> {ts}
+// Which N samples of the dataset the server loads: the first N in store order, or
+// N drawn at random. A random draw is deterministic in (seed, N, dataset) — the
+// same seed always yields the same N samples — and it is the *membership* that is
+// random, not the order (the list stays in store order). Every request carries the
+// sampling, because it decides WHICH build of the dataset answers it.
+let SAMP={mode:'first', n:null, seed:0};
+let SAMP_DEFKEY='';                       // the launch defaults this session's override belongs to
+// N is always sent — 0 means "no cap, every sample", which is what a blank N box
+// asks for and must override the server's --limit.
+// The user scope is part of WHICH samples the server loaded, so it rides along
+// with the sampling on every request — but only once applied (SAMP_USERS), never
+// straight from the tick boxes, so ticking never silently re-reads the store.
+let SAMP_USERS={users:[], mode:'total'};
+function sampQS(){
+  let s='&sm='+SAMP.mode+'&n='+(SAMP.n||0);
+  if(SAMP.mode==='random') s+='&seed='+SAMP.seed;
+  if(SAMP_USERS.users.length)
+    s+='&users='+encodeURIComponent(SAMP_USERS.users.join(','))+'&usmode='+SAMP_USERS.mode;
+  return s;
+}
+let activeNumMetrics=[];                  // numeric filter rows rendered for this dataset
+// Numeric filter metrics (min/max). Only those present in the loaded dataset's
+// segment summaries are rendered, so the panel adapts to master/sample/conv/records.
+const NUM_METRICS=[
+  {key:'duration_s',  label:'duration (s)'},
+  {key:'n_frames',    label:'frames / turns'},
+  {key:'n_non_noop',  label:'action frames'},
+  // Per-TURN action counts (ordered_events: one per primitive; computer_use: one
+  // per tool call; plain: movement + scroll + each key event). max finds the
+  // segments containing a dense turn, mean the uniformly dense ones.
+  {key:'acts_max',    label:'actions/turn (max)'},
+  {key:'acts_mean',   label:'actions/turn (mean)'},
+  {key:'mouse_max',   label:'mouse+scroll/turn (max)'},
+  {key:'mouse_mean',  label:'mouse+scroll/turn (mean)'},
+  {key:'mouse_px',    label:'mouse travel (px)'},
+  {key:'clicks',      label:'clicks'},
+  {key:'scroll',      label:'scroll'},
+  {key:'keys',        label:'key presses'},
+  {key:'chars',       label:'chars typed'},
+  {key:'letters',     label:'letters'},
+  {key:'digits',      label:'digits'},
+  {key:'special',     label:'special chars'},
+  {key:'measured_length', label:'tokens'},
+];
+// Per-frame action string the HUD parses: aligned-clock binning when toggled,
+// else the hud translation of a native computer_use turn, else the action itself.
+function hudAction(f){ return (CLOCK==='aligned' && f.action_aln!=null) ? f.action_aln : (f.hud!=null ? f.hud : f.action); }
+// Compact display string for rows / status / tooltips (native turns), else the action.
+function dispAction(f){ return f.disp!=null ? f.disp : hudAction(f); }
+function curActions(){ return FR.map(hudAction); }
 function lb(a,x){ let lo=0,hi=a.length; while(lo<hi){ const m=(lo+hi)>>1; if(a[m]<x) lo=m+1; else hi=m; } return lo; }
 // Keep `el` horizontally centered in scroll container `c` (browser clamps at the ends).
 function centerX(c, el){ if(!c||!el) return; const cr=c.getBoundingClientRect(), er=el.getBoundingClientRect(); c.scrollLeft += (er.left - cr.left) - (c.clientWidth - er.width)/2; }
@@ -1083,9 +3334,11 @@ function pageY(c, el){ if(!c||!el) return; const cr=c.getBoundingClientRect(), e
 
 // ---- action parsing --------------------------------------------------------
 function parseAction(s){
-  if(!s || s.trim()==='NO_OP') return {noop:true,dx:0,dy:0,scroll:0,events:[]};
+  if(!s || s.trim()==='NO_OP') return {noop:true,dx:0,dy:0,scroll:0,hscroll:0,events:[]};
   const parts=s.split(' ; ');
   const mv=(parts[0]||'').trim().split(/\s+/).map(Number);
+  // exactly four numbers = the extended "<dx> <dy> <scroll> <hscroll>" form
+  const four = mv.length===4 && mv.every(Number.isFinite);
   const events=[];
   if(parts[1]){
     for(const tok of parts[1].trim().split(/\s+/)){
@@ -1094,7 +3347,7 @@ function parseAction(s){
       if((sign==='+'||sign==='-') && name) events.push({sign,name});
     }
   }
-  return {noop:false, dx:mv[0]||0, dy:mv[1]||0, scroll:mv[2]||0, events};
+  return {noop:false, dx:mv[0]||0, dy:mv[1]||0, scroll:mv[2]||0, hscroll:four?(mv[3]||0):0, events};
 }
 
 // ---- typed-text reconstruction --------------------------------------------
@@ -1196,12 +3449,59 @@ function updateRadar(p, pressed, held){
     el.classList.toggle('press', pressed.has(b));
     el.classList.toggle('held', !pressed.has(b) && held.has(b));
   }
-  $('#scrollind').textContent = p.scroll ? (p.scroll>0 ? `▲ scroll ${p.scroll}` : `▼ scroll ${Math.abs(p.scroll)}`) : '';
+  let sc = p.scroll ? (p.scroll>0 ? `▲ scroll ${p.scroll}` : `▼ scroll ${Math.abs(p.scroll)}`) : '';
+  if(p.hscroll) sc += (sc?' · ':'') + (p.hscroll>0 ? `▶ ${p.hscroll}` : `◀ ${Math.abs(p.hscroll)}`);
+  $('#scrollind').textContent = sc;
   $('#dxy').textContent = `Δ ${p.dx}, ${p.dy}`;
 }
 
 // ---- typed text render -----------------------------------------------------
-function esc(s){ return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function esc(s){ return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function collapsibleNote(cls, label, text){
+  if(!text) return '';
+  return `<details><summary><span class="${cls}">${label}</span></summary><div class="cnote-text">${esc(String(text))}</div></details>`;
+}
+// The goal is the one thing you need on screen at all times to judge whether a
+// trace is doing the right thing — unlike context/system prompt, it's never
+// tucked behind a click.
+function goalNote(text){
+  if(!text) return '';
+  return `<div class="cnote-fixed"><span class="cnote-goal">goal</span><div class="cnote-text">${esc(String(text))}</div></div>`;
+}
+// Dedicated full-chat window. Reassembled client-side from what the segment detail
+// already carries (system prompt + goal/context + per-frame actions) — no extra
+// payload. Images are stripped from the client, so each user turn shows a screenshot
+// placeholder (index + time). Toggled from the banner button; collapse with ✕ / Esc.
+function renderChat(){
+  const body=$('#chatbody'), sub=$('#chatsub');
+  if(!SEG || !FR.length){ if(body) body.innerHTML='<div class="fnote" style="color:#8b93a1">no turns</div>'; return; }
+  if(sub) sub.textContent=`${SEG.segment_id||''} · ${FR.length} turns`;
+  const h=[];
+  if(SEG.system_prompt){
+    h.push(`<div class="turn sys"><div class="role">system</div>`
+      +`<details class="syswrap"><summary>show system prompt</summary>`
+      +`<div class="body" style="margin-top:5px">${esc(String(SEG.system_prompt))}</div></details></div>`);
+  }
+  for(let i=0;i<FR.length;i++){
+    let u=`<div class="turn user"><div class="role">user · turn ${i}</div>`;
+    if(i===0){
+      if(SEG.instruction) u+=`<div class="goal">🎯 ${esc(String(SEG.instruction))}</div>`;
+      if(SEG.context)     u+=`<div class="ctx">${esc(String(SEG.context))}</div>`;
+      if(!SEG.instruction && !SEG.context && SEG.first_user_text)
+        u+=`<div class="body">${esc(String(SEG.first_user_text))}</div>`;
+    }
+    u+=`<div class="shot">🖼 screenshot #${i}${FR[i].t!=null?` · t=${FR[i].t}s`:''}${FR[i].is_black?' · ⬛ black':''}</div></div>`;
+    h.push(u);
+    h.push(`<div class="turn asst"><div class="role">assistant · turn ${i}</div>`
+      +`<div class="body act">${esc(String(FR[i].action||'')) || '∅'}</div></div>`);
+  }
+  body.innerHTML=h.join('');
+  body.scrollTop=0;
+}
+function chatBtn(){ return `<span id="chatbtn">💬 full chat (${FR.length} turns)</span>`; }
+function openChat(){ renderChat(); $('#chatwin').classList.add('show'); }
+function closeChat(){ $('#chatwin').classList.remove('show'); }
+function toggleChat(){ $('#chatwin').classList.contains('show') ? closeChat() : openChat(); }
 function renderTyped(chars, cur){
   const el=$('#typed');
   if(!chars.length){ el.innerHTML='<span class="empty">— no text typed yet —</span>'; return; }
@@ -1219,6 +3519,180 @@ function renderTyped(chars, cur){
   if(now) now.scrollIntoView({block:'nearest'}); else el.scrollTop=el.scrollHeight;
 }
 
+// ---- provenance + siblings --------------------------------------------------
+// A segment is one slice of a much longer recording, and a sampled dataset shows
+// it with its neighbours missing. This box says where the open segment physically
+// came from (ids + on-disk paths, all copyable) and can pull the rest of its
+// recording into the loaded set, so an interesting segment can be read together
+// with what happened before and after it.
+let SIB_N = parseInt(localStorage.getItem('fr_sib_n')||'', 10) || 10;
+async function copyText(t, btn){
+  let ok=true;
+  try{ await navigator.clipboard.writeText(t); }
+  catch(e){
+    // no clipboard API (non-secure origin / denied): hidden-textarea fallback
+    const ta=document.createElement('textarea');
+    ta.value=t; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.select();
+    try{ ok=document.execCommand('copy'); }catch(_){ ok=false; }
+    ta.remove();
+  }
+  if(btn){ const o=btn.textContent; btn.textContent=ok?'✓':'✗'; setTimeout(()=>{btn.textContent=o;}, 900); }
+  return ok;
+}
+function copyBtn(v){ return `<button class="cp" data-copy="${esc(String(v))}" title="copy">⧉</button>`; }
+function srcRow(label, val, title){
+  if(val==null || val==='') return '';
+  return `<div class="srow"><span class="slab"${title?` title="${esc(title)}"`:''}>${label}</span>`
+       + `<span class="sval">${esc(String(val))}</span>${copyBtn(val)}</div>`;
+}
+// The provenance panel is opt-out: useful while tracing where a segment came
+// from, in the way once you know. Remembered per-browser.
+let SRC_ON = localStorage.getItem('fr_src_open') !== '0';
+function setSrcPanel(on){
+  SRC_ON=on; localStorage.setItem('fr_src_open', on?'1':'0');
+  $('#srctoggle').classList.toggle('on', on);
+  renderSource();
+}
+function renderSource(){
+  const el=$('#srcbox');
+  if(!SEG || !SRC_ON){ el.classList.remove('show'); el.innerHTML=''; return; }
+  const rec=SEG.recording_id||'';
+  const loaded = rec ? ALL_SEGMENTS.filter(s=>String(s.segment_id||'').includes(rec)).length : 0;
+  const src = SEG.source_file ? SEG.source_file + (SEG.source_row!=null?`  (row ${SEG.source_row})`:'') : null;
+  const who = (SEG.user_id||SEG.upload_version)
+    ? `  (user ${SEG.user_id||'?'}${SEG.upload_version?' · v'+SEG.upload_version:''})` : '';
+  let h = srcRow('segment', SEG.segment_id)
+        + srcRow('recording', rec, 'the parent capture this segment was cut from')
+        + srcRow('source', src, 'the record file this segment was read from')
+        + srcRow('frames', SEG.frames_dir, 'per-segment frame store in the stage-01a master')
+        + srcRow('master', SEG.master_dir, 'the stage-01a frames-master root the images resolve from');
+  h += srcRow('video', SEG.video_path, 'the original screen recording this segment was cut from')
+     + srcRow('keylog', SEG.keylog_path, 'the raw input log recorded with it')
+     + srcRow('upload', SEG.upload_dir ? SEG.upload_dir + who : null,
+         'the upload folder this recording was captured into — its other recordings are listed below');
+  if(MODE!=='inline_records'){
+    h += `<div class="sibrow"><span>load</span>`
+       + `<input id="sibn" class="sibn" type="number" min="0" step="1" value="${SIB_N}" title="how many segments to load, centred on this one (0 = all of them)">`
+       + `<button id="sibload" title="load that many segments of THIS recording">⇊ recording</button>`
+       + `<button id="sibfolder" title="load that many segments from the whole upload folder, centred here (neighbouring recordings included)">⇊ folder</button>`
+       + `<button id="sibonly" title="filter the segment list down to this recording">◧ only this recording</button>`
+       + `<span id="sibinfo">${loaded?`${loaded} loaded`:''}</span></div>`
+       + `<div id="folderbox"><div class="fhdr">`
+       + `<button id="folderbtn" title="list the recordings uploaded into this folder">▤ recordings in this folder</button>`
+       + `<span id="folderinfo"></span></div></div>`;
+  }
+  el.innerHTML=h; el.classList.add('show');
+  if(FOLDER_OPEN) showFolder(true);
+}
+// ---- upload folder: the recordings captured alongside this one ---------------
+// One level above the recording: the folder the source mp4s were uploaded into.
+// Its recordings are read from the clips manifest (the whole SOURCE corpus, so it
+// also shows recordings this dataset filtered out — those load 0 segments), and
+// each row loads that recording's first N segments into the list.
+let FOLDER_OPEN=false, FOLDER=null;
+function recListHTML(){
+  if(!FOLDER) return '';
+  const q=(($('#recfilt')&&$('#recfilt').value)||'').trim().toLowerCase();
+  const rows=FOLDER.recordings.filter(r=>!q||r.recording_id.toLowerCase().includes(q));
+  const cur=SEG&&SEG.recording_id;
+  const shown=rows.slice(0,400);
+  return shown.map(r=>`<div class="rec${r.recording_id===cur?' cur':''}" data-rec="${esc(r.recording_id)}" data-first="${esc(r.first_segment)}" title="load this recording's segments">`
+      + `<span class="rid">${r.recording_id===cur?'● ':''}${esc(r.recording_id)}</span>`
+      + `<span class="rn">${r.n_segments} seg</span>`
+      + (r.n_loaded?`<span class="rl">${r.n_loaded} loaded</span>`:'')
+      + `</div>`).join('')
+    + (rows.length>shown.length?`<div class="rec"><span class="rid">… ${rows.length-shown.length} more (filter to narrow)</span></div>`:'')
+    + (rows.length?'':'<div class="rec"><span class="rid">no recording matches</span></div>');
+}
+function folderInfo(t, warn){
+  const el=$('#folderinfo'); if(!el) return;
+  el.textContent=t; el.classList.toggle('warn', !!warn);
+}
+async function showFolder(reload){
+  const box=$('#folderbox'); if(!box || !SEG) return;
+  FOLDER_OPEN=true;
+  if(reload || !FOLDER || FOLDER._for!==SEG.upload_dir){
+    folderInfo('reading…');
+    let r;
+    try{ r=await jget('/api/folder?ds='+encodeURIComponent(DS)+'&id='+encodeURIComponent(SEG.segment_id)+sampQS()); }
+    catch(e){ folderInfo('⚠ '+e.message, true); return; }
+    if(r.error){ folderInfo('⚠ '+r.error, true); return; }
+    FOLDER=r; FOLDER._for=r.folder;
+  }
+  folderInfo(`${FOLDER.n_recordings} recordings · ${FOLDER.n_segments} clips`);
+  let list=$('#reclist');
+  if(!list){
+    box.insertAdjacentHTML('beforeend',
+      `<div class="fhdr" style="margin-top:4px">filter <input id="recfilt" class="recfilt" type="search" placeholder="recording id…"></div>`
+      + `<div id="reclist"></div>`);
+    $('#recfilt').addEventListener('input', ()=>{ $('#reclist').innerHTML=recListHTML(); });
+    list=$('#reclist');
+  }
+  list.innerHTML=recListHTML();
+}
+// Load one recording of the folder (its first N segments) and show it.
+async function loadRecording(firstSegment, rec){
+  const raw=$('#sibn')?String($('#sibn').value||'').trim():'';
+  const k = raw==='' ? SIB_N : Math.max(0, parseInt(raw,10)||0);
+  sibInfo('loading '+rec+'…');
+  let r;
+  try{
+    r=await jget('/api/siblings?ds='+encodeURIComponent(DS)
+      +'&id='+encodeURIComponent(firstSegment)+'&k='+k+'&scope=recording'+sampQS());
+  }catch(e){ sibInfo('⚠ '+e.message, true); return; }
+  if(r.error){ sibInfo('⚠ '+r.error, true); return; }
+  await refreshAfterLoad(r, rec);
+}
+function sibInfo(t, warn){
+  const el=$('#sibinfo'); if(!el) return;
+  el.textContent=t; el.classList.toggle('warn', !!warn);
+}
+// Filter the segment list down to one recording — the segment-id filter already
+// does substring matching, and a segment id starts with its recording id.
+async function filterToRecording(rec){
+  const el=$('#fseg');
+  if(!el){ return 0; }
+  el.value=rec||'';
+  await applyFilters();
+  return ALL_SEGMENTS.filter(s=>String(s.segment_id||'').includes(rec||'')).length;
+}
+async function loadSiblings(scope){
+  if(!SEG) return;
+  const raw=String($('#sibn').value||'').trim();
+  const k = raw==='' ? SIB_N : Math.max(0, parseInt(raw,10)||0);
+  SIB_N=k; localStorage.setItem('fr_sib_n', String(k));
+  sibInfo('loading…');
+  let r;
+  try{
+    r=await jget('/api/siblings?ds='+encodeURIComponent(DS)
+      +'&id='+encodeURIComponent(SEG.segment_id)+'&k='+k
+      +'&scope='+(scope||'recording')+sampQS());
+  }catch(e){ sibInfo('⚠ '+e.message, true); return; }
+  if(r.error){ sibInfo('⚠ '+r.error, true); return; }
+  await refreshAfterLoad(r, scope==='folder' ? null : r.recording_id);
+}
+// After any load: re-read the build's segment list, narrow the dropdown to the
+// recording (folder-wide loads keep every recording visible) and report what came
+// in. A folder family is listed from the source corpus, so segments this dataset
+// filtered out are counted as missing rather than silently dropped.
+async function refreshAfterLoad(r, focusRec){
+  const info=await jget('/api/segments?ds='+encodeURIComponent(DS)+sampQS());
+  if(info.error){ sibInfo('⚠ '+info.error, true); return; }
+  ALL_SEGMENTS=info.segments||[]; showSampling(info);
+  renderUserFilter();   // a folder load can bring in recordings from new users
+  let msg=`+${r.added} loaded`;
+  if(r.n_missing) msg+=` · ${r.n_missing} not in this dataset`;
+  if(focusRec){
+    const shown=await filterToRecording(focusRec);
+    msg+=` · ${shown} of ${r.n_family} in this recording · list filtered to it`;
+  }else{
+    await applyFilters();
+    msg+=` · ${info.n_segments} segments loaded`;
+  }
+  sibInfo(msg);
+  if(FOLDER_OPEN) await showFolder(true);   // refresh the per-recording loaded counts
+}
 // ---- data loading ----------------------------------------------------------
 async function jget(u){ const r=await fetch(u); if(!r.ok) throw new Error(await r.text()); return r.json(); }
 
@@ -1227,16 +3701,69 @@ async function loadDatasets(){
   const sel=$('#ds'); sel.innerHTML='';
   for(const d of info.datasets){
     const o=document.createElement('option'); o.value=d.name;
-    const ml = d.mode==='frames_master'?'master/raw':d.mode==='conversations'?'conversation':'sample';
+    const ml = d.mode==='frames_master'?'master/raw':d.mode==='conversations'?'conversation':d.mode==='inline_records'?'stage-06 records':'sample';
     o.textContent=`${d.name}  (${ml})`;
     sel.appendChild(o);
   }
+  initSampling(info.sampling||{});
   DS = info.default || (info.datasets[0] && info.datasets[0].name) || null;
   if(DS){ sel.value=DS; await loadSegments(); }
 }
+// ---- sampling (first N / random N, seeded) ----------------------------------
+// Prime the controls from the server's CLI defaults (--limit/--sample-mode/--seed),
+// overridden by whatever this browser was last left on — but only while the launch
+// defaults are the SAME ones that override was made against. Relaunching with a
+// different --limit/--sample-mode/--seed is an explicit instruction, so it wins over
+// a remembered choice instead of silently doing nothing.
+function initSampling(def){
+  let s={mode:def.mode||'first', n:(def.n!=null?def.n:null), seed:def.seed||0};
+  SAMP_DEFKEY=JSON.stringify([s.mode, s.n, s.seed]);
+  try{
+    const saved=JSON.parse(localStorage.getItem('fr_sampling')||'null');
+    if(saved&&saved.mode&&saved.defKey===SAMP_DEFKEY)
+      s={mode:saved.mode, n:(saved.n!=null?saved.n:s.n), seed:saved.seed||0};
+  }catch(e){}
+  SAMP=s;
+  $('#smode').value=SAMP.mode; $('#sn').value=(SAMP.n!=null?SAMP.n:''); $('#sseed').value=SAMP.seed;
+  syncSeedVis();
+}
+// The seed only means something for a random draw.
+function syncSeedVis(){ $('#sseedwrap').style.display = SAMP.mode==='random' ? '' : 'none'; }
+// Re-read the controls and, if the sampling really changed, rebuild the dataset
+// under it (a rebuild re-reads the store, so an unchanged sampling does nothing).
+async function onSamplingChange(){
+  const nRaw=String($('#sn').value||'').trim();
+  const next={
+    mode: $('#smode').value,
+    n: nRaw===''?null:Math.max(1, parseInt(nRaw,10)||1),
+    seed: parseInt($('#sseed').value,10)||0,
+  };
+  const same = next.mode===SAMP.mode && next.n===SAMP.n && next.seed===SAMP.seed;
+  SAMP=next; syncSeedVis();
+  $('#sn').value=(SAMP.n!=null?SAMP.n:'');
+  localStorage.setItem('fr_sampling', JSON.stringify({...SAMP, defKey:SAMP_DEFKEY}));
+  if(same) return;
+  await loadSegments();
+}
+// What the server actually loaded — reported from its own answer, not from the
+// controls, so "random N" with no N shows up as the "all" it fell back to.
+function showSampling(info){
+  const el=$('#sampinfo'); el.classList.remove('busy');
+  const sp=info.sampling||{}, tot=info.total_available, n=info.n_segments;
+  // "of <total>" only where the loader knows the population: always for a random
+  // draw, and for "first N" on the stores whose size is metadata (inline records).
+  const of = tot!=null ? ` of ${tot}` : '';
+  const who = (sp.users&&sp.users.length)
+    ? ` · ${sp.users.length} user${sp.users.length>1?'s':''}${sp.per_user?' (N each)':''}` : '';
+  el.textContent = (sp.mode==='random'
+    ? `random ${n}${tot!=null?of:' of ?'} · seed ${sp.seed}`
+    : (info.limited ? `first ${n}${of}` : `all ${n}`)) + who;
+}
 async function loadSegments(){
-  const info=await jget('/api/segments?ds='+encodeURIComponent(DS));
-  if(info.error){ $('#seginfo').textContent='⚠ '+info.error; $('#seg').innerHTML=''; $('#strip').innerHTML=''; $('#rows').innerHTML=''; return; }
+  $('#sampinfo').textContent='sampling…'; $('#sampinfo').classList.add('busy');
+  const info=await jget('/api/segments?ds='+encodeURIComponent(DS)+sampQS());
+  if(info.error){ $('#seginfo').textContent='⚠ '+info.error; $('#sampinfo').textContent=''; $('#sampinfo').classList.remove('busy'); $('#seg').innerHTML=''; $('#strip').innerHTML=''; $('#rows').innerHTML=''; ALL_SEGMENTS=[]; buildFilters([]); return; }
+  showSampling(info);
   MODE=info.mode||'frame_records';
   MASTER_FPS=info.master_fps||MASTER_FPS;
   const note=$('#modenote');
@@ -1250,21 +3777,312 @@ async function loadSegments(){
     note.textContent=`raw frames-master (01a), master_fps=${info.master_fps||'?'} — no keylog linked, so no actions. Pass --clips-manifest, or run the 01b sampler.`;
     note.classList.add('show');
   } else if(MODE==='conversations'){
-    note.textContent=`stage-04 conversations · ${info.goal_conditioned?'goal-conditioned':'goal-free'}${info.target_fps?` · ${info.target_fps} fps`:''} — each step is one screenshot→action turn (assistant reply = the frame's action). Frames resolve from the linked stage-01a master.`;
+    note.textContent=`stage-04 conversations · ${info.goal_conditioned?'goal-conditioned':'goal-free'}${info.action_format?` · ${info.action_format} actions`:''}${info.target_fps?` · ${info.target_fps} fps`:''} — each step is one screenshot→action turn (assistant reply = the frame's action). Frames resolve from the linked stage-01a master.`;
+    note.classList.add('show');
+  } else if(MODE==='inline_records'){
+    note.textContent=`stage-06 inline records · ${info.model_id||'?'} · max_length ${info.max_length||'?'}${info.overflow_mode?` · overflow=${info.overflow_mode}`:''}${info.splits&&info.splits.length?` · splits: ${info.splits.join('/')}`:''} — each entry is ONE tokenized training example (a ≤max_length conversation chunk; ar:// frames into the stage-01a master). Only kept records are shown, so this IS the model's training input.`;
     note.classList.add('show');
   } else note.classList.remove('show');
-  const sel=$('#seg'); sel.innerHTML='';
-  for(const s of info.segments){
-    const o=document.createElement('option'); o.value=s.segment_id;
-    o.textContent = MODE==='frames_master'
-      ? `${s.segment_id}  (${s.n_frames} frames, ${s.duration_s}s${s.align_status?', '+s.align_status:''})`
-      : `${s.segment_id}  (${s.n_non_noop}/${s.n_frames} act, ${s.duration_s}s)`;
-    sel.appendChild(o);
+  ALL_SEGMENTS = info.segments || [];
+  // The hit map belongs to the dataset it was searched in.
+  clearTimeout(_actTimer); ACTQ=''; ACTHITS=null; MATCHES=[];
+  await loadMarks();       // marks belong to DS too — load before options render
+  buildFilters(ALL_SEGMENTS);
+  renderUserFilter();
+  loadUserTotals();   // background: fills in each user's store-wide total
+  await applyFilters();   // populates #seg from the (filtered) list and loads one
+}
+
+// ---- golden-trace marks -----------------------------------------------------
+// Marking is a per-segment boolean (this trace is 100% correct), persisted
+// server-side to golden_marks.json (or golden_marks_<id>.json, see MARKS_ID)
+// next to the dataset so it survives restarts and browser reloads; the client
+// just mirrors that file in MARKS.
+// MARKS_ID namespaces the marks file so independent review passes/sessions
+// don't share (and overwrite) one another's marks: blank -> golden_marks.json,
+// set -> golden_marks_<id>.json. Remembered per-browser via localStorage, since
+// it's a "who/which pass is reviewing" choice, not a dataset property.
+let MARKS_ID = localStorage.getItem('fr_marks_id') || '';
+$('#marksid').value = MARKS_ID;
+function marksQS(){ return '&mid='+encodeURIComponent(MARKS_ID); }
+async function loadMarks(){
+  try{
+    const info=await jget('/api/marks?ds='+encodeURIComponent(DS)+marksQS());
+    MARKS = info.marks || {};
+    MARKS_PATH = info.path || '';
+  }catch(e){ MARKS = {}; MARKS_PATH=''; }
+  updateMarkCount();
+}
+function updateMarkCount(){
+  const el=$('#markinfo'); if(!el) return;
+  el.textContent = Object.keys(MARKS).length+' marked';
+  el.title = MARKS_PATH || '';
+}
+function updateMarkUI(){
+  const on = !!(SEG && MARKS[SEG.segment_id]);
+  const btn=$('#markgood'); if(!btn) return;
+  btn.classList.toggle('on', on);
+  btn.textContent = on ? '★ marked good' : '☆ mark good';
+}
+async function toggleMark(){
+  if(!SEG || !SEG.segment_id) return;
+  const id=SEG.segment_id, marked=!MARKS[id];
+  const r=await fetch('/api/mark', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ds:DS, id, marked, mid:MARKS_ID}),
+  });
+  const j=await r.json();
+  if(j.error){ console.error(j.error); return; }
+  if(marked) MARKS[id]={ts:Date.now()}; else delete MARKS[id];
+  MARKS_PATH = j.path || MARKS_PATH;
+  updateMarkUI(); updateMarkCount();
+  const sel=$('#seg'); const opt=sel && sel.querySelector(`option[value="${CSS.escape(id)}"]`);
+  const s=ALL_SEGMENTS.find(s=>s.segment_id===id);
+  if(opt && s) opt.textContent = segOptionLabel(s);
+  // "marked only" filters on MARKS membership, so a toggle can drop the current
+  // segment out of the visible list — re-run the filter to reflect that.
+  if($('#fmarked') && $('#fmarked').checked) await applyFilters();
+}
+// Switching marks id mid-session re-reads that file's marks for DS and refreshes
+// every place MARKS shows up (button state, counter, dropdown stars, "marked
+// only" filter) without touching the loaded segment/frame data.
+async function onMarksIdChange(){
+  MARKS_ID = $('#marksid').value.trim();
+  localStorage.setItem('fr_marks_id', MARKS_ID);
+  await loadMarks();
+  updateMarkUI();
+  if(ALL_SEGMENTS.length) await applyFilters();
+}
+
+// ---- filtering (left sidebar) ----------------------------------------------
+// The dropdown option label for one segment, per dataset mode.
+function stuckOptionLabel(s){
+  if(!(s.stuck_key_frames>0)) return '';
+  return `, stuck ${s.stuck_key||'key'} ${s.stuck_key_frames}f${s.stuck_key_unreleased?' open':''}`;
+}
+function segOptionLabel(s){
+  const star = MARKS[s.segment_id] ? '★ ' : '';
+  return star + (MODE==='frames_master'
+    ? `${s.segment_id}  (${s.n_frames} frames, ${s.duration_s}s${s.align_status?', '+s.align_status:''})`
+    : MODE==='inline_records'
+    ? `${s.segment_id}  (${s.n_non_noop}/${s.n_frames} act${s.measured_length?', '+s.measured_length+' tok':''}${stuckOptionLabel(s)})`
+    : `${s.segment_id}  (${s.n_non_noop}/${s.n_frames} act, ${s.duration_s}s${stuckOptionLabel(s)})`);
+}
+const _has = (segs,k)=>segs.some(s=>s[k]!=null);
+// ---- user filter ------------------------------------------------------------
+// Every segment carries the id of the user who recorded it (from the clips
+// manifest). Ticking users keeps (or drops) everything they uploaded — the fast
+// way to look at one recorder's data, or to get a noisy one out of the way. The
+// tick set survives sibling/folder loads; only switching dataset clears it.
+// Ticked users do one of two things, chosen by USER_SCOPE:
+//   'filter'  — client-side, live: keep (or drop) what's already loaded.
+//   'sample'  — server-side, on ⟳ apply: the store is re-read with the population
+//               narrowed to those users FIRST, so the header's N samples come out
+//               of their recordings (N over the whole selection, or N per user).
+// The second is the only way to get a real sample of one user out of a store where
+// they are a small minority — a live filter can only ever show the few of theirs
+// that the global draw happened to include.
+let USERS=new Set(), USER_MODE='include', USER_SCOPE='filter', USER_SAMP='total';
+// user -> how many of their segments are in the CURRENT load. Users stay listed at
+// 0 once seen, so a user-scoped load (which drops everyone else) doesn't strand you
+// with a list you can no longer untick.
+let USER_POOL=new Map();
+// user -> how many segments they have in the WHOLE store (server census, one pass,
+// cached there). It's the denominator of each row's loaded/total, what the list is
+// sorted by, and what makes users with nothing loaded yet tickable at all — you
+// can sample from a user the current draw missed entirely.
+let USER_TOTALS=new Map(), _totalsFor=null;
+function refreshUserPool(){
+  const cur=new Map();
+  for(const s of ALL_SEGMENTS){ const u=s.user_id; if(!u) continue; cur.set(u,(cur.get(u)||0)+1); }
+  for(const u of USER_TOTALS.keys()) if(!cur.has(u)) cur.set(u,0);
+  for(const u of USER_POOL.keys()) if(!cur.has(u)) cur.set(u,0);
+  for(const u of USERS) if(!cur.has(u)) cur.set(u,0);
+  USER_POOL=cur;
+}
+// Fetched once per dataset, in the background: the store scan behind it is cheap
+// but not free, and the panel is useful (loaded counts only) before it lands.
+async function loadUserTotals(){
+  const forDS=DS;
+  if(_totalsFor===forDS) return;
+  _totalsFor=forDS;
+  try{
+    const info=await jget('/api/users?ds='+encodeURIComponent(DS)+sampQS());
+    if(DS!==forDS || info.error) return;
+    USER_TOTALS=new Map((info.users||[]).map(u=>[u.user_id, u.n_segments]));
+    renderUserFilter();
+  }catch(e){ /* totals stay unknown — rows just show the loaded count */ }
+}
+function resetUserFilter(){
+  USERS=new Set(); USER_MODE='include'; USER_SCOPE='filter'; USER_SAMP='total';
+  USER_POOL=new Map(); USER_TOTALS=new Map(); _totalsFor=null;
+  SAMP_USERS={users:[], mode:'total'};
+}
+// [user, loaded, total] — biggest recorder first (by store total where known,
+// falling back to what's loaded while the census is still in flight).
+function userCounts(){
+  return [...USER_POOL.entries()]
+    .map(([u,loaded])=>[u, loaded, USER_TOTALS.has(u)?USER_TOTALS.get(u):null])
+    .sort((a,b)=> (b[2]!=null?b[2]:b[1])-(a[2]!=null?a[2]:a[1])
+                  || String(a[0]).localeCompare(String(b[0])));
+}
+// Whether the ticks differ from what the server was last asked for.
+function userDirty(){
+  if(USER_SCOPE!=='sample') return false;
+  const a=[...USERS].sort().join(','), b=[...SAMP_USERS.users].sort().join(',');
+  return a!==b || (a && USER_SAMP!==SAMP_USERS.mode);
+}
+function userStat(){
+  const el=$('#fustat');
+  const ap=$('#fuapply'); if(ap) ap.classList.toggle('on', userDirty());
+  if(!el) return;
+  el.textContent = !USERS.size ? 'none ticked · no user filter'
+    : USER_SCOPE==='sample'
+      ? `${USERS.size} ticked${userDirty()?' · not applied yet':' · applied'}`
+      : `${USERS.size} ticked (${USER_MODE})`;
+}
+async function applyUserSampling(){
+  SAMP_USERS={users:[...USERS], mode:USER_SAMP};
+  await loadSegments();
+}
+// Rebuilt whenever the loaded set changes (a folder load can bring in new users);
+// ticks are held in USERS, so re-rendering never loses them.
+function renderUserFilter(){
+  const box=$('#fusers'); if(!box) return;
+  refreshUserPool();
+  const users=userCounts();
+  if(!users.length){ box.innerHTML=''; return; }
+  const n = SAMP.n!=null ? SAMP.n : 'all';
+  const sumL=users.reduce((a,r)=>a+r[1],0);
+  const sumT=USER_TOTALS.size ? [...USER_TOTALS.values()].reduce((a,v)=>a+v,0) : null;
+  box.innerHTML = `<div class="fhead">users (${users.length})`
+    + `<span style="margin-left:auto;text-transform:none;letter-spacing:0">`
+    + `${sumL}/${sumT!=null?sumT:'…'} loaded</span></div>`
+    + `<select id="fuscope" title="what ticking a user does">`
+    + `<option value="filter">filter the loaded list</option>`
+    + `<option value="sample">sample from ticked users</option></select>`
+    + (USER_SCOPE==='sample'
+        ? `<select id="fusampmode" title="how the header's N is spent across the ticked users">`
+          + `<option value="total">N=${n} over the selection</option>`
+          + `<option value="per">N=${n} per ticked user</option></select>`
+          + `<div class="fnote"><button id="fuapply" title="re-read the store, drawing the samples from the ticked users only">⟳ apply sampling</button> `
+          + `<span id="fustat"></span></div>`
+        : `<select id="fusermode"><option value="include">include ticked only</option>`
+          + `<option value="exclude">exclude ticked</option></select>`
+          + `<div class="fnote"><span id="fustat"></span></div>`)
+    + `<div class="fnote"><button id="fuall">all</button> <button id="funone">none</button></div>`
+    + `<div id="fulist">` + users.map(([u,loaded,total])=>
+        `<label class="urow${loaded?'':' none'}" title="${esc(u)} — ${loaded} loaded${total!=null?` of ${total} in the store`:''}">`
+        + `<input type="checkbox" class="uchk" data-user="${esc(u)}"${USERS.has(u)?' checked':''}>`
+        + `<span class="uid">${esc(u)}</span>`
+        + `<span class="un"><b>${loaded}</b>/${total!=null?total:'…'}</span></label>`).join('')
+    + `</div>`;
+  $('#fuscope').value=USER_SCOPE;
+  if($('#fusermode')) $('#fusermode').value=USER_MODE;
+  if($('#fusampmode')) $('#fusampmode').value=USER_SAMP;
+  userStat();
+}
+// Build the filter controls to match the fields this dataset actually carries.
+function buildFilters(segs){
+  const hasGoal=_has(segs,'instruction'), hasConv=_has(segs,'conv_text'), hasTyped=_has(segs,'typed'), hasStuck=_has(segs,'stuck_key_frames');
+  // action search: every mode whose turns carry actions (acts_max comes from
+  // compute_metrics, which is exactly those modes)
+  const hasActs=_has(segs,'acts_max');
+  // segment id is always present — with tens of thousands of segments this is the
+  // only practical way to reach a known one without scrolling the dropdown
+  let th=`<label class="frow2"><input id="fmarked" type="checkbox"> ★ marked good only</label>`
+        + `<label class="frow2">segment id contains<input id="fseg" type="search" placeholder="uuid / _seg0000 / substring…"></label>`;
+  if(hasActs) th+=`<label class="frow2">action contains<input id="fact" type="search" placeholder='down(LMB) · move(-100, · type(" · KeyEnter'></label>`
+                + `<div class="fnote"><span id="factstat"></span>every turn searched verbatim · `
+                + `<kbd>n</kbd>/<kbd>N</kbd> step through the matches in the open segment</div>`;
+  if(hasGoal)  th+=`<label class="frow2">goal contains<input id="fgoal" type="search" placeholder="substring…"></label>`;
+  if(hasConv)  th+=`<label class="frow2">conversation contains<input id="fconv" type="search" placeholder="goal / context / any action…"></label>`;
+  if(hasTyped) th+=`<label class="frow2">typed text contains<input id="ftyped" type="search" placeholder="substring…"></label>`;
+  if(hasStuck) th+=`<label class="frow2">stuck key held &gt; frames<input id="fstuck" type="number" min="0" step="1" placeholder="T"></label>`;
+  $('#ftext').innerHTML = th;
+  activeNumMetrics = NUM_METRICS.filter(m=>_has(segs,m.key));
+  $('#fnums').innerHTML = activeNumMetrics.map(m=>
+    `<div class="frow"><span class="flab" title="${m.label}">${m.label}</span>`
+    + `<input id="min_${m.key}" class="fnum" type="number" step="any" placeholder="min">`
+    + `<input id="max_${m.key}" class="fnum" type="number" step="any" placeholder="max"></div>`
+  ).join('') || '<div class="fnote">no numeric metrics</div>';
+  const sopts=['<option value="">— none —</option>']
+    .concat(activeNumMetrics.map(m=>`<option value="${m.key}">${m.label}</option>`));
+  if(hasGoal) sopts.push('<option value="instruction">goal (A→Z)</option>');
+  $('#fsort').innerHTML = `<select id="fsortkey">${sopts.join('')}</select>`
+    + `<select id="fsortdir"><option value="desc">high → low</option><option value="asc">low → high</option></select>`;
+  // Re-filter live as any control changes (elements are recreated per dataset).
+  $('#filters').querySelectorAll('input,select').forEach(el=>{
+    if(el.id==='fact'){   // needs the server: debounce, then re-filter
+      el.addEventListener('input', queueActionSearch);
+      el.addEventListener('change', queueActionSearch);
+      el.addEventListener('keydown', e=>{ if(e.key==='Enter'){ clearTimeout(_actTimer); runActionSearch(); } });
+      return;
+    }
+    el.addEventListener('input', applyFilters);
+    el.addEventListener('change', applyFilters);
+  });
+}
+// The current filtered + sorted segment list.
+function filteredSegments(){
+  const sg=($('#fseg')&&$('#fseg').value||'').trim().toLowerCase();
+  const g=($('#fgoal')&&$('#fgoal').value||'').trim().toLowerCase();
+  const cv=($('#fconv')&&$('#fconv').value||'').trim().toLowerCase();
+  const tp=($('#ftyped')&&$('#ftyped').value||'').trim().toLowerCase();
+  const stuckRaw=($('#fstuck')&&$('#fstuck').value||'').trim();
+  const stuckT=stuckRaw===''?null:Number(stuckRaw);
+  const markedOnly=!!($('#fmarked')&&$('#fmarked').checked);
+  let list=ALL_SEGMENTS.filter(s=>{
+    if(markedOnly && !MARKS[s.segment_id]) return false;
+    if(USER_SCOPE==='filter' && USERS.size
+       && (USER_MODE==='include') !== USERS.has(s.user_id)) return false;
+    if(sg && !String(s.segment_id||'').toLowerCase().includes(sg)) return false;
+    if(g && !String(s.instruction||'').toLowerCase().includes(g)) return false;
+    if(cv && !String(s.conv_text||'').toLowerCase().includes(cv)) return false;
+    if(tp && !String(s.typed||'').toLowerCase().includes(tp)) return false;
+    // action search: only once the server has answered for the CURRENT query,
+    // so a half-typed token never silently empties the list
+    if(ACTHITS && ACTQ===actQuery() && !(ACTHITS[s.segment_id]>0)) return false;
+    if(stuckT!=null && Number.isFinite(stuckT) && !((s.stuck_key_frames||0)>stuckT)) return false;
+    for(const m of activeNumMetrics){
+      const loEl=$('#min_'+m.key), hiEl=$('#max_'+m.key);
+      const lo=loEl?loEl.value:'', hi=hiEl?hiEl.value:'';
+      const v=s[m.key];
+      if(lo!=='' && (v==null || v< +lo)) return false;
+      if(hi!=='' && (v==null || v> +hi)) return false;
+    }
+    return true;
+  });
+  const skEl=$('#fsortkey'), sk=skEl?skEl.value:'';
+  if(sk){
+    const dir=($('#fsortdir')&&$('#fsortdir').value==='asc')?1:-1;
+    list=list.slice().sort((a,b)=> sk==='instruction'
+      ? dir*String(a.instruction||'').localeCompare(String(b.instruction||''))
+      : dir*(((a[sk]!=null?a[sk]:0)-(b[sk]!=null?b[sk]:0))||0));
   }
-  if(info.segments.length) await loadSegment(info.segments[0].segment_id);
+  return list;
+}
+// Repopulate the segment dropdown from the filtered list; keep the current
+// selection if it still matches, else load the first match.
+async function applyFilters(){
+  const list=filteredSegments();
+  const prev=SEG&&SEG.segment_id;
+  const sel=$('#seg'); sel.innerHTML='';
+  for(const s of list){ const o=document.createElement('option'); o.value=s.segment_id; o.textContent=segOptionLabel(s); sel.appendChild(o); }
+  const cnt=$('#fcount'); if(cnt) cnt.textContent=`${list.length} / ${ALL_SEGMENTS.length} match`;
+  if(!list.length){ $('#seginfo').textContent='⚠ no segments match the filters'; return; }
+  if(prev && list.some(s=>s.segment_id===prev)){
+    sel.value=prev;   // keep current view
+    if(FR.length){
+      refreshMatches(); buildStrip(); buildRows();
+      // a fresh search moves to its first hit; without one, stay where you were
+      show(MATCHES.length && !MATCHES.includes(cur) ? MATCHES[0] : cur);
+    }
+  } else await loadSegment(list[0].segment_id);
 }
 async function loadSegment(id){
-  SEG=await jget('/api/segment?ds='+encodeURIComponent(DS)+'&id='+encodeURIComponent(id));
+  SEG=await jget('/api/segment?ds='+encodeURIComponent(DS)+'&id='+encodeURIComponent(id)+sampQS());
+  updateMarkUI();
   FR=SEG.frames;
   DUAL = !!SEG.dual_clock;
   ALN = SEG.align || null;
@@ -1281,33 +4099,148 @@ async function loadSegment(id){
   tg.style.display = canAlign ? '' : 'none';
   tg.textContent = 'keys: '+CLOCK; tg.classList.toggle('on', CLOCK==='aligned');
   PARSED=curActions().map(parseAction);
+  const stuckInfo = SEG.stuck_key_frames
+    ? ` · stuck ${SEG.stuck_key||'key'} ${SEG.stuck_key_frames}f${SEG.stuck_key_unreleased?' unreleased':''}`
+    : '';
   $('#seginfo').textContent = ((MODE==='frames_master' && !HAS_ACTIONS)
     ? `${SEG.recording_id||'?'} · ${SEG.n_frames} raw frames`
     : `${SEG.recording_id||'?'} · ${SEG.n_non_noop}/${SEG.n_frames} active frames`)
-    + (SEG.n_black ? ` · ${SEG.n_black} black${SEG.n_black_act?` (${SEG.n_black_act} w/ action)`:''}` : '');
+    + (SEG.n_black ? ` · ${SEG.n_black} black${SEG.n_black_act?` (${SEG.n_black_act} w/ action)`:''}` : '')
+    + stuckInfo;
   if(MODE==='conversations'){
     // Per-segment banner: the system prompt + (optional) goal instruction that
     // frame this conversation, plus its turn count / fps / alignment.
     const note=$('#modenote');
     let h=`<b>stage-04 conversation</b> · ${SEG.goal_conditioned?'goal-conditioned':'goal-free'}`;
+    if(SEG.action_format) h+=` · ${esc(String(SEG.action_format))}`;
     if(SEG.target_fps) h+=` · ${SEG.target_fps} fps`;
     if(SEG.alignment_status) h+=` · ${esc(String(SEG.alignment_status))}`;
     h+=` · ${SEG.n_turns||FR.length} turns`;
-    if(SEG.instruction) h+=`<br><span class="cnote-goal">goal:</span> ${esc(String(SEG.instruction))}`;
-    if(SEG.system_prompt) h+=`<br><span class="cnote-sys">system:</span> ${esc(String(SEG.system_prompt))}`;
+    h+=goalNote(SEG.instruction);
+    h+=collapsibleNote('cnote-context', 'context', SEG.context);
+    h+=collapsibleNote('cnote-sys', 'system prompt', SEG.system_prompt);
+    h+='<div>'+chatBtn()+'</div>';
     note.innerHTML=h; note.classList.add('show');
   }
+  if(MODE==='inline_records'){
+    // Per-record banner: which split, how full the token budget is, and the
+    // system prompt / goal that frame this training example.
+    const note=$('#modenote');
+    const ml=SEG.measured_length, mx=SEG.max_length;
+    const pct=(ml&&mx)?Math.round(100*ml/mx):null;
+    let h=`<b>stage-06 record</b> · <span class="cnote-goal">${esc(String(SEG.split||'?'))}</span> split · ${SEG.n_turns||FR.length} turns`;
+    if(ml) h+=` · ${ml}${mx?`/${mx}`:''} tok${pct!=null?` (${pct}% of budget)`:''}`;
+    if(SEG.model_id) h+=` · ${esc(String(SEG.model_id))}`;
+    if(SEG.overflow_mode) h+=` · overflow=${esc(String(SEG.overflow_mode))}`;
+    if(SEG.action_format) h+=` · ${esc(String(SEG.action_format))}`;
+    if(SEG.target_fps) h+=` · ${SEG.target_fps} fps`;
+    h+=goalNote(SEG.instruction);
+    h+=collapsibleNote('cnote-context', 'context', SEG.context);
+    h+=collapsibleNote('cnote-sys', 'system prompt', SEG.system_prompt);
+    h+='<div>'+chatBtn()+'</div>';
+    note.innerHTML=h; note.classList.add('show');
+  }
+  renderSource();
   $('#fn').textContent=FR.length;
-  buildStrip(); buildStrip2(); buildRows(); show(0);
+  refreshMatches();
+  buildStrip(); buildStrip2(); buildRows();
+  // Land on the first matching turn when a search is active — the segment was
+  // selected BECAUSE it contains one.
+  show(MATCHES.length ? MATCHES[0] : 0);
+  if($('#chatwin').classList.contains('show')) renderChat();  // keep the open window in sync
 }
+// ---- action search ---------------------------------------------------------
+// Two halves of one query: the server says WHICH segments contain it (the
+// segment list must not carry every trajectory's action text), and the client
+// finds the matching turns inside the segment it has open.
+let ACTQ='', ACTHITS=null, MATCHES=[], _actTimer=null;
+function actQuery(){ const el=$('#fact'); return el ? el.value.trim() : ''; }
+function actStat(t){ const el=$('#factstat'); if(el) el.textContent = t ? t+' · ' : ''; }
+async function runActionSearch(){
+  const q=actQuery();
+  if(!q){ ACTQ=''; ACTHITS=null; actStat(''); refreshMatches(); await applyFilters(); return; }
+  actStat('searching…');
+  try{
+    const r=await jget('/api/find?ds='+encodeURIComponent(DS)+'&q='+encodeURIComponent(q)+sampQS());
+    if(r.error){ actStat(r.error); return; }
+    ACTQ=q; ACTHITS=r.segments||{};
+    actStat(`${r.n_turns} turns in ${r.n_segments} segments`);
+  }catch(e){ actStat(String(e)); return; }
+  refreshMatches();
+  await applyFilters();
+}
+function queueActionSearch(){ clearTimeout(_actTimer); _actTimer=setTimeout(runActionSearch, 250); }
+// Does this turn match? Raw text AND the rendered line, so "down(LMB)" reaches
+// an ordered turn's primitives and "click" reaches a native tool call.
+function turnMatches(f, q){
+  return String(f.action||'').toLowerCase().includes(q)
+      || String(dispAction(f)||'').toLowerCase().includes(q);
+}
+function refreshMatches(){
+  const q=actQuery().toLowerCase();
+  MATCHES = q ? FR.map((f,i)=>turnMatches(f,q)?i:-1).filter(i=>i>=0) : [];
+  const on=MATCHES.length>0;
+  $('#prevmatch').style.display=on?'':'none';
+  $('#nextmatch').style.display=on?'':'none';
+  updateMatchInfo();
+}
+function updateMatchInfo(){
+  const el=$('#matchinfo');
+  if(!MATCHES.length){ el.textContent = actQuery()? '0 matches here' : ''; return; }
+  const k=MATCHES.indexOf(cur);
+  el.textContent = `match ${k>=0?k+1:'–'}/${MATCHES.length}`;
+}
+// Next/previous matching turn, wrapping at the ends.
+function nextMatch(d){
+  if(!MATCHES.length) return;
+  let i = d>0 ? MATCHES.find(x=>x>cur) : [...MATCHES].reverse().find(x=>x<cur);
+  if(i===undefined) i = d>0 ? MATCHES[0] : MATCHES[MATCHES.length-1];
+  show(i);
+}
+// Escape for HTML, then wrap the query's occurrences in <mark>.
+function hlText(s, q){
+  const e=esc(s);
+  if(!q) return e;
+  const needle=esc(q).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  return e.split(new RegExp('('+needle+')','ig'))
+          .map((p,i)=> i%2 ? '<mark>'+p+'</mark>' : p).join('');
+}
+
 // Built via innerHTML (+ delegated click) so multi-thousand-frame segments
 // (e.g. a 15fps frames-master: ~6k frames) render fast.
+function stuckThreshold(){
+  const el=$('#fstuck');
+  if(!el || el.value.trim()==='') return null;
+  const t=Number(el.value);
+  return Number.isFinite(t) ? t : null;
+}
+function stuckTimelineMap(){
+  const t=stuckThreshold();
+  const map=new Map();
+  if(t==null || !SEG || !SEG.key_hold_ranges) return map;
+  for(const r of SEG.key_hold_ranges){
+    if(!((r.frames||0)>t)) continue;
+    const lo=Math.max(0, Math.min(FR.length-1, r.start||0));
+    const hi=Math.max(lo, Math.min(FR.length-1, r.end||0));
+    for(let i=lo;i<=hi;i++){
+      if(!map.has(i)) map.set(i, []);
+      map.get(i).push(r);
+    }
+  }
+  return map;
+}
 function buildStrip(){
   const cuts=(ALN&&ALN.cut_ranges)?ALN.cut_ranges:[];
   const inCut=i=>{ for(const r of cuts) if(i>=r[0]&&i<r[1]) return true; return false; };
+  const stuck=stuckTimelineMap();
+  const mset=new Set(MATCHES);
   let h='';
   for(let i=0;i<FR.length;i++){ const f=FR[i]; const cut=inCut(i); const blk=!!f.is_black; const blkAct=blk&&!f.is_noop;
-    h+=`<div class="cell${f.is_noop?'':' act'}${cut?' cut':''}${blk?' black':''}" data-i="${i}" title="#${i} t=${f.t}s ${blkAct?'[black + action] ':(blk?'[black frame] ':'')}${cut?'[cut — collapsed idle] ':''}${esc(f.action||'NO_OP')}"></div>`; }
+    const stuckHere=stuck.get(i)||[];
+    const stuckTitle=stuckHere.length
+      ? '['+stuckHere.map(r=>`${r.key||'key'} held ${r.frames||0}f${r.unreleased?' unreleased':''}`).join(', ')+'] '
+      : '';
+    h+=`<div class="cell${f.is_noop?'':' act'}${cut?' cut':''}${blk?' black':''}${stuckHere.length?' stuck':''}${mset.has(i)?' match':''}" data-i="${i}" title="#${i} t=${f.t}s ${stuckTitle}${blkAct?'[black + action] ':(blk?'[black frame] ':'')}${cut?'[cut — collapsed idle] ':''}${esc(dispAction(f)||'NO_OP')}"></div>`; }
   $('#strip').innerHTML=h;
 }
 // Second timeline (master + alignment only): aligned keys on the video clock,
@@ -1347,10 +4280,17 @@ function buildRows(){
       h+=`<div class="erow" id="ev${k}" data-fi="${Math.floor(e[0]*MASTER_FPS)}"><span class="t">${e[0].toFixed(2)}s</span><span class="ty">${esc(String(e[1]))}</span><span class="a">${esc(String(e[2]))}</span></div>`; }
     $('#rows').innerHTML=h;
   } else {                                    // per-frame binned actions
-    if(head) head.textContent='actions';
+    if(head) head.textContent='actions  (n = actions in the turn)';
+    const q=actQuery().toLowerCase();
     let h='';
     for(let i=0;i<FR.length;i++){ const f=FR[i];
-      h+=`<div class="row${f.is_noop?' noop':''}" id="row${i}" data-i="${i}"><span class="t">#${i}</span><span class="t">${f.t}s</span><span class="a">${esc(f.action||'NO_OP')}</span></div>`; }
+      // the turn as the label spells it; the FULL raw text (thinking included,
+      // tool-call JSON for native turns) stays on hover
+      const title=f.disp!=null?` title="${esc(f.action||'')}"`:'';
+      const n=f.n_act||0;
+      const nc=`<span class="n${n>=10?' hi':''}" title="${n} actions, ${f.n_mouse||0} mouse/scroll">${n||''}</span>`;
+      const m=q&&turnMatches(f,q)?' match':'';
+      h+=`<div class="row${f.is_noop?' noop':''}${m}" id="row${i}" data-i="${i}"${title}><span class="t">#${i}</span><span class="t">${f.t}s</span>${nc}<span class="a">${hlText(dispAction(f)||'NO_OP', q)}</span></div>`; }
     $('#rows').innerHTML=h;
   }
 }
@@ -1360,14 +4300,15 @@ function show(i){
   if(!FR.length) return;
   cur=Math.max(0,Math.min(FR.length-1,i));
   const f=FR[cur], p=PARSED[cur];
-  $('#frameimg').src=`/frame?ds=${encodeURIComponent(DS)}&seg=${encodeURIComponent(SEG.segment_id)}&i=${cur}`;
+  $('#frameimg').src=`/frame?ds=${encodeURIComponent(DS)}&seg=${encodeURIComponent(SEG.segment_id)}&i=${cur}`+sampQS();
   $('#fi').textContent=cur; $('#ft').textContent=f.t;
   $('#fbin').textContent=(f.bin??'–'); $('#fsrc').textContent=(f.src??'–');
-  const act=(CLOCK==='aligned'&&f.action_aln!=null)?f.action_aln:f.action;
+  const act=hudAction(f);
   const noop=!act||act==='NO_OP';
-  $('#fbadge').innerHTML=(noop?'<span class="badge noop">NO_OP</span>':'<span class="badge act">ACTION</span>')
+  $('#fbadge').innerHTML=(noop?'<span class="badge noop">NO_OP</span>'
+      : `<span class="badge act">ACTION${f.n_act>1?' ×'+f.n_act:''}</span>`)
     + (f.is_black?' <span class="badge black">BLACK</span>':'');
-  $('#rawaction').textContent=act||'NO_OP';
+  $('#rawaction').textContent=dispAction(f)||'NO_OP';
   if(HAS_ACTIONS){
     const st=stateAt(cur);
     lightKeyboard(st.pressed, st.held); updateRadar(p, st.pressed, st.held); renderTyped(st.chars, cur);
@@ -1394,12 +4335,9 @@ function show(i){
     _lastRow=document.getElementById('row'+cur);
     if(_lastRow){ _lastRow.classList.add('cur'); pageY($('#rows'), _lastRow); }
   }
+  updateMatchInfo();
 }
 function step(d){ show(cur+d); }
-// Active on the currently-selected clock: aligned action when the HUD toggle is
-// on 'aligned' (and aligned actions exist), else the raw binning.
-function frameActive(f){ return (CLOCK==='aligned' && f.action_aln!=null) ? f.action_aln!=='NO_OP' : !f.is_noop; }
-function nextActive(d){ let i=cur+d; while(i>=0&&i<FR.length){ if(frameActive(FR[i])){show(i);return;} i+=d; } }
 // Jump to the prev/next (near-)black frame. Both modes carry is_black (master:
 // from its own luma metrics; 01b sample: cross-referenced from the master).
 function nextBlack(d){ let i=cur+d; while(i>=0&&i<FR.length){ if(FR[i].is_black){show(i);return;} i+=d; } }
@@ -1414,11 +4352,30 @@ function togglePlay(){
   else clearInterval(timer);
 }
 
-$('#ds').onchange=e=>{ DS=e.target.value; loadSegments(); };
+$('#ds').onchange=e=>{ DS=e.target.value; resetUserFilter(); loadSegments(); };
 $('#seg').onchange=e=>loadSegment(e.target.value);
+// number inputs fire `change` on blur/Enter — a rebuild is too expensive to run
+// on every keystroke
+$('#smode').onchange=onSamplingChange;
+$('#sn').onchange=onSamplingChange;
+$('#sseed').onchange=onSamplingChange;
+for(const id of ['#sn','#sseed'])
+  $(id).addEventListener('keydown', e=>{ if(e.key==='Enter') onSamplingChange(); });
+// Move to the prev/next segment in the (filtered, sorted) dropdown; clamps at the ends.
+function stepSegment(delta){
+  const sel=$('#seg'); if(!sel || !sel.options.length) return;
+  const i=Math.max(0, Math.min(sel.options.length-1, (sel.selectedIndex<0?0:sel.selectedIndex)+delta));
+  if(i===sel.selectedIndex) return;
+  sel.selectedIndex=i; loadSegment(sel.value);
+}
 $('#prev').onclick=()=>step(-1);
 $('#next').onclick=()=>step(1);
+$('#prevmatch').onclick=()=>nextMatch(-1);
+$('#nextmatch').onclick=()=>nextMatch(1);
 $('#play').onclick=togglePlay;
+$('#markgood').onclick=toggleMark;
+$('#marksid').onchange=onMarksIdChange;
+$('#marksid').addEventListener('keydown', e=>{ if(e.key==='Enter') onMarksIdChange(); });
 $('#strip').onclick=e=>{ const c=e.target.closest('.cell'); if(c) show(+c.dataset.i); };
 $('#strip2').onclick=e=>{ const c=e.target.closest('.cell'); if(c) show(+c.dataset.i); };
 $('#clocktoggle').onclick=()=>{
@@ -1427,13 +4384,88 @@ $('#clocktoggle').onclick=()=>{
   PARSED=curActions().map(parseAction); show(cur);
 };
 $('#rows').onclick=e=>{ const er=e.target.closest('.erow'); if(er){ show(+er.dataset.fi); return; } const r=e.target.closest('.row'); if(r) show(+r.dataset.i); };
+// Full-chat window: the button lives inside #modenote (rebuilt per segment via
+// innerHTML), so bind it by delegation; ✕ / Esc collapse the window.
+$('#modenote').addEventListener('click', e=>{ if(e.target.closest('#chatbtn')) toggleChat(); });
+// #srcbox is rebuilt per segment, so its buttons are handled by delegation.
+$('#srcbox').addEventListener('click', async e=>{
+  const cp=e.target.closest('[data-copy]');
+  if(cp){ copyText(cp.dataset.copy, cp); return; }
+  if(e.target.id==='sibload'){ await loadSiblings('recording'); return; }
+  if(e.target.id==='sibfolder'){ await loadSiblings('folder'); return; }
+  if(e.target.id==='folderbtn'){
+    if(FOLDER_OPEN && $('#reclist')){ FOLDER_OPEN=false; $('#reclist').remove(); folderInfo(''); }
+    else await showFolder(false);
+    return;
+  }
+  const rec=e.target.closest('.rec');
+  if(rec && rec.dataset.first){ await loadRecording(rec.dataset.first, rec.dataset.rec); return; }
+  if(e.target.id==='sibonly'){
+    const n=await filterToRecording(SEG&&SEG.recording_id);
+    sibInfo(`${n} of this recording loaded · list filtered to it`);
+  }
+});
+$('#copyseg').addEventListener('click', e=>{ if(SEG) copyText(SEG.segment_id, e.currentTarget); });
+$('#srctoggle').addEventListener('click', ()=>setSrcPanel(!SRC_ON));
+// #fusers is rebuilt whenever the loaded set changes — bind it by delegation.
+$('#fusers').addEventListener('change', async e=>{
+  if(e.target.id==='fuscope'){
+    USER_SCOPE=e.target.value;
+    renderUserFilter();
+    // leaving 'sample' with a sampling applied means going back to the global draw
+    if(USER_SCOPE!=='sample' && SAMP_USERS.users.length){
+      SAMP_USERS={users:[], mode:'total'};
+      await loadSegments();
+    } else await applyFilters();
+    return;
+  }
+  if(e.target.id==='fusampmode'){ USER_SAMP=e.target.value; userStat(); return; }
+  if(e.target.id==='fusermode'){ USER_MODE=e.target.value; userStat(); applyFilters(); return; }
+  if(e.target.classList.contains('uchk')){
+    const u=e.target.dataset.user;
+    if(e.target.checked) USERS.add(u); else USERS.delete(u);
+    userStat();
+    if(USER_SCOPE==='filter') applyFilters();   // 'sample' waits for ⟳ apply
+  }
+});
+$('#fusers').addEventListener('click', async e=>{
+  if(e.target.id==='fuapply'){ await applyUserSampling(); return; }
+  if(e.target.id!=='fuall' && e.target.id!=='funone') return;
+  USERS = e.target.id==='fuall' ? new Set(userCounts().map(r=>r[0])) : new Set();
+  $('#fulist').querySelectorAll('.uchk').forEach(c=>{ c.checked=USERS.has(c.dataset.user); });
+  userStat(); applyFilters();
+});
+$('#chatclose').onclick=closeChat;
+// --- filter panel toggle / reset ---
+function setFilters(on){ $('#filters').classList.toggle('show',on); $('#filttoggle').classList.toggle('on',on);
+  localStorage.setItem('fr_filters_open', on?'1':''); }
+$('#filttoggle').onclick=()=>setFilters(!$('#filters').classList.contains('show'));
+$('#fclear').onclick=()=>{
+  $('#filters').querySelectorAll('input').forEach(i=>{ if(i.type==='checkbox') i.checked=false; else i.value=''; });
+  const hadSampling=SAMP_USERS.users.length>0;
+  USERS=new Set(); userStat();
+  const sk=$('#fsortkey'); if(sk) sk.value='';
+  clearTimeout(_actTimer); ACTQ=''; ACTHITS=null; actStat(''); refreshMatches();
+  if(FR.length){ buildStrip(); buildRows(); }
+  // a user-scoped draw is part of what the server loaded, so dropping it reloads
+  if(hadSampling){ SAMP_USERS={users:[], mode:'total'}; loadSegments(); return; }
+  applyFilters(); };
 document.addEventListener('keydown',e=>{
-  if(e.target.tagName==='SELECT') return;
-  if(e.key==='ArrowLeft'){step(-1);e.preventDefault();}
-  else if(e.key==='ArrowRight'){step(1);e.preventDefault();}
+  if(e.key==='Escape' && $('#chatwin').classList.contains('show')){ closeChat(); e.preventDefault(); return; }
+  if(e.target.tagName==='SELECT'||e.target.tagName==='INPUT') return;
+  if(e.key==='c'){ toggleChat(); return; }
+  if(e.key==='i'){ if(SEG) copyText(SEG.segment_id, $('#copyseg')); return; }
+  if(e.key==='p'){ setSrcPanel(!SRC_ON); return; }
+  if(e.key==='f'){ setFilters(!$('#filters').classList.contains('show')); return; }
+  if(e.key==='m'){ toggleMark(); return; }
+  // wasd mirrors the arrows: w/s step segments (up/down), a/d step frames (left/right).
+  if(e.key==='ArrowUp'||e.key==='w'){stepSegment(-1);e.preventDefault();}
+  else if(e.key==='ArrowDown'||e.key==='s'){stepSegment(1);e.preventDefault();}
+  else if(e.key==='ArrowLeft'||e.key==='a'){step(-1);e.preventDefault();}
+  else if(e.key==='ArrowRight'||e.key==='d'){step(1);e.preventDefault();}
   else if(e.key===' '){togglePlay();e.preventDefault();}
-  else if(e.key==='a'){nextActive(-1);}
-  else if(e.key==='d'){nextActive(1);}
+  else if(e.key==='n'){nextMatch(1);}
+  else if(e.key==='N'){nextMatch(-1);}   // shift+n
   else if(e.key===','){nextBlack(-1);}
   else if(e.key==='.'){nextBlack(1);}
   else if(e.key==='<'){nextBlackAct(-1);}   // shift+,
@@ -1450,14 +4482,33 @@ function fitKeyboard(){
   const u=Math.max(15, Math.min(34, Math.floor((w-20)/16.8)));  // widest row ~16.8 units
   if(u!==UNIT){ UNIT=u; buildKeyboard(); if(FR.length) show(cur); }
 }
+// left handle: the filter panel's width (only draggable while it's open)
+const filtersEl=$('#filters'), lresizer=$('#lresizer');
+function setFilterWidth(w){
+  w=Math.max(180, Math.min(window.innerWidth-380, w));
+  filtersEl.style.width=w+'px';
+}
+let ldrag=false;
+lresizer.addEventListener('mousedown', e=>{ ldrag=true; lresizer.classList.add('drag');
+  document.body.style.userSelect='none'; e.preventDefault(); });
+document.addEventListener('mousemove', e=>{ if(ldrag) setFilterWidth(e.clientX); });
+document.addEventListener('mouseup', ()=>{ if(!ldrag) return; ldrag=false; lresizer.classList.remove('drag');
+  document.body.style.userSelect=''; localStorage.setItem('fr_filterw', parseInt(filtersEl.style.width)||262); });
+(function(){ const w=parseInt(localStorage.getItem('fr_filterw')); if(w) setFilterWidth(w); })();
 let rdrag=false;
 resizer.addEventListener('mousedown', e=>{ rdrag=true; resizer.classList.add('drag');
   document.body.style.userSelect='none'; e.preventDefault(); });
 document.addEventListener('mousemove', e=>{ if(rdrag) setPanelWidth(window.innerWidth - e.clientX); });
 document.addEventListener('mouseup', ()=>{ if(!rdrag) return; rdrag=false; resizer.classList.remove('drag');
   document.body.style.userSelect=''; localStorage.setItem('fr_panelw', parseInt(panel.style.width)||430); fitKeyboard(); });
-window.addEventListener('resize', ()=>{ setPanelWidth(parseInt(panel.style.width)||430); fitKeyboard(); });
+window.addEventListener('resize', ()=>{
+  setPanelWidth(parseInt(panel.style.width)||430);
+  if(parseInt(filtersEl.style.width)) setFilterWidth(parseInt(filtersEl.style.width));
+  fitKeyboard();
+});
 (function(){ const s=parseInt(localStorage.getItem('fr_panelw')); if(s) setPanelWidth(s); })();
+if(localStorage.getItem('fr_filters_open')) setFilters(true);
+$('#srctoggle').classList.toggle('on', SRC_ON);
 
 buildKeyboard(); initRadar();
 setTimeout(fitKeyboard, 0);
@@ -1487,12 +4538,6 @@ def resolve_jsonl_paths(dataset: Path) -> list[Path]:
     root = dataset / "frame_records.jsonl"
     if root.exists():
         return [root]
-    # A stage-03 filter artifact's QC view (qc_view/<segment_id>.jsonl, written
-    # with --qc-view-fps): per-segment sampled frames + derived canonical
-    # actions in frame_records field names — browse it like any 01b sample.
-    qc = sorted((dataset / "qc_view").glob("*.jsonl"))
-    if qc:
-        return qc
     # Otherwise gather per-segment files: shallow layout, then the 01b annotate
     # layout, then a bounded recursive sweep. First non-empty match wins.
     for pattern in (
@@ -1504,11 +4549,20 @@ def resolve_jsonl_paths(dataset: Path) -> list[Path]:
         if found:
             return found
     raise SystemExit(
-        f"no frame_records.jsonl (or qc_view/*.jsonl) found under {dataset} "
-        f"(looked at the root, qc_view/, */, clips/*/stage_01/, and recursively); "
-        f"pass the file directly with --dataset <path>/frame_records.jsonl. "
-        f"For a stage-03 filter artifact, re-run stage_03_filter with --qc-view-fps."
+        f"no frame_records.jsonl found under {dataset} "
+        f"(looked at the root, */, clips/*/stage_01/, and recursively); "
+        f"pass the file directly with --dataset <path>/frame_records.jsonl"
     )
+
+
+def _positive_int(raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected an integer, got {raw!r}") from exc
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be > 0")
+    return value
 
 
 def parse_args() -> argparse.Namespace:
@@ -1517,11 +4571,31 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--dataset", required=True, nargs="+", metavar="PATH",
-        help="one or more datasets, each a frame-records dir (or frame_records.jsonl "
-             "file), a stage-03 filter artifact with a qc_view/ (run with "
-             "--qc-view-fps), a stage-01 frames-master store dir (segment_index.jsonl "
-             "+ frames/), or a stage-04 conversations dir (or conversations.jsonl "
-             "file) — auto-detected; choose between them in the UI",
+        help="one or more datasets, each a 01b output dir (or frame_records.jsonl "
+             "file), a 01a frames-master store dir (segment_index.jsonl + frames/), "
+             "a stage-04 conversations dir (or conversations.jsonl file), or a "
+             "stage-06 inline-records dir (train/ + val/ ArrayRecord shards) — "
+             "auto-detected; choose between them in the UI",
+    )
+    p.add_argument(
+        "--limit", "--limit-samples", dest="limit", type=_positive_int, default=100,
+        help="load at most K samples per dataset (default 100 — a store of any size "
+             "opens fast; raise it here or in the UI, blank N there = every sample). "
+             "For frame_records a sample is a segment_id, for conversations/inline "
+             "records a row/chunk, for frames-master a listed segment. WHICH K is "
+             "--sample-mode; both are switchable per dataset in the UI ('samples' in "
+             "the header).",
+    )
+    p.add_argument(
+        "--sample-mode", choices=("first", "random"), default="first",
+        help="which --limit samples to load: the 'first' K in store order (default, "
+             "stops reading at K+1) or 'random' K drawn with --seed. Sets the UI's "
+             "initial state only — toggle it there without a restart.",
+    )
+    p.add_argument(
+        "--seed", type=int, default=0,
+        help="seed for --sample-mode random (default 0). The same seed + N on the "
+             "same store always draws the same K samples.",
     )
     p.add_argument(
         "--clips-manifest", default=None,
@@ -1557,59 +4631,108 @@ def looks_like_frames_master(root: Path) -> bool:
 
 
 def looks_like_conversations(root: Path) -> bool:
-    """A stage-04 conversations artifact: a ``conversations.jsonl`` file, a dir
-    holding one, or a dir whose ``manifest.json`` marks it as a conversations store."""
+    """A conversations-shaped artifact: our stage-04 ``conversations.jsonl`` OR an
+    external goal-SFT store (e.g. hindsight_fold canonical SFT: a ``chat.jsonl`` at
+    the root or under ``train``/``val``). Same interleaved screenshot->action
+    ``messages`` schema; the goal shows as the per-conversation instruction."""
     root = root.expanduser()
     if root.is_file():
-        return root.name.endswith(".jsonl") and "conversation" in root.name.lower()
+        name = root.name.lower()
+        return name.endswith(".jsonl") and ("conversation" in name or "chat" in name)
     if not root.is_dir():
         return False
-    if (root / "conversations.jsonl").exists():
+    if any((root / p).exists() for p in (
+        "conversations.jsonl", "chat.jsonl", "val/chat.jsonl", "train/chat.jsonl"
+    )):
         return True
     manifest = root / "manifest.json"
     if manifest.exists():
         try:
-            return "conversations" in json.loads(manifest.read_text()).get("artifact_type", "")
+            at = json.loads(manifest.read_text()).get("artifact_type", "")
+            return "conversations" in at or "canonical_sft" in at
         except (OSError, json.JSONDecodeError):
             return False
     return False
 
 
+def looks_like_inline_records(root: Path) -> bool:
+    """A stage-06 inline SFT records store: a dir whose ``manifest.json`` marks the
+    stage ``inline_records``, or one with ``train``/``val`` split subdirs (or a split
+    dir itself) holding a ``metadata.json`` with ``inline_records: true``."""
+    root = root.expanduser()
+    if not root.is_dir():
+        return False
+    manifest = root / "manifest.json"
+    if manifest.exists():
+        try:
+            if json.loads(manifest.read_text()).get("stage") == "inline_records":
+                return True
+        except (OSError, json.JSONDecodeError):
+            pass
+    for cand in (root, root / "train", root / "val"):
+        meta = cand / "metadata.json"
+        if meta.exists():
+            try:
+                if json.loads(meta.read_text()).get("inline_records"):
+                    return True
+            except (OSError, json.JSONDecodeError):
+                pass
+    return False
+
+
 def resolve_conversations_path(dataset: Path) -> Path:
-    """Locate the ``conversations.jsonl`` for a stage-04 dataset (the file itself,
-    or ``<dir>/conversations.jsonl``)."""
+    """Locate the conversations file for a dataset: the file itself, or -- for a dir
+    -- ``conversations.jsonl`` (our stage-04), then ``chat.jsonl`` / ``val/chat.jsonl``
+    / ``train/chat.jsonl`` (external goal-SFT). A big combined ``chat.jsonl`` loads
+    eagerly, so pass a split file directly (e.g. ``.../val/chat.jsonl``) to browse fast."""
     dataset = dataset.expanduser().resolve()
     if dataset.is_file():
         return dataset
-    candidate = dataset / "conversations.jsonl"
-    if candidate.exists():
-        return candidate
-    raise SystemExit(f"no conversations.jsonl found under {dataset}")
+    for candidate in (
+        dataset / "conversations.jsonl",
+        dataset / "chat.jsonl",
+        dataset / "val" / "chat.jsonl",
+        dataset / "train" / "chat.jsonl",
+    ):
+        if candidate.exists():
+            return candidate
+    raise SystemExit(f"no conversations.jsonl / chat.jsonl found under {dataset}")
 
 
 def detect_mode(path: Path) -> str:
     """Cheap mode detection shared by registration and building (no full load).
-    Frames-master and conversations are checked before the frame_records default."""
+    Frames-master, conversations and inline-records are checked before the
+    frame_records default."""
     if looks_like_frames_master(path):
         return "frames_master"
     if looks_like_conversations(path):
         return "conversations"
+    if looks_like_inline_records(path):
+        return "inline_records"
     return "frame_records"
 
 
-def _build_dataset(path: Path):
+def _build_dataset(path: Path, sampling: Sampling):
     """Build the right dataset object for a path (frames-master / conversations /
-    frame_records)."""
+    inline-records / frame_records), loading the samples ``sampling`` selects."""
     mode = detect_mode(path)
     if mode == "frames_master":
-        return FramesMasterDataset(path.expanduser().resolve())
+        return FramesMasterDataset(path.expanduser().resolve(), sampling)
     if mode == "conversations":
-        return ConversationsDataset(resolve_conversations_path(path))
-    return FrameRecordsDataset(resolve_jsonl_paths(path))
+        return ConversationsDataset(resolve_conversations_path(path), sampling)
+    if mode == "inline_records":
+        return InlineRecordsDataset(path.expanduser().resolve(), sampling)
+    return FrameRecordsDataset(resolve_jsonl_paths(path), sampling)
 
 
-def get_dataset(name: str):
-    """Return the built dataset for a registered name (build + cache on first use).
+def get_dataset(name: str, sampling: "Sampling | None" = None):
+    """Return the built dataset for a registered name + sampling (build + cache on
+    first use).
+
+    One name can be built under several samplings — first N, random N seed 0,
+    random N seed 1 — so switching in the UI doesn't re-read a store you already
+    looked at; the per-name cache keeps the last ``_SAMPLING_CACHE_CAP`` builds and
+    drops the least-recently-used (an evicted sampling just costs a rebuild).
 
     Build failures (e.g. an empty / not-yet-generated dataset dir) are re-raised as
     RuntimeError so the request handler reports them as JSON instead of a bare
@@ -1618,12 +4741,80 @@ def get_dataset(name: str):
     entry = DATASETS.get(name)
     if entry is None:
         return None
-    if entry["obj"] is None:
+    samp = sampling or Sampling(DATASET_SAMPLE_MODE, DATASET_SAMPLE_LIMIT, DATASET_SAMPLE_SEED)
+    objs: "OrderedDict[str, Any]" = entry["objs"]
+    key = samp.key()
+    obj = objs.get(key)
+    if obj is None:
         try:
-            entry["obj"] = _build_dataset(entry["path"])
+            obj = _build_dataset(entry["path"], samp)
         except SystemExit as exc:
             raise RuntimeError(str(exc)) from exc
-    return entry["obj"]
+        objs[key] = obj
+        while len(objs) > _SAMPLING_CACHE_CAP:
+            objs.popitem(last=False)
+    else:
+        objs.move_to_end(key)
+    return obj
+
+
+_MARKS_ID_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _sanitize_marks_id(raw: str) -> str:
+    """A client-chosen marks-file identifier, defanged to a safe filename
+    fragment (it lands directly in a path segment): anything outside
+    ``[A-Za-z0-9._-]`` collapses to ``_``, capped at 64 chars. Blank stays blank
+    -- that's the "no id" case, i.e. the dataset's shared ``golden_marks.json``."""
+    return _MARKS_ID_RE.sub("_", (raw or "").strip())[:64]
+
+
+def _marks_path(name: str, marks_id: str = "") -> Path:
+    """Where a dataset's golden-trace marks live: ``golden_marks.json`` next to the
+    dataset root (or next to the file itself, if ``--dataset`` pointed at a file
+    directly) — so the marks travel with the dataset rather than piling up
+    somewhere central. A non-blank ``marks_id`` gets its own sibling file
+    (``golden_marks_<id>.json``) instead of the shared default, so independent
+    review passes / sessions never step on each other's marks."""
+    root = DATASETS[name]["path"].expanduser()
+    root = root if root.is_dir() else root.parent
+    mid = _sanitize_marks_id(marks_id)
+    return root / (f"golden_marks_{mid}.json" if mid else "golden_marks.json")
+
+
+def _load_marks(name: str, marks_id: str = "") -> dict[str, Any]:
+    """The mark dict for ``name``/``marks_id`` (segment_id -> {"ts": iso str}), read
+    fresh from disk on every call — no in-memory cache. Several server processes
+    (or browser tabs against the same dataset+marks_id) can be open at once; a
+    cached copy would go stale the moment ANOTHER one writes, and the next save
+    from here would blindly overwrite it and lose those marks. Re-reading is cheap
+    (the file is a small dict), so there's no reason to risk that. A
+    missing/corrupt file just means no marks yet."""
+    path = _marks_path(name, marks_id)
+    if not path.exists():
+        return {}
+    try:
+        return dict(json.loads(path.read_text()).get("marks") or {})
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_marks(name: str, marks: dict[str, Any], marks_id: str = "") -> None:
+    """Persist ``marks`` for ``name``/``marks_id``, atomically (write to a temp file
+    then rename) so a crash mid-write can't corrupt the marks file. Callers must
+    have just re-read the current on-disk state via ``_load_marks`` and applied
+    only their own change to it, so a concurrent writer's marks survive."""
+    path = _marks_path(name, marks_id)
+    payload = {
+        "dataset": name,
+        "dataset_path": str(DATASETS[name]["path"]),
+        "marks_id": marks_id or None,
+        "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "marks": marks,
+    }
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    tmp.replace(path)
 
 
 def register_datasets(paths: list[str]) -> None:
@@ -1635,20 +4826,38 @@ def register_datasets(paths: list[str]) -> None:
         base, k = name, 2
         while name in DATASETS:
             name, k = f"{base}#{k}", k + 1
-        DATASETS[name] = {"path": p, "mode": detect_mode(p), "obj": None}
+        DATASETS[name] = {"path": p, "mode": detect_mode(p), "objs": OrderedDict()}
 
 
 def main() -> None:
-    global CLIPS_MANIFEST_OVERRIDE, ALIGNMENT_OVERRIDE
+    global CLIPS_MANIFEST_OVERRIDE, ALIGNMENT_OVERRIDE, DATASET_SAMPLE_LIMIT
+    global DATASET_SAMPLE_MODE, DATASET_SAMPLE_SEED
     args = parse_args()
     CLIPS_MANIFEST_OVERRIDE = args.clips_manifest
     ALIGNMENT_OVERRIDE = args.alignment
+    DATASET_SAMPLE_LIMIT = args.limit
+    DATASET_SAMPLE_MODE = args.sample_mode
+    DATASET_SAMPLE_SEED = args.seed
     register_datasets(args.dataset)
     if not DATASETS:
         raise SystemExit("no datasets given")
     print(f"registered {len(DATASETS)} dataset(s):", flush=True)
     for name, entry in DATASETS.items():
         print(f"  {name}  [{entry['mode']}]  {entry['path']}", flush=True)
+    if DATASET_SAMPLE_LIMIT is None:
+        print("sample limit: none (every sample per dataset)", flush=True)
+    elif DATASET_SAMPLE_MODE == "random":
+        print(
+            f"sample limit: {DATASET_SAMPLE_LIMIT} random samples per dataset "
+            f"(seed {DATASET_SAMPLE_SEED}) — switch mode/N/seed in the UI",
+            flush=True,
+        )
+    else:
+        print(
+            f"sample limit: first {DATASET_SAMPLE_LIMIT} samples per dataset "
+            "— switch to random N (seeded) in the UI",
+            flush=True,
+        )
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(
         f"serving on http://{args.host}:{args.port}/  "

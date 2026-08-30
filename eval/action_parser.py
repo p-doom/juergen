@@ -14,6 +14,17 @@ Keyboard events use rdev key names (e.g. ``KeyA``, ``ShiftLeft``,
 The parser is intentionally lenient on whitespace and tolerates a trailing
 newline / EOS token. It raises on truly malformed input so callers can
 count parse errors as a separate failure mode.
+
+Two further formats are parsed here, one function per format — freeroll picks
+one by ``--action_format`` and never mixes them:
+
+  * ``parse_computer_use_tool_call`` — Qwen3-VL native ``<tool_call>`` JSON.
+  * ``parse_ordered_action`` — the ordered_events_v2/v3 mini-program
+    (``move(4,-1); down(LMB); up(LMB)``), inverse of
+    ``data_pipeline/realigned_pipeline/lib/action_format.py``. Unlike the
+    aggregate grammar above it is order-preserving, so ``move -> click ->
+    move`` survives in a single turn; see the section at the bottom of this
+    module.
 """
 
 from __future__ import annotations
@@ -249,3 +260,247 @@ def parse_computer_use_tool_call(text: str) -> ComputerUseCall:
         suffix = f": {'; '.join(errors)}" if errors else ""
         raise ValueError(f"no valid computer_use tool call found{suffix}")
     return parsed
+
+
+# --------------------------------------------------------------------------
+# ordered_events_v2 / v3 (the ORDERED mini-program format)
+# --------------------------------------------------------------------------
+# Inverse of data_pipeline/realigned_pipeline/lib/action_format.py's
+# OrderedFormatter (v2) / OrderedTypingFormatter (v3), implementing
+# ORDERED_EVENTS_V3_GRAMMAR verbatim:
+#
+#     line       = "NO_OP" / primitive *("; " primitive)
+#     primitive  = move / scroll / down / up / type
+#     move       = "move(" int "," int ")"
+#     scroll     = "scroll(" int "," int ")"
+#     down       = "down(" NAME ")"
+#     up         = "up(" NAME ")"
+#     type       = "type(" DQUOTE chars DQUOTE ")"
+#
+# v2 is the v3 grammar minus ``type``, so ONE parser serves both: a v2-trained
+# checkpoint simply never emits ``type(...)``. TERMINATE is not part of the
+# grammar -- stage 04 OVERWRITES the final turn's action with it, so it always
+# arrives alone and freeroll._is_terminate intercepts it before parsing.
+#
+# The primitive list is order-significant: ``move -> click -> move`` in one
+# turn is the whole point of the format, and the aggregate ``Action`` (single
+# dx/dy/scroll + a flat event tuple) cannot represent it. Hence a separate
+# value type rather than a lossy projection onto ``Action``.
+
+_ORDERED_VECTOR_RE = re.compile(r"(move|scroll)\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)")
+# NAME is "any char except whitespace ( ) , ;" per the grammar.
+_ORDERED_INPUT_RE = re.compile(r"(down|up)\(\s*([^\s(),;]+)\s*\)")
+# chars = 1*(escape / plain); escape = "\" ("\" / DQUOTE). The payload may
+# contain "; ", so a line is NEVER safely split on the separator -- it must be
+# scanned left to right, which is what _parse_ordered_primitives does.
+_ORDERED_TYPE_RE = re.compile(r'type\("((?:\\.|[^"\\])*)"\)')
+
+_ORDERED_NO_OP = "NO_OP"
+
+
+def _unescape_typed_text(payload: str) -> str:
+    """Inverse of action_format._escape_typed_text (``\\\\`` and ``\\"`` only).
+
+    A backslash before any other character is not an escape in this grammar,
+    so it is kept literally (both characters pass through) rather than being
+    silently swallowed.
+    """
+    out: list[str] = []
+    i, n = 0, len(payload)
+    while i < n:
+        ch = payload[i]
+        if ch == "\\" and i + 1 < n and payload[i + 1] in ('\\', '"'):
+            out.append(payload[i + 1])
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+@dataclass(frozen=True)
+class OrderedPrimitive:
+    """One primitive of an ordered mini-program.
+
+    Mirrors action_format.ActionPrimitive (the render side) but lives here so
+    eval/ stays independent of the data_pipeline package, and adds
+    ``mouse_button`` so dispatch does not re-derive it.
+
+    ``kind`` is one of ``"move"``, ``"scroll"``, ``"down"``, ``"up"``,
+    ``"type"``. ``dx``/``dy`` are set for move/scroll, ``input_name`` for
+    down/up, ``text`` (unescaped) for type.
+    """
+
+    kind: str
+    dx: int | None = None
+    dy: int | None = None
+    input_name: str | None = None
+    text: str | None = None
+    mouse_button: int | None = None  # 1/2/3 for LMB/MMB/RMB on down/up
+
+    def render(self) -> str:
+        """Re-render this primitive in the wire format (round-trip helper)."""
+        if self.kind in ("move", "scroll"):
+            return f"{self.kind}({self.dx},{self.dy})"
+        if self.kind == "type":
+            escaped = self.text.replace("\\", "\\\\").replace('"', '\\"')
+            return f'type("{escaped}")'
+        return f"{self.kind}({self.input_name})"
+
+    def as_key_event(self) -> KeyEvent:
+        """The equivalent aggregate-format KeyEvent (down/up primitives only)."""
+        if self.kind not in ("down", "up"):
+            raise ValueError(f"{self.kind!r} primitive is not a key/button event")
+        return KeyEvent(
+            kind="press" if self.kind == "down" else "release",
+            what=self.input_name,
+            mouse_button=self.mouse_button,
+        )
+
+
+@dataclass(frozen=True)
+class OrderedAction:
+    """A parsed ordered mini-program: primitives in the order performed."""
+
+    primitives: tuple[OrderedPrimitive, ...]
+    no_op: bool
+
+    @property
+    def key_events(self) -> tuple[KeyEvent, ...]:
+        """The down/up primitives as aggregate-format events, order preserved.
+
+        Lets consumers that only care about key/button transitions (e.g.
+        left-click detection) treat an ordered action like an aggregate one.
+        Motion and typing are dropped, so this is NOT a lossless projection.
+        """
+        return tuple(
+            p.as_key_event() for p in self.primitives if p.kind in ("down", "up")
+        )
+
+    @property
+    def has_left_click_press(self) -> bool:
+        return any(
+            p.kind == "down" and p.input_name == "LMB" for p in self.primitives
+        )
+
+    @property
+    def has_left_click_release(self) -> bool:
+        return any(
+            p.kind == "up" and p.input_name == "LMB" for p in self.primitives
+        )
+
+    def render(self) -> str:
+        """Re-render the whole line (exact inverse of parse for valid input)."""
+        if self.no_op:
+            return _ORDERED_NO_OP
+        return "; ".join(p.render() for p in self.primitives)
+
+
+def _parse_ordered_primitives(body: str) -> list[OrderedPrimitive]:
+    """Scan ``body`` left to right into primitives, or raise ValueError.
+
+    Scanning (rather than splitting on ``"; "``) is required: a
+    ``type("a; b")`` payload legally contains the separator.
+    """
+    primitives: list[OrderedPrimitive] = []
+    pos, n = 0, len(body)
+    while True:
+        while pos < n and body[pos].isspace():
+            pos += 1
+        if pos >= n:
+            break
+
+        if m := _ORDERED_VECTOR_RE.match(body, pos):
+            kind, dx, dy = m.group(1), int(m.group(2)), int(m.group(3))
+            primitives.append(OrderedPrimitive(kind=kind, dx=dx, dy=dy))
+        elif m := _ORDERED_INPUT_RE.match(body, pos):
+            kind, name = m.group(1), m.group(2)
+            primitives.append(OrderedPrimitive(
+                kind=kind,
+                input_name=name,
+                mouse_button=_MOUSE_BUTTON_CODES.get(name),
+            ))
+        elif m := _ORDERED_TYPE_RE.match(body, pos):
+            text = _unescape_typed_text(m.group(1))
+            if not text:
+                raise ValueError('type("") payload is empty')
+            primitives.append(OrderedPrimitive(kind="type", text=text))
+        else:
+            raise ValueError(
+                f"not an ordered primitive at offset {pos}: {body[pos:pos + 40]!r}"
+            )
+
+        pos = m.end()
+        while pos < n and body[pos].isspace():
+            pos += 1
+        if pos >= n:
+            break
+        if body[pos] != ";":
+            raise ValueError(
+                f"expected ';' between primitives at offset {pos}: "
+                f"{body[pos:pos + 40]!r}"
+            )
+        pos += 1
+        # A trailing ';' with nothing after it is malformed, not an empty
+        # primitive -- the loop top breaks out and we catch it here.
+        if not body[pos:].strip():
+            raise ValueError("trailing ';' with no primitive after it")
+
+    if not primitives:
+        raise ValueError("no primitives in ordered action")
+    return primitives
+
+
+def parse_ordered_action(text: str) -> OrderedAction:
+    """Parse one ordered_events_v2/v3 action line.
+
+    Args:
+        text: the assistant's response. Leading/trailing whitespace is
+              stripped and everything after the first newline is ignored
+              (trailing chatter / EOS), matching ``parse_action``.
+
+    Returns:
+        An ``OrderedAction``. ``NO_OP`` yields ``no_op=True`` and no
+        primitives.
+
+    Raises:
+        ValueError if the line does not match the ordered grammar.
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"parse_ordered_action expects str, got {type(text)!r}")
+    text = text.strip()
+    if "\n" in text:
+        text = text.split("\n", 1)[0].strip()
+    if not text:
+        raise ValueError("empty action text")
+    if text == _ORDERED_NO_OP:
+        return OrderedAction(primitives=(), no_op=True)
+    return OrderedAction(
+        primitives=tuple(_parse_ordered_primitives(text)), no_op=False
+    )
+
+
+def parse_ordered_action_tolerant(text: str) -> OrderedAction:
+    """Like ``parse_ordered_action`` but tolerates prose before the action.
+
+    Same three-step strategy as ``parse_action_tolerant`` (strict on the full
+    text, then the last ``Action:`` marker, then the last non-blank line), and
+    the same guarantee: the candidate is ALWAYS routed through the strict
+    parser, so primitives are never scraped out of the middle of prose. This
+    matters for the thinking-SFT prompts, whose replies are reasoning followed
+    by the action line.
+    """
+    if not isinstance(text, str):
+        raise TypeError(
+            f"parse_ordered_action_tolerant expects str, got {type(text)!r}"
+        )
+    try:
+        return parse_ordered_action(text)
+    except (ValueError, TypeError):
+        pass
+    if marker_matches := list(_ACTION_MARKER_RE.finditer(text)):
+        return parse_ordered_action(marker_matches[-1].group(1))
+    lines = [ln for ln in (s.strip() for s in text.splitlines()) if ln]
+    if not lines:
+        raise ValueError(f"empty response in tolerant parse of {text!r}")
+    return parse_ordered_action(lines[-1])
