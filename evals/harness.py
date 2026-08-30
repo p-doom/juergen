@@ -27,7 +27,7 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Awaitable, Protocol
 
 import verifiers.v1 as vf
 from desktop.execute.guest_program import HeldStateError
@@ -173,14 +173,10 @@ class DesktopPoolConfig(vf.BaseConfig):
     key: str = "default"
     max_node_slots: int = Field(default=14, ge=1)
     slot_dir: str = ""
-    episode_ttl_s: float = Field(default=1800.0, gt=0.0)
-    scoring_grace_s: float = Field(default=120.0, ge=0.0)
-    """How long after `launch` the desktop stays leased so a runtime-declaring
-    `@vf.reward` can still probe live guest state."""
     pool_idle_ttl_s: float = Field(default=900.0, ge=0.0)
     acquire_timeout_s: float = Field(default=1800.0, gt=0.0)
     reap_interval_s: float = Field(default=15.0, gt=0.0)
-    """How often the reaper looks for expired leases and an idle pool."""
+    """How often the reaper looks for an idle pool."""
     session_kwargs: dict[str, Any] = Field(default_factory=dict)
     """Passed verbatim to the session-pool constructor named by `pool_target`."""
     pool_target: str = "desktop.vm.pool:DesktopSessionPool"
@@ -342,20 +338,9 @@ class _Budget:
         }
 
 
-async def _to_thread(function: Any, *args: Any) -> Any:
-    """Run a blocking guest call without abandoning its thread on cancellation.
-
-    `asyncio.to_thread` cannot stop a function that has already started, so a bare
-    `await` on it hands control back the instant the rollout is cancelled while the
-    thread keeps driving the VM. `lease.finish` then hands that VM to the scoring
-    phase — or the reaper releases it into the pool — with an `execute_atomic` still
-    in flight against it.
-
-    Every cancellation is deferred until the thread has finished, and only then
-    re-raised. `asyncio.shield` alone is not enough: the shield's own await is what
-    gets cancelled, so it has to be re-entered until the task is done.
-    """
-    task = asyncio.ensure_future(asyncio.to_thread(function, *args))
+async def _await_owned(awaitable: Awaitable[Any]) -> Any:
+    """Finish owned work before propagating cancellation."""
+    task = asyncio.ensure_future(awaitable)
     cancelled: asyncio.CancelledError | None = None
     while not task.done():
         try:
@@ -367,6 +352,11 @@ async def _to_thread(function: Any, *args: Any) -> Any:
     if cancelled is not None:
         raise cancelled from task.exception()
     return task.result()
+
+
+async def _to_thread(function: Any, *args: Any) -> Any:
+    """Run a blocking guest call without abandoning its thread on cancellation."""
+    return await _await_owned(asyncio.to_thread(function, *args))
 
 
 @contextlib.contextmanager
@@ -732,8 +722,6 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             key=self.config.pool.key,
             max_node_slots=self.config.pool.max_node_slots,
             slot_dir=self.config.pool.slot_dir or str(DEFAULT_SLOT_DIR),
-            episode_ttl_s=self.config.pool.episode_ttl_s,
-            scoring_grace_s=self.config.pool.scoring_grace_s,
             pool_idle_ttl_s=self.config.pool.pool_idle_ttl_s,
             reap_interval_s=self.config.pool.reap_interval_s,
             acquire_timeout_s=self.config.pool.acquire_timeout_s,
@@ -747,7 +735,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         def acquire() -> None:
             # Stored, not returned: `_to_thread` re-raises a cancellation once the
             # thread has finished, which discards whatever the await would have
-            # produced. A lease that never reaches `lease` is never `finish`ed, so
+            # produced. A lease that never reaches `lease` is never released, so
             # its node slot stays checked out — a handful of cancellations wedge a
             # node at `max_node_slots`.
             nonlocal lease
@@ -785,29 +773,18 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 artifacts,
                 cleanup,
             )
-            failed = False
+            published = trace.info.get(RESULT_KEY) or {}
+            if published.get("validity") == "infra_invalid":
+                error = json.dumps(published.get("infra_error"), default=str)
+            else:
+                failed = False
             return vf.ProgramResult(0, "", "")
         except BaseException as exc:
             error = repr(exc)
             raise
         finally:
             if lease is not None:
-                # `_run` publishes an episode failure as `infra_invalid` instead of
-                # letting it escape, so this flag would otherwise only ever catch an
-                # `acquire` failure. `failed` is what makes desktop retire the VM
-                # rather than hand it to the next rollout (`vm/pool.py:509-519`):
-                # a wedged guest — dead executor transport, unreadable state — was
-                # being recycled as healthy.
-                published = trace.info.get(RESULT_KEY) or {}
-                if published.get("validity") == "infra_invalid":
-                    failed = True
-                    error = error or json.dumps(
-                        published.get("infra_error"), default=str
-                    )
-                # Hand the VM to the scoring phase, then let the reaper release it.
-                lease.finish(
-                    failed=failed, error=error, grace_s=self.config.pool.scoring_grace_s
-                )
+                lease.release(failed=failed, error=error)
 
     async def _run(
         self,
@@ -850,6 +827,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         held: list[tuple[str, tuple]] = []
         outcome = "max_steps"
         infra_error: dict[str, str] | None = None
+        fatal_error: BaseException | None = None
         sampling_record: dict[str, Any] = {}
         setup_evidence: dict[str, Any] = {}
 
@@ -1024,28 +1002,8 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                     outcome = f"budget_{budget.failure}"
                     break
 
-            state.final_probe = probe
             state.reach_frame = reach_frame
             state.best_distance = best_distance
-            if infra_error is None:
-                # Before `evaluate()`, and before the reaper hands the VM to the
-                # next rollout. A guest already declared broken is retired, not
-                # cleaned.
-                state.released_holds = await self._release_held(session, held)
-                if self.config.evaluate_on_finish:
-                    state.task_reward = await self._evaluate(
-                        preparer, session, task, declared=state.control_terminate
-                    )
-                    if state.task_reward is None:
-                        # The scorer failed, not the rollout: without a score there
-                        # is no verdict, and leaving one in the denominator reports
-                        # a scorer crash as a task failure. `outcome` is left alone
-                        # so the stop-reason census keeps the real stop.
-                        infra_error = {
-                            "stage": "evaluate",
-                            "type": "EvaluateFailed",
-                            "message": "evaluate_on_finish returned no score",
-                        }
         except ModelCallError as exc:
             # The orchestrator halts a rollout by stamping `stop_condition` and
             # refusing the call with a 400 (`interception/server.py:400-406`,
@@ -1069,24 +1027,73 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             }
             outcome = "infrastructure_error"
             _LOGGER.exception("episode %s failed", task.name)
-        finally:
+        except BaseException as exc:
+            fatal_error = exc
+
+        if fatal_error is None:
             try:
-                await agent.close()
-            finally:
-                if cleanup is not None:
-                    try:
-                        await _to_thread(cleanup)
-                    except Exception as exc:
-                        if infra_error is None:
-                            infra_error = {
-                                "stage": "cleanup",
-                                "type": type(exc).__name__,
-                                "message": str(exc),
-                            }
-                        else:
-                            infra_error["message"] += f"; cleanup also failed: {exc}"
-                        outcome = "infrastructure_error"
-                        _LOGGER.exception("episode %s cleanup failed", task.name)
+                state.released_holds = await self._release_held(session, held)
+                await _to_thread(_screenshot, session, self.config.settle, task.kind)
+                state.final_probe = await _to_thread(preparer.probe, session, task)
+                if infra_error is None and not self.config.evaluate_on_finish:
+                    terminal_success = state.final_probe.get("postcondition_success")
+                    if terminal_success is True:
+                        outcome = "postcondition_reached"
+                    elif terminal_success is False and outcome == "postcondition_reached":
+                        outcome = "postcondition_lost"
+                if infra_error is None and self.config.evaluate_on_finish:
+                    state.task_reward = await self._evaluate(
+                        preparer,
+                        session,
+                        task,
+                        declared=state.control_terminate,
+                    )
+                    if state.task_reward is None:
+                        infra_error = {
+                            "stage": "evaluate",
+                            "type": "EvaluateFailed",
+                            "message": "evaluate_on_finish returned no score",
+                        }
+            except Exception as exc:  # noqa: BLE001 - published as infra-invalid
+                if infra_error is None:
+                    infra_error = {
+                        "stage": "episode",
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                    outcome = "infrastructure_error"
+                _LOGGER.exception("episode %s cleanup failed", task.name)
+            except BaseException as exc:
+                fatal_error = exc
+
+        if cleanup is not None:
+            try:
+                await _to_thread(cleanup)
+            except Exception as exc:
+                if fatal_error is None:
+                    if infra_error is None:
+                        infra_error = {
+                            "stage": "cleanup",
+                            "type": type(exc).__name__,
+                            "message": str(exc),
+                        }
+                    else:
+                        infra_error["message"] += f"; cleanup also failed: {exc}"
+                    outcome = "infrastructure_error"
+                _LOGGER.exception("episode %s cleanup failed", task.name)
+            except BaseException as exc:
+                if fatal_error is None:
+                    fatal_error = exc
+
+        close_error: BaseException | None = None
+        try:
+            await _await_owned(agent.close())
+        except BaseException as exc:
+            close_error = exc
+        if fatal_error is not None:
+            raise fatal_error from close_error
+        if close_error is not None:
+            raise close_error
 
         self._publish(
             trace,

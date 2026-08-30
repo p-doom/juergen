@@ -222,7 +222,6 @@ def _harness_config(tmp_path: Path) -> DesktopHarnessConfig:
             slot_dir=str(tmp_path / "slots"),
             pool_target="juergen_harness_pool:Pool",
             hide_gpu_during_boot=False,
-            scoring_grace_s=0.0,
         ),
         evaluate_on_finish=True,
         require_unsolved_start=True,
