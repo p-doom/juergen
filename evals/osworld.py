@@ -56,6 +56,8 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
+from evals.osworld_assets import assert_offline_task, get_offline_file
+
 __all__ = [
     "OSWorldBridge",
     "OSWorldNotAvailable",
@@ -236,6 +238,7 @@ class OSWorldBridge:
         our own bbox oracle, and must not be forced to carry a benchmark
         evaluator it does not have.
         """
+        assert_offline_task(task_config)
         self.task_id = str(task_config.get("id") or "task")
         self.instruction = str(task_config.get("instruction") or "")
         self.config = list(task_config.get("config") or [])
@@ -269,8 +272,15 @@ class OSWorldBridge:
                 return [None] * len(self.metric) if listed else None
             if isinstance(spec, list):
                 return [
-                    getattr(getters, f"get_{item['type']}") if item else None for item in spec
+                    get_offline_file
+                    if item and item["type"] == "offline_file"
+                    else getattr(getters, f"get_{item['type']}")
+                    if item
+                    else None
+                    for item in spec
                 ]
+            if spec["type"] == "offline_file":
+                return get_offline_file
             return getattr(getters, f"get_{spec['type']}")
 
         self.result_getter = _bind_getters("result")
