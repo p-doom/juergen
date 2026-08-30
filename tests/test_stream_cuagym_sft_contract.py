@@ -4,6 +4,7 @@ import asyncio
 import copy
 import io
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -123,7 +124,11 @@ def test_desktop_harness_and_stage_04_use_one_render_sequence(
     )
     context = make_ctx(replies=replies)
     try:
-        asyncio.run(DesktopHarness(config).launch(context, trace, None, "", "", {}))
+        asyncio.run(
+            DesktopHarness(config).launch(
+                context, trace, SimpleNamespace(is_local=True), "", "", {}
+            )
+        )
     finally:
         desktop_pools.close_all_pools()
         juergen_harness_pool.Pool.session = None
@@ -193,7 +198,12 @@ def test_desktop_harness_refuses_render_digest_mismatch_before_pool_acquire(
     with pytest.raises(ValueError, match=expected):
         asyncio.run(
             DesktopHarness(_harness_config(tmp_path)).launch(
-                make_ctx(replies=["NO_OP"]), trace, None, "", "", {}
+                make_ctx(replies=["NO_OP"]),
+                trace,
+                SimpleNamespace(is_local=True),
+                "",
+                "",
+                {},
             )
         )
     assert "desktop_session" not in trace.info
@@ -201,6 +211,30 @@ def test_desktop_harness_refuses_render_digest_mismatch_before_pool_acquire(
         build_episode_records(
             _trajectory(1), _Images([_jpeg_q92((0, 0, 0))]), failure_step_percent=100
         )
+
+
+def test_desktop_harness_refuses_a_remote_runtime_before_pool_acquire(
+    tmp_path: Path,
+) -> None:
+    _, root = _synthetic_snapshot(tmp_path, platform=TaskPlatform.DESKTOP)
+    trace = vf.Trace(
+        task=vf.TraceTask(type="CuaGymDesktopTask", data=_task(root)),
+        state=DesktopState(),
+    )
+
+    with pytest.raises(ValueError, match="host-local verifiers runtime"):
+        asyncio.run(
+            DesktopHarness(_harness_config(tmp_path)).launch(
+                make_ctx(replies=["NO_OP"]),
+                trace,
+                SimpleNamespace(is_local=False),
+                "",
+                "",
+                {},
+            )
+        )
+
+    assert "desktop_session" not in trace.info
 
 
 def test_offline_translation_and_runtime_compile_share_the_relative_1000_grid() -> None:

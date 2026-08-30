@@ -682,7 +682,12 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         secret: str,
         mcp_urls: dict[str, str],
     ) -> vf.ProgramResult:
-        del runtime, mcp_urls
+        if not runtime.is_local:
+            raise ValueError(
+                "DesktopHarness requires a host-local verifiers runtime; the "
+                "prewarmed desktop pool is node-local"
+            )
+        del mcp_urls
         task = trace.task.data
         if not isinstance(task, DesktopTaskData):
             raise TypeError("DesktopHarness requires DesktopTaskData")

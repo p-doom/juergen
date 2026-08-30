@@ -6,6 +6,7 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -243,7 +244,12 @@ def _launch_harness(
     try:
         asyncio.run(
             DesktopHarness(_harness_config(tmp_path)).launch(
-                make_ctx(replies=["NO_OP"]), trace, None, "", "", {}
+                make_ctx(replies=["NO_OP"]),
+                trace,
+                SimpleNamespace(is_local=True),
+                "",
+                "",
+                {},
             )
         )
     finally:
@@ -453,7 +459,12 @@ def test_web_runtime_uses_the_harness_renderer_and_closes_private_state(
     try:
         asyncio.run(
             DesktopHarness(config).launch(
-                make_ctx(replies=["NO_OP"]), trace, None, "", "", {}
+                make_ctx(replies=["NO_OP"]),
+                trace,
+                SimpleNamespace(is_local=True),
+                "",
+                "",
+                {},
             )
         )
     finally:
