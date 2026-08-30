@@ -1,4 +1,4 @@
-"""`NodeSlots` / `LeasedDesktopPool` / `LeaseRegistry`.
+"""`NodeSlots` and process-global `LeasedDesktopPool` ownership.
 
 The lock dies with the process that holds it, so a SIGKILLed worker returns its
 slots to the node without a reaper — a property a per-worker in-memory counter
@@ -22,14 +22,12 @@ import pytest
 from agent import desktop as dsk
 from agent.desktop import (
     DesktopLease,
-    LeaseRegistry,
     LeasedDesktopPool,
     NodeSlots,
     PoolSpec,
     SlotExhausted,
     close_all_pools,
     default_pool_factory,
-    lease_for_trace,
     pool_for,
 )
 from juergen_doubles import FakePool, FakeSession
@@ -219,27 +217,11 @@ def _lease(trace_id: str, *, pool) -> DesktopLease:
     )
 
 
-def test_registry_hides_a_released_lease() -> None:
-    registry = LeaseRegistry()
-    pool = LeasedDesktopPool(PoolSpec(key="registry-test"), FakePool)
-    lease = _lease("trace-a", pool=pool)
-    registry.put(lease)
-    assert registry.get("trace-a") is lease
-    assert registry.live() == [lease]
-    lease.released = True
-    assert registry.get("trace-a") is None, "a released lease must not be handed out"
-    assert registry.live() == []
-    registry.drop("trace-a")
-    assert registry.get("trace-a") is None
-    pool.close()
-
-
 def test_lease_release_is_idempotent_and_reports_failure_to_the_session() -> None:
     pool = LeasedDesktopPool(PoolSpec(key="idempotent"), FakePool)
     lease = _lease("trace-b", pool=pool)
-    lease.finish(failed=True, error="boom", grace_s=0.0)
-    lease.release()
-    lease.release()
+    lease.release(failed=True, error="boom")
+    lease.release(failed=False, error=None)
     assert lease.session.released == [(True, "boom")], "release must run exactly once"
     pool.close()
 
@@ -259,43 +241,20 @@ def test_a_raising_session_release_does_not_mask_the_rollout_error() -> None:
 
     slot = _NullSlot()
     lease = DesktopLease(trace_id="t", session=Angry(), slot=slot, pool=pool)
-    lease.release()  # must not raise
+    lease.release(failed=True, error="original rollout error")
     assert _NullSlot.released, "the node slot must come back even if release() throws"
     pool.close()
 
 
-def test_acquire_publishes_the_lease_and_finish_starts_the_grace_window(tmp_path: Path) -> None:
-    spec = PoolSpec(key="grace", slot_dir=str(tmp_path), max_node_slots=2, reap_interval_s=1.0)
+def test_acquire_tracks_the_lease_until_synchronous_release(tmp_path: Path) -> None:
+    spec = PoolSpec(key="tracked", slot_dir=str(tmp_path), max_node_slots=2)
     backing = FakePool()
     pool = LeasedDesktopPool(spec, lambda: backing)
-    lease = pool.acquire("trace-grace")
+    lease = pool.acquire("trace-tracked")
     assert backing.started == 1, "the pool starts lazily, on first acquire"
-    assert lease_for_trace("trace-grace") is lease
-    lease.finish(failed=False, error=None, grace_s=5.0)
-    assert not lease.expired(), "the grace window keeps the VM readable for scoring"
-    assert lease_for_trace("trace-grace") is lease
-    lease.release()
-    assert lease_for_trace("trace-grace") is None
-    pool.close()
-
-
-def test_a_lease_past_its_deadline_is_reclaimed_by_the_reaper(tmp_path: Path) -> None:
-    spec = PoolSpec(
-        key="reaper", slot_dir=str(tmp_path), max_node_slots=1, reap_interval_s=1.0
-    )
-    backing = FakePool()
-    pool = LeasedDesktopPool(spec, lambda: backing)
-    lease = pool.acquire("trace-reap")
-    lease.finish(failed=False, error=None, grace_s=0.0)  # deadline is now
-    assert lease.expired()
-    deadline = time.monotonic() + 8.0
-    while time.monotonic() < deadline and not lease.released:
-        time.sleep(0.1)
-    assert lease.released, "the idle reaper must release a lease past its deadline"
-    assert lease.session.released == [(False, None)]
-    # And the slot came back, so the next rollout can have it.
-    again = pool.acquire("trace-reap-2")
-    again.release()
+    assert lease in pool._leases
+    lease.release(failed=False, error=None)
+    assert lease not in pool._leases
     pool.close()
 
 
@@ -310,7 +269,7 @@ def test_an_idle_pool_releases_its_vms(tmp_path: Path) -> None:
     )
     backing = FakePool()
     pool = LeasedDesktopPool(spec, lambda: backing)
-    pool.acquire("trace-idle").release()
+    pool.acquire("trace-idle").release(failed=False, error=None)
     deadline = time.monotonic() + 8.0
     while time.monotonic() < deadline and backing.closed == 0:
         time.sleep(0.1)

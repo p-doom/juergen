@@ -1775,7 +1775,7 @@ def _eval_config(
         sampling=sampling,
         num_rollouts=1,
         # One episode per supervised worker. Parallelism belongs to the dispatcher,
-        # where every process owns the one desktop its deadline may reap.
+        # where every process owns and releases its one desktop.
         max_concurrent=1,
         output_dir=traces_dir,
         rich=False,  # a live dashboard in a batch job is a log full of escape codes
@@ -1970,7 +1970,6 @@ class _WorkerRuntime:
     vm_smp: int | None
     vm_mem: str | None
     vm_slots: int
-    scoring_grace_s: float
     pool_target: str
 
 
@@ -2088,7 +2087,6 @@ def _worker_pool(runtime: _WorkerRuntime, spec: _AttemptSpec) -> dict[str, Any]:
         "max_sessions": 1,
         "max_rollouts_per_session": 1,
         "checkout_timeout_s": _POOL_CHECKOUT_TIMEOUT_S,
-        "lease_timeout_s": arm.pool.episode_ttl_s,
         "startup_timeout_s": _POOL_STARTUP_TIMEOUT_S,
     }
     for key, value in (
@@ -2103,8 +2101,6 @@ def _worker_pool(runtime: _WorkerRuntime, spec: _AttemptSpec) -> dict[str, Any]:
         "key": f"signoflife-{runtime.arm}-attempt-{spec.index}",
         "max_node_slots": runtime.vm_slots,
         "slot_dir": str(runtime.output / "vm_slots"),
-        "episode_ttl_s": arm.pool.episode_ttl_s,
-        "scoring_grace_s": runtime.scoring_grace_s,
         "pool_idle_ttl_s": arm.pool.pool_idle_ttl_s,
         "acquire_timeout_s": _POOL_ACQUIRE_TIMEOUT_S,
         "reap_interval_s": arm.pool.reap_interval_s,
@@ -2610,14 +2606,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=1,
         help="fixed at 1: each supervised attempt owns and tears down its VM pool",
     )
-    parser.add_argument(
-        "--scoring-grace-s",
-        type=float,
-        default=120.0,
-        help="how long the desktop stays leased after the episode so a "
-        "runtime-declaring reward can probe live guest state. Pure wall clock per "
-        "cell, and until now it was pinned in code with no way to name it.",
-    )
     parser.add_argument("--model-path", type=Path, default=None)
     parser.add_argument("--sglang-python", default=None)
     parser.add_argument("--sglang-port", type=int, default=0)
@@ -2678,8 +2666,6 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--trials must be >= 1")
     if args.vm_slots < 1:
         raise SystemExit("--vm-slots must be >= 1")
-    if not math.isfinite(args.scoring_grace_s) or args.scoring_grace_s < 0.0:
-        raise SystemExit("--scoring-grace-s must be a finite value >= 0")
     if (
         not math.isfinite(args.sglang_ready_timeout_s)
         or args.sglang_ready_timeout_s <= 0.0
@@ -2826,7 +2812,6 @@ def main(argv: list[str] | None = None) -> int:
             vm_smp=args.vm_smp,
             vm_mem=args.vm_mem,
             vm_slots=args.vm_slots,
-            scoring_grace_s=args.scoring_grace_s,
             pool_target=POOL_TARGET,
         )
         rows.extend(_run_attempts(runtime, specs))

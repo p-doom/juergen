@@ -179,8 +179,8 @@ def test_indicator_D_does_not_fire_on_the_gold_plan() -> None:
         episode={"success": True, "outcome": "postcondition_reached", "steps_detail": steps},
     )
     task = SignOfLifeTask(task_data)
-    asyncio.run(task.score(trace))
-    assert trace.metrics["D_submitted_in_no_submit_cell"] == 0.0, (
+    metrics = asyncio.run(task.failure_modes(trace))
+    assert metrics["D_submitted_in_no_submit_cell"] == 0.0, (
         "indicator D must not flag the gold, calibrated, oracle-arm behaviour"
     )
     assert task_data.no_submit is False
@@ -260,8 +260,8 @@ def test_14i_indicator_D_has_no_valid_cell_to_fire_on_in_the_scored_tier() -> No
             }
         ]
         trace = make_trace(row.data, episode={"success": True, "steps_detail": steps})
-        asyncio.run(SignOfLifeTask(row.data).score(trace))
-        assert trace.metrics["D_submitted_in_no_submit_cell"] == 0.0, row.data.name
+        metrics = asyncio.run(SignOfLifeTask(row.data).failure_modes(trace))
+        assert metrics["D_submitted_in_no_submit_cell"] == 0.0, row.data.name
 
 
 def test_14j_the_loader_refuses_a_no_submit_cell_that_demands_submission(monkeypatch) -> None:
@@ -873,6 +873,6 @@ def test_indicator_D_fires_on_the_no_submit_cells_negative_and_not_on_its_gold()
                 {"raw_model_output": text, "parsed_action": _parse(COMPACT_CODEC, text)}
             )
         trace = make_trace(data, episode={"success": not negative, "steps_detail": steps})
-        asyncio.run(SignOfLifeTask(data).score(trace))
-        readings[negative] = trace.metrics["D_submitted_in_no_submit_cell"]
+        metrics = asyncio.run(SignOfLifeTask(data).failure_modes(trace))
+        readings[negative] = metrics["D_submitted_in_no_submit_cell"]
     assert readings == {False: 0.0, True: 1.0}, readings

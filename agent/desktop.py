@@ -1,4 +1,4 @@
-"""Leased desktop sessions with a bounded lifetime.
+"""Prewarmed desktop sessions with process-global pooling and node admission.
 
 Two facts about verifiers force this module to exist.
 
@@ -25,10 +25,8 @@ Three parts:
     under a shared directory, so the sum over spawn-workers cannot exceed the node
     budget however many workers the broker starts. A per-worker `max_sessions`
     cannot bound it.
-  * An idle reaper: a lease has a deadline. A rollout's lease is extended past
-    `launch` by `scoring_grace_s` so a runtime-declaring `@vf.reward` can still
-    read live VM state during `Task.score`, then it is released. A pool with no
-    live leases for `pool_idle_ttl_s` is closed and its slots returned.
+  * An idle reaper: a pool with no live leases for `pool_idle_ttl_s` is closed
+    and its slots returned. Each rollout releases its own lease synchronously.
 """
 
 from __future__ import annotations
@@ -48,13 +46,11 @@ _LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "DesktopLease",
-    "LeaseRegistry",
     "LeasedDesktopPool",
     "NodeSlots",
     "PoolSpec",
     "SlotExhausted",
     "close_all_pools",
-    "lease_for_trace",
     "pool_for",
 ]
 
@@ -126,98 +122,43 @@ class NodeSlots:
 
 @dataclass(eq=False)
 class DesktopLease:
-    """One desktop session, held for one rollout plus a scoring grace period.
+    """One desktop session owned by one rollout.
 
     `eq=False` is load-bearing: `LeasedDesktopPool._leases` is a set, and a plain
     `@dataclass` generates `__eq__`, which sets `__hash__ = None`. With the
     generated `__eq__` every `acquire` died on `TypeError: unhashable type` after
     the node slot and the VM had already been taken but before either was tracked,
     leaking both. Identity is also the semantics the pool wants: two leases are
-    never interchangeable, the registry keys by `trace_id`, and `forget` discards
-    the object it was handed.
-
-    `session` is whatever `desktop.vm.pool.DesktopSessionPool` checks out. The
-    episode driver never releases directly — it calls `finish()`, which starts the
-    grace window during which a runtime-declaring reward may still probe live VM
-    state. The reaper does the actual release.
+    never interchangeable, and `forget` discards the object it was handed.
     """
 
     trace_id: str
     session: Any
     slot: _Slot
     pool: "LeasedDesktopPool"
-    created_at: float = field(default_factory=time.monotonic)
-    deadline: float = 0.0
-    failed: bool = False
+    failed: bool | None = None
     error: str | None = None
     released: bool = False
+    _release_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def touch(self, ttl_s: float) -> None:
-        self.deadline = time.monotonic() + max(0.0, ttl_s)
-
-    def finish(self, *, failed: bool, error: str | None, grace_s: float) -> None:
-        """End the episode, keep the VM readable for `grace_s` (post-launch scoring)."""
-        self.failed = failed
-        self.error = error
-        self.touch(grace_s)
-
-    def expired(self) -> bool:
-        return not self.released and time.monotonic() >= self.deadline
-
-    def release(self) -> None:
-        if self.released:
-            return
-        self.released = True
-        try:
-            release = getattr(self.session, "release", None)
-            if callable(release):
-                release(failed=self.failed, error=self.error)
-        except Exception:  # noqa: BLE001 - a release must never mask a rollout error
-            _LOGGER.exception("desktop lease %s: release failed", self.trace_id)
-        finally:
-            self.slot.release()
-            self.pool.forget(self)
-
-
-class LeaseRegistry:
-    """trace id -> live lease, so post-`launch` scoring can find the VM.
-
-    `Task.score` and `Harness.score` run after `launch` returns
-    (`rollout.py:226-235`) and receive `runtime`, not our session. A
-    runtime-declaring `@vf.reward` looks the session up here and probes real VM
-    state; if the grace window has already closed it falls back to the final probe
-    the harness recorded on `trace.info`. Both paths are real state — one live,
-    one a snapshot taken inside the episode — and the reward reports which.
-    """
-
-    def __init__(self) -> None:
-        self._by_trace: dict[str, DesktopLease] = {}
-        self._lock = threading.Lock()
-
-    def put(self, lease: DesktopLease) -> None:
-        with self._lock:
-            self._by_trace[lease.trace_id] = lease
-
-    def get(self, trace_id: str) -> DesktopLease | None:
-        with self._lock:
-            lease = self._by_trace.get(trace_id)
-        return None if lease is None or lease.released else lease
-
-    def drop(self, trace_id: str) -> None:
-        with self._lock:
-            self._by_trace.pop(trace_id, None)
-
-    def live(self) -> list[DesktopLease]:
-        with self._lock:
-            return [lease for lease in self._by_trace.values() if not lease.released]
-
-
-REGISTRY = LeaseRegistry()
-
-
-def lease_for_trace(trace_id: str) -> DesktopLease | None:
-    """The live desktop for a trace, or None once its grace window has closed."""
-    return REGISTRY.get(trace_id)
+    def release(self, *, failed: bool, error: str | None) -> None:
+        with self._release_lock:
+            if self.released:
+                return
+            self.released = True
+            self.failed = failed
+            self.error = error
+            try:
+                release = getattr(self.session, "release", None)
+                if callable(release):
+                    release(failed=failed, error=error)
+            except Exception:  # noqa: BLE001 - release must not mask the rollout error
+                _LOGGER.exception("desktop lease %s: release failed", self.trace_id)
+            finally:
+                try:
+                    self.slot.release()
+                finally:
+                    self.pool.forget(self)
 
 
 @dataclass(frozen=True)
@@ -232,15 +173,13 @@ class PoolSpec:
     key: str
     max_node_slots: int = 14
     slot_dir: str = str(DEFAULT_SLOT_DIR)
-    episode_ttl_s: float = 1800.0
-    scoring_grace_s: float = 120.0
     pool_idle_ttl_s: float = 900.0
     reap_interval_s: float = 15.0
     acquire_timeout_s: float = 1800.0
 
 
 class LeasedDesktopPool:
-    """A `DesktopSessionPool` whose sessions have deadlines and a node-wide cap."""
+    """A process-global `DesktopSessionPool` with a node-wide cap."""
 
     def __init__(self, spec: PoolSpec, factory: Callable[[], Any]) -> None:
         self.spec = spec
@@ -280,10 +219,8 @@ class LeasedDesktopPool:
             slot.release()
             raise
         lease = DesktopLease(trace_id=trace_id, session=session, slot=slot, pool=self)
-        lease.touch(self.spec.episode_ttl_s)
         with self._lock:
             self._leases.add(lease)
-        REGISTRY.put(lease)
         return lease
 
     def forget(self, lease: DesktopLease) -> None:
@@ -291,14 +228,13 @@ class LeasedDesktopPool:
             self._leases.discard(lease)
             if not self._leases:
                 self._idle_since = time.monotonic()
-        REGISTRY.drop(lease.trace_id)
 
     def close(self) -> None:
         with self._lock:
             self._closed = True
             leases = list(self._leases)
         for lease in leases:
-            lease.release()
+            lease.release(failed=True, error="desktop pool closed")
         with self._lock:
             pool, self._pool = self._pool, None
         if pool is not None:
@@ -310,17 +246,9 @@ class LeasedDesktopPool:
 
     def _reap_once(self) -> None:
         with self._lock:
-            expired = [lease for lease in self._leases if lease.expired()]
             idle = not self._leases
             pool_live = self._pool is not None
             idle_since = self._idle_since
-        for lease in expired:
-            _LOGGER.info(
-                "desktop lease %s: deadline passed after %.0fs, releasing",
-                lease.trace_id,
-                time.monotonic() - lease.created_at,
-            )
-            lease.release()
         if (
             idle
             and pool_live
@@ -376,7 +304,7 @@ def pool_for(spec: PoolSpec, factory: Callable[[], Any]) -> LeasedDesktopPool:
             raise ValueError(
                 f"desktop pool {spec.key!r} already exists with a different spec; "
                 f"live={pool.spec!r} requested={spec!r}. Returning the live one would "
-                "silently run the episode under someone else's slot budget and TTLs."
+                "silently run the episode under someone else's pool settings."
             )
         return pool
 

@@ -155,11 +155,6 @@ def _argv(output: Path, tmp_path: Path, *extra: str) -> list[str]:
         str(output),
         "--qcow",
         str(tmp_path / "desktop.qcow2"),
-        # Both are real flags and both are here for wall clock: the default
-        # 120 s scoring grace plus a single node slot serialises the cells
-        # behind a 120 s lease each, and the reaper only looks every 15 s.
-        "--scoring-grace-s",
-        "0",
         "--vm-slots",
         "4",
         *extra,
@@ -171,7 +166,7 @@ def _fresh_process() -> None:
 
     `agent.desktop.pool_for` deliberately refuses to hand back a pool registered
     under the same key with a different `PoolSpec` — returning the live one would
-    run the episode under someone else's slot budget and TTLs. The dispatcher's
+    run the episode under someone else's pool settings. The dispatcher's
     key is `signoflife-<arm>` while its `slot_dir` is derived from `--output`, so
     two runs of one arm in one process collide by construction. In production
     they never share a process; in a test they do, so the process-global registry
@@ -274,10 +269,7 @@ def test_the_pool_adapter_is_the_production_one(tmp_path) -> None:
 
 
 @pytest.mark.slow
-def test_the_pool_flags_reach_the_pool(tmp_path) -> None:
-    """`--scoring-grace-s` was pinned in code with no way to name it, and
-    `reap_interval_s` is what decides how long after that grace the VM actually
-    goes away. Both are now on the config the harness builds its `PoolSpec` from."""
+def test_only_live_pool_ownership_fields_reach_the_harness_config(tmp_path) -> None:
     from evals.harness import DesktopPoolConfig
     from evals.signoflife.__main__ import _harness_payload
 
@@ -289,19 +281,14 @@ def test_the_pool_flags_reach_the_pool(tmp_path) -> None:
     payload = _harness_payload(
         "native_negative",
         artifacts=output,
-        pool={"scoring_grace_s": 7.5, "pool_target": "evals.vm:kvm_desktop_pool"},
+        pool={"pool_target": "evals.vm:kvm_desktop_pool"},
     )
     pool = DesktopPoolConfig(**payload["pool"])
-    assert pool.scoring_grace_s == 7.5
     assert pool.pool_target == "evals.vm:kvm_desktop_pool"
-    # The reaper interval is what decides how long *after* the grace the VM
-    # actually goes away, and it is only reachable because the same config object
-    # carries both. Both are bounded, so neither can be turned off by accident.
     assert pool.reap_interval_s == 15.0
+    assert set(payload["pool"]) == set(DesktopPoolConfig.model_fields)
     with pytest.raises(ValueError):
         DesktopPoolConfig(reap_interval_s=0.0)
-    with pytest.raises(ValueError):
-        DesktopPoolConfig(scoring_grace_s=-1.0)
 
 
 @pytest.mark.slow
@@ -933,8 +920,6 @@ def test_a_model_arm_records_which_bytes_answered_and_refuses_to_score_a_dead_se
             str(output),
             "--qcow",
             str(tmp_path / "desktop.qcow2"),
-            "--scoring-grace-s",
-            "0",
             "--vm-slots",
             "4",
             "--cell",
@@ -1015,8 +1000,6 @@ def test_an_unattended_model_arm_samples_at_its_own_knobs(tmp_path, monkeypatch)
                 str(output),
                 "--qcow",
                 str(tmp_path / "desktop.qcow2"),
-                "--scoring-grace-s",
-                "0",
                 "--cell",
                 CELL_IDS[0],
                 "--model-path",
@@ -1341,9 +1324,31 @@ def _scheduler_runtime(tmp_path):
         vm_smp=None,
         vm_mem=None,
         vm_slots=2,
-        scoring_grace_s=0.0,
         pool_target="evals.vm:kvm_desktop_pool",
     )
+
+
+def test_worker_serialization_leaves_activity_timeout_to_desktop(tmp_path) -> None:
+    import inspect
+
+    from evals.signoflife.__main__ import (
+        _AttemptSpec,
+        _worker_pool,
+    )
+    from evals.vm import kvm_desktop_pool
+
+    task = load_suite().for_tier("candidate")[0]
+    spec = _AttemptSpec(
+        index=0,
+        cell_ordinal=0,
+        trial=1,
+        task=task,
+        wall_bound_s=1234.0,
+    )
+    pool = _worker_pool(_scheduler_runtime(tmp_path), spec)
+    assert "lease_timeout_s" not in pool["session_kwargs"]
+    assert inspect.signature(kvm_desktop_pool).parameters["lease_timeout_s"].default == 1800.0
+    assert spec.wall_bound_s == 1234.0
 
 
 def _crash_with_stubborn_descendant(pid_path: str) -> None:

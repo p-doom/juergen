@@ -15,6 +15,9 @@ from pathlib import Path
 
 import pytest
 import verifiers.v1 as vf
+from verifiers.v1.retries import RolloutRetryConfig, run_with_retry
+from verifiers.v1.rollout import Rollout
+from verifiers.v1.runtimes import SubprocessConfig
 
 import agent.desktop as dsk
 from evals.harness import (
@@ -28,12 +31,12 @@ from evals.harness import (
     ScriptedConfig,
     SettleConfig,
     _TRAJECTORY,
-    _assert_frame_set,
     _Budget,
     _is_left_click,
     _screenshot,
     _to_thread,
 )
+from evals.oracles import OracleOutcome, StateOracle
 from agent.agent import load_codec
 from desktop.geometry import DisplayGeometry
 from evals.tasks import (
@@ -48,7 +51,6 @@ from juergen_doubles import (
     load_convert,
     make_ctx,
     make_task_data,
-    make_trace,
     png,
 )
 
@@ -113,7 +115,6 @@ def _config(tmp_path: Path, **kwargs) -> DesktopHarnessConfig:
             slot_dir=str(tmp_path / "slots"),
             pool_target="juergen_harness_pool:Pool",
             hide_gpu_during_boot=False,
-            scoring_grace_s=0.0,
         ),
         require_unsolved_start=True,
     )
@@ -138,6 +139,16 @@ def _task(**kwargs) -> DesktopTaskData:
     return make_task_data(kind="harness_test", **kwargs)
 
 
+class _TraceOnlyTask(StateOracle, vf.Task[DesktopTaskData, DesktopState]):
+    def evaluate_state(self, task, state):
+        return OracleOutcome(
+            task_id=task.name,
+            status="ok",
+            success=bool(state.get("postcondition_success")),
+            reason="recorded terminal probe",
+        )
+
+
 def test_a_full_episode_publishes_one_result_shape(tmp_path, preparer) -> None:
     trace, result, _ = _run(_config(tmp_path), _task(max_steps=2), replies=["0 0 0 ;", "0 0 0 ;"])
     assert result["schema_version"] == 1 and result["validity"] == "valid"
@@ -148,6 +159,105 @@ def test_a_full_episode_publishes_one_result_shape(tmp_path, preparer) -> None:
     assert result["steps"] == 2 and len(result["steps_detail"]) == 2
     assert result["host"] and "slurm_job_id" in result
     assert trace.is_completed and trace.stop_condition == "max_steps"
+
+
+def test_real_verifiers_finalize_and_reward_run_only_after_release(
+    tmp_path, preparer
+) -> None:
+    events: list[str] = []
+
+    class GuardedSession(FakeSession):
+        closed = False
+
+        def _live(self, operation):
+            if self.closed:
+                raise AssertionError(f"post-launch desktop read: {operation}")
+
+        def screen_size(self):
+            self._live("screen_size")
+            return super().screen_size()
+
+        def screenshot(self):
+            self._live("screenshot")
+            return super().screenshot()
+
+        def cursor_position(self):
+            self._live("cursor_position")
+            return super().cursor_position()
+
+        def execute_atomic(self, operations):
+            self._live("execute_atomic")
+            return super().execute_atomic(operations)
+
+        def release(self, *, failed, error):
+            super().release(failed=failed, error=error)
+            self.closed = True
+            events.append("release")
+
+    class Task(_TraceOnlyTask):
+        async def finalize(self, trace, runtime):
+            del trace, runtime
+            assert session.closed
+            events.append("finalize")
+
+        @vf.reward
+        async def postcondition(self, trace):
+            events.append("reward")
+            return await super().postcondition(trace)
+
+    import juergen_harness_pool
+
+    session = GuardedSession()
+    juergen_harness_pool.Pool.session = session
+    preparer.plan = ["0 0 0 ;"]
+    config = _config(tmp_path, scripted=ScriptedConfig(enabled=True))
+    task = Task(_task(max_steps=1))
+    rollout = Rollout(
+        task,
+        DesktopHarness(config),
+        make_ctx(),
+        SubprocessConfig(),
+    )
+    trace = asyncio.run(rollout.run())
+    assert trace.error is None
+    assert trace.rewards["postcondition"] == 0.0
+    assert events == ["release", "finalize", "reward"]
+
+
+def test_real_verifiers_whole_rollout_retry_acquires_a_fresh_lease(
+    tmp_path, preparer, monkeypatch
+) -> None:
+    attempts = 0
+
+    class RetryOnce(_TraceOnlyTask):
+        async def finalize(self, trace, runtime):
+            nonlocal attempts
+            del trace, runtime
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("retry the whole rollout")
+
+    import juergen_harness_pool
+
+    session = FakeSession()
+    juergen_harness_pool.Pool.session = session
+    preparer.plan = ["0 0 0 ;"]
+    leases = _captured_lease(monkeypatch)
+    rollout = Rollout(
+        RetryOnce(_task(max_steps=1)),
+        DesktopHarness(_config(tmp_path, scripted=ScriptedConfig(enabled=True))),
+        make_ctx(),
+        SubprocessConfig(),
+    )
+    trace = asyncio.run(
+        run_with_retry(rollout, RolloutRetryConfig(max_retries=1))
+    )
+    assert trace.error is None and attempts == 2
+    assert len(leases) == 2
+    assert leases[0] is not leases[1]
+    assert leases[0].trace_id != leases[1].trace_id
+    assert all(lease.released for lease in leases)
+    assert session.released == [(False, None), (False, None)]
 
 
 def test_the_episode_stops_the_moment_the_postcondition_is_reached(tmp_path, preparer) -> None:
@@ -556,6 +666,40 @@ def test_a_model_call_failure_is_infrastructure(tmp_path, preparer) -> None:
     result = trace.info[RESULT_KEY]
     assert result["outcome"] == "model_error" and result["validity"] == "infra_invalid"
     assert result["infra_error"]["stage"] == "model"
+
+
+def test_a_model_failure_after_a_hold_still_releases_the_input(
+    tmp_path, preparer
+) -> None:
+    class FailsSecondTurn:
+        turns = 0
+
+        async def get_response(self, *args, **kwargs):
+            self.turns += 1
+            if self.turns == 2:
+                raise TimeoutError("endpoint gone")
+            return type(
+                "R",
+                (),
+                {
+                    "message": type("M", (), {"content": "10 10 0 ; +LMB"})(),
+                    "finish_reason": "stop",
+                },
+            )()
+
+    import juergen_harness_pool
+
+    session = FakeSession()
+    juergen_harness_pool.Pool.session = session
+    trace = vf.Trace(
+        task=vf.TraceTask(type="T", data=_task(max_steps=2)), state=DesktopState()
+    )
+    ctx = vf.ModelContext(model="m", client=FailsSecondTurn(), sampling=vf.Sampling())
+    asyncio.run(DesktopHarness(_config(tmp_path)).launch(ctx, trace, None, "", "", {}))
+    result = trace.info[RESULT_KEY]
+    assert result["validity"] == "infra_invalid"
+    assert result["released_holds"] == [{"kind": "mouse_up", "args": ["left"]}]
+    assert len(session.operations_log) == 2
 
 
 def _launch(config, task_data, client) -> tuple[vf.Trace, dict]:
@@ -1392,12 +1536,7 @@ def test_the_pool_target_injects_a_fake_and_receives_session_kwargs(tmp_path, pr
 
 
 def _captured_lease(monkeypatch) -> list:
-    """`launch` hands the lease to the scoring phase; the reaper does the release.
-
-    So the observable contract at the end of `launch` is `finish()` having been
-    called with the episode's verdict and a deadline `scoring_grace_s` out — not the
-    session already being released (that happens up to `reap_interval_s` later).
-    """
+    """Capture the real lease acquired by `DesktopHarness.launch`."""
     captured: list = []
     original = dsk.LeasedDesktopPool.acquire
 
@@ -1410,29 +1549,23 @@ def _captured_lease(monkeypatch) -> list:
     return captured
 
 
-def test_launch_finishes_the_lease_and_the_reaper_releases_it(tmp_path, preparer, monkeypatch) -> None:
+def test_launch_synchronously_releases_the_lease(tmp_path, preparer, monkeypatch) -> None:
     captured = _captured_lease(monkeypatch)
     session = FakeSession()
     _run(_config(tmp_path), _task(max_steps=1), replies=["0 0 0 ;"], session=session)
     (lease,) = captured
     assert lease.failed is False and lease.error is None, "a clean episode is not a failure"
-    assert not lease.released, "launch must not release — scoring may still read the VM"
-    assert lease.expired(), "with scoring_grace_s=0 the deadline is immediately past"
-    lease.release()  # what the reaper does
+    assert lease.released, "launch must release before returning to Verifiers finalize"
     assert session.released == [(False, None)]
 
 
-def test_the_grace_window_keeps_the_vm_readable_for_scoring(tmp_path, preparer, monkeypatch) -> None:
-    captured = _captured_lease(monkeypatch)
-    config = _config(tmp_path)
-    config.pool.scoring_grace_s = 120.0
+def test_release_is_exactly_once_even_if_pool_teardown_follows_launch(
+    tmp_path, preparer
+) -> None:
     session = FakeSession()
-    _run(config, _task(max_steps=1), replies=["0 0 0 ;"], session=session)
-    (lease,) = captured
-    assert not lease.expired(), "a runtime-declaring reward can still probe the guest"
-    assert dsk.lease_for_trace(lease.trace_id) is lease
-    assert session.released == []
-    lease.release()
+    _run(_config(tmp_path), _task(max_steps=1), replies=["0 0 0 ;"], session=session)
+    dsk.close_all_pools()
+    assert session.released == [(False, None)]
 
 
 def test_an_infra_invalid_episode_retires_the_vm(tmp_path, preparer, monkeypatch) -> None:
@@ -1450,7 +1583,6 @@ def test_an_infra_invalid_episode_retires_the_vm(tmp_path, preparer, monkeypatch
     (lease,) = captured
     assert lease.failed is True, "an infra-invalid episode must retire its VM"
     assert "unsolved" in (lease.error or "")
-    lease.release()
     assert session.released[0][0] is True
 
 
@@ -1482,7 +1614,7 @@ def test_a_clean_episode_returns_the_vm_for_reuse(tmp_path, preparer, monkeypatc
 def test_to_thread_defers_a_cancellation_until_the_thread_has_finished() -> None:
     """`asyncio.to_thread` cannot stop a function that has already started, so a bare
     `await` on it returns the instant the rollout is cancelled while the thread keeps
-    driving the VM. `lease.finish` then hands that VM to the scoring phase with an
+    driving the VM. Releasing the lease then could recycle a session with an
     `execute_atomic` still in flight against it.
     """
     running = threading.Event()
@@ -1552,17 +1684,14 @@ def test_a_cancellation_during_acquire_still_finishes_the_lease(
     (lease,) = captured
     assert lease.failed is True, "a cancelled rollout must retire its VM"
     assert "Cancelled" in (lease.error or "")
-    assert lease.expired(), "with scoring_grace_s=0 the reaper can take it now"
-    lease.release()
+    assert lease.released
     assert session.released == [(True, lease.error)]
 
 
 def test_a_cancelled_episode_finishes_the_lease_only_after_the_guest_call_returns(
     tmp_path, preparer, monkeypatch
 ) -> None:
-    """The ordering the shield buys: `lease.finish` starts the scoring window, and the
-    reaper releases the VM into the pool from there, so it must not run while a
-    detached thread is still dispatching into that guest.
+    """The lease must not be released while a detached thread still dispatches.
     """
     order: list[str] = []
     dispatching = threading.Event()
@@ -1574,13 +1703,13 @@ def test_a_cancelled_episode_finishes_the_lease_only_after_the_guest_call_return
             order.append("dispatched")
             return super().execute_atomic(operations)
 
-    original = dsk.DesktopLease.finish
+    original = dsk.DesktopLease.release
 
-    def spy(self, **kwargs):
-        order.append("lease_finished")
-        return original(self, **kwargs)
+    def spy(self, *, failed, error):
+        order.append("lease_released")
+        return original(self, failed=failed, error=error)
 
-    monkeypatch.setattr(dsk.DesktopLease, "finish", spy)
+    monkeypatch.setattr(dsk.DesktopLease, "release", spy)
     import juergen_harness_pool
 
     juergen_harness_pool.Pool.session = Slow()
@@ -1591,7 +1720,87 @@ def test_a_cancelled_episode_finishes_the_lease_only_after_the_guest_call_return
     asyncio.run(
         _cancel_once(dispatching)(harness, trace, make_ctx(replies=["0 0 0 ; +LMB -LMB"] * 2))
     )
-    assert order == ["dispatched", "lease_finished"], order
+    assert order == ["dispatched", "lease_released"], order
+
+
+def test_cancellation_remains_primary_when_agent_close_fails(
+    tmp_path, preparer, monkeypatch
+) -> None:
+    dispatching = threading.Event()
+    closed: list[str] = []
+
+    class Slow(FakeSession):
+        def execute_atomic(self, operations):
+            dispatching.set()
+            time.sleep(0.2)
+            return super().execute_atomic(operations)
+
+    async def fail_close(self):
+        closed.append("close")
+        raise RuntimeError("close failed")
+
+    monkeypatch.setattr("evals.harness.Agent.close", fail_close)
+    import juergen_harness_pool
+
+    juergen_harness_pool.Pool.session = Slow()
+    trace = vf.Trace(
+        task=vf.TraceTask(type="DesktopTask", data=_task(max_steps=2)), state=DesktopState()
+    )
+    harness = DesktopHarness(_config(tmp_path))
+
+    async def cancel() -> BaseException | None:
+        task = asyncio.ensure_future(
+            harness.launch(
+                make_ctx(replies=["0 0 0 ; +LMB -LMB"] * 2), trace, None, "", "", {}
+            )
+        )
+        while not dispatching.is_set():
+            await asyncio.sleep(0.005)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError) as excinfo:
+            await task
+        return excinfo.value.__cause__
+
+    cause = asyncio.run(cancel())
+    assert closed == ["close"]
+    assert isinstance(cause, RuntimeError) and str(cause) == "close failed"
+
+
+def test_cancellation_during_held_cleanup_retires_after_cleanup_returns(
+    tmp_path, preparer, monkeypatch
+) -> None:
+    order: list[str] = []
+    cleaning = threading.Event()
+
+    class SlowCleanup(FakeSession):
+        def execute_atomic(self, operations):
+            operations = list(operations)
+            if [operation.kind for operation in operations] == ["mouse_up"]:
+                cleaning.set()
+                time.sleep(0.2)
+                order.append("cleaned")
+            return super().execute_atomic(operations)
+
+    original = dsk.DesktopLease.release
+
+    def spy(self, *, failed, error):
+        order.append("lease_released")
+        return original(self, failed=failed, error=error)
+
+    monkeypatch.setattr(dsk.DesktopLease, "release", spy)
+    import juergen_harness_pool
+
+    session = SlowCleanup()
+    juergen_harness_pool.Pool.session = session
+    trace = vf.Trace(
+        task=vf.TraceTask(type="DesktopTask", data=_task(max_steps=1)), state=DesktopState()
+    )
+    harness = DesktopHarness(_config(tmp_path))
+    asyncio.run(
+        _cancel_once(cleaning)(harness, trace, make_ctx(replies=["10 10 0 ; +LMB"]))
+    )
+    assert order == ["cleaned", "lease_released"], order
+    assert session.released and session.released[0][0] is True
 
 
 def test_the_desktop_session_id_rides_the_trace(tmp_path, preparer) -> None:
@@ -1630,6 +1839,76 @@ def test_a_button_left_down_is_lifted_at_teardown(tmp_path, preparer) -> None:
     assert result["released_holds"] == [{"kind": "mouse_up", "args": ["left"]}]
     (_, teardown) = session.operations_log
     assert [(op.kind, op.args) for op in teardown] == [("mouse_up", ("left",))]
+
+
+def test_final_probe_is_captured_after_held_inputs_are_released(
+    tmp_path, preparer, monkeypatch
+) -> None:
+    class ReleaseChangesState(FakeSession):
+        held = False
+
+        def execute_atomic(self, operations):
+            operations = list(operations)
+            for operation in operations:
+                if operation.kind == "mouse_down":
+                    self.held = True
+                elif operation.kind == "mouse_up":
+                    self.held = False
+            return super().execute_atomic(operations)
+
+    def probe(session, task):
+        del task
+        return {
+            "postcondition_status": "ok",
+            "postcondition_success": bool(session.operations_log) and not session.held,
+        }
+
+    monkeypatch.setattr(preparer, "probe", probe)
+    session = ReleaseChangesState()
+    import juergen_harness_pool
+
+    juergen_harness_pool.Pool.session = session
+    preparer.plan = ["10 10 0 ; +LMB"]
+    rollout = Rollout(
+        _TraceOnlyTask(_task(max_steps=1)),
+        DesktopHarness(_config(tmp_path, scripted=ScriptedConfig(enabled=True))),
+        make_ctx(),
+        SubprocessConfig(),
+    )
+    trace = asyncio.run(rollout.run())
+    result = trace.info[RESULT_KEY]
+    assert session.held is False
+    assert result["final_probe"]["postcondition_success"] is True
+    assert result["outcome"] == "postcondition_reached"
+    assert result["success"] is True
+    assert trace.rewards["postcondition"] == 1.0
+
+
+def test_final_probe_is_captured_after_the_existing_settle_policy(
+    tmp_path, preparer, monkeypatch
+) -> None:
+    class SettlesTerminalState(FakeSession):
+        terminal_settled = False
+
+        def screenshot(self):
+            if len(self.operations_log) == 2:
+                self.terminal_settled = True
+            return super().screenshot()
+
+    def probe(session, task):
+        del task
+        return {
+            "postcondition_status": "ok",
+            "postcondition_success": session.terminal_settled,
+        }
+
+    monkeypatch.setattr(preparer, "probe", probe)
+    session = SettlesTerminalState()
+    _, result, _ = _run(
+        _config(tmp_path), _task(max_steps=1), replies=["10 10 0 ; +LMB"], session=session
+    )
+    assert session.terminal_settled is True
+    assert result["final_probe"]["postcondition_success"] is True
 
 
 def test_every_kind_of_hold_is_lifted_newest_first(tmp_path, preparer) -> None:

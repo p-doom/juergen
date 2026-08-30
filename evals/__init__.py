@@ -6,9 +6,9 @@
     -> codec.parse -> codec.compile -> desktop executes -> oracle -> repeat
 
 `tasks.py` holds the task data/state and the tasksets that enumerate them.
-`oracles.py` holds the state oracles as rewards that declare `runtime` and so
-keep reading real VM state. `indicators.py` holds the diagnostics, computed
-in-process from the step records the harness writes so they ride the trace.
+`oracles.py` holds trace-only rewards over terminal evidence recorded by the
+harness. `indicators.py` holds the diagnostics, computed in-process from the step
+records the harness writes so they ride the trace.
 `fixtures/` holds the task-specific fixtures: the browser pages and their host
 server, the CDP client, Chrome launch, and the Writer / Calc / Files guest scripts.
 They attach to tasks through the same `Preparer` seam, so a task that needs Chrome
@@ -35,7 +35,6 @@ from evals.oracles import (
     OracleOutcome,
     StateOracle,
     final_probe,
-    probe_now,
 )
 from evals.tasks import (
     PREPARERS,
@@ -67,6 +66,5 @@ __all__ = [
     "delta_histogram",
     "final_probe",
     "on_lattice",
-    "probe_now",
     "register_preparer",
 ]

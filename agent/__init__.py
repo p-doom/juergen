@@ -11,8 +11,8 @@ Three concerns, one per module, all injected rather than inherited:
     (`ctx.sampling`), never from a per-harness constant, so there is one
     temperature source and the body we log is the body `Dialect.apply_overrides`
     puts on the wire.
-  * `desktop` — leased desktop sessions with a bounded lifetime: verifiers'
-    worker pool is upscale-only, and a worker that holds a VM never gives it back.
+  * `desktop` — process-global prewarmed desktop sessions under a node-wide slot
+    budget: verifiers' worker pool is upscale-only.
 """
 
 from agent.agent import (
@@ -24,9 +24,7 @@ from agent.agent import (
 )
 from agent.desktop import (
     DesktopLease,
-    LeaseRegistry,
     LeasedDesktopPool,
-    lease_for_trace,
 )
 from agent.history import (
     History,
@@ -50,13 +48,11 @@ __all__ = [
     "ImageBudget",
     "InterleavedFrames",
     "LatestImageOnly",
-    "LeaseRegistry",
     "LeasedDesktopPool",
     "ModelCallError",
     "ProseSummarisedWindow",
     "StatelessSingleTurn",
     "Turn",
     "history_policy",
-    "lease_for_trace",
     "resolve_sampling",
 ]

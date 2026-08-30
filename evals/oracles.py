@@ -1,56 +1,25 @@
-"""State oracles as rewards that read real VM state.
-
-`Task.score(self, trace, runtime)` (`v1/task.py:269-313`) builds
-`available = {"task": self.data, "trace": trace, "runtime": runtime}` and
-`decorators.invoke` (`v1/decorators.py:28-30`) passes only the keys whose names
-appear in the callee's signature, so a reward asks for what it needs by declaring
-a parameter. `_requires_runtime` (`task.py:70-73`) partitions the signals:
-
-    runtime declared without a default  ->  runtime-dependent, skipped offline
-    runtime absent (or defaulted)       ->  trace-only, always scored
-
-There is no `@vf.reward(runtime=...)` kwarg; the decorator takes `weight` and
-`priority` only. Runtime is requested by parameter name.
-
-Two probe sources, both real:
-
-  * live — the rollout's desktop lease is still open (the harness extends it past
-    `launch` by `scoring_grace_s` for this), so the oracle re-reads the guest at
-    scoring time;
-  * recorded — the grace window closed, so the oracle uses the final probe the
-    harness took inside the episode, which is the same read-only extraction one
-    settle-interval earlier.
-
-Which one was used is recorded as a metric: a run whose oracles all fell back to
-`recorded` is a run whose grace window is mistuned.
-"""
+"""State oracles over terminal evidence recorded while the desktop lease is live."""
 
 from __future__ import annotations
 
-import logging
 import math
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import verifiers.v1 as vf
 
-from agent.desktop import lease_for_trace
 from evals.tasks import (
     FULL_SUCCESS_THRESHOLD,
     RESULT_KEY,
     DesktopTaskData,
-    preparer_for,
     valid_result,
 )
-
-_LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "OSWorldEvaluateOracle",
     "OracleOutcome",
     "StateOracle",
     "final_probe",
-    "probe_now",
 ]
 
 
@@ -69,7 +38,6 @@ class OracleOutcome:
     success: bool
     reason: str
     evidence: dict[str, Any] = field(default_factory=dict)
-    source: str = "recorded"
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -81,19 +49,8 @@ def final_probe(trace: vf.Trace) -> dict[str, Any] | None:
     return probe if isinstance(probe, dict) else None
 
 
-def probe_now(trace: vf.Trace, task: DesktopTaskData) -> tuple[dict[str, Any] | None, str]:
-    """Read guest state at scoring time, live if the lease is still open."""
-    lease = lease_for_trace(trace.id)
-    if lease is not None:
-        try:
-            return preparer_for(task.kind).probe(lease.session, task), "live"
-        except Exception as exc:  # noqa: BLE001 - fall back rather than lose the score
-            _LOGGER.warning("live probe failed for %s: %r", trace.id, exc)
-    return final_probe(trace), "recorded"
-
-
 class StateOracle:
-    """Mixin: success is decided from realized guest state, never from the trace.
+    """Mixin: success is decided from recorded realized state, never from actions.
 
     A subclass implements `evaluate_state`. The judgement stays in the task
     (verifiers' single judgement authority); the extraction stays in the family's
@@ -106,49 +63,34 @@ class StateOracle:
         raise NotImplementedError
 
     @vf.reward
-    async def postcondition(self, trace: vf.Trace, runtime: vf.Runtime) -> float:
-        """1.0 iff every required realized VM postcondition is observed.
-
-        Declares `runtime`, so `_requires_runtime` is True and offline replay skips
-        it rather than scoring a VM it cannot reach as a failure. The recorded
-        counterpart below is the offline-safe view of the same verdict.
-        """
-        del runtime
+    async def postcondition(self, trace: vf.Trace) -> float:
+        """1.0 iff every required terminal postcondition is recorded."""
         task = trace.task.data
         assert isinstance(task, DesktopTaskData)
-        probe, source = probe_now(trace, task)
+        probe = final_probe(trace)
         if probe is None:
             raise RuntimeError(
-                "state oracle has no guest evidence (neither live nor recorded) — "
+                "state oracle has no recorded terminal guest evidence — "
                 "infrastructure-invalid, not a task failure"
             )
         outcome = self.evaluate_state(task, probe)
-        trace.info.setdefault("oracle", {})["postcondition"] = {
-            **outcome.as_dict(),
-            "source": source,
-        }
+        trace.info.setdefault("oracle", {})["postcondition"] = outcome.as_dict()
         if outcome.status != "ok":
             raise RuntimeError(f"state oracle could not evaluate: {outcome.reason}")
         return 1.0 if outcome.success else 0.0
 
     @vf.metric
     async def postcondition_recorded(self, trace: vf.Trace) -> dict[str, float]:
-        """The same verdict from the in-episode probe alone — always available.
-
-        Offline re-scoring of `traces.jsonl` gets the number here; the reward above
-        is the authoritative, runtime-backed one.
-        """
+        """The same verdict as a metric for existing result consumers."""
         task = trace.task.data
         assert isinstance(task, DesktopTaskData)
         probe = final_probe(trace)
         if probe is None:
             return {"postcondition_recorded": 0.0, "postcondition_evidence_missing": 1.0}
         outcome = self.evaluate_state(task, probe)
-        live = 1.0 if (trace.info.get("oracle", {}).get("postcondition", {}).get("source") == "live") else 0.0
         return {
             "postcondition_recorded": 1.0 if outcome.success else 0.0,
             "postcondition_oracle_error": 0.0 if outcome.status == "ok" else 1.0,
-            "postcondition_probe_live": live,
         }
 
 
@@ -157,15 +99,14 @@ class OSWorldEvaluateOracle:
 
     No shaping and no curriculum, so a lift here is a lift on the benchmark. A
     missing, non-finite or out-of-range score raises rather than returning 0, so
-    infrastructure failure is never trained as task failure. It needs a live guest,
-    hence `runtime`.
+    infrastructure failure is never trained as task failure. `launch` records the
+    score before releasing the desktop, so reward evaluation is trace-only.
     """
 
     full_success_threshold: float = FULL_SUCCESS_THRESHOLD
 
     @vf.reward
-    async def task_success(self, trace: vf.Trace, runtime: vf.Runtime) -> float:
-        del runtime
+    async def task_success(self, trace: vf.Trace) -> float:
         result = valid_result(trace, "OSWorld")
         raw = result.get("task_reward")
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
