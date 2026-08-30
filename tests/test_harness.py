@@ -1795,11 +1795,18 @@ def test_the_osworld_taskset_skips_a_task_that_already_has_a_result(tmp_path) ->
     (resume / "chrome" / "t1").mkdir(parents=True)
     (resume / "chrome" / "t1" / "result.json").write_text("{}")
     config = OSWorldTasksetConfig(
-        osworld_root=str(root), split_path=str(root / "split.json"), resume_dir=str(resume)
+        osworld_root=str(root),
+        split_path=str(root / "split.json"),
+        asset_bundle=str(tmp_path),
+        resume_dir=str(resume),
     )
     names = [t.data.name for t in OSWorldTaskset(config).load()]
     assert names == ["t2"], names
-    without = OSWorldTasksetConfig(osworld_root=str(root), split_path=str(root / "split.json"))
+    without = OSWorldTasksetConfig(
+        osworld_root=str(root),
+        split_path=str(root / "split.json"),
+        asset_bundle=str(tmp_path),
+    )
     assert sorted(t.data.name for t in OSWorldTaskset(without).load()) == ["t1", "t2"]
 
 
@@ -1815,7 +1822,10 @@ def test_max_tasks_truncates_the_osworld_taskset(tmp_path) -> None:
         )
     (root / "split.json").write_text(json.dumps({"chrome": [f"t{i}" for i in range(5)]}))
     config = OSWorldTasksetConfig(
-        osworld_root=str(root), split_path=str(root / "split.json"), max_tasks=2
+        osworld_root=str(root),
+        split_path=str(root / "split.json"),
+        asset_bundle=str(tmp_path),
+        max_tasks=2,
     )
     assert len(list(OSWorldTaskset(config).load())) == 2
 
