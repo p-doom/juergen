@@ -25,6 +25,8 @@ from typing import Any, Iterable, Protocol, runtime_checkable
 
 import verifiers.v1 as vf
 
+from evals.osworld_assets import stage_offline_task
+
 _LOGGER = logging.getLogger(__name__)
 
 __all__ = [
@@ -393,6 +395,7 @@ class OSWorldTasksetConfig(vf.TasksetConfig):
     osworld_root: str = ""
     split_path: str = ""
     task_paths: list[str] = []
+    asset_bundle: str = ""
     max_steps: int = 15
     max_tasks: int = 0
     resume_dir: str = ""
@@ -412,7 +415,7 @@ class OSWorldTaskset(vf.Taskset[DesktopTask, OSWorldTasksetConfig]):
                         (app, root / "evaluation_examples" / "examples" / app / f"{task_id}.json")
                     )
         paths.extend((None, Path(p)) for p in self.config.task_paths)
-        emitted = 0
+        rows: list[DesktopTask] = []
         for idx, (app, path) in enumerate(paths):
             payload = json.loads(path.read_text())
             task_id = str(payload.get("id") or path.stem)
@@ -422,10 +425,10 @@ class OSWorldTaskset(vf.Taskset[DesktopTask, OSWorldTasksetConfig]):
             ).exists():
                 _LOGGER.info("resume: skipping %s/%s", app_name, task_id)
                 continue
-            if self.config.max_tasks and emitted >= self.config.max_tasks:
-                return
-            emitted += 1
-            yield DesktopTask(
+            if self.config.max_tasks and len(rows) >= self.config.max_tasks:
+                break
+            payload = stage_offline_task(payload, self.config.asset_bundle)
+            rows.append(DesktopTask(
                 DesktopTaskData(
                     idx=idx,
                     name=task_id,
@@ -446,7 +449,8 @@ class OSWorldTaskset(vf.Taskset[DesktopTask, OSWorldTasksetConfig]):
                     },
                 ),
                 self.config.task,
-            )
+            ))
+        yield from rows
 
 
 class FreerollTasksetConfig(vf.TasksetConfig):

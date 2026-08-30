@@ -44,6 +44,7 @@ PROBED = FLAT_PLUGIN_IDS + (
     "desktop.ir",
     "evals.signoflife.suite",
     "evals.cua_gym.manifest",
+    "evals.osworld_assets",
 )
 
 # Nothing a build reads, and `build/` in particular is poison: setuptools copies
@@ -147,6 +148,11 @@ def test_the_pinned_cua_gym_compatibility_document_ships_beside_its_package(
     _, files = resolved
     package = files["evals.cua_gym.manifest"].parent
     assert (package / "compatibility" / f"{PINNED_REVISION}.json").is_file()
+
+
+def test_the_osworld_offline_asset_stager_ships_in_the_wheel(resolved) -> None:
+    site, files = resolved
+    assert files["evals.osworld_assets"].is_relative_to(site)
 
 
 def test_the_pinned_desktop_source_resolves_where_a_path_could_not() -> None:

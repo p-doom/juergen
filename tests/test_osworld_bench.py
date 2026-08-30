@@ -54,6 +54,10 @@ class _Metrics:
         return 0.5
 
     @staticmethod
+    def file_bytes(result: str, **options: Any) -> float:
+        return 1.0 if Path(result).read_bytes() == options["content"].encode() else 0.0
+
+    @staticmethod
     def infeasible() -> float:
         """OSWorld really does bind a metric named `infeasible`
         (`evaluators/metrics/__init__.py:169`) even though `evaluate()` never
@@ -137,6 +141,49 @@ def test_setup_runs_the_config_steps_and_binds_the_evaluator(tmp_path) -> None:
     assert bridge.task_id == "chrome/task-1"
     assert Path(bridge.cache_dir).is_dir()
     assert bridge.evaluate() == 1.0
+
+
+def test_unstaged_network_assets_are_rejected_before_setup(tmp_path) -> None:
+    bridge = _bridge(tmp_path)
+    with pytest.raises(ValueError, match="unstaged download"):
+        bridge.setup(
+            {
+                "id": "task-1",
+                "config": [
+                    {
+                        "type": "download",
+                        "parameters": {
+                            "files": [
+                                {
+                                    "url": "https://example.test/input.txt",
+                                    "path": "/tmp/input.txt",
+                                }
+                            ]
+                        },
+                    }
+                ],
+            }
+        )
+    assert bridge._setup_controller is None
+
+
+def test_unstaged_cloud_evaluators_are_rejected_before_setup(tmp_path) -> None:
+    bridge = _bridge(tmp_path)
+    with pytest.raises(ValueError, match="unstaged cloud_file"):
+        bridge.setup(
+            {
+                "id": "task-1",
+                "evaluator": {
+                    "func": "file_bytes",
+                    "result": {
+                        "type": "cloud_file",
+                        "path": "https://example.test/gold.txt",
+                        "dest": "gold.txt",
+                    },
+                },
+            }
+        )
+    assert bridge._setup_controller is None
 
 
 def test_a_task_with_no_evaluator_binds_but_cannot_be_scored(tmp_path) -> None:
@@ -538,6 +585,179 @@ def _osworld_tree(tmp_path: Path, *, evaluator: dict[str, Any] | None = None) ->
     (examples / "t1.json").write_text(json.dumps(payload))
     (root / "split.json").write_text(json.dumps({"chrome": ["t1"]}))
     return root
+
+
+_ASSET_PREFIX = (
+    "https://huggingface.co/datasets/xlangai/ubuntu_osworld_file_cache/resolve/main/"
+)
+
+
+def _offline_osworld_tree(tmp_path: Path) -> tuple[Path, Path]:
+    root = tmp_path / "osworld"
+    examples = root / "evaluation_examples" / "examples" / "writer"
+    examples.mkdir(parents=True)
+    task_id = "task-1"
+    input_relative = f"writer/{task_id}/input.txt"
+    ignored_relative = f"writer/{task_id}/ignored.txt"
+    expected_relative = f"writer/{task_id}/expected.txt"
+    post_relative = f"writer/{task_id}/post.txt"
+    payload = {
+        "id": task_id,
+        "instruction": "edit the file",
+        "config": [
+            {
+                "type": "download",
+                "parameters": {
+                    "files": [
+                        {
+                            "url": _ASSET_PREFIX + input_relative,
+                            "path": "Downloads/input.txt",
+                        }
+                    ]
+                },
+            },
+            {"type": "launch", "parameters": {"command": ["writer"]}},
+        ],
+        "evaluator": {
+            "func": "file_bytes",
+            "result": {
+                "type": "cloud_file",
+                "path": [
+                    _ASSET_PREFIX + ignored_relative,
+                    _ASSET_PREFIX + expected_relative,
+                ],
+                "dest": ["ignored.txt", "expected.txt"],
+                "multi": True,
+                "gives": [1],
+            },
+            "options": {"content": "expected"},
+            "postconfig": [
+                {
+                    "type": "download",
+                    "parameters": {
+                        "files": [
+                            {
+                                "url": _ASSET_PREFIX + post_relative,
+                                "path": "/tmp/post.txt",
+                            }
+                        ]
+                    },
+                }
+            ],
+        },
+    }
+    (examples / f"{task_id}.json").write_text(json.dumps(payload))
+    (root / "split.json").write_text(json.dumps({"writer": [task_id]}))
+    bundle = tmp_path / "assets"
+    (bundle / input_relative).parent.mkdir(parents=True)
+    (bundle / input_relative).write_bytes(b"input")
+    (bundle / ignored_relative).write_bytes(b"ignored")
+    (bundle / expected_relative).write_bytes(b"expected")
+    (bundle / post_relative).write_bytes(b"post")
+    return root, bundle
+
+
+def test_the_taskset_stages_one_local_bundle_through_the_real_consumer(
+    tmp_path,
+) -> None:
+    from evals.tasks import OSWorldTaskset, OSWorldTasksetConfig, preparer_for
+
+    root, bundle = _offline_osworld_tree(tmp_path)
+    task = next(
+        iter(
+            OSWorldTaskset(
+                OSWorldTasksetConfig(
+                    osworld_root=str(root),
+                    split_path=str(root / "split.json"),
+                    asset_bundle=str(bundle),
+                )
+            ).load()
+        )
+    ).data
+    task_config = task.setup["task_config"]
+    upload = task_config["config"][0]
+    assert upload["type"] == "upload_file"
+    assert upload["parameters"]["files"][0]["path"] == "Downloads/input.txt"
+    assert Path(upload["parameters"]["files"][0]["local_path"]).read_bytes() == b"input"
+    assert task_config["config"][1] == {
+        "type": "launch",
+        "parameters": {"command": ["writer"]},
+    }
+    assert task_config["evaluator"]["result"]["type"] == "offline_file"
+    post_upload = task_config["evaluator"]["postconfig"][0]
+    assert post_upload["type"] == "upload_file"
+    assert Path(post_upload["parameters"]["files"][0]["local_path"]).read_bytes() == b"post"
+
+    facade, _ = _facade(tmp_path)
+    evidence = preparer_for("osworld").prepare(facade, task)
+    assert evidence == {"prepared": "osworld", "steps": 2, "scorable": True}
+    assert facade.evaluate() == 1.0
+    assert facade._osworld.setup_controller.calls[0][0] == upload
+    assert facade._osworld.setup_controller.calls[1][0] == post_upload
+
+
+def test_every_selected_bundle_is_validated_before_the_first_task_is_yielded(
+    tmp_path,
+) -> None:
+    from evals.tasks import OSWorldTaskset, OSWorldTasksetConfig
+
+    root, bundle = _offline_osworld_tree(tmp_path)
+    examples = root / "evaluation_examples" / "examples" / "writer"
+    missing_id = "task-2"
+    missing_relative = f"writer/{missing_id}/missing.txt"
+    (examples / f"{missing_id}.json").write_text(
+        json.dumps(
+            {
+                "id": missing_id,
+                "instruction": "edit another file",
+                "config": [
+                    {
+                        "type": "download",
+                        "parameters": {
+                            "files": [
+                                {
+                                    "url": _ASSET_PREFIX + missing_relative,
+                                    "path": "/tmp/missing.txt",
+                                }
+                            ]
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    (root / "split.json").write_text(json.dumps({"writer": ["task-1", missing_id]}))
+    tasks = OSWorldTaskset(
+        OSWorldTasksetConfig(
+            osworld_root=str(root),
+            split_path=str(root / "split.json"),
+            asset_bundle=str(bundle),
+        )
+    ).load()
+    with pytest.raises(FileNotFoundError, match="task-2.*absent from the bundle"):
+        next(iter(tasks))
+
+
+def test_an_asset_url_outside_the_canonical_bundle_is_rejected(tmp_path) -> None:
+    from evals.tasks import OSWorldTaskset, OSWorldTasksetConfig
+
+    root, bundle = _offline_osworld_tree(tmp_path)
+    path = root / "evaluation_examples" / "examples" / "writer" / "task-1.json"
+    payload = json.loads(path.read_text())
+    payload["config"][0]["parameters"]["files"][0]["url"] = (
+        "https://example.test/input.txt"
+    )
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="unsupported asset URL"):
+        list(
+            OSWorldTaskset(
+                OSWorldTasksetConfig(
+                    osworld_root=str(root),
+                    split_path=str(root / "split.json"),
+                    asset_bundle=str(bundle),
+                )
+            ).load()
+        )
 
 
 def test_the_benchmark_arm_pairs_the_flag_with_the_reward() -> None:
