@@ -38,6 +38,9 @@ above and must not be used as its result.
 The corrected probe samples four native actions per state under one fixed
 Qwen3.5 reasoning prefix, scores both native models, converts the candidates,
 and reports the normalized transported weights and effective sample size.
+It is packaged in the normal labctl harness as
+`recipes/eval/native_oev3_transport_qwen38.toml` (in the labctl repository),
+with declared model/data inputs and a registered `eval_result` output.
 
 The optional recorded-action diagnostic is not a clean teacher-accuracy test:
 Qwen3.8 scored both candidates after the student's sampled reasoning.  For
@@ -82,8 +85,8 @@ can have different token lengths.  The existing finite-candidate proof is
 
 ## Framework decision (2026-08-31)
 
-Use the current upstream **Miles** as the intended training base, while keeping
-the first signal probe framework-independent.  Miles already has Qwen3.5/VLM
+Use the current upstream **Miles** as the intended continuous-online training
+base, while keeping the first signal probe framework-independent.  Miles already has Qwen3.5/VLM
 support, SGLang teacher serving, computer-use/agent environment connectors,
 custom rollout and loss hooks, and ordinary OPD.  Our required extension is
 small but fundamental: score a separately tokenized mapped native action and
@@ -118,8 +121,12 @@ Other options:
   the bottleneck.  It is a larger Ray/Megatron/SGLang system than this initial
   experiment needs, and its built-in OPD has the same alignment assumption.
 - **Omegalax** is useful for the existing SFT pipeline, but the local checkout
-  lacks an online rollout/teacher/OPD loop; building those pieces would be more
-  work than extending Miles.
+  lacks an online rollout/teacher/OPD loop.  It is nevertheless the shortest
+  path to a **round-based first training experiment** in the existing harness:
+  collect a frozen native proposal batch, write converted OEV3 records carrying
+  sequence weights, add sample-weight support to its already available
+  per-sample cross-entropy path, train a short LoRA round, then recollect.  This
+  is transformed online distillation in rounds, not synchronous OPD.
 
 Closest research references:
 
