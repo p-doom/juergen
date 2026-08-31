@@ -28,6 +28,7 @@ prerelease = "allow"
 override-dependencies = [
     "openai>=2.26.0",
     "nvidia-cudnn-cu12>=9.16",
+    "nvidia-nccl-cu12==2.28.3",
 ]
 
 # Force the torch stack to come from PyTorch's cu128 wheel index. The hai
