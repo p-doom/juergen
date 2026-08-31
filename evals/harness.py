@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Protocol
 
 import verifiers.v1 as vf
-from desktop.execute.guest_program import HeldStateError
+from desktop.execute import HeldStateError
 from pydantic import Field, SecretStr, model_validator
 
 import grammars
@@ -44,7 +44,13 @@ from agent.agent import (
     dump_prompt,
     load_codec,
 )
-from agent.desktop import DEFAULT_SLOT_DIR, PoolSpec, default_pool_factory, pool_for
+from agent.desktop import (
+    DEFAULT_POOL_TARGET,
+    DEFAULT_SLOT_DIR,
+    PoolSpec,
+    default_pool_factory,
+    pool_for,
+)
 from evals.cua_gym.web.runtime import CuaGymWebPreparer, CuaGymWebTaskData
 from evals.tasks import (
     FULL_SUCCESS_THRESHOLD,
@@ -73,15 +79,14 @@ class Desktop(Protocol):
     def screen_size(self) -> tuple[int, int]: ...
     def cursor_position(self) -> tuple[int, int]: ...
     def screenshot(self) -> bytes: ...
-    def execute_atomic(self, operations: Any) -> Receipt: ...
+    def execute(self, operations: tuple[Any, ...]) -> Receipt: ...
 
 
 class Receipt(Protocol):
     """The guest's own account of one dispatched action.
 
-    `desktop.execute.guest_program.AtomicExecutionResult` is the real one, reached
-    through `evals/vm.py`'s adapter; the in-process canvas (`rl/desktop.py`)
-    implements the same four members. Written down rather than left implied because
+    ``desktop.execute.ExecutionReceipt`` is the real one; the in-process test
+    desktop implements the same four members. Written down rather than left implied because
     the return value used to be assigned and dropped, so any shape satisfied it —
     and a session that reports nothing publishes a turn in which a failed action
     looks exactly like a successful one.
@@ -179,7 +184,7 @@ class DesktopPoolConfig(vf.BaseConfig):
     """How often the reaper looks for an idle pool."""
     session_kwargs: dict[str, Any] = Field(default_factory=dict)
     """Passed verbatim to the session-pool constructor named by `pool_target`."""
-    pool_target: str = "evals.vm:kvm_desktop_pool"
+    pool_target: str = DEFAULT_POOL_TARGET
     """The session-pool constructor, as `module:attribute`.
 
     A constructor, not a provider name. Override it to inject a fake pool, not to
@@ -481,7 +486,7 @@ _PROMOTED_STEP_KEYS = frozenset({"step", "raw_model_output", "sampling"})
 def _receipt_record(receipt: Any) -> dict[str, Any] | None:
     """The guest's own account of one action. `None` = nothing was dispatched.
 
-    A subset of `AtomicExecutionResult`, not its `as_dict()`: the full receipt
+    A subset of `ExecutionReceipt`, not its `as_dict()`: the full receipt
     carries per-primitive X injection evidence and timestamp tables, and this lands
     in every row of every trajectory. These four are the ones nothing else can
     supply. `ok` and `failure_kind` are the guest's verdict on whether the action
@@ -498,7 +503,7 @@ def _receipt_record(receipt: Any) -> dict[str, Any] | None:
     if not hasattr(receipt, "ok"):
         raise TypeError(
             f"{type(receipt).__name__} is not an execution receipt: "
-            "`session.execute_atomic` must return desktop's `AtomicExecutionResult` "
+            "`session.execute` must return desktop's `ExecutionReceipt` "
             "(`ok`, `failure_kind`, `cursor_before`, `cursor_after`). Publishing the "
             "guest's verdict is not optional — without it a failed action is "
             "indistinguishable from a successful one in the trajectory."
@@ -653,8 +658,8 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         """Build the underlying session pool.
 
         The one override point for an environment family. Real desktops come from
-        `desktop.vm.pool.DesktopSessionPool`; the container-free RL envs return an
-        in-process virtual desktop with the same session surface.
+        ``evals.vm.kvm_desktop_pool``; tests may inject an in-process pool with the
+        same checkout contract.
         """
         return default_pool_factory(
             dict(self.config.pool.session_kwargs), self.config.pool.pool_target
@@ -752,19 +757,28 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
             trace.info["desktop_session"] = getattr(lease.session, "session_id", None)
             artifacts = self._artifact_dir(task)
             cleanup = None
+            episode_kwargs: dict[str, Any] = {
+                "session": lease.session,
+                "task": task,
+            }
             if web_values is not None:
                 hub_image, apptainer_binary, port_lock_dir, guest_password = web_values
-                preparer = preparer.episode(
-                    session=lease.session,
-                    task=task,
-                    episode_id=hashlib.sha256(trace.id.encode("utf-8")).hexdigest(),
-                    artifacts=artifacts,
-                    hub_image=hub_image,
-                    apptainer_binary=apptainer_binary,
-                    port_lock_dir=port_lock_dir,
-                    guest_password=guest_password,
+                episode_kwargs.update(
+                    {
+                        "episode_id": hashlib.sha256(
+                            trace.id.encode("utf-8")
+                        ).hexdigest(),
+                        "artifacts": artifacts,
+                        "hub_image": hub_image,
+                        "apptainer_binary": apptainer_binary,
+                        "port_lock_dir": port_lock_dir,
+                        "guest_password": guest_password,
+                    }
                 )
-                cleanup = preparer.close
+            episode_factory = getattr(preparer, "episode", None)
+            if callable(episode_factory):
+                preparer = episode_factory(**episode_kwargs)
+                cleanup = getattr(preparer, "close", None)
             await self._run(
                 ctx,
                 trace,
@@ -927,7 +941,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
                 if decision.operations:
                     try:
                         receipt = await _to_thread(
-                            session.execute_atomic, decision.operations
+                            session.execute, tuple(decision.operations)
                         )
                         budget.dispatched(len(decision.operations))
                         _update_held(held, decision.operations)
@@ -1380,7 +1394,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         from desktop.ir import Operation  # type: ignore[import-not-found]
 
         operations = tuple(Operation(kind, args) for kind, args in reversed(held))
-        await _to_thread(session.execute_atomic, operations)
+        await _to_thread(session.execute, operations)
         return [operation.as_dict() for operation in operations]
 
     async def _evaluate(

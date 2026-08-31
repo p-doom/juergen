@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import verifiers.v1 as vf
-from desktop.vm import DesktopResetMode, PortRangeLease, acquire_port_range
+from desktop.vm import PortRangeLease, acquire_port_range
 from pydantic import Field
 
 from evals.cua_gym.manifest import PINNED_REVISION
@@ -25,6 +25,7 @@ from evals.cua_gym.runtime import (
     _materialized_setup_steps,
     _required_absolute_path,
     _run_reward,
+    _run_setup_steps,
 )
 from evals.cua_gym.snapshot import CuaGymDatasetSnapshot
 from evals.cua_gym.web.desktop import CuaGymDesktopBrowser, CuaGymDesktopConfig
@@ -43,7 +44,6 @@ from evals.cua_gym.web.manifest import (
     load_default_web_runtime_manifest,
 )
 from evals.tasks import DesktopTaskData, register_preparer
-from evals.vm import DesktopFacade
 
 __all__ = [
     "CUA_GYM_WEB_KIND",
@@ -156,7 +156,7 @@ class CuaGymWebPreparer:
     def episode(
         self,
         *,
-        session: DesktopFacade,
+        session: Any,
         task: CuaGymWebTaskData,
         episode_id: str,
         artifacts: Path,
@@ -181,7 +181,7 @@ class _CuaGymWebEpisode:
     def __init__(
         self,
         *,
-        session: DesktopFacade,
+        session: Any,
         task: CuaGymWebTaskData,
         episode_id: str,
         artifacts: Path,
@@ -208,10 +208,9 @@ class _CuaGymWebEpisode:
         self.browser: CuaGymDesktopBrowser | None = None
         self.browser_identity: str | None = None
 
-    def prepare(self, session: DesktopFacade, task: DesktopTaskData) -> dict[str, Any]:
+    def prepare(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
         if session is not self.session or task is not self.task:
             raise RuntimeError("CUA-Gym web episode was called with another lease")
-        session.reset(mode=DesktopResetMode.SNAPSHOT)
         web_root = self.artifacts / "web"
         self.hub = CuaGymHubSupervisor(
             config=CuaGymHubConfig(
@@ -255,7 +254,7 @@ class _CuaGymWebEpisode:
         self.browser = CuaGymDesktopBrowser(
             guest=session,
             config=CuaGymDesktopConfig(
-                browser_debugging_url=session.chromium_debugging_url(),
+                browser_debugging_url=_chromium_debugging_url(session),
                 guest_gateway_host=_GUEST_GATEWAY_HOST,
                 guest_hostnames=tuple(sorted(self.gateway.gateway_hostnames.values())),
                 guest_password=self.guest_password,
@@ -272,7 +271,7 @@ class _CuaGymWebEpisode:
                 self.bundle.setup_steps, self.materialized, Path(staging)
             )
             if steps:
-                session.setup_steps(steps)
+                _run_setup_steps(session, steps)
         self.browser.verify_after_setup(self.browser_identity)
         self.gateway.wait_for_browser_session(_BROWSER_READY_TIMEOUT_S)
         self.gateway.transition(GatewayPhase.ROLLOUT)
@@ -285,7 +284,7 @@ class _CuaGymWebEpisode:
             "setup_steps": len(self.bundle.setup_steps),
         }
 
-    def probe(self, session: DesktopFacade, task: DesktopTaskData) -> dict[str, Any]:
+    def probe(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
         if session is not self.session or task is not self.task:
             raise RuntimeError("CUA-Gym web episode was called with another lease")
         return {
@@ -296,7 +295,7 @@ class _CuaGymWebEpisode:
 
     def evaluate(
         self,
-        session: DesktopFacade,
+        session: Any,
         task: DesktopTaskData,
         *,
         declared: str | None,
@@ -390,6 +389,13 @@ def _bundle_for_task(
             "Unsupported CUA-Gym web task: " + "; ".join(incompatibilities)
         )
     return snapshot, snapshot.load_task_bundle(metadata.id)
+
+
+def _chromium_debugging_url(session: Any) -> str:
+    port = getattr(session.ports, "chromium", None)
+    if type(port) is not int or port <= 0:
+        raise RuntimeError("desktop session has no forwarded Chromium port")
+    return f"http://127.0.0.1:{port}"
 
 
 register_preparer(CuaGymWebPreparer())

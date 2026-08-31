@@ -94,6 +94,11 @@ def test_desktop_harness_and_stage_04_use_one_render_sequence(
 
     snapshot, root = _synthetic_snapshot(tmp_path, platform=TaskPlatform.DESKTOP)
     monkeypatch.setattr(runtime, "_snapshot", lambda *_: snapshot)
+    monkeypatch.setattr(
+        runtime,
+        "_run_setup_steps",
+        lambda session, steps: session.record_setup_steps(steps),
+    )
     frames = [_jpeg_q92((index, 0, 0)) for index in range(7)]
     replies = [f"<think>reason {index}</think>\n\nNO_OP" for index in range(6)]
     online_prompts: list[list[dict[str, Any]]] = []

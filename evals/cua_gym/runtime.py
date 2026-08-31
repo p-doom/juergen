@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 import verifiers.v1 as vf
-from desktop.vm import DesktopResetMode, GuestCommandResult
+from desktop.vm import GuestCommandResult
 from pydantic import Field
 
 from evals.cua_gym.manifest import PINNED_REVISION
@@ -32,7 +32,6 @@ from evals.cua_gym.models import (
 from evals.cua_gym.snapshot import CuaGymDatasetSnapshot
 from evals.cua_gym.task_blocklist import TaskBlocklist, load_blocklist
 from evals.tasks import DesktopTask, DesktopTaskData, register_preparer, valid_result
-from evals.vm import DesktopFacade
 
 __all__ = [
     "CUA_GYM_DESKTOP_KIND",
@@ -176,15 +175,14 @@ class CuaGymDesktopPreparer:
 
     kind = CUA_GYM_DESKTOP_KIND
 
-    def prepare(self, session: DesktopFacade, task: DesktopTaskData) -> dict[str, Any]:
+    def prepare(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
         snapshot, bundle = _bundle_for_task(task)
 
-        session.reset(mode=DesktopResetMode.SNAPSHOT)
         _require_guest_modules(session)
         with tempfile.TemporaryDirectory(prefix="cua-gym-setup-") as staging:
             steps = _materialized_setup_steps(bundle.setup_steps, bundle, Path(staging))
             if steps:
-                session.setup_steps(steps)
+                _run_setup_steps(session, steps)
         return {
             "prepared": CUA_GYM_DESKTOP_KIND,
             "task_id": str(bundle.task_id),
@@ -192,7 +190,7 @@ class CuaGymDesktopPreparer:
             "setup_steps": len(bundle.setup_steps),
         }
 
-    def probe(self, session: DesktopFacade, task: DesktopTaskData) -> dict[str, Any]:
+    def probe(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
         del task
         return {
             "cursor": list(session.cursor_position()),
@@ -201,7 +199,7 @@ class CuaGymDesktopPreparer:
         }
 
     def evaluate(
-        self, session: DesktopFacade, task: DesktopTaskData, *, declared: str | None
+        self, session: Any, task: DesktopTaskData, *, declared: str | None
     ) -> float:
         del declared
         snapshot, bundle = _bundle_for_task(task)
@@ -240,8 +238,8 @@ def _bundle_for_task(
     return snapshot, snapshot.load_task_bundle(metadata.id)
 
 
-def _require_guest_modules(session: DesktopFacade) -> None:
-    result = session.execute_detached(
+def _require_guest_modules(session: Any) -> None:
+    result = session.run_guest(
         ["python3", "-c", "import " + ", ".join(_GUEST_MODULES)],
         timeout_s=_COMMAND_TIMEOUT_S,
     )
@@ -300,9 +298,15 @@ def _offline_upload(entry: object, staged: Mapping[str, Path]) -> dict[str, str]
     return {"local_path": str(local_path), "path": path}
 
 
-def _run_reward(session: DesktopFacade, bundle: TaskBundle) -> GuestCommandResult:
-    session.write_file(_REWARD_SCRIPT_PATH, bundle.reward_source.encode("utf-8"))
-    return session.execute_detached(
+def _run_setup_steps(session: Any, steps: list[dict[str, Any]]) -> int:
+    from evals.osworld import bridge_for_desktop
+
+    return bridge_for_desktop(session).run_setup_steps(steps)
+
+
+def _run_reward(session: Any, bundle: TaskBundle) -> GuestCommandResult:
+    session.write_guest_file(_REWARD_SCRIPT_PATH, bundle.reward_source.encode("utf-8"))
+    return session.run_guest(
         ["python3", _REWARD_SCRIPT_PATH], timeout_s=_COMMAND_TIMEOUT_S
     )
 

@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import verifiers.v1 as vf
-from desktop.vm import DesktopResetMode, GuestCommandResult
+from desktop.vm import GuestCommandResult
 from juergen_doubles import FakeSession, make_ctx
 from test_cua_gym_dataset import (
     DESKTOP_ID,
@@ -51,32 +50,28 @@ class _CuaSession(FakeSession):
         self.reward_returncode = reward_returncode
         self.reward_stdout = reward_stdout
         self.reward_stderr = reward_stderr
-        self.reset_modes: list[DesktopResetMode] = []
         self.setup_calls: list[list[dict[str, Any]]] = []
         self.staged_contents: list[bytes] = []
         self.written_files: dict[str, bytes] = {}
         self.guest_commands: list[list[str]] = []
+        self.ports = SimpleNamespace(chromium=9222, vlc=8080)
 
-    def reset(self, *, mode: DesktopResetMode) -> None:
-        self.reset_modes.append(mode)
-
-    def setup_steps(self, steps: list[dict[str, Any]]) -> int:
+    def record_setup_steps(self, steps: list[dict[str, Any]]) -> int:
         self.setup_calls.append(steps)
         upload = steps[0]["parameters"]["files"][0]
         self.staged_contents.append(Path(upload["local_path"]).read_bytes())
         return len(steps)
 
-    def write_file(self, path: str, content: bytes) -> None:
+    def write_guest_file(self, path: str, content: bytes) -> None:
         self.written_files[path] = content
 
-    def execute_detached(
+    def run_guest(
         self,
-        argv: Sequence[str],
+        argv: list[str],
         *,
-        timeout_s: float,
-        env: Mapping[str, str] | None = None,
+        timeout_s: float | None = None,
     ) -> GuestCommandResult:
-        del timeout_s, env
+        del timeout_s
         command = list(argv)
         self.guest_commands.append(command)
         if command[:2] == ["python3", "-c"]:
@@ -88,6 +83,15 @@ class _CuaSession(FakeSession):
                 self.reward_returncode, self.reward_stdout, self.reward_stderr
             )
         raise AssertionError(f"unexpected guest command: {command}")
+
+
+@pytest.fixture(autouse=True)
+def _replace_osworld_setup_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+    def record(session: _CuaSession, steps: list[dict[str, Any]]) -> int:
+        return session.record_setup_steps(steps)
+
+    monkeypatch.setattr(runtime, "_run_setup_steps", record)
+    monkeypatch.setattr(web_runtime, "_run_setup_steps", record)
 
 
 def _blocklist(path: Path, *, blocked: dict[str, list[str]] | None = None) -> Path:
@@ -151,7 +155,7 @@ def test_taskset_preserves_requested_order_and_rejects_blocklisted_ids(
         tuple(refused.load())
 
 
-def test_preparer_stages_bundle_files_offline_and_uses_the_shared_reset(
+def test_preparer_stages_bundle_files_offline_on_the_checked_out_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     snapshot, root = _synthetic_snapshot(tmp_path, platform=TaskPlatform.DESKTOP)
@@ -160,7 +164,6 @@ def test_preparer_stages_bundle_files_offline_and_uses_the_shared_reset(
 
     evidence = runtime.CuaGymDesktopPreparer().prepare(session, _task(root))
 
-    assert session.reset_modes == [DesktopResetMode.SNAPSHOT]
     assert evidence["setup_steps"] == 3
     assert session.staged_contents == [b"PK\x03\x04 binary docx"]
     (steps,) = session.setup_calls
@@ -416,11 +419,7 @@ def test_web_runtime_uses_the_harness_renderer_and_closes_private_state(
     monkeypatch.setattr(web_runtime, "CuaGymDesktopBrowser", Browser)
     monkeypatch.setattr(web_runtime, "acquire_port_range", lambda **_: Lease())
 
-    class WebSession(_CuaSession):
-        def chromium_debugging_url(self) -> str:
-            return "http://127.0.0.1:9222"
-
-    session = WebSession(reward_stdout="REWARD: 0.5\n")
+    session = _CuaSession(reward_stdout="REWARD: 0.5\n")
     task = web_runtime.CuaGymWebTaskData(
         idx=0,
         name="web-consumer",

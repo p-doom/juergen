@@ -223,20 +223,29 @@ class _TerminalPreparation:
     kind = "terminal"
     evaluate = staticmethod(unscored_evaluate)
 
-    _SCRIPT = (
-        "import subprocess; "
-        "subprocess.Popen(['bash', '-lc', "
-        "\"(command -v gnome-terminal >/dev/null && gnome-terminal) || "
-        "(command -v xfce4-terminal >/dev/null && xfce4-terminal) || "
-        "(command -v xterm >/dev/null && xterm)\"]); "
-        "time.sleep(2.0); "
-        "pyautogui.hotkey('ctrl', 'l'); "
-        "time.sleep(0.2)"
+    _COMMAND = (
+        "if command -v gnome-terminal >/dev/null; then gnome-terminal; "
+        "elif command -v xfce4-terminal >/dev/null; then xfce4-terminal; "
+        "elif command -v xterm >/dev/null; then xterm >/dev/null 2>&1 & "
+        "else exit 127; fi"
     )
 
     def prepare(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
         del task
-        session.execute_pyautogui(self._SCRIPT)
+        from desktop import ir
+        from desktop.execute import key_chord
+
+        launched = session.spawn_guest(["sh", "-c", self._COMMAND], timeout_s=10.0)
+        if launched.returncode != 0:
+            raise RuntimeError(
+                f"terminal launch failed with {launched.returncode}: "
+                f"{launched.stderr.strip()}"
+            )
+        receipt = session.execute(
+            (ir.wait(2.0), *key_chord(("ControlLeft", "l")), ir.wait(0.2))
+        )
+        if not receipt.ok:
+            raise RuntimeError(f"terminal focus action failed: {receipt.error}")
         return {"prepared": "terminal"}
 
     def probe(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
@@ -254,11 +263,30 @@ class _OSWorldPreparation:
 
     kind = "osworld"
 
+    def episode(self, *, session: Any, task: DesktopTaskData) -> _OSWorldEpisode:
+        return _OSWorldEpisode(session, task)
+
+
+class _OSWorldEpisode:
+    """OSWorld-only setup and scoring state for one leased desktop."""
+
+    def __init__(self, session: Any, task: DesktopTaskData) -> None:
+        from evals.osworld import bridge_for_desktop
+
+        self._session = session
+        self._task = task
+        self._bridge = bridge_for_desktop(session)
+
+    def _require_episode(self, session: Any, task: DesktopTaskData) -> None:
+        if session is not self._session or task is not self._task:
+            raise RuntimeError("OSWorld episode was called with another desktop lease")
+
     def prepare(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
-        task_config = osworld_task_config(task)
+        self._require_episode(session, task)
+        task_config = osworld_task_config(self._task)
         if not task_config.get("config") and not task_config.get("evaluator"):
             return {"prepared": "osworld", "steps": 0}
-        steps = session.setup(task_config)
+        steps = self._bridge.setup(task_config)
         return {
             "prepared": "osworld",
             "steps": len(task_config.get("config") or []) if steps is None else int(steps),
@@ -266,23 +294,23 @@ class _OSWorldPreparation:
         }
 
     def probe(self, session: Any, task: DesktopTaskData) -> dict[str, Any]:
-        del task
+        self._require_episode(session, task)
         return {"cursor": list(session.cursor_position())}
 
     def evaluate(
         self, session: Any, task: DesktopTaskData, *, declared: str | None
     ) -> float:
-        del task
-        session.declare_terminal(declared)
-        return session.evaluate()
+        self._require_episode(session, task)
+        self._bridge.declare_terminal(declared)
+        return self._bridge.evaluate()
 
 
 def osworld_task_config(task: DesktopTaskData) -> dict[str, Any]:
     """The whole OSWorld task JSON a row stands for.
 
     Whole, not just its `config` list, because the `evaluator` block travels with
-    it: `DesktopFacade.setup()` binds both at once so `evaluate()` can stay
-    argument-free (`evals/vm.py`). Precedence is inline row -> file on disk, so a
+    it: the per-episode OSWorld bridge binds both at once so `evaluate()` can stay
+    argument-free. Precedence is inline row -> file on disk, so a
     synthetic row still works and a benchmark row does not need its 369 JSONs
     copied into the taskset.
     """
@@ -463,7 +491,7 @@ class OSWorldTaskset(vf.Taskset[DesktopTask, OSWorldTasksetConfig]):
                     snapshot=str(payload.get("snapshot") or "") or None,
                     task_path=str(path),
                     # The whole JSON, not just `config`: the `evaluator` block is
-                    # what `DesktopFacade.evaluate()` scores, and re-reading the
+                    # what the OSWorld episode scores, and re-reading the
                     # file inside the preparer would make the row and the score
                     # disagree the moment the checkout moves under a running array.
                     setup={

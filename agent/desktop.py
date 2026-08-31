@@ -134,8 +134,9 @@ class DesktopLease:
 
     trace_id: str
     session: Any
+    checkout: Any
     slot: _Slot
-    pool: "LeasedDesktopPool"
+    pool: LeasedDesktopPool
     failed: bool | None = None
     error: str | None = None
     released: bool = False
@@ -149,9 +150,7 @@ class DesktopLease:
             self.failed = failed
             self.error = error
             try:
-                release = getattr(self.session, "release", None)
-                if callable(release):
-                    release(failed=failed, error=error)
+                self.checkout.release(failed=failed, error=error)
             except Exception:  # noqa: BLE001 - release must not mask the rollout error
                 _LOGGER.exception("desktop lease %s: release failed", self.trace_id)
             finally:
@@ -212,16 +211,31 @@ class LeasedDesktopPool:
         slot = NodeSlots(
             directory=Path(self.spec.slot_dir), max_slots=self.spec.max_node_slots
         ).acquire(timeout_s=self.spec.acquire_timeout_s)
+        checkout = None
         try:
             pool = self._ensure_pool()
-            session = pool.checkout()
-        except BaseException:
+            checkout = pool.checkout()
+            session = checkout.tracked_env()
+            lease = DesktopLease(
+                trace_id=trace_id,
+                session=session,
+                checkout=checkout,
+                slot=slot,
+                pool=self,
+            )
+            with self._lock:
+                self._leases.add(lease)
+            return lease
+        except BaseException as exc:
+            if checkout is not None:
+                try:
+                    checkout.release(failed=True, error=repr(exc))
+                except Exception:
+                    _LOGGER.exception(
+                        "desktop lease %s: failed checkout release failed", trace_id
+                    )
             slot.release()
             raise
-        lease = DesktopLease(trace_id=trace_id, session=session, slot=slot, pool=self)
-        with self._lock:
-            self._leases.add(lease)
-        return lease
 
     def forget(self, lease: DesktopLease) -> None:
         with self._lock:
@@ -351,7 +365,7 @@ def _install_teardown() -> None:
             pass
 
 
-DEFAULT_POOL_TARGET = "desktop.vm.pool:DesktopSessionPool"
+DEFAULT_POOL_TARGET = "evals.vm:kvm_desktop_pool"
 
 
 def default_pool_factory(

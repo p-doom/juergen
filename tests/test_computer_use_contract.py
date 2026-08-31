@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from desktop import ir
@@ -71,3 +72,71 @@ def test_episode_cleanup_releases_held_inputs_newest_first() -> None:
 
     assert released == [operation.as_dict() for operation in expected]
     assert session.operations_log == [list(expected)]
+
+
+def test_leased_pool_drives_the_tracked_session_and_releases_the_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent.desktop as desktop_pools
+
+    events: list[object] = []
+
+    class Slot:
+        def release(self) -> None:
+            events.append("slot_released")
+
+    class Slots:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def acquire(self, **_kwargs: object) -> Slot:
+            return Slot()
+
+    class TrackedSession:
+        session_id = "tracked-session"
+
+    tracked_session = TrackedSession()
+
+    class Checkout:
+        def tracked_env(self) -> TrackedSession:
+            events.append("tracked_env")
+            return tracked_session
+
+        def release(self, *, failed: bool, error: str | None) -> None:
+            events.append(("checkout_released", failed, error))
+
+    class Pool:
+        def start(self) -> None:
+            events.append("pool_started")
+
+        def checkout(self) -> Checkout:
+            events.append("checked_out")
+            return Checkout()
+
+        def close(self) -> None:
+            events.append("pool_closed")
+
+    monkeypatch.setattr(desktop_pools, "NodeSlots", Slots)
+    pool = desktop_pools.LeasedDesktopPool(
+        desktop_pools.PoolSpec(
+            key="tracked-session-test",
+            max_node_slots=1,
+            slot_dir=str(tmp_path),
+            reap_interval_s=60.0,
+        ),
+        Pool,
+    )
+    lease = pool.acquire("trace")
+    assert lease.session is tracked_session
+
+    lease.release(failed=True, error="episode failed")
+    pool.close()
+
+    assert events == [
+        "pool_started",
+        "checked_out",
+        "tracked_env",
+        ("checkout_released", True, "episode failed"),
+        "slot_released",
+        "pool_closed",
+    ]

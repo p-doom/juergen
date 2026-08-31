@@ -7,7 +7,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import ModuleType, SimpleNamespace
-from typing import Any
 
 import pytest
 
@@ -35,54 +34,45 @@ class _Result:
 class _Guest:
     def __init__(self) -> None:
         self.calls: list[tuple[object, ...]] = []
-        self.execute_result: dict[str, Any] = {
-            "status": "success",
-            "returncode": 1,
-            "output": "",
-            "error": "",
-        }
-        self.execute_results: list[dict[str, Any]] = []
+        self.guest_result: object = _Result(1)
+        self.guest_results: list[object] = []
         self.secret_error: BaseException | None = None
-        self.detached_result = _Result(0)
-        self.on_detached = lambda: None
+        self.spawn_result = _Result(0)
+        self.on_spawn = lambda: None
 
-    def write_file(self, path: str, content: bytes) -> None:
-        self.calls.append(("write_file", path, content))
+    def write_guest_file(self, path: str, content: bytes) -> None:
+        self.calls.append(("write_guest_file", path, content))
 
-    def execute(
+    def run_guest(
         self,
         argv: list[str],
         *,
-        check: bool = True,
         timeout_s: float | None = None,
-    ) -> dict[str, Any]:
-        self.calls.append(("execute", argv, check, timeout_s))
-        result = (
-            self.execute_results.pop(0) if self.execute_results else self.execute_result
-        )
-        return dict(result)
+    ) -> object:
+        self.calls.append(("run_guest", argv, timeout_s))
+        return self.guest_results.pop(0) if self.guest_results else self.guest_result
 
-    def execute_with_secret_stdin(
+    def run_guest_with_secret(
         self,
         argv: Sequence[str],
         *,
         secret: bytes,
         timeout_s: float | None = None,
     ) -> None:
-        self.calls.append(("execute_with_secret_stdin", tuple(argv), secret, timeout_s))
+        self.calls.append(("run_guest_with_secret", tuple(argv), secret, timeout_s))
         if self.secret_error is not None:
             raise self.secret_error
 
-    def execute_detached(
+    def spawn_guest(
         self,
         argv: Sequence[str],
         *,
         timeout_s: float,
         env: Mapping[str, str] | None = None,
     ) -> _Result:
-        self.calls.append(("execute_detached", tuple(argv), timeout_s, env))
-        self.on_detached()
-        return self.detached_result
+        self.calls.append(("spawn_guest", tuple(argv), timeout_s, env))
+        self.on_spawn()
+        return self.spawn_result
 
 
 class _VersionServer(ThreadingHTTPServer):
@@ -182,7 +172,7 @@ def test_guest_hosts_use_one_fixed_privileged_operation(
 
     assert len(guest.calls) == 1
     operation, argv, secret, timeout_s = guest.calls[0]
-    assert operation == "execute_with_secret_stdin"
+    assert operation == "run_guest_with_secret"
     assert secret == b"password\n"
     assert timeout_s == 1.0
     assert list(argv[:6]) == [
@@ -243,14 +233,14 @@ def test_existing_browser_is_reused_without_guest_io(
 def test_absent_browser_is_launched_once(version_server: _VersionServer) -> None:
     guest = _Guest()
     version_server.identity = None
-    guest.on_detached = lambda: setattr(version_server, "identity", _IDENTITY)
+    guest.on_spawn = lambda: setattr(version_server, "identity", _IDENTITY)
     browser = CuaGymDesktopBrowser(guest=guest, config=_config(version_server))
 
     assert browser.ensure_browser() == _IDENTITY
     assert [call[0] for call in guest.calls] == [
-        "execute",
-        "write_file",
-        "execute_detached",
+        "run_guest",
+        "write_guest_file",
+        "spawn_guest",
     ]
     assert guest.calls[1][1] == "/tmp/cua_gym_launch_chrome.py"
     assert b"--remote-debugging-port=9222" in guest.calls[1][2]
@@ -259,15 +249,15 @@ def test_absent_browser_is_launched_once(version_server: _VersionServer) -> None
 def test_launch_failure_fails_before_polling(version_server: _VersionServer) -> None:
     guest = _Guest()
     version_server.identity = None
-    guest.detached_result = _Result(7, stderr="chrome missing")
+    guest.spawn_result = _Result(7, stderr="chrome missing")
     browser = CuaGymDesktopBrowser(guest=guest, config=_config(version_server))
 
     with pytest.raises(RuntimeError, match="launcher failed with 7: chrome missing"):
         browser.ensure_browser()
     assert [call[0] for call in guest.calls] == [
-        "execute",
-        "write_file",
-        "execute_detached",
+        "run_guest",
+        "write_guest_file",
+        "spawn_guest",
     ]
 
 
@@ -276,13 +266,9 @@ def test_readiness_timeout_includes_bounded_guest_log_tail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     guest = _Guest()
-    guest.execute_results = [
-        dict(guest.execute_result),
-        {
-            "status": "success",
-            "returncode": 0,
-            "output": "Chrome failed to bind\n",
-        },
+    guest.guest_results = [
+        _Result(1),
+        _Result(0, stdout="Chrome failed to bind\n"),
     ]
     browser = CuaGymDesktopBrowser(guest=guest, config=_config(version_server))
 
@@ -297,9 +283,8 @@ def test_readiness_timeout_includes_bounded_guest_log_tail(
     with pytest.raises(TimeoutError, match="guest Chrome log:\\nChrome failed to bind"):
         browser.ensure_browser()
     assert guest.calls[-1] == (
-        "execute",
+        "run_guest",
         ["tail", "-c", "65536", "/tmp/cua_gym_chrome.log"],
-        False,
         1.0,
     )
 
@@ -307,21 +292,20 @@ def test_readiness_timeout_includes_bounded_guest_log_tail(
 @pytest.mark.parametrize(
     "log_result",
     [
-        {"status": "success", "returncode": 0},
-        {"status": "success", "returncode": 0, "output": None},
-        {"status": "success", "returncode": True, "output": ""},
-        {"status": "success", "returncode": 1, "output": ""},
-        {"status": "failure", "returncode": 0, "output": ""},
-        {"status": "success", "returncode": 0, "output": "x" * 65_537},
+        SimpleNamespace(returncode=0, stderr=""),
+        SimpleNamespace(returncode=0, stdout=None, stderr=""),
+        SimpleNamespace(returncode=True, stdout="", stderr=""),
+        _Result(1),
+        _Result(0, stdout="x" * 65_537),
     ],
 )
 def test_readiness_timeout_rejects_malformed_log_result(
     version_server: _VersionServer,
     monkeypatch: pytest.MonkeyPatch,
-    log_result: dict[str, Any],
+    log_result: object,
 ) -> None:
     guest = _Guest()
-    guest.execute_results = [dict(guest.execute_result), log_result]
+    guest.guest_results = [_Result(1), log_result]
     browser = CuaGymDesktopBrowser(guest=guest, config=_config(version_server))
 
     def unavailable() -> str:
@@ -332,7 +316,9 @@ def test_readiness_timeout_rejects_malformed_log_result(
     monkeypatch.setattr(desktop.time, "monotonic", lambda: next(times))
     monkeypatch.setattr(desktop.time, "sleep", lambda _seconds: None)
 
-    with pytest.raises(RuntimeError, match="log retrieval returned an invalid result"):
+    with pytest.raises(
+        RuntimeError, match="log retrieval (returned an invalid result|failed)"
+    ):
         browser.ensure_browser()
 
 

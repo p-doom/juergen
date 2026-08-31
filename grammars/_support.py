@@ -603,7 +603,7 @@ def group_operations(
     grammar at once, so these are handled explicitly:
 
     * ``click(button)`` — desktop's executor synthesises this itself
-      (``guest_program.lower_guest_operations``), so it appears in any stream
+      (``protocol.lower_guest_operations``), so it appears in any stream
       that has been through that lowering. It is one press/release pair, and a
       pair spelled this way coalesces with pairs spelled as
       ``mouse_down``/``mouse_up``, so ``click, click`` is a double click.
@@ -1164,7 +1164,7 @@ def normalize_key(value: object, *, error: type[Exception] = ValueError) -> str:
 # that set is open per grammar; a codec's job ends at ``compile``, and the
 # Operation vocabulary on the far side is closed: a pointer moves, a button
 # transitions, a wheel turns, text arrives. Lowering it is a fixed
-# ``if kind ==`` chain in ``desktop.execute.guest_program`` over something no
+# ``if kind ==`` chain in ``desktop.vm.guest.executor`` over something no
 # grammar extends.
 
 

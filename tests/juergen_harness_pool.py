@@ -22,11 +22,12 @@ class Pool:
         self.started += 1
 
     def checkout(self) -> Any:
-        if Pool.session is not None:
-            return Pool.session
-        from juergen_doubles import FakeSession
+        from juergen_doubles import FakeCheckout, FakeSession
 
-        return FakeSession()
+        if Pool.session is not None:
+            return FakeCheckout(Pool.session)
+
+        return FakeCheckout(FakeSession())
 
     def close(self) -> None:
         self.closed += 1

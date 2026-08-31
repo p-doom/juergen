@@ -1,7 +1,7 @@
 """Shared doubles for the agent/ evals/ rl/ suite.
 
-A `FakeSession` records the argv it was handed and replays canned stdout, because
-every guest interaction in this module is "run one command, read one marker line".
+A `FakeSession` records typed desktop operation batches and supplies deterministic
+screenshots.
 
 Nothing here needs a VM, a GPU or a network. The one test file that needs a real
 qemu is marked `kvm` and skips itself.
@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import importlib.util
 import io
-import json
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import verifiers.v1 as vf
 
@@ -64,7 +64,7 @@ def jpeg(width: int = 8, height: int = 6, colour: tuple[int, int, int] = (10, 20
 
 @dataclass(frozen=True)
 class FakeGuestReceipt:
-    """What `execute_atomic` returns: desktop's `AtomicExecutionResult` surface.
+    """What `execute` returns: desktop's `ExecutionReceipt` surface.
 
     Only the four fields the harness publishes. Returning a bare
     `{"dispatched": n}` here would let a receipt-shaped contract pass on a shape
@@ -79,34 +79,22 @@ class FakeGuestReceipt:
 
 
 class FakeSession:
-    """The session surface the harness and the preparers actually touch.
-
-    `argv_responses` maps a substring of the joined argv to the stdout to return,
-    so a test pins the guest protocol (one `SOLV2_STATE=` line, one
-    `FIXTURE_JSON=` line).
-    """
+    """The session surface the harness and the preparers actually touch."""
 
     def __init__(
         self,
         *,
         screen: tuple[int, int] = (1920, 1080),
         cursor: tuple[int, int] = (100, 100),
-        argv_responses: dict[str, str] | None = None,
         frames: list[bytes] | None = None,
     ) -> None:
         self.screen = screen
         self.cursor = cursor
-        self.argv_responses = dict(argv_responses or {})
         self.frames = list(frames or [])
         self.session_id = "fake-session"
-        self.argv_log: list[list[str]] = []
-        self.pyautogui_log: list[str] = []
         self.operations_log: list[Any] = []
         self.released: list[tuple[bool, str | None]] = []
         self.screenshots = 0
-        self.evaluate_value: float | None = None
-        self.task_config: dict[str, Any] | None = None
-        self.declared_terminal: list[str | None] = []
 
     def screen_size(self) -> tuple[int, int]:
         return self.screen
@@ -120,50 +108,32 @@ class FakeSession:
             return self.frames[min(self.screenshots - 1, len(self.frames) - 1)]
         return jpeg(colour=(self.screenshots % 250, 0, 0))
 
-    def execute_atomic(self, operations: Any) -> FakeGuestReceipt:
+    def execute(self, operations: Any) -> FakeGuestReceipt:
         ops = list(operations)
         self.operations_log.append(ops)
         return FakeGuestReceipt(
             ok=True, cursor_before=self.cursor, cursor_after=self.cursor
         )
 
-    def execute_pyautogui(self, code: str) -> None:
-        self.pyautogui_log.append(code)
-        import re
-
-        match = re.search(r"moveTo\(\s*(-?\d+)\s*,\s*(-?\d+)", code)
-        if match:
-            self.cursor = (int(match.group(1)), int(match.group(2)))
-
-    def execute_argv(self, argv: list[str]) -> dict[str, Any]:
-        self.argv_log.append(list(argv))
-        joined = " ".join(argv)
-        for needle, output in self.argv_responses.items():
-            if needle in joined:
-                return {"output": output}
-        return {"output": ""}
-
-    def setup(self, task_config: dict[str, Any]) -> int:
-        """The whole OSWorld task JSON, matching `DesktopFacade.setup`.
-
-        Not just the `config` list: the `evaluator` block has to reach the
-        session, or a no-argument `evaluate()` has nothing to score.
-        """
-        steps = list(task_config.get("config") or [])
-        self.task_config = dict(task_config)
-        self.argv_log.append(["<osworld-setup>", json.dumps(steps)])
-        return len(steps)
-
-    def declare_terminal(self, control: str | None) -> None:
-        self.declared_terminal.append(control)
-
-    def evaluate(self) -> float:
-        if self.evaluate_value is None:
-            raise RuntimeError("no evaluate configured")
-        return self.evaluate_value
-
     def release(self, *, failed: bool = False, error: str | None = None) -> None:
         self.released.append((failed, error))
+
+
+class FakeCheckout:
+    """Desktop's checkout handle around one fake session."""
+
+    def __init__(self, session: FakeSession) -> None:
+        self.session = session
+
+    @property
+    def session_id(self) -> str:
+        return self.session.session_id
+
+    def tracked_env(self) -> FakeSession:
+        return self.session
+
+    def release(self, *, failed: bool = False, error: str | None = None) -> None:
+        self.session.release(failed=failed, error=error)
 
 
 class FakePool:
@@ -173,15 +143,16 @@ class FakePool:
         self._factory = factory or FakeSession
         self.started = 0
         self.closed = 0
-        self.checked_out: list[Any] = []
+        self.checked_out: list[FakeCheckout] = []
 
     def start(self) -> None:
         self.started += 1
 
-    def checkout(self) -> Any:
+    def checkout(self) -> FakeCheckout:
         session = self._factory()
-        self.checked_out.append(session)
-        return session
+        checkout = FakeCheckout(session)
+        self.checked_out.append(checkout)
+        return checkout
 
     def close(self) -> None:
         self.closed += 1

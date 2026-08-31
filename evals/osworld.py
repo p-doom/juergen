@@ -1,9 +1,9 @@
 """OSWorld's task setup and its benchmark scorer, against a desktop we own.
 
 `OSWorldEvaluateOracle` says the reward is `DesktopEnv.evaluate()`. This module
-produces that number without letting OSWorld own the VM: `evals/vm.py`'s
-`DesktopFacade` gets `setup()` and `evaluate()` from here, and the OSWorld task
-family (`kind="osworld"`) reaches the guest through them.
+produces that number without letting OSWorld own the VM. The OSWorld task
+preparer owns one bridge per episode; core desktop actions and
+observations continue to use ``DesktopSession`` directly.
 
 `DesktopEnv` itself is unusable here: it owns a VM lifecycle through its own
 provider layer, and the lifecycle is ours (qemu + KVM under `desktop`'s pool) —
@@ -11,8 +11,7 @@ OSWorld's apptainer provider strips KVM ioctls on the hai-* nodes. Two pieces do
 generalise across providers, and they are the ones we take:
 
   * `SetupController`, which turns a task JSON's `config` list into guest side
-    effects over the in-VM HTTP agent — the same agent our `HttpGuiTransport`
-    drives, on the same port.
+    effects over the in-VM HTTP agent, on the same port as the desktop client.
   * `evaluators.getters` + `evaluators.metrics`, which are the benchmark's
     definition of success.
 
@@ -59,6 +58,7 @@ from urllib.parse import urlsplit
 __all__ = [
     "OSWorldBridge",
     "OSWorldNotAvailable",
+    "bridge_for_desktop",
     "osworld_modules",
     "osworld_root",
 ]
@@ -126,7 +126,7 @@ class OSWorldBridge:
 
     Bound to a task by `bind()` / `setup()`, then asked for a number by
     `evaluate()`. Nothing here boots, resets or releases a VM: the lease is the
-    facade's, and this object is discarded with it.
+    session pool's, and this object is discarded with the episode.
     """
 
     def __init__(
@@ -153,7 +153,7 @@ class OSWorldBridge:
         self.screen_width, self.screen_height = (int(screen_size[0]), int(screen_size[1]))
         self.action_history: list[Any] = []
         """OSWorld reads only the *last* entry, and only to spot a declared FAIL.
-        Our harness declares that through `DesktopFacade.declare_terminal`."""
+        Our harness declares that through the episode's OSWorld bridge."""
 
         self._loader = loader
         self._client_password = client_password
@@ -395,3 +395,24 @@ class OSWorldBridge:
             expected_state = self.expected_getter(self, self.evaluator["expected"])
             return float(self.metric(result_state, expected_state, **self.metric_options))
         return float(self.metric(result_state, **self.metric_options))
+
+
+def bridge_for_desktop(
+    session: Any, *, cache_dir: str | Path | None = None
+) -> OSWorldBridge:
+    """Bind OSWorld's controller/scorer to one live ``DesktopSession``."""
+    base_url = session.base_url
+    ports = session.ports
+    chromium_port = getattr(ports, "chromium", None)
+    vlc_port = getattr(ports, "vlc", None)
+    if type(chromium_port) is not int or chromium_port <= 0:
+        raise RuntimeError("desktop session has no forwarded Chromium port")
+    if type(vlc_port) is not int or vlc_port <= 0:
+        raise RuntimeError("desktop session has no forwarded VLC port")
+    return OSWorldBridge(
+        base_url=base_url,
+        chromium_port=chromium_port,
+        vlc_port=vlc_port,
+        cache_dir=cache_dir,
+        screen_size=session.screen_size(),
+    )

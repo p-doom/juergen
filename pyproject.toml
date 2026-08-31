@@ -41,7 +41,7 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.uv.sources]
-desktop = { git = "https://github.com/p-doom/desktop.git", rev = "47c08a7379c0fe3d7589298207cd2ff49182d645" }
+desktop = { git = "https://github.com/p-doom/desktop.git", rev = "1db6ae2499afc16d87dee15453a57042dff13f64" }
 torch = { index = "pytorch-cu128" }
 torchaudio = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }

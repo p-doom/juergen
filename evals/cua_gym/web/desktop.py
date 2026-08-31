@@ -7,7 +7,7 @@ import re
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import urlopen
@@ -130,17 +130,16 @@ class GuestCommandResult(Protocol):
 
 
 class GuestClient(Protocol):
-    def write_file(self, path: str, content: bytes) -> None: ...
+    def write_guest_file(self, path: str, content: bytes) -> None: ...
 
-    def execute(
+    def run_guest(
         self,
         argv: list[str],
         *,
-        check: bool = True,
         timeout_s: float | None = None,
-    ) -> dict[str, Any]: ...
+    ) -> GuestCommandResult: ...
 
-    def execute_with_secret_stdin(
+    def run_guest_with_secret(
         self,
         argv: Sequence[str],
         *,
@@ -148,7 +147,7 @@ class GuestClient(Protocol):
         timeout_s: float | None = None,
     ) -> None: ...
 
-    def execute_detached(
+    def spawn_guest(
         self,
         argv: Sequence[str],
         *,
@@ -213,7 +212,7 @@ class CuaGymDesktopBrowser:
         self.config = config
 
     def configure_guest_hosts(self) -> None:
-        self.guest.execute_with_secret_stdin(
+        self.guest.run_guest_with_secret(
             [
                 "sudo",
                 "--stdin",
@@ -257,7 +256,7 @@ class CuaGymDesktopBrowser:
         except BrowserUnavailable:
             pass
 
-        stopped = self.guest.execute(
+        stopped = self.guest.run_guest(
             [
                 "pkill",
                 "--signal",
@@ -265,16 +264,15 @@ class CuaGymDesktopBrowser:
                 "--full",
                 "/opt/google/[c]hrome/[c]hrome|google-[c]hrome|[c]hromium",
             ],
-            check=False,
             timeout_s=self.config.browser_ready_timeout_s,
         )
-        _require_execute_result(
+        _require_guest_result(
             stopped, allowed_returncodes={0, 1}, operation="stale Chrome cleanup"
         )
-        self.guest.write_file(
+        self.guest.write_guest_file(
             _CHROME_LAUNCH_PATH, _CHROME_LAUNCH_SOURCE.encode("utf-8")
         )
-        launched = self.guest.execute_detached(
+        launched = self.guest.spawn_guest(
             ["python3", _CHROME_LAUNCH_PATH],
             timeout_s=self.config.browser_ready_timeout_s,
         )
@@ -299,24 +297,18 @@ class CuaGymDesktopBrowser:
                 last_error = error
                 time.sleep(0.25)
         readiness_error = TimeoutError(f"Chrome did not become ready: {last_error!r}")
-        log = self.guest.execute(
+        log = self.guest.run_guest(
             ["tail", "-c", str(_MAX_CHROME_LOG_BYTES), _CHROME_LOG_PATH],
-            check=False,
             timeout_s=self.config.browser_ready_timeout_s,
         )
-        if not isinstance(log, dict):
-            raise TypeError(
-                "Chrome log retrieval returned a non-object"
-            ) from readiness_error
-        returncode = log.get("returncode")
-        output = log.get("output")
-        if (
-            log.get("status") != "success"
-            or type(returncode) is not int
-            or returncode != 0
-            or not isinstance(output, str)
-            or len(output.encode("utf-8")) > _MAX_CHROME_LOG_BYTES
-        ):
+        try:
+            _require_guest_result(
+                log, allowed_returncodes={0}, operation="Chrome log retrieval"
+            )
+        except (TypeError, RuntimeError) as error:
+            raise error from readiness_error
+        output = log.stdout
+        if len(output.encode("utf-8")) > _MAX_CHROME_LOG_BYTES:
             raise RuntimeError(
                 "Chrome log retrieval returned an invalid result"
             ) from readiness_error
@@ -347,20 +339,23 @@ class CuaGymDesktopBrowser:
             raise RuntimeError("Browser cleanup replaced the reusable Chrome process")
 
 
-def _require_execute_result(
+def _require_guest_result(
     result: object,
     *,
     allowed_returncodes: set[int],
     operation: str,
 ) -> None:
-    if not isinstance(result, dict):
-        raise TypeError(f"{operation} returned a non-object")
-    returncode = result.get("returncode")
-    if result.get("status") != "success" or type(returncode) is not int:
+    returncode = getattr(result, "returncode", None)
+    stdout = getattr(result, "stdout", None)
+    stderr = getattr(result, "stderr", None)
+    if (
+        type(returncode) is not int
+        or not isinstance(stdout, str)
+        or not isinstance(stderr, str)
+    ):
         raise RuntimeError(f"{operation} returned an invalid result: {result!r}")
     if returncode not in allowed_returncodes:
-        detail = result.get("error")
-        raise RuntimeError(f"{operation} failed with {returncode}: {detail!r}")
+        raise RuntimeError(f"{operation} failed with {returncode}: {stderr.strip()!r}")
 
 
 def _validate_debugging_url(value: object) -> str:
