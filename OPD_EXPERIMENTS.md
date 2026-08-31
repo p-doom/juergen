@@ -18,6 +18,13 @@ merge probability when several native candidates convert to the same OEV3
 program, and apply loss only to converted OEV3 action tokens.  The implementation
 probe is `eval/probe_native_rollout_transport.py`.
 
+For the eventual Qwen3.8-teacher run, this action transport can be combined
+with ordinary aligned OPD on the unchanged reasoning tokens: Qwen3.8 teaches
+the reasoning in native text, while only the final native action suffix is
+replaced by the transported OEV3 target.  In the Qwen3.5 self-distillation
+control, mask reasoning and train only the converted action, since the two
+reasoners are the same model.
+
 This is a self-normalized importance-sampling estimate of forward distillation
 from the teacher's native action distribution into the OEV3 policy.  It is
 online and sampled from the current Qwen3.5, but it is not strict "on-policy
