@@ -41,6 +41,23 @@ class _UnusedTransport:
         return None
 
 
+def test_desktop_harness_prewarms_its_pool_when_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: list[object] = []
+
+    class Pool:
+        def start(self) -> None:
+            started.append(self)
+
+    pool = Pool()
+    monkeypatch.setattr("evals.harness.pool_for", lambda spec, factory: pool)
+
+    DesktopHarness(_harness_config(tmp_path))
+
+    assert started == [pool]
+
+
 def _jpeg_q92(color: tuple[int, int, int]) -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (1920, 1080), color).save(

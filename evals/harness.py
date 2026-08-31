@@ -648,6 +648,8 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         than of a rollout. `_persist` runs synchronously inside `_publish`, so
         concurrent rollouts in one event loop cannot interleave here.
         """
+        with _hidden_gpu(self.config.pool.hide_gpu_during_boot):
+            self._desktop_pool().start()
 
     def pool_factory(self) -> Any:
         """Build the underlying session pool.
@@ -659,6 +661,18 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         return default_pool_factory(
             dict(self.config.pool.session_kwargs), self.config.pool.pool_target
         )
+
+    def _desktop_pool(self) -> Any:
+        config = self.config.pool
+        spec = PoolSpec(
+            key=config.key,
+            max_node_slots=config.max_node_slots,
+            slot_dir=config.slot_dir or str(DEFAULT_SLOT_DIR),
+            pool_idle_ttl_s=config.pool_idle_ttl_s,
+            reap_interval_s=config.reap_interval_s,
+            acquire_timeout_s=config.acquire_timeout_s,
+        )
+        return pool_for(spec, self.pool_factory())
 
     @vf.metric
     async def harness_provenance(self, trace: vf.Trace) -> dict[str, float]:
@@ -723,15 +737,7 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
         trace.info["render"] = render_metadata
         trace.info["images"] = self._image_report(render_metadata)
 
-        spec = PoolSpec(
-            key=self.config.pool.key,
-            max_node_slots=self.config.pool.max_node_slots,
-            slot_dir=self.config.pool.slot_dir or str(DEFAULT_SLOT_DIR),
-            pool_idle_ttl_s=self.config.pool.pool_idle_ttl_s,
-            reap_interval_s=self.config.pool.reap_interval_s,
-            acquire_timeout_s=self.config.pool.acquire_timeout_s,
-        )
-        pool = pool_for(spec, self.pool_factory())
+        pool = self._desktop_pool()
 
         lease = None
         failed = True

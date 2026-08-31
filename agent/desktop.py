@@ -208,6 +208,10 @@ class LeasedDesktopPool:
                 _LOGGER.info("desktop pool %s: started", self.spec.key)
             return self._pool
 
+    def start(self) -> None:
+        """Start prewarming the underlying desktop pool."""
+        self._ensure_pool()
+
     def acquire(self, trace_id: str) -> DesktopLease:
         slot = NodeSlots(
             directory=Path(self.spec.slot_dir), max_slots=self.spec.max_node_slots
