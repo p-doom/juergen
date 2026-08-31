@@ -63,6 +63,7 @@ def sglang_server(
     chunked_prefill_size: int = 2048,
     ready_timeout_s: int = 1500,
     served_model_name: str | None = None,
+    tp_size: int = 1,
 ):
     """Yield ``http://localhost:<port>/v1`` once SGLang is /health_generate-ready.
 
@@ -98,6 +99,8 @@ def sglang_server(
     ]
     if served_model_name:
         cmd.extend(["--served-model-name", served_model_name])
+    if tp_size != 1:
+        cmd.extend(["--tp-size", str(tp_size)])
     print(f"[sglang] launching: {' '.join(cmd)}", flush=True)
     log_f = log_path.open("w")
     proc = subprocess.Popen(cmd, env=env, stdout=log_f, stderr=subprocess.STDOUT)
