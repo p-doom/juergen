@@ -39,7 +39,7 @@ srun -A <ACCT> -p <PART> --gres=gpu:1 -t 0:20:00 --pty bash -c \
 | Asset | Origin path | Notes |
 |---|---|---|
 | Eval repo | this repo, branch **`yll/oev3-cuagym`** | entrypoints `eval/osworld_oev3_kvm.py`, `eval/osworld_passk_score.py`; system prompt `data_pipeline/realigned_pipeline/system_prompts/cua_v3_cuagym.txt` (bundled — the agent reads it from the repo) |
-| OSWorld harness | `osworld-pinned/` repo | set `OSWORLD_ROOT` to its path |
+| OSWorld harness | **`github.com/xlang-ai/OSWorld` @ `b7db4d8c85d9e95e0b1db44de5bec954cf37f0cf`** | `git checkout b7db4d8`; set `OSWORLD_ROOT` to it. Ships the task splits under `evaluation_examples/`. The origin tree has one local patch (`mm_agents/qwen3vl_agent.py`) used ONLY by the native/teacher path — **not needed for the oev3 checkpoint eval** (which uses `Oev3Agent` from this juergen repo). |
 | VM disk (21 GB) | `p-doom_shared/franz/osworld_vm/Ubuntu.qcow2` | transfer to Horeka scratch → `OSWORLD_QCOW2` |
 | QEMU | `p-doom_shared/franz/qemu/bin/qemu-system-x86_64-wrapped` (24 KB wrapper) | it wraps a system qemu; on Horeka either transfer + fix its inner path, or `module load qemu`/use system qemu and point `OSWORLD_QEMU_BIN` at it |
 | Task subset (38) | `osworld_verified_strat38_no_gdrive.json` (1.8 KB) | copy the file, or use `osworld-pinned/evaluation_examples/test_small.json` |
