@@ -22,6 +22,7 @@ dependencies = [
     # can redirect it to the cu128 wheel index. Without an explicit
     # mention here it's transitive-only and sources don't apply.
     "torch",
+    "nvidia-nccl-cu12==2.28.3",
     "torchaudio",
     "torchvision",
     "torchcodec",
@@ -30,7 +31,7 @@ dependencies = [
     # nodes' NVIDIA driver (12080) only supports CUDA 12.8. Until either
     # the cluster drivers move or sglang relaxes the cuda-python floor,
     # we stay on the CUDA-12-compatible 0.5.x line.
-    "sglang[all]>=0.5,<0.5.11",
+    "sglang[all]==0.5.10.post1",
     "inspect-ai>=0.3.213",
     "inspect-evals>=0.10",
     # inspect-ai's SGLang model provider requires openai>=2.26.0, but sglang
