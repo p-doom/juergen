@@ -984,7 +984,7 @@ def render_tool_calls(calls: Sequence[dict[str, Any]]) -> str:
 
 CONTROL_TOKEN = "TERMINATE"
 
-_CONTROL_LINE_RE = re.compile(rf"^{CONTROL_TOKEN}:\s*(success|failure)$")
+_CONTROL_LINE_RE = re.compile(rf"(?:^|\n){CONTROL_TOKEN}: (success|failure)\n?\Z")
 
 #: Appended to every grammar's prompt. It names no coordinate, no key and no
 #: action, which is what makes it grammar-independent rather than a shared token
@@ -1037,15 +1037,14 @@ def split_control(text: str) -> Control:
     """Remove one exact final ``TERMINATE: success|failure`` control line."""
     if not isinstance(text, str):
         raise TypeError(f"expected str, got {type(text)!r}")
-    lines = text.splitlines()
-    for index in range(len(lines) - 1, -1, -1):
-        if not lines[index].strip():
-            continue
-        match = _CONTROL_LINE_RE.fullmatch(lines[index].strip())
-        if match is None:
-            break
-        return Control(match[1], "\n".join(lines[:index]))
-    return Control(None, text)
+    if CONTROL_TOKEN not in text:
+        return Control(None, text)
+    if text.count(CONTROL_TOKEN) != 1 or (match := _CONTROL_LINE_RE.search(text)) is None:
+        raise ValueError(
+            "TERMINATE must occur exactly once as the literal final line "
+            "'TERMINATE: success' or 'TERMINATE: failure'"
+        )
+    return Control(match[1], text[: match.start()])
 
 
 # pyautogui-style key words -> rdev names, so ``key_down``/``key_up`` args are

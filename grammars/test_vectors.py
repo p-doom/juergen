@@ -181,17 +181,29 @@ def test_control_channel_round_trip(name, status):
 
 def test_control_line_is_exact_and_final():
     assert _support.split_control("NO_OP\nTERMINATE: failure").status == "failure"
+    assert _support.split_control("TERMINATE: success\n").status == "success"
     for text in (
-        "TERMINATE",
         "terminate: success",
-        "TERMINATE: success\nNO_OP",
-        "I will TERMINATE: success",
         '<tool_call>{"name":"computer_use","arguments":{"action":"terminate"}}</tool_call>',
         '{"action":"terminate","status":"success"}',
     ):
         control = _support.split_control(text)
         assert control.status is None
         assert control.body == text
+    for text in (
+        "TERMINATE",
+        "TERMINATE: success\nNO_OP",
+        "I will TERMINATE: success",
+        "TERMINATE:success",
+        "TERMINATE:  success",
+        "TERMINATE:\tsuccess",
+        " TERMINATE: success",
+        "TERMINATE: success ",
+        "TERMINATE: success\n\n",
+        "NO_OP\nTERMINATE: success\nNO_OP\nTERMINATE: failure",
+    ):
+        with pytest.raises(ValueError, match="TERMINATE must occur exactly once"):
+            _support.split_control(text)
 
 
 @pytest.mark.parametrize("name", NAMES)
