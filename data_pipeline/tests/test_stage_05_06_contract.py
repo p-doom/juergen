@@ -25,6 +25,16 @@ STAGES = REPO_ROOT / "pipeline"
 COMMIT = "a" * 40
 TREE = "b" * 40
 SNAPSHOT_REVISION = "c" * 40
+SNAPSHOT_FILES = {
+    "chat_template.json",
+    "config.json",
+    "generation_config.json",
+    "merges.txt",
+    "preprocessor_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.json",
+}
 
 
 def make_source(root: Path, image_store: Path, *, n_conversations: int = 2) -> Path:
@@ -126,8 +136,13 @@ import json, os, sys
 from pathlib import Path
 
 Path(os.environ["FAKE_UV_LOG"]).open("a").write(json.dumps(sys.argv[1:]) + "\\n")
+for name in ("PYTHONHOME", "PYTHONPATH", "UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT"):
+    if name in os.environ:
+        raise SystemExit(f"unscrubbed environment: {{name}}")
+if os.environ.get("PYTHONNOUSERSITE") != "1":
+    raise SystemExit("PYTHONNOUSERSITE is not set")
 if "-c" in sys.argv:
-    print(os.environ.get("FAKE_LOSS_PROBE", "[false, true]"))
+    print(os.environ.get("FAKE_LOSS_PROBE", "[0, 2]"))
     raise SystemExit(0)
 flags = dict(a[2:].split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
 script = next(a for a in sys.argv[1:] if a.endswith(".py"))
@@ -149,27 +164,72 @@ if "measure_message_lengths" in script:
                         measurement = {{
                             "length": 10,
                             "vision_tokens": 4 * num_images,
-                            "vision_patches": 4 * num_images,
+                            "vision_patches": 16 * num_images,
                             "num_images": num_images,
-                            "image_grid_thw": [[1, 2, 2]] * num_images,
+                            "image_grid_thw": [[1, 4, 4]] * num_images,
                         }}
                         if mode == "malformed":
                             measurement.pop("length")
+                        if mode == "bad_vision_tokens" and num_images:
+                            measurement["vision_tokens"] = 999
                         target.write(json.dumps({{
                             "conv_idx": conv_idx,
                             "msg_offset": msg_offset,
                             "measurement": measurement,
                         }}) + "\\n")
+        if os.environ.get("FAKE_MUTATE_SNAPSHOT"):
+            (Path(flags["processor"]) / "tokenizer.json").write_text("mutated")
 elif os.environ.get("FAKE_UV_RECORDS", "valid") != "absent":
+    import hashlib
     from array_record.python.array_record_module import ArrayRecordWriter
     mode = os.environ.get("FAKE_UV_RECORDS", "valid")
     shard = out / "part-00000.array_record"
     writer = ArrayRecordWriter(str(shard), "group_size:1")
     if mode != "empty":
-        writer.write(b'{{"messages":[]}}')
+        rows = []
+        with Path(flags["data_path"]).open() as source:
+            for line_number, line in enumerate(source, 1):
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                bucket = int(
+                    hashlib.sha1(str(row["recording_id"]).encode()).hexdigest(), 16
+                ) % 1000
+                expected = (
+                    "val"
+                    if bucket < round(float(flags["val_fraction"]) * 1000)
+                    else "train"
+                )
+                if expected == flags["split"]:
+                    rows.append((line_number, row))
+        line_number, row = rows[0]
+        record = {{
+            key: value
+            for key, value in row.items()
+            if key not in {{"messages", "session_id"}}
+        }}
+        record["messages"] = row["messages"]
+        record["_omegalax_session_id"] = (
+            f"{{Path(flags['data_path']).stem}}-{{line_number:09d}}"
+        )
+        record["_omegalax_measured_length"] = (
+            int(flags["max_length"]) + 1 if mode == "length_overflow" else 30
+        )
+        if mode == "unsupervised":
+            for message in record["messages"]:
+                if message.get("role") == "assistant":
+                    message["loss"] = False
+        payload = json.dumps(record, sort_keys=True).encode()
+        if mode == "noncanonical":
+            payload = json.dumps(record, sort_keys=False).encode()
+        writer.write(payload)
     writer.close()
     if mode == "corrupt":
         shard.write_bytes(b"corrupt")
+    if mode == "crc":
+        payload = bytearray(shard.read_bytes())
+        payload[112] ^= 1
+        shard.write_bytes(payload)
     metadata = {{
         "inline_records": True,
         "source_chat_path": str(Path(flags["data_path"]).resolve()),
@@ -191,6 +251,17 @@ elif os.environ.get("FAKE_UV_RECORDS", "valid") != "absent":
     if mode == "bad_metadata":
         metadata["overflow_mode"] = "drop"
     (out / "metadata.json").write_text(json.dumps(metadata))
+    for name in (
+        "sequence_lengths.jsonl",
+        "token_stats.json",
+        "truncation_stats.json",
+    ):
+        if not (mode == "missing_sidecar" and name == "token_stats.json"):
+            (out / name).write_text("{{}}\\n")
+    if mode == "extra_file":
+        (out / "extra.json").write_text("{{}}\\n")
+    if os.environ.get("FAKE_MUTATE_REPO"):
+        (Path.cwd() / "omegalax/data/qwen3_encoding.py").write_text("mutated")
 """
 
 
@@ -209,14 +280,9 @@ def production_inputs(tmp_path: Path) -> dict[str, Any]:
         path.write_text(relative)
     snapshot = tmp_path / "models--test" / "snapshots" / SNAPSHOT_REVISION
     snapshot.mkdir(parents=True)
-    for name in (
-        "config.json",
-        "preprocessor_config.json",
-        "tokenizer_config.json",
-        "tokenizer.json",
-        "special_tokens_map.json",
-    ):
-        (snapshot / name).write_text("{}")
+    for name in SNAPSHOT_FILES:
+        value = {"merge_size": 2} if name == "preprocessor_config.json" else {}
+        (snapshot / name).write_text(json.dumps(value))
     screenshots = tmp_path / "screenshots"
     screenshots.mkdir()
     image = io.BytesIO()
@@ -319,25 +385,17 @@ def _record_flags(
     return values
 
 
-def test_processor_snapshot_hashes_every_file_and_rejects_weights(tmp_path: Path) -> None:
+def test_processor_snapshot_requires_the_exact_qwen_file_set(tmp_path: Path) -> None:
     snapshot = tmp_path / "model" / "snapshots" / SNAPSHOT_REVISION
     snapshot.mkdir(parents=True)
-    for name in (
-        "config.json",
-        "preprocessor_config.json",
-        "tokenizer_config.json",
-        "tokenizer.json",
-    ):
-        (snapshot / name).write_text(name)
+    for name in SNAPSHOT_FILES:
+        value = {"merge_size": 2} if name == "preprocessor_config.json" else {}
+        (snapshot / name).write_text(json.dumps(value))
     identity = attest_processor_snapshot(snapshot)
-    assert set(identity["files"]) == {
-        "config.json",
-        "preprocessor_config.json",
-        "tokenizer_config.json",
-        "tokenizer.json",
-    }
-    (snapshot / "model.safetensors").write_bytes(b"weights")
-    with pytest.raises(ValueError, match="must not contain model weights"):
+    assert set(identity["files"]) == SNAPSHOT_FILES
+    assert identity["merge_size"] == 2
+    (snapshot / "model.SAFETENSORS").write_bytes(b"weights")
+    with pytest.raises(ValueError, match="files do not match"):
         attest_processor_snapshot(snapshot)
 
 
@@ -388,7 +446,9 @@ def test_stage_05_records_sealed_inputs_and_exact_cache(tmp_path: Path, producti
     source = make_source(tmp_path / "source", production_inputs["image_store"])
     output = _measure(tmp_path, production_inputs, source)
     (argv,) = _script_invocations(production_inputs["log"])
+    assert "--offline" in argv
     assert "--locked" in argv
+    assert "-I" in argv
     flags = _flags_of(argv)
     assert flags["model_id"] == flags["processor"] == str(production_inputs["snapshot"].resolve())
     manifest = json.loads((output / "manifest.json").read_text())
@@ -396,7 +456,7 @@ def test_stage_05_records_sealed_inputs_and_exact_cache(tmp_path: Path, producti
     assert manifest["inputs"]["source_id"] == make_artifact_id(source)
     assert manifest["params"]["omegalax"]["commit"] == COMMIT
     assert manifest["params"]["omegalax"]["tree"] == TREE
-    assert manifest["params"]["omegalax"]["capability"] == "assistant_loss_false_v1"
+    assert manifest["params"]["omegalax"]["capability"] == "vlm_sft_collator_loss_false_v1"
     assert manifest["params"]["processor_snapshot"]["revision"] == SNAPSHOT_REVISION
     assert "tokenizer.json" in manifest["params"]["processor_snapshot"]["files"]
     assert manifest["stats"]["cache"] == {
@@ -409,7 +469,12 @@ def test_stage_05_records_sealed_inputs_and_exact_cache(tmp_path: Path, producti
 
 @pytest.mark.parametrize(
     ("mode", "message"),
-    [("absent", "no cache"), ("empty", "cache keys"), ("malformed", "measurement")],
+    [
+        ("absent", "no cache"),
+        ("empty", "cache keys"),
+        ("malformed", "measurement"),
+        ("bad_vision_tokens", "vision token count"),
+    ],
 )
 def test_stage_05_rejects_invalid_cache(
     tmp_path: Path, production_inputs, mode: str, message: str
@@ -435,7 +500,7 @@ def test_stage_05_rejects_invalid_cache(
 
 def test_omegalax_capability_probe_is_required(tmp_path: Path, production_inputs) -> None:
     source = make_source(tmp_path / "source", production_inputs["image_store"])
-    env = {**production_inputs["env"], "FAKE_LOSS_PROBE": "[true, true]"}
+    env = {**production_inputs["env"], "FAKE_LOSS_PROBE": "[2, 2]"}
     result = _run(
         "stage_05_measure_lengths.py",
         env,
@@ -446,7 +511,48 @@ def test_omegalax_capability_probe_is_required(tmp_path: Path, production_inputs
         num_workers=2,
     )
     assert result.returncode != 0
-    assert "exclude loss:false" in result.stderr
+    assert "exclude loss:false history" in result.stderr
+
+
+def test_stage_05_rejects_compiler_changes_during_execution(
+    tmp_path: Path, production_inputs
+) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    env = {**production_inputs["env"], "FAKE_MUTATE_SNAPSHOT": "1"}
+    output = tmp_path / "lengths"
+    result = _run(
+        "stage_05_measure_lengths.py",
+        env,
+        output_dir=output,
+        source_path=source,
+        omegalax_repo=production_inputs["repo"],
+        processor_snapshot=production_inputs["snapshot"],
+        num_workers=2,
+    )
+    assert result.returncode != 0
+    assert "compiler identity changed" in result.stderr
+    assert not (output / "manifest.json").exists()
+
+
+def test_omegalax_attestation_rejects_consumed_untracked_files(
+    tmp_path: Path, production_inputs
+) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    env = {
+        **production_inputs["env"],
+        "FAKE_GIT_STATUS": "?? omegalax/injected.py",
+    }
+    result = _run(
+        "stage_05_measure_lengths.py",
+        env,
+        output_dir=tmp_path / "lengths",
+        source_path=source,
+        omegalax_repo=production_inputs["repo"],
+        processor_snapshot=production_inputs["snapshot"],
+        num_workers=2,
+    )
+    assert result.returncode != 0
+    assert "checkout has consumed changes" in result.stderr
 
 
 def test_stage_06_requires_matching_source_compiler_processor_and_digest(
@@ -501,7 +607,7 @@ def test_stage_06_builds_verified_nonempty_arrayrecords(tmp_path: Path, producti
             source,
             lengths,
             output_dir=output,
-            val_fraction=0.25,
+            val_fraction=0.3,
         ),
     )
     assert result.returncode == 0, result.stderr
@@ -511,7 +617,7 @@ def test_stage_06_builds_verified_nonempty_arrayrecords(tmp_path: Path, producti
         if any("build_sft_records" in argument for argument in argv)
     ]
     assert [_flags_of(argv)["split"] for argv in builds] == ["train", "val"]
-    assert all("--locked" in argv for argv in builds)
+    assert all("--offline" in argv and "--locked" in argv and "-I" in argv for argv in builds)
     manifest = json.loads((output / "manifest.json").read_text())
     assert manifest["inputs"]["source_id"] == make_artifact_id(source)
     assert manifest["inputs"]["message_lengths_id"] == make_artifact_id(lengths)
@@ -524,6 +630,33 @@ def test_stage_06_builds_verified_nonempty_arrayrecords(tmp_path: Path, producti
                 "num_records": 1,
             }
         }
+        assert {path.name for path in (output / row["split"]).iterdir()} == {
+            "metadata.json",
+            "part-00000.array_record",
+        }
+
+
+def test_stage_06_rejects_compiler_changes_during_execution(
+    tmp_path: Path, production_inputs
+) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    lengths = _measure(tmp_path, production_inputs, source)
+    output = tmp_path / "records"
+    env = {**production_inputs["env"], "FAKE_MUTATE_REPO": "1"}
+    result = _run(
+        "stage_06_training_records.py",
+        env,
+        **_record_flags(
+            tmp_path,
+            production_inputs,
+            source,
+            lengths,
+            output_dir=output,
+        ),
+    )
+    assert result.returncode != 0
+    assert "compiler identity changed" in result.stderr
+    assert not (output / "manifest.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -532,8 +665,14 @@ def test_stage_06_builds_verified_nonempty_arrayrecords(tmp_path: Path, producti
         ("absent", "metadata.json"),
         ("empty", "counts must be positive"),
         ("corrupt", "invalid Omegalax ArrayRecord"),
+        ("crc", "cannot read Omegalax record"),
         ("count_mismatch", "record count"),
         ("bad_metadata", "metadata values"),
+        ("length_overflow", "invalid Omegalax record"),
+        ("unsupervised", "invalid Omegalax record"),
+        ("noncanonical", "noncanonical Omegalax record"),
+        ("missing_sidecar", "output set"),
+        ("extra_file", "output set"),
     ],
 )
 def test_stage_06_rejects_invalid_record_artifacts(

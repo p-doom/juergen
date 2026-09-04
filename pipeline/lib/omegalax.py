@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -19,31 +20,42 @@ _TRACKED_PATHS = (
     "uv.lock",
 )
 _SNAPSHOT_REVISION = re.compile(r"[0-9a-f]{40}")
-_SNAPSHOT_REQUIRED_FILES = {
+_SNAPSHOT_FILES = {
+    "chat_template.json",
     "config.json",
+    "generation_config.json",
+    "merges.txt",
     "preprocessor_config.json",
     "tokenizer_config.json",
     "tokenizer.json",
-}
-_MODEL_WEIGHT_SUFFIXES = {
-    ".bin",
-    ".ckpt",
-    ".gguf",
-    ".h5",
-    ".msgpack",
-    ".onnx",
-    ".pt",
-    ".pth",
-    ".safetensors",
+    "vocab.json",
 }
 _LOSS_MASK_PROBE = """
 import json
-from omegalax.data.qwen3_encoding import message_is_supervised
-print(json.dumps([
-    message_is_supervised({"role": "assistant", "content": "history", "loss": False}),
-    message_is_supervised({"role": "assistant", "content": "target"}),
-]))
+import sys
+from transformers import AutoImageProcessor, AutoTokenizer
+from omegalax.data.collator_qwen3 import VLMSFTCollator
+
+snapshot = sys.argv[1]
+tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True)
+processor = AutoImageProcessor.from_pretrained(
+    snapshot, local_files_only=True, use_fast=False
+)
+collator = VLMSFTCollator(tokenizer, 32, processor)
+totals = []
+for message in (
+    {"role": "assistant", "content": "x", "loss": False},
+    {"role": "assistant", "content": "x"},
+):
+    batch = collator([{"messages": [message]}])
+    totals.append(int(batch["loss_mask_BT"].sum()))
+print(json.dumps(totals))
 """.strip()
+_COMPILED_SIDECARS = {
+    "sequence_lengths.jsonl",
+    "token_stats.json",
+    "truncation_stats.json",
+}
 
 
 def _sha256(path: Path) -> str:
@@ -52,6 +64,37 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def isolated_subprocess_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    for name in (
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "UV_NO_SYNC",
+        "UV_PROJECT_ENVIRONMENT",
+    ):
+        environment.pop(name, None)
+    environment.update(
+        HF_HUB_OFFLINE="1",
+        PYTHONNOUSERSITE="1",
+        TRANSFORMERS_OFFLINE="1",
+    )
+    return environment
+
+
+def omegalax_python(root: Path, *arguments: str) -> list[str]:
+    return [
+        "uv",
+        "run",
+        "--offline",
+        "--locked",
+        "--project",
+        str(root.resolve()),
+        "python",
+        "-I",
+        *arguments,
+    ]
 
 
 def attest_processor_snapshot(path: Path) -> dict[str, Any]:
@@ -64,25 +107,28 @@ def attest_processor_snapshot(path: Path) -> dict[str, Any]:
         raise ValueError(
             "model snapshot must be an existing Hugging Face snapshots/<40-hex-revision> directory"
         )
-    paths = sorted(path for path in resolved.rglob("*") if path.is_file())
+    paths = sorted(path for path in resolved.iterdir() if path.is_file())
     relative = {str(path.relative_to(resolved)): path for path in paths}
-    missing = _SNAPSHOT_REQUIRED_FILES - set(relative)
-    if missing:
+    observed = set(relative)
+    if observed != _SNAPSHOT_FILES or any(path.is_dir() for path in resolved.iterdir()):
         raise ValueError(
-            f"processor snapshot is missing required files: {sorted(missing)}"
+            "processor snapshot files do not match the Qwen3-VL contract: "
+            f"missing={sorted(_SNAPSHOT_FILES - observed)}, "
+            f"unexpected={sorted(observed - _SNAPSHOT_FILES)}"
         )
-    weights = [
-        name for name, item in relative.items() if item.suffix in _MODEL_WEIGHT_SUFFIXES
-    ]
-    if weights:
-        raise ValueError(
-            f"processor snapshot must not contain model weights: {weights}"
-        )
+    preprocessor = json.loads(relative["preprocessor_config.json"].read_text())
+    if not isinstance(preprocessor, dict) or preprocessor.get("merge_size") != 2:
+        raise ValueError("processor snapshot must declare merge_size=2")
     files = {name: _sha256(item) for name, item in relative.items()}
-    return {"path": str(resolved), "revision": resolved.name, "files": files}
+    return {
+        "path": str(resolved),
+        "revision": resolved.name,
+        "merge_size": 2,
+        "files": files,
+    }
 
 
-def attest_omegalax(root: Path) -> dict[str, Any]:
+def attest_omegalax(root: Path, processor_snapshot: dict[str, Any]) -> dict[str, Any]:
     root = root.resolve()
     if not root.is_dir():
         raise ValueError(f"Omegalax project is not a directory: {root}")
@@ -115,7 +161,7 @@ def attest_omegalax(root: Path) -> dict[str, Any]:
         text=True,
     ).stdout.strip()
     if status:
-        raise ValueError(f"Omegalax compiler checkout has tracked changes:\n{status}")
+        raise ValueError(f"Omegalax compiler checkout has consumed changes:\n{status}")
     tracked = subprocess.run(
         ["git", "ls-files", "-z", "--", *_TRACKED_PATHS],
         cwd=root,
@@ -129,42 +175,35 @@ def attest_omegalax(root: Path) -> dict[str, Any]:
     ):
         raise ValueError("Omegalax checkout is missing consumed tracked files")
     files = {name: _sha256(root / name) for name in names}
-    environment = dict(
-        os.environ,
-        HF_HUB_OFFLINE="1",
-        TRANSFORMERS_OFFLINE="1",
-    )
     probe = subprocess.run(
-        [
-            "uv",
-            "run",
-            "--locked",
-            "--project",
-            str(root),
-            "python",
+        omegalax_python(
+            root,
             "-c",
             _LOSS_MASK_PROBE,
-        ],
+            processor_snapshot["path"],
+        ),
         cwd=root,
-        env=environment,
+        env=isolated_subprocess_environment(),
         check=True,
         capture_output=True,
         text=True,
     ).stdout.strip()
-    if probe != "[false, true]":
+    if probe != "[0, 2]":
         raise ValueError(
-            "Omegalax must exclude loss:false assistant messages and supervise targets"
+            "Omegalax VLM collator must exclude loss:false history and supervise targets"
         )
     return {
         "path": str(root),
         "commit": head,
         "tree": tree,
         "files": files,
-        "capability": "assistant_loss_false_v1",
+        "capability": "vlm_sft_collator_loss_false_v1",
     }
 
 
-def validate_message_lengths(cache: Path, chat: Path) -> int:
+def validate_message_lengths(cache: Path, chat: Path, *, merge_size: int) -> int:
+    if merge_size <= 0:
+        raise ValueError("processor merge_size must be positive")
     expected_keys: list[tuple[int, int]] = []
     with chat.open(encoding="utf-8") as source:
         conversation_index = 0
@@ -240,6 +279,25 @@ def validate_message_lengths(cache: Path, chat: Path) -> int:
             if measurement["vision_patches"] != patches:
                 raise ValueError(
                     f"vision patch count mismatch at {cache}:{line_number}"
+                )
+            if any(
+                height % merge_size or width % merge_size
+                for _time, height, width in grid
+            ):
+                raise ValueError(
+                    f"image grid is not divisible by merge_size at {cache}:{line_number}"
+                )
+            vision_tokens = sum(
+                time * (height // merge_size) * (width // merge_size)
+                for time, height, width in grid
+            )
+            if measurement["vision_tokens"] != vision_tokens:
+                raise ValueError(
+                    f"vision token count mismatch at {cache}:{line_number}"
+                )
+            if vision_tokens > length:
+                raise ValueError(
+                    f"vision token count exceeds length at {cache}:{line_number}"
                 )
             if not grid and any(counters):
                 raise ValueError(
@@ -321,9 +379,34 @@ def validate_record_dataset(
         raise ValueError(
             f"Omegalax metadata shard sequence is invalid: {metadata_path}"
         )
-    observed_shards = sorted(path.name for path in output_dir.glob("*.array_record"))
-    if observed_shards != expected_shards:
-        raise ValueError(f"Omegalax shard set does not match metadata: {output_dir}")
+    expected_entries = {"metadata.json", *expected_shards, *_COMPILED_SIDECARS}
+    entries = {path.name: path for path in output_dir.iterdir()}
+    if set(entries) != expected_entries or any(
+        not path.is_file() for path in entries.values()
+    ):
+        raise ValueError(f"Omegalax output set does not match metadata: {output_dir}")
+    for name in _COMPILED_SIDECARS:
+        sidecar = entries[name]
+        if sidecar.stat().st_size == 0:
+            raise ValueError(f"empty Omegalax sidecar: {sidecar}")
+        sidecar.unlink()
+
+    source_sessions: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+    with source_chat.open(encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            messages = row["messages"]
+            session_id = f"{source_chat.stem}-{line_number:09d}"
+            source_sessions[session_id] = (
+                {
+                    key: value
+                    for key, value in row.items()
+                    if key not in {"messages", "session_id"}
+                },
+                messages,
+            )
 
     from array_record.python.array_record_module import ArrayRecordReader
 
@@ -336,10 +419,70 @@ def validate_record_dataset(
             raise ValueError(f"invalid Omegalax ArrayRecord: {path}")
         try:
             num_records = reader.num_records()
+            if num_records <= 0:
+                raise ValueError(f"empty Omegalax ArrayRecord: {path}")
+            for index in range(num_records):
+                try:
+                    payload = reader.read()
+                    record = json.loads(payload.decode("utf-8"))
+                except Exception as exc:
+                    raise ValueError(
+                        f"cannot read Omegalax record {index} from {path}"
+                    ) from exc
+                if not isinstance(record, dict) or payload != json.dumps(
+                    record, sort_keys=True
+                ).encode("utf-8"):
+                    raise ValueError(f"noncanonical Omegalax record {index} in {path}")
+                session_id = record.get("_omegalax_session_id")
+                measured = record.get("_omegalax_measured_length")
+                messages = record.get("messages")
+                if (
+                    not isinstance(session_id, str)
+                    or session_id not in source_sessions
+                    or isinstance(measured, bool)
+                    or not isinstance(measured, int)
+                    or not 0 < measured <= max_length
+                    or not isinstance(messages, list)
+                    or not messages
+                    or not any(
+                        isinstance(message, dict)
+                        and message.get("role") == "assistant"
+                        and message.get("loss", True) is True
+                        for message in messages
+                    )
+                ):
+                    raise ValueError(f"invalid Omegalax record {index} in {path}")
+                expected_metadata, source_messages = source_sessions[session_id]
+                observed_metadata = {
+                    key: value
+                    for key, value in record.items()
+                    if key
+                    not in {
+                        "_omegalax_measured_length",
+                        "_omegalax_session_id",
+                        "messages",
+                    }
+                }
+                if observed_metadata != expected_metadata or not any(
+                    messages == source_messages[start : start + len(messages)]
+                    for start in range(len(source_messages) - len(messages) + 1)
+                ):
+                    raise ValueError(
+                        f"Omegalax record {index} does not match source chat"
+                    )
+            try:
+                reader.read()
+            except IndexError:
+                pass
+            else:
+                raise ValueError(f"Omegalax ArrayRecord has uncounted records: {path}")
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"cannot read Omegalax ArrayRecord: {path}") from exc
         finally:
-            reader.close()
-        if num_records <= 0:
-            raise ValueError(f"empty Omegalax ArrayRecord: {path}")
+            with contextlib.suppress(Exception):
+                reader.close()
         total_records += num_records
         shards[name] = {"sha256": _sha256(path), "num_records": num_records}
     if total_records != metadata["num_records"]:

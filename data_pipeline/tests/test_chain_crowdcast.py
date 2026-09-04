@@ -96,12 +96,17 @@ def chain(monkeypatch, tmp_path: Path):
     snapshot = tmp_path / "model" / "snapshots" / ("a" * 40)
     snapshot.mkdir(parents=True)
     for name in (
+        "chat_template.json",
         "config.json",
+        "generation_config.json",
+        "merges.txt",
         "preprocessor_config.json",
-        "tokenizer_config.json",
         "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.json",
     ):
-        (snapshot / name).write_text("{}")
+        value = {"merge_size": 2} if name == "preprocessor_config.json" else {}
+        (snapshot / name).write_text(json.dumps(value))
 
     monkeypatch.setenv("LABCTL_DATASETS_ROOT", str(datasets))
     monkeypatch.setenv("JUERGEN_REPO", str(REPO_ROOT))
@@ -111,7 +116,11 @@ def chain(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("SFT_PROCESSOR_SNAPSHOT", str(snapshot))
     sys.modules.pop("configs.chain_crowdcast", None)
     module = importlib.import_module("configs.chain_crowdcast")
-    monkeypatch.setattr(module, "attest_omegalax", lambda path: {"path": str(path)})
+    monkeypatch.setattr(
+        module,
+        "attest_omegalax",
+        lambda path, processor_snapshot: {"path": str(path)},
+    )
     return module, master, clips
 
 

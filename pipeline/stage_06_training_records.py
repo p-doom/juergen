@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -27,6 +26,8 @@ from pipeline.lib.manifest import (
 from pipeline.lib.omegalax import (
     attest_omegalax,
     attest_processor_snapshot,
+    isolated_subprocess_environment,
+    omegalax_python,
     validate_message_lengths,
     validate_record_dataset,
 )
@@ -99,15 +100,8 @@ def _run_split(
     processor_snapshot: dict,
 ) -> dict:
     out_split_dir.mkdir(parents=True, exist_ok=True)
-    for shard in out_split_dir.glob("*.array_record"):
-        shard.unlink()
-    cmd = [
-        "uv",
-        "run",
-        "--locked",
-        "--project",
-        FLAGS.omegalax_repo,
-        "python",
+    cmd = omegalax_python(
+        Path(FLAGS.omegalax_repo),
         "scripts/build_sft_records_from_chat.py",
         f"--data_path={src_chat}",
         f"--out_dir={out_split_dir}",
@@ -121,18 +115,13 @@ def _run_split(
         f"--split={split}",
         "--overwrite",
         f"--message_lengths_path={cache_path}",
-    ]
+    )
     print(f"[stage_records] {split}: {' '.join(cmd)}", flush=True)
     t0 = time.time()
-    environment = dict(
-        os.environ,
-        HF_HUB_OFFLINE="1",
-        TRANSFORMERS_OFFLINE="1",
-    )
     rc = subprocess.run(
         cmd,
-        cwd=FLAGS.omegalax_repo,
-        env=environment,
+        cwd=Path(FLAGS.omegalax_repo).resolve(),
+        env=isolated_subprocess_environment(),
         check=False,
     ).returncode
     elapsed = time.time() - t0
@@ -232,7 +221,14 @@ def _resolve_cache(
         raise ValueError(
             f"message-length cache digest mismatch: expected {expected}, got {observed}"
         )
-    if validate_message_lengths(path, source_chat) != cache["n_messages"]:
+    if (
+        validate_message_lengths(
+            path,
+            source_chat,
+            merge_size=processor_snapshot["merge_size"],
+        )
+        != cache["n_messages"]
+    ):
         raise ValueError("message-length cache count mismatch")
     return path, make_artifact_id(root)
 
@@ -245,11 +241,20 @@ def main(_) -> None:
     lengths_root = Path(FLAGS.message_lengths_path).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "manifest.json").unlink(missing_ok=True)
+    unexpected = [
+        path for path in output_dir.iterdir() if path.name not in {"train", "val"}
+    ]
+    if unexpected:
+        raise ValueError(f"unexpected Stage06 output entries: {unexpected}")
+    for split in ("train", "val"):
+        path = output_dir / split
+        if path.exists():
+            shutil.rmtree(path)
 
     src_chat = resolve_chat_artifact(source_path)
     source_id = make_artifact_id(source_path)
-    omegalax = attest_omegalax(Path(FLAGS.omegalax_repo))
     processor_snapshot = attest_processor_snapshot(Path(FLAGS.processor_snapshot))
+    omegalax = attest_omegalax(Path(FLAGS.omegalax_repo), processor_snapshot)
     cache_path, cache_id = _resolve_cache(
         lengths_root,
         source_id,
@@ -258,20 +263,34 @@ def main(_) -> None:
         omegalax,
     )
     splits = ("train", "val") if FLAGS.val_fraction > 0.0 else ("train",)
-    for split in ("train", "val"):
-        path = output_dir / split
-        if path.exists():
-            shutil.rmtree(path)
-    per_split = [
-        _run_split(
+    per_split = []
+    for split in splits:
+        result = _run_split(
             split,
             src_chat,
             output_dir / split,
             cache_path,
             processor_snapshot,
         )
-        for split in splits
-    ]
+        post_processor = attest_processor_snapshot(Path(FLAGS.processor_snapshot))
+        post_omegalax = attest_omegalax(Path(FLAGS.omegalax_repo), post_processor)
+        if post_processor != processor_snapshot or post_omegalax != omegalax:
+            raise RuntimeError("Stage06 compiler identity changed during execution")
+        if (
+            resolve_chat_artifact(source_path) != src_chat
+            or make_artifact_id(source_path) != source_id
+        ):
+            raise RuntimeError("Stage06 source changed during execution")
+        observed_cache_path, observed_cache_id = _resolve_cache(
+            lengths_root,
+            source_id,
+            src_chat,
+            processor_snapshot,
+            omegalax,
+        )
+        if observed_cache_path != cache_path or observed_cache_id != cache_id:
+            raise RuntimeError("Stage06 cache changed during execution")
+        per_split.append(result)
 
     write_manifest(
         output_dir,
@@ -281,9 +300,9 @@ def main(_) -> None:
             "max_length": FLAGS.max_length,
             "records_per_shard": FLAGS.records_per_shard,
             "num_workers": FLAGS.num_workers,
-            "omegalax_repo": FLAGS.omegalax_repo,
+            "omegalax_repo": omegalax["path"],
             "omegalax": omegalax,
-            "message_lengths_path": FLAGS.message_lengths_path,
+            "message_lengths_path": str(lengths_root),
             "val_fraction": FLAGS.val_fraction,
         },
         inputs={

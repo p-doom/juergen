@@ -679,7 +679,14 @@ def test_labctl_chain_requires_and_connects_omegalax_scripts(monkeypatch, tmp_pa
     monkeypatch.setitem(sys.modules, "pmanager.configs", types.ModuleType("pmanager.configs"))
     monkeypatch.setitem(sys.modules, "pmanager.configs.schema", schema)
     module = importlib.import_module("configs.chain_cua_gym_parity")
-    monkeypatch.setattr(module, "attest_omegalax", lambda path: {"path": str(path)})
+
+    def attest(path, processor_snapshot):
+        required = path / "scripts" / "measure_message_lengths_from_chat.py"
+        if not required.is_file():
+            raise RuntimeError(f"OMEGALAX_REPO is missing {required.name}")
+        return {"path": str(path)}
+
+    monkeypatch.setattr(module, "attest_omegalax", attest)
 
     screenshots = tmp_path / "screenshots"
     screenshots.mkdir()
@@ -692,12 +699,17 @@ def test_labctl_chain_requires_and_connects_omegalax_scripts(monkeypatch, tmp_pa
     snapshot = tmp_path / "model" / "snapshots" / ("a" * 40)
     snapshot.mkdir(parents=True)
     for name in (
+        "chat_template.json",
         "config.json",
+        "generation_config.json",
+        "merges.txt",
         "preprocessor_config.json",
-        "tokenizer_config.json",
         "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.json",
     ):
-        (snapshot / name).write_text("{}")
+        value = {"merge_size": 2} if name == "preprocessor_config.json" else {}
+        (snapshot / name).write_text(json.dumps(value))
     monkeypatch.setenv("LABCTL_DATASETS_ROOT", str(datasets))
     monkeypatch.setenv("CUA_GYM_SCREENSHOTS_DIR", str(screenshots))
     monkeypatch.setenv("CUA_GYM_TRAJECTORIES", str(trajectories))

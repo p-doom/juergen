@@ -84,8 +84,8 @@ def get_config():
     master = _required_dir("CROWDCAST_MASTER_DIR")
     clips = _required_file("CROWDCAST_CLIPS_MANIFEST")
     omegalax = _required_dir("OMEGALAX_REPO")
-    attest_omegalax(omegalax)
     processor_snapshot = attest_processor_snapshot(_required_dir("SFT_PROCESSOR_SNAPSHOT"))
+    attest_omegalax(omegalax, processor_snapshot)
     master_manifest = _manifest(
         master / "manifest.json",
         {
@@ -122,13 +122,6 @@ def get_config():
         for row in clip_rows
     ):
         raise RuntimeError("CROWDCAST_CLIPS_MANIFEST contains an unclosed alignment")
-    for relative in (
-        "scripts/measure_message_lengths_from_chat.py",
-        "scripts/build_sft_records_from_chat.py",
-    ):
-        if not (omegalax / relative).is_file():
-            raise RuntimeError(f"OMEGALAX_REPO is missing {relative}")
-
     filter_name = f"{TAG}_stage_03_filter"
     goals_name = f"{TAG}_stage_03b_describe_extract"
     conversations_name = f"{TAG}_stage_04_conversations"

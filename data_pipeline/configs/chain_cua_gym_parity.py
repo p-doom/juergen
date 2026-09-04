@@ -71,15 +71,8 @@ def get_config():
     screenshots = _required_dir("CUA_GYM_SCREENSHOTS_DIR")
     trajectories = _required_file("CUA_GYM_TRAJECTORIES")
     omegalax = _required_dir("OMEGALAX_REPO")
-    attest_omegalax(Path(omegalax))
     processor_snapshot = attest_processor_snapshot(Path(_required_dir("SFT_PROCESSOR_SNAPSHOT")))
-    for relative in (
-        "scripts/measure_message_lengths_from_chat.py",
-        "scripts/build_sft_records_from_chat.py",
-    ):
-        if not (Path(omegalax) / relative).is_file():
-            raise RuntimeError(f"OMEGALAX_REPO is missing {relative}")
-
+    attest_omegalax(Path(omegalax), processor_snapshot)
     stage_01_name = f"{TAG}_stage_01_images"
     stage_03_name = f"{TAG}_stage_03_curated"
     stage_04_name = f"{TAG}_stage_04_conversations"
