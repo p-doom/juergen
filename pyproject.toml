@@ -9,10 +9,9 @@ dependencies = [
     # DisplayGeometry.
     "desktop",
     "av>=16.1.0",
-    # `verifiers.v1` is the framework agent/ and evals/ are written against:
-    # fifteen modules do `import verifiers.v1 as vf`, every Taskset/Harness/Task/
-    # Config base comes from it, and `evals/signoflife` is a verifiers plugin
-    # package (its `__all__` contract is verifiers').
+    # `verifiers.v1` is the framework agent/ is written against: `ModelContext`,
+    # `Sampling` and the trace types are its, and the transports post to its
+    # interception endpoint.
     #
     # Pinned exactly, not floored: `loaders._plugin_class`, `narrow_plugin_field`
     # and the `Harness.launch(endpoint, secret, ...)` signature are unversioned
@@ -85,10 +84,10 @@ override-dependencies = [
 # and `uv lock` re-run. That is the point. The divergence was always there; now
 # it is stated instead of silently followed.
 #
-# The import name is the constraint that fixed the name. `evals/osworld.py`
-# imports OSWorld's `desktop_env.controllers.setup` and `desktop_env.evaluators`
-# to score the benchmark, in this process -- and sys.path cannot override an
-# entry already in sys.modules, so our package must not own `desktop_env`.
+# The import name is the constraint that fixed the name. An OSWorld-scoring
+# process imports `desktop_env.controllers.setup` and `desktop_env.evaluators`
+# alongside ours -- and sys.path cannot override an entry already in sys.modules,
+# so our package must not own `desktop_env`.
 # `desktop` is distinct from it, but it is not unclaimed: PyPI's `desktop` 0.4.2
 # is a different package with the same distribution AND import name. This source
 # entry is read only by uv, so `pip install .` resolves that one from the index
@@ -105,33 +104,23 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-# The flat plugin ids. verifiers 0.2.1 cannot resolve a dotted one (see
-# signoflife.py), so each is a module at the repo root -- and a root module is
-# not a package, so `packages.find` never sees it. Left out of the wheel they
-# resolve only from a cwd that happens to be the checkout, and every
-# `--taskset.id` breaks the moment a run is dispatched from anywhere else.
+# A root module is not a package, so `packages.find` never sees it; left out of
+# the wheel it resolves only from a cwd that happens to be the checkout.
 py-modules = [
-    # Not a plugin id. The image-domain spelling `agent/` and `pipeline/` both
-    # write, flat because `pipeline/` runs in a venv without `verifiers` and so
-    # can import nothing under `agent/`.
+    # The image-domain spelling `agent/` and `pipeline/` both write, flat because
+    # `pipeline/` runs in a venv without `verifiers` and so can import nothing
+    # under `agent/`.
     "image_domain",
-    "osworld_bench",
-    "signoflife",
 ]
 
 [tool.setuptools.packages.find]
-# Their import closure: they re-export from evals/, evals/ imports agent/, and
-# agent/ imports grammars/. Shipping only grammars/ made every one of them
-# uninstallable. pipeline/ and eval/ are deliberately absent: labctl invokes both
-# as file paths in a checkout, nothing imports them. eval/ additionally *cannot*
-# be packaged -- its modules import each other flat (`import cua_micro_oracle`),
-# so it only resolves with itself on sys.path, and `eval` as a top-level module
-# name shadows the builtin.
-include = ["agent", "agent.*", "evals", "evals.*", "grammars", "grammars.*"]
+# `image_domain` re-exports nothing but agent/ imports grammars/, and shipping
+# only grammars/ made the episode driver uninstallable. pipeline/ and eval/ are
+# deliberately absent: labctl invokes both as file paths in a checkout, nothing
+# imports them. eval/ additionally *cannot* be packaged -- its modules import
+# each other flat (`import cua_micro_oracle`), so it only resolves with itself on
+# sys.path, and `eval` as a top-level module name shadows the builtin.
+include = ["agent", "agent.*", "grammars", "grammars.*"]
 
 [tool.setuptools.package-data]
 "*" = ["vectors/*.json"]
-# `SUITE_PATH = Path(__file__).with_name("suite.json")`: the sign-of-life cell
-# table is read beside its module, and a wheel built straight from the tree (what
-# `uv sync` and `pip install .` do) carries no data file nobody names here.
-"evals.signoflife" = ["suite.json"]

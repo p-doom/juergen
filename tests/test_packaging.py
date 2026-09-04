@@ -30,16 +30,17 @@ import pytest
 _REPO = Path(__file__).resolve().parent.parent
 _DESKTOP = _REPO.parent / "desktop"
 
-FLAT_PLUGIN_IDS = (
-    "osworld_bench",
-    "signoflife",
-)
+# The one flat module left in `[tool.setuptools] py-modules`. It is not a plugin
+# id -- it is the image-domain spelling `agent/` and `pipeline/` both write, flat
+# because `pipeline/` runs in a venv without `verifiers` and so can import nothing
+# under `agent/`.
+FLAT_MODULES = ("image_domain",)
 
-PROBED = FLAT_PLUGIN_IDS + (
+PROBED = FLAT_MODULES + (
+    "agent.agent",
     "grammars",
     "desktop.geometry",
     "desktop.ir",
-    "evals.signoflife.suite",
 )
 
 # Nothing a build reads, and `build/` in particular is poison: setuptools copies
@@ -102,10 +103,17 @@ def resolved(tmp_path_factory) -> tuple[Path, dict[str, Path]]:
     return site, {name: Path(path) for name, path in json.loads(process.stdout).items()}
 
 
-@pytest.mark.parametrize("plugin_id", FLAT_PLUGIN_IDS)
-def test_every_flat_plugin_id_imports_out_of_the_wheel(resolved, plugin_id: str) -> None:
+@pytest.mark.parametrize("flat_module", FLAT_MODULES)
+def test_every_flat_module_imports_out_of_the_wheel(resolved, flat_module: str) -> None:
     site, files = resolved
-    assert files[plugin_id].is_relative_to(site)
+    assert files[flat_module].is_relative_to(site)
+
+
+def test_the_episode_driver_imports_out_of_the_wheel(resolved) -> None:
+    # `agent/` is named in `packages.find`, and nothing else here probes it: the
+    # flat modules are one declaration and the package list is another.
+    site, files = resolved
+    assert files["agent.agent"].is_relative_to(site)
 
 
 def test_grammars_imports_with_only_the_wheels_on_the_path(resolved) -> None:
@@ -122,14 +130,6 @@ def test_the_desktop_that_answers_is_ours_and_not_the_index_one(resolved) -> Non
     site, files = resolved
     assert files["desktop.geometry"].is_relative_to(site)
     assert files["desktop.ir"].is_relative_to(site)
-
-
-def test_the_sign_of_life_cell_table_ships_beside_its_module(resolved) -> None:
-    # `suite.py` reads `Path(__file__).with_name("suite.json")`, so a data file
-    # left out of the wheel is a missing file at dispatch, not an import error.
-    # It was left out: only `vectors/*.json` was declared.
-    _, files = resolved
-    assert (files["evals.signoflife.suite"].parent / "suite.json").is_file()
 
 
 def test_the_pinned_desktop_source_resolves_where_a_path_could_not() -> None:

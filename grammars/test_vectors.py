@@ -193,6 +193,19 @@ def test_invalid_compile(name, payload, case):
         _codec(name).compile(case["text"], geometry, cursor)
 
 
+def test_the_same_bytes_mean_different_actions_in_the_paired_arms():
+    """Identical text in paired grammars must compile to distinct actions."""
+    text = "0 0 0 ; +LMB -LMB"
+    geometry = DisplayGeometry(desktop_width=1920, desktop_height=1080)
+    cursor = (640, 480)
+    absolute = grammars.load("compact_absolute").compile(text, geometry, cursor)
+    relative = grammars.load("compact_raw").compile(text, geometry, cursor)
+    absolute_moves = [tuple(op.args[:2]) for op in absolute if op.kind in _MOVE_KINDS]
+    relative_moves = [tuple(op.args[:2]) for op in relative if op.kind in _MOVE_KINDS]
+    assert absolute_moves == [(0, 0)], absolute_moves
+    assert relative_moves in ([], [cursor]), relative_moves
+
+
 _MOVE_KINDS = ("move_to", "glide_to")
 
 #: Per grammar: a move the display cannot honour, the same turn asking to stay

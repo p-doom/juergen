@@ -268,8 +268,8 @@ def _content(message: Any) -> str:
 
     Every grammar spells its action inside `content`, including the `<tool_call>`
     blocks the native grammars emit — those are text the codec parses. Probed
-    against the serving path the evals use (sglang 0.5.10.post1 launched by
-    `evals/signoflife/__main__.py`, no `--tool-call-parser`): `content` carried the
+    against the serving path the evals use (sglang 0.5.10.post1, launched without
+    `--tool-call-parser`): `content` carried the
     block and `tool_calls` was null on both an off-the-shelf 4B and a LoRA-merged
     checkpoint, even when the request offered a tool schema. A server that does
     populate `tool_calls` — one with a tool-call parser, or a provider injecting its

@@ -1,4 +1,4 @@
-"""Shared doubles for the agent/ evals/ suite.
+"""Shared doubles for the agent/ suite.
 
 A `FakeSession` records the argv it was handed and replays canned stdout, because
 every guest interaction in this module is "run one command, read one marker line".
@@ -18,8 +18,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 import verifiers.v1 as vf
-
-from evals.tasks import DesktopState, DesktopTaskData
 
 _CONVERT = "juergen_datasets_convert"
 
@@ -214,33 +212,3 @@ def make_ctx(
         client=FakeClient(replies),  # type: ignore[arg-type]
         sampling=vf.Sampling(**sampling),
     )
-
-
-def make_task_data(**kwargs: Any) -> DesktopTaskData:
-    base: dict[str, Any] = {
-        "idx": 0,
-        "name": "cell",
-        "prompt": "do the thing",
-        "instruction": "do the thing",
-        "kind": "none",
-        "max_steps": 3,
-    }
-    base.update(kwargs)
-    return DesktopTaskData(**base)
-
-
-def make_trace(
-    data: DesktopTaskData | None = None,
-    *,
-    task_type: str = "DesktopTask",
-    episode: dict[str, Any] | None = None,
-) -> vf.Trace:
-    trace = vf.Trace(
-        task=vf.TraceTask(type=task_type, data=data or make_task_data()),
-        state=DesktopState(),
-    )
-    if episode is not None:
-        from evals.tasks import RESULT_KEY
-
-        trace.info[RESULT_KEY] = episode
-    return trace

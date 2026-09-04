@@ -18,31 +18,34 @@ then runs the complete `pytest -q tests grammars` gate. A shared mutable venv do
 not earn release credit. Do not tag or publish a commit unless its final local
 gate is green.
 
-## Evaluation results
+## Evaluation
 
-`python -m evals.signoflife` requires an absent absolute output path. It creates
-that run ID before external/server/desktop resources; a crash leaves a visible
-uncommitted orphan that must be audited before manual removal. Completion exists
-only when `RESULT_COMMITTED.json` is present and the exhaustive generation can be
-read through:
+The one eval in this repo is the CUA micro-eval, under `eval/`. It scores a
+checkpoint on a small state-verifiable suite of atomic and short-horizon desktop
+tasks: each attempt starts from a fresh VM, every step is semantically gated
+against realized guest state, and four sampled attempts per task give pass@1 and
+pass@4.
 
-```python
-from pathlib import Path
-from evals.signoflife.__main__ import read_committed_result
-
-result = read_committed_result(Path("/absolute/run/path"))
+```bash
+cd eval && python cua_micro_eval.py --model_path <hf-checkout> --output_dir <dir>
 ```
 
-That marker proves atomic transport completion, not authorization or promotion.
-Promotion additionally requires the Labctl DB-bound exhaustive result receipt
-named by `result["promotion_evidence"]["required_receipt"]`.
+Run it from `eval/`: its modules import each other flat, so the directory has to
+be on `sys.path`. It launches its own SGLang server out of `eval/pyproject.toml`
+-- a separate resolve, deliberately not a member of this workspace, because that
+stack is the CUDA/torch one this repo otherwise does not carry.
 
-External OpenAI-compatible servers are unsupported by the canonical evaluator.
-It rejects the presence of `SIGN_OF_LIFE_API_KEY` before argument parsing or
-resource acquisition and launches only a local no-auth loopback SGLang server.
-Causal evaluation remains blocked until the registered model generation, sealed
-runtime, inherited listener, host GPU/driver boundary, and registrar contracts
-are all production-authoritative.
+`eval/README.md` documents the suite, the action format and the task table. Its
+unit tests are not part of the `tests grammars` gate and run separately:
+
+```bash
+cd eval && python -m pytest -q .
+```
+
+Three of the suite's own contract tests are `xfail(strict)`: they assert a shape
+`cua_micro_tasks.json` no longer has, and they fail the same way on the branch
+this was ported from. The task set is frozen because the suite's value is a
+calibrated reference, so neither side was edited to agree.
 
 ## Nightly model-estate check
 
