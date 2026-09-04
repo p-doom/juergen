@@ -30,25 +30,41 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from pipeline.lib.manifest import make_artifact_id, write_manifest  # noqa: E402
+from pipeline.lib.manifest import (
+    make_artifact_id,
+    resolve_chat_artifact,
+    write_manifest,
+)
 
 FLAGS = flags.FLAGS
 
 MESSAGE_LENGTHS_FILENAME = "message_lengths.jsonl"
 
 # pmanager-injected:
-flags.DEFINE_string("output_dir", None, "Message-length cache output dir.", required=True)
 flags.DEFINE_string(
-    "source_path", None, "Conversations dataset root (stage 04, with a single chat.jsonl).",
+    "output_dir", None, "Message-length cache output dir.", required=True
+)
+flags.DEFINE_string(
+    "source_path",
+    None,
+    "Conversations dataset root (stage 04, with a single chat.jsonl).",
     required=True,
 )
 # Stage-specific:
 flags.DEFINE_string(
-    "omegalax_repo", None, "Path to omegalax repo root (used as uv --project).", required=True
+    "omegalax_repo",
+    None,
+    "Path to omegalax repo root (used as uv --project).",
+    required=True,
 )
-flags.DEFINE_string("model_id", None, "Model id (resolves the tokenizer).", required=True)
 flags.DEFINE_string(
-    "processor", None, "HF repo for image processor config (defaults to model_id).", required=True
+    "model_id", None, "Model id (resolves the tokenizer).", required=True
+)
+flags.DEFINE_string(
+    "processor",
+    None,
+    "HF repo for image processor config (defaults to model_id).",
+    required=True,
 )
 flags.DEFINE_integer(
     "num_workers",
@@ -91,12 +107,7 @@ def main(_) -> None:
     source_path = Path(FLAGS.source_path)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    src_chat = source_path / "chat.jsonl"
-    if not src_chat.is_file():
-        raise FileNotFoundError(
-            f"no chat.jsonl under {source_path} (stage 04 writes a single "
-            f"<source>/chat.jsonl)"
-        )
+    src_chat = resolve_chat_artifact(source_path)
     # Identity, not just a path: stage 06 reuses this cache and must be able to
     # refuse one measured from a different chat.jsonl.
     source_id = make_artifact_id(source_path)

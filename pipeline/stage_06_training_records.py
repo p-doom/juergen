@@ -33,8 +33,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from pipeline.lib.goals import assert_same_artifact  # noqa: E402
-from pipeline.lib.manifest import make_artifact_id, write_manifest  # noqa: E402
+from pipeline.lib.goals import assert_same_artifact
+from pipeline.lib.manifest import (
+    make_artifact_id,
+    resolve_chat_artifact,
+    write_manifest,
+)
 
 FLAGS = flags.FLAGS
 
@@ -46,19 +50,31 @@ MESSAGE_LENGTHS_FILENAME = "message_lengths.jsonl"
 # pmanager-injected:
 flags.DEFINE_string("output_dir", None, "Inline-records output dir.", required=True)
 flags.DEFINE_string(
-    "source_path", None, "Conversations dataset root (stage 04, with a single chat.jsonl).",
+    "source_path",
+    None,
+    "Conversations dataset root (stage 04, with a single chat.jsonl).",
     required=True,
 )
 # Stage-specific:
 flags.DEFINE_string(
-    "omegalax_repo", None, "Path to omegalax repo root (used as uv --project).", required=True
+    "omegalax_repo",
+    None,
+    "Path to omegalax repo root (used as uv --project).",
+    required=True,
 )
-flags.DEFINE_string("model_id", None, "Model id (resolves the tokenizer).", required=True)
 flags.DEFINE_string(
-    "processor", None, "HF repo for image processor config (defaults to model_id).", required=True
+    "model_id", None, "Model id (resolves the tokenizer).", required=True
+)
+flags.DEFINE_string(
+    "processor",
+    None,
+    "HF repo for image processor config (defaults to model_id).",
+    required=True,
 )
 flags.DEFINE_integer("max_length", None, "Max sequence length.", required=True)
-flags.DEFINE_integer("records_per_shard", None, "Records per output shard.", required=True)
+flags.DEFINE_integer(
+    "records_per_shard", None, "Records per output shard.", required=True
+)
 flags.DEFINE_integer(
     "num_workers",
     None,
@@ -99,7 +115,9 @@ flags.DEFINE_float(
 )
 
 
-def _run_split(split: str, src_chat: Path, out_split_dir: Path, cache_path: Path | None) -> dict:
+def _run_split(
+    split: str, src_chat: Path, out_split_dir: Path, cache_path: Path | None
+) -> dict:
     """One build_sft_records_from_chat.py invocation for one recording-level split.
     ``--split`` makes the builder emit only that split from the single chat.jsonl;
     ``cache_path`` is the (split-agnostic) message_lengths.jsonl to reuse."""
@@ -130,7 +148,9 @@ def _run_split(split: str, src_chat: Path, out_split_dir: Path, cache_path: Path
     rc = subprocess.run(cmd, cwd=FLAGS.omegalax_repo, check=False).returncode
     elapsed = time.time() - t0
     if rc != 0:
-        raise RuntimeError(f"build_sft_records_from_chat.py failed (rc={rc}) for {split}")
+        raise RuntimeError(
+            f"build_sft_records_from_chat.py failed (rc={rc}) for {split}"
+        )
     n_shards = sum(1 for _ in out_split_dir.glob("*.array_record"))
     return {"split": split, "n_shards": n_shards, "elapsed_s": int(elapsed)}
 
@@ -138,22 +158,21 @@ def _run_split(split: str, src_chat: Path, out_split_dir: Path, cache_path: Path
 def main(_) -> None:
     output_dir = Path(FLAGS.output_dir)
     source_path = Path(FLAGS.source_path)
-    lengths_root = Path(FLAGS.message_lengths_path) if FLAGS.message_lengths_path else None
+    lengths_root = (
+        Path(FLAGS.message_lengths_path) if FLAGS.message_lengths_path else None
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    src_chat = source_path / "chat.jsonl"
-    if not src_chat.is_file():
-        raise FileNotFoundError(
-            f"no chat.jsonl under {source_path} (stage 04 writes a single "
-            f"<source>/chat.jsonl)"
-        )
+    src_chat = resolve_chat_artifact(source_path)
     source_id = make_artifact_id(source_path)
     cache_path = None
     if lengths_root is not None:
         # Per-message lengths are independent of max_length / overflow_mode /
         # split, but NOT of the chat that produced them: a cache measured from
         # another dataset would silently pack this one at the wrong lengths.
-        measured_id = json.loads((lengths_root / "manifest.json").read_text())["inputs"]["source_id"]
+        measured_id = json.loads((lengths_root / "manifest.json").read_text())[
+            "inputs"
+        ]["source_id"]
         assert_same_artifact(measured_id, source_id, what="message-length cache source")
         cache_path = lengths_root / MESSAGE_LENGTHS_FILENAME
     splits = ("train", "val") if FLAGS.val_fraction > 0.0 else ("train",)

@@ -24,6 +24,28 @@ _CLICKS = {
 }
 _NO_OPS = {"wait", "screenshot"}
 _UNSUPPORTED = {"call_user", "answer"}
+_FIELDS = {
+    "terminate": ({"action", "status"}, {"status"}),
+    "wait": ({"action", "time"}, {"time"}),
+    "screenshot": ({"action"}, set()),
+    "mouse_move": ({"action", "coordinate"}, {"coordinate"}),
+    "left_click": ({"action", "coordinate"}, set()),
+    "right_click": ({"action", "coordinate"}, set()),
+    "middle_click": ({"action", "coordinate"}, set()),
+    "double_click": ({"action", "coordinate"}, set()),
+    "triple_click": ({"action", "coordinate"}, set()),
+    "left_click_drag": ({"action", "coordinate"}, {"coordinate"}),
+    "left_mouse_down": ({"action", "coordinate"}, set()),
+    "left_mouse_up": ({"action", "coordinate"}, set()),
+    "key": ({"action", "keys"}, {"keys"}),
+    "key_down": ({"action", "keys"}, {"keys"}),
+    "key_up": ({"action", "keys"}, {"keys"}),
+    "type": ({"action", "text"}, {"text"}),
+    "scroll": ({"action", "pixels"}, {"pixels"}),
+    "hscroll": ({"action", "pixels"}, {"pixels"}),
+    "call_user": ({"action", "text"}, {"text"}),
+    "answer": ({"action", "text"}, {"text"}),
+}
 
 
 class UnsupportedSourceAction(ValueError):
@@ -96,8 +118,8 @@ def _move(
         return [], None
     width, height = _size(geometry)
     delta = (
-        grid_from_pixels(target[0], width) - grid_from_pixels(cursor[0], width),
-        grid_from_pixels(target[1], height) - grid_from_pixels(cursor[1], height),
+        grid_from_pixels(target[0] - cursor[0], width),
+        grid_from_pixels(target[1] - cursor[1], height),
     )
     return (
         [] if delta == (0, 0) else [Primitive("move", dx=delta[0], dy=delta[1])]
@@ -120,6 +142,8 @@ def _keys(value: object) -> list[str]:
 
 
 def _typing(text: str) -> list[Primitive]:
+    if not text:
+        raise ValueError("type text must be non-empty")
     primitives: list[Primitive] = []
     run: list[str] = []
 
@@ -153,31 +177,42 @@ def translate_step(
     if not isinstance(arguments, dict):
         raise TypeError(f"computer_use arguments must be an object, got {arguments!r}")
     action = arguments.get("action")
-    if action in _UNSUPPORTED:
-        raise UnsupportedSourceAction(str(action))
     if not isinstance(action, str):
         raise TypeError(f"computer_use action must be text, got {action!r}")
+    if action not in _FIELDS:
+        raise ValueError(f"unsupported computer_use action: {action!r}")
+    permitted, required = _FIELDS[action]
+    extra = set(arguments) - permitted
+    missing = required - set(arguments)
+    if extra:
+        raise ValueError(f"unexpected arguments for {action}: {sorted(extra)}")
+    if missing:
+        raise ValueError(f"missing arguments for {action}: {sorted(missing)}")
+    if action in _UNSUPPORTED:
+        raise UnsupportedSourceAction(action)
     cursor = _cursor(cursor_before, geometry)
     coordinate = _coordinate(arguments.get("coordinate"), geometry)
     primitives: list[Primitive] = []
     target = None
 
     if action == "terminate":
-        status = arguments.get("status", "success")
+        status = arguments["status"]
         if status not in ("success", "failure"):
             raise ValueError(
                 f"terminate status must be success or failure, got {status!r}"
             )
         return Translation(OrderedEventsV3Action(no_op=True, terminate=status))
     if action in _NO_OPS:
+        if action == "wait":
+            _number(arguments["time"], field="time")
         return Translation(OrderedEventsV3Action(no_op=True))
     if action == "mouse_move":
         if coordinate is None:
             raise ValueError("mouse_move requires coordinate")
         moved, target = _move(coordinate, cursor, geometry)
         primitives.extend(moved)
-    elif action in _CLICKS or action == "click":
-        button, count = _CLICKS.get(action, ("left", 1))
+    elif action in _CLICKS:
+        button, count = _CLICKS[action]
         moved, target = _move(coordinate, cursor, geometry)
         primitives.extend(moved)
         primitives.extend(_click(button, count))
@@ -204,12 +239,12 @@ def translate_step(
             for name in _keys(arguments.get("keys"))
         )
     elif action == "type":
-        text = arguments.get("text")
+        text = arguments["text"]
         if not isinstance(text, str):
             raise ValueError(f"type requires text, got {text!r}")
         primitives.extend(_typing(text))
     elif action in ("scroll", "hscroll"):
-        amount = round(_number(arguments.get("pixels", 0), field="pixels"))
+        amount = round(_number(arguments["pixels"], field="pixels"))
         if amount:
             primitives.append(
                 Primitive(
@@ -218,9 +253,6 @@ def translate_step(
                     dy=amount if action == "scroll" else 0,
                 )
             )
-    else:
-        raise ValueError(f"unsupported computer_use action: {action!r}")
-
     return Translation(
         OrderedEventsV3Action(
             primitives=tuple(primitives),
@@ -233,9 +265,11 @@ def translate_step(
 def rewrite_assistant(source: str, action: OrderedEventsV3Action) -> str:
     if not isinstance(source, str):
         raise TypeError("assistant_raw must be text")
-    prefix, separator, _ = source.partition("<tool_call>")
-    if not separator or "</think>" not in prefix:
+    thinking, separator, remainder = source.partition("</think>")
+    if not separator or "<tool_call>" not in remainder:
         raise ValueError("assistant_raw must contain reasoning followed by a tool call")
-    if prefix.lstrip().startswith("<think>"):
+    if "</think>" in remainder:
+        raise ValueError("assistant_raw must contain exactly one reasoning block")
+    if thinking.lstrip().startswith("<think>"):
         raise ValueError("assistant_raw unexpectedly contains an opening <think> tag")
-    return f"<think>{prefix.rstrip()}\n\n{CODEC.format(action)}"
+    return f"<think>{thinking.strip()}</think>\n\n{CODEC.format(action)}"

@@ -23,7 +23,6 @@ JPEG_QUALITY = 92
 SCREEN = (1920, 1080)
 SHARD_NAME = "images.array_record"
 INDEX_NAME = "index.jsonl"
-SUMMARY_NAME = "summary.json"
 
 
 def _sha256(path: Path) -> str:
@@ -32,6 +31,15 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _bytes_sha256(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _canonical_sha256(value: object) -> str:
+    encoded = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
+    return _bytes_sha256(encoded)
 
 
 def _transcode(job: tuple[str, bytes]) -> tuple[str, bytes]:
@@ -67,86 +75,86 @@ def _members(path: Path):
             yield member.name, source.read()
 
 
-def _complete(output: Path, source_sha256: str) -> bool:
+def _validate_shard(
+    physical: Path,
+    published: Path,
+    expected: dict[str, object],
+) -> None:
+    from array_record.python.array_record_module import ArrayRecordReader
+    from PIL import Image
+
+    index_path = physical / INDEX_NAME
+    shard_path = physical / SHARD_NAME
     try:
-        summary = json.loads((output / SUMMARY_NAME).read_text(encoding="utf-8"))
-        rows = (output / INDEX_NAME).read_text(encoding="utf-8").splitlines()
-    except (OSError, json.JSONDecodeError):
-        return False
-    return (
-        (output / SHARD_NAME).is_file()
-        and summary.get("source_sha256") == source_sha256
-        and summary.get("jpeg_quality") == JPEG_QUALITY
-        and summary.get("num_images") == len(rows)
-        and len(rows) > 0
-    )
+        rows = [
+            json.loads(line)
+            for line in index_path.read_text(encoding="utf-8").splitlines()
+        ]
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read image index {index_path}: {exc}") from exc
+    if len(rows) != expected["num_images"] or not rows:
+        raise ValueError(f"image count mismatch in {index_path}")
+    if _sha256(index_path) != expected["index_sha256"]:
+        raise ValueError(f"image index digest mismatch: {index_path}")
+    if _sha256(shard_path) != expected["arrayrecord_sha256"]:
+        raise ValueError(f"ArrayRecord digest mismatch: {shard_path}")
 
-
-def process_tar(source: Path, output_root: Path, *, workers: int) -> dict:
-    if workers <= 0:
-        raise ValueError(f"workers must be positive, got {workers}")
-    source_sha256 = _sha256(source)
-    name = source.name.removesuffix(".tar")
-    final = output_root / name
-    if _complete(final, source_sha256):
-        return json.loads((final / SUMMARY_NAME).read_text(encoding="utf-8"))
-    if final.exists():
-        shutil.rmtree(final)
-    temporary = output_root / f".{name}.{os.getpid()}.tmp"
-    if temporary.exists():
-        shutil.rmtree(temporary)
-    temporary.mkdir(parents=True)
-
-    from array_record.python.array_record_module import ArrayRecordWriter
-
-    writer = ArrayRecordWriter(str(temporary / SHARD_NAME), "group_size:1")
-    count = 0
-
-    def write(encoded) -> None:
-        nonlocal count
-        for member, jpeg in encoded:
-            writer.write(jpeg)
-            uri = make_arrayrecord_image_uri(final / SHARD_NAME, count)
-            index.write(json.dumps({"member": member, "uri": uri}) + "\n")
-            count += 1
-
+    reader = ArrayRecordReader(str(shard_path))
     try:
-        with (temporary / INDEX_NAME).open("w", encoding="utf-8") as index:
-            jobs = _members(source)
-            if workers == 1:
-                write(map(_transcode, jobs))
-            else:
-                with multiprocessing.Pool(workers) as pool:
-                    write(pool.imap(_transcode, jobs, chunksize=8))
-    except BaseException:
-        writer.close()
-        shutil.rmtree(temporary)
-        raise
-    writer.close()
-    if count == 0:
-        shutil.rmtree(temporary)
-        raise ValueError(f"screenshot tar contains no PNG members: {source}")
-    summary = {
-        "source": source.name,
-        "source_sha256": source_sha256,
-        "jpeg_quality": JPEG_QUALITY,
-        "num_images": count,
-    }
-    (temporary / SUMMARY_NAME).write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(final)
-    return summary
+        if reader.num_records() != len(rows):
+            raise ValueError(f"ArrayRecord count mismatch: {shard_path}")
+        for record_index, row in enumerate(rows):
+            if set(row) != {"member", "uri", "jpeg_sha256"}:
+                raise ValueError(f"invalid image index row {record_index}: {row!r}")
+            expected_uri = make_arrayrecord_image_uri(
+                published / SHARD_NAME, record_index
+            )
+            if row["uri"] != expected_uri:
+                raise ValueError(
+                    f"image index URI mismatch at row {record_index}: {row['uri']!r}"
+                )
+            jpeg = reader.read([record_index])[0]
+            if _bytes_sha256(jpeg) != row["jpeg_sha256"]:
+                raise ValueError(
+                    f"JPEG digest mismatch at {shard_path} record {record_index}"
+                )
+            with Image.open(io.BytesIO(jpeg)) as image:
+                image.load()
+                if (
+                    image.format != "JPEG"
+                    or image.mode != "RGB"
+                    or image.size != SCREEN
+                ):
+                    raise ValueError(
+                        f"invalid JPEG at {shard_path} record {record_index}"
+                    )
+    finally:
+        reader.close()
 
 
-def build_store(screenshots_dir: Path, output_dir: Path, *, workers: int) -> dict:
-    sources = sorted(screenshots_dir.glob("screenshots-*.tar"))
-    if not sources:
-        raise ValueError(f"no screenshots-*.tar files under {screenshots_dir}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    summaries = [process_tar(source, output_dir, workers=workers) for source in sources]
-    manifest = {
+def _validate_generation(
+    physical: Path,
+    published: Path,
+    shards: dict[str, dict[str, object]],
+) -> None:
+    observed = {path.name for path in physical.iterdir() if path.is_dir()}
+    if observed != set(shards):
+        raise ValueError(
+            f"image-store shard set mismatch: expected {set(shards)}, got {observed}"
+        )
+    for name, expected in shards.items():
+        _validate_shard(physical / name, published / name, expected)
+
+
+def validate_image_store(output_dir: Path) -> dict[str, object]:
+    manifest_path = output_dir / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"cannot read image-store manifest {manifest_path}: {exc}"
+        ) from exc
+    required = {
         "artifact_type": "cuagym_stage_01_image_store",
         "schema_version": 1,
         "uri_scheme": "ar:///abs/path/images.array_record#idx",
@@ -154,24 +162,185 @@ def build_store(screenshots_dir: Path, output_dir: Path, *, workers: int) -> dic
         "width": SCREEN[0],
         "height": SCREEN[1],
         "image_domain": "jpeg_q92_1920x1080",
-        "num_tars": len(summaries),
-        "total_images": sum(item["num_images"] for item in summaries),
-        "source_tars": {item["source"]: item["source_sha256"] for item in summaries},
     }
-    temporary = output_dir / ".manifest.json.tmp"
+    if {key: manifest.get(key) for key in required} != required:
+        raise ValueError(f"image-store contract mismatch: {manifest!r}")
+    generation = manifest.get("generation")
+    shards = manifest.get("shards")
+    source_tars = manifest.get("source_tars")
+    if (
+        not isinstance(generation, str)
+        or not generation.startswith("generation-")
+        or Path(generation).name != generation
+        or not isinstance(shards, dict)
+        or not shards
+        or not isinstance(source_tars, dict)
+    ):
+        raise ValueError(f"invalid image-store manifest: {manifest_path}")
+    if manifest.get("num_tars") != len(shards):
+        raise ValueError(f"image-store tar count mismatch: {manifest_path}")
+    if manifest.get("total_images") != sum(
+        int(item["num_images"]) for item in shards.values()
+    ):
+        raise ValueError(f"image-store image count mismatch: {manifest_path}")
+    for name, expected in shards.items():
+        if not isinstance(name, str) or not isinstance(expected, dict):
+            raise TypeError(f"invalid shard entry in {manifest_path}")
+        if set(expected) != {
+            "source",
+            "source_sha256",
+            "num_images",
+            "index_sha256",
+            "arrayrecord_sha256",
+        }:
+            raise ValueError(f"invalid shard contract for {name!r}")
+        if expected["source"] != f"{name}.tar":
+            raise ValueError(f"shard/source mismatch for {name!r}")
+        if source_tars.get(expected["source"]) != expected["source_sha256"]:
+            raise ValueError(f"source digest mismatch for {name!r}")
+    if set(source_tars) != {f"{name}.tar" for name in shards}:
+        raise ValueError(f"image-store source/shard set mismatch: {manifest_path}")
+    path = output_dir / generation
+    _validate_generation(path, path, shards)
+    return manifest
+
+
+def _existing_manifest(
+    output_dir: Path,
+    source_tars: dict[str, str],
+) -> dict[str, object] | None:
+    try:
+        manifest = validate_image_store(output_dir)
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
+    return manifest if manifest["source_tars"] == source_tars else None
+
+
+def _build_shard(
+    source: Path,
+    physical: Path,
+    published: Path,
+    *,
+    workers: int,
+) -> dict[str, object]:
+    from array_record.python.array_record_module import ArrayRecordWriter
+
+    physical.mkdir(parents=True)
+    writer = ArrayRecordWriter(str(physical / SHARD_NAME), "group_size:1")
+    count = 0
+
+    def write(encoded) -> None:
+        nonlocal count
+        for member, jpeg in encoded:
+            writer.write(jpeg)
+            uri = make_arrayrecord_image_uri(published / SHARD_NAME, count)
+            index.write(
+                json.dumps(
+                    {
+                        "member": member,
+                        "uri": uri,
+                        "jpeg_sha256": _bytes_sha256(jpeg),
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            count += 1
+
+    try:
+        with (physical / INDEX_NAME).open("w", encoding="utf-8") as index:
+            jobs = _members(source)
+            if workers == 1:
+                write(map(_transcode, jobs))
+            else:
+                with multiprocessing.Pool(workers) as pool:
+                    write(pool.imap(_transcode, jobs, chunksize=8))
+    finally:
+        writer.close()
+    if count == 0:
+        raise ValueError(f"screenshot tar contains no PNG members: {source}")
+    return {
+        "source": source.name,
+        "source_sha256": _sha256(source),
+        "num_images": count,
+        "index_sha256": _sha256(physical / INDEX_NAME),
+        "arrayrecord_sha256": _sha256(physical / SHARD_NAME),
+    }
+
+
+def _publish_manifest(output_dir: Path, manifest: dict[str, object]) -> None:
+    temporary = output_dir / f".manifest.{os.getpid()}.tmp"
     temporary.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     temporary.replace(output_dir / "manifest.json")
+
+
+def build_store(screenshots_dir: Path, output_dir: Path, *, workers: int) -> dict:
+    if workers <= 0:
+        raise ValueError(f"workers must be positive, got {workers}")
+    sources = sorted(screenshots_dir.glob("screenshots-*.tar"))
+    if not sources:
+        raise ValueError(f"no screenshots-*.tar files under {screenshots_dir}")
+    source_tars = {source.name: _sha256(source) for source in sources}
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if manifest := _existing_manifest(output_dir, source_tars):
+        return manifest
+
+    generation_name = f"generation-{_canonical_sha256(source_tars)[:16]}"
+    generation = output_dir / generation_name
+    temporary = output_dir / f".{generation_name}.{os.getpid()}.tmp"
+    if temporary.exists():
+        shutil.rmtree(temporary)
+    temporary.mkdir()
+    shards: dict[str, dict[str, object]] = {}
+    try:
+        for source in sources:
+            name = source.name.removesuffix(".tar")
+            shards[name] = _build_shard(
+                source,
+                temporary / name,
+                generation / name,
+                workers=workers,
+            )
+        _validate_generation(temporary, generation, shards)
+        if generation.exists():
+            backup = output_dir / f".{generation_name}.{os.getpid()}.old"
+            generation.replace(backup)
+            temporary.replace(generation)
+            shutil.rmtree(backup)
+        else:
+            temporary.replace(generation)
+    except BaseException:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        raise
+
+    manifest: dict[str, object] = {
+        "artifact_type": "cuagym_stage_01_image_store",
+        "schema_version": 1,
+        "uri_scheme": "ar:///abs/path/images.array_record#idx",
+        "jpeg_quality": JPEG_QUALITY,
+        "width": SCREEN[0],
+        "height": SCREEN[1],
+        "image_domain": "jpeg_q92_1920x1080",
+        "generation": generation_name,
+        "num_tars": len(shards),
+        "total_images": sum(int(item["num_images"]) for item in shards.values()),
+        "source_tars": source_tars,
+        "shards": shards,
+    }
+    _publish_manifest(output_dir, manifest)
+    for path in output_dir.glob("generation-*"):
+        if path != generation:
+            shutil.rmtree(path)
     return manifest
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--screenshots-dir", "--screenshots_dir", type=Path, required=True
-    )
-    parser.add_argument("--output-dir", "--output_dir", type=Path, required=True)
+    parser.add_argument("--screenshots_dir", type=Path, required=True)
+    parser.add_argument("--output_dir", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 1)
     return parser.parse_args(argv)
 

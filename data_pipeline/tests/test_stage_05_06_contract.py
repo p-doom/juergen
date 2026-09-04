@@ -31,6 +31,7 @@ two.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -60,8 +61,9 @@ MIN_PIXELS = 56 * 56
 MAX_PIXELS = 28 * 28 * 1280
 
 
-def _smart_resize(height: int, width: int, *, factor: int, min_pixels: int,
-                  max_pixels: int) -> tuple[int, int]:
+def _smart_resize(
+    height: int, width: int, *, factor: int, min_pixels: int, max_pixels: int
+) -> tuple[int, int]:
     """``transformers.models.qwen2_vl.image_processing_qwen2_vl.smart_resize``.
 
     Reproduced rather than imported: ``transformers`` is not a dependency of the
@@ -84,8 +86,11 @@ def _smart_resize(height: int, width: int, *, factor: int, min_pixels: int,
 def _grid_thw(height: int, width: int, *, min_pixels: int, max_pixels: int) -> tuple[int, int, int]:
     """``image_grid_thw`` for one still image under a given processor budget."""
     h_bar, w_bar = _smart_resize(
-        height, width, factor=PATCH_SIZE * MERGE_SIZE,
-        min_pixels=min_pixels, max_pixels=max_pixels,
+        height,
+        width,
+        factor=PATCH_SIZE * MERGE_SIZE,
+        min_pixels=min_pixels,
+        max_pixels=max_pixels,
     )
     return 1, h_bar // PATCH_SIZE, w_bar // PATCH_SIZE
 
@@ -141,12 +146,14 @@ def make_source(root: Path, *, n_conversations: int = 2, n_turns: int = 3) -> Pa
         for row in rows:
             f.write(json.dumps(row) + "\n")
     (root / "conversations.jsonl").write_bytes((root / "chat.jsonl").read_bytes())
+    chat_sha256 = hashlib.sha256((root / "chat.jsonl").read_bytes()).hexdigest()
     (root / "manifest.json").write_text(
         json.dumps(
             {
                 "artifact_type": "juergen_annotation_conversations",
                 "schema_version": 2,
                 "chat": "chat.jsonl",
+                "chat_sha256": chat_sha256,
                 "n_conversations": len(rows),
             },
             indent=2,
@@ -228,13 +235,24 @@ def _builds(log: Path) -> list[list[str]]:
     return [a for a in _invocations(log) if any("build_sft_records" in x for x in a)]
 
 
-def _measure(tmp_path: Path, omegalax: dict[str, Any], source: Path, *,
-             out: str = "lengths", processor: str = MODEL_ID) -> Path:
+def _measure(
+    tmp_path: Path,
+    omegalax: dict[str, Any],
+    source: Path,
+    *,
+    out: str = "lengths",
+    processor: str = MODEL_ID,
+) -> Path:
     out_dir = tmp_path / out
     proc = _run(
-        "stage_05_measure_lengths.py", omegalax["env"],
-        output_dir=out_dir, source_path=source, omegalax_repo=omegalax["repo"],
-        model_id=MODEL_ID, processor=processor, num_workers=2,
+        "stage_05_measure_lengths.py",
+        omegalax["env"],
+        output_dir=out_dir,
+        source_path=source,
+        omegalax_repo=omegalax["repo"],
+        model_id=MODEL_ID,
+        processor=processor,
+        num_workers=2,
     )
     assert proc.returncode == 0, proc.stderr
     return out_dir
@@ -249,13 +267,17 @@ def test_stage_05_refuses_a_source_without_a_chat_file(tmp_path: Path, omegalax)
     source = make_source(tmp_path / "conv")
     (source / "chat.jsonl").unlink()
     proc = _run(
-        "stage_05_measure_lengths.py", omegalax["env"],
-        output_dir=tmp_path / "lengths", source_path=source,
-        omegalax_repo=omegalax["repo"], model_id=MODEL_ID, processor=MODEL_ID,
+        "stage_05_measure_lengths.py",
+        omegalax["env"],
+        output_dir=tmp_path / "lengths",
+        source_path=source,
+        omegalax_repo=omegalax["repo"],
+        model_id=MODEL_ID,
+        processor=MODEL_ID,
         num_workers=2,
     )
     assert proc.returncode != 0
-    assert "no chat.jsonl" in proc.stderr
+    assert "chat artifact is missing" in proc.stderr
     assert _invocations(omegalax["log"]) == []
 
 
@@ -267,7 +289,10 @@ def test_stage_05_invokes_the_measure_script_and_fingerprints_its_source(
 
     (argv,) = _invocations(omegalax["log"])
     assert argv[:5] == [
-        "run", "--project", str(omegalax["repo"]), "python",
+        "run",
+        "--project",
+        str(omegalax["repo"]),
+        "python",
         "scripts/measure_message_lengths_from_chat.py",
     ]
     assert _flags_of(argv) == {
@@ -291,17 +316,21 @@ def test_stage_05_invokes_the_measure_script_and_fingerprints_its_source(
 # --------------------------------------------------------------------------
 
 
-def test_stage_06_refuses_a_cache_measured_from_another_dataset(
-    tmp_path: Path, omegalax
-) -> None:
+def test_stage_06_refuses_a_cache_measured_from_another_dataset(tmp_path: Path, omegalax) -> None:
     source = make_source(tmp_path / "conv")
     other = make_source(tmp_path / "other", n_conversations=3)
     stale = _measure(tmp_path, omegalax, other)
     proc = _run(
-        "stage_06_training_records.py", omegalax["env"],
-        output_dir=tmp_path / "records", source_path=source,
-        omegalax_repo=omegalax["repo"], model_id=MODEL_ID, processor=MODEL_ID,
-        max_length=4096, records_per_shard=8, num_workers=2,
+        "stage_06_training_records.py",
+        omegalax["env"],
+        output_dir=tmp_path / "records",
+        source_path=source,
+        omegalax_repo=omegalax["repo"],
+        model_id=MODEL_ID,
+        processor=MODEL_ID,
+        max_length=4096,
+        records_per_shard=8,
+        num_workers=2,
         message_lengths_path=stale,
     )
     assert proc.returncode != 0
@@ -318,11 +347,19 @@ def test_stage_06_fans_out_one_build_per_split_and_reuses_the_cache(
     lengths = _measure(tmp_path, omegalax, source)
     out_dir = tmp_path / "records"
     proc = _run(
-        "stage_06_training_records.py", omegalax["env"],
-        output_dir=out_dir, source_path=source, omegalax_repo=omegalax["repo"],
-        model_id=MODEL_ID, processor=MODEL_ID, max_length=4096,
-        records_per_shard=8, num_workers=2, overflow_mode="split",
-        message_lengths_path=lengths, val_fraction=0.25,
+        "stage_06_training_records.py",
+        omegalax["env"],
+        output_dir=out_dir,
+        source_path=source,
+        omegalax_repo=omegalax["repo"],
+        model_id=MODEL_ID,
+        processor=MODEL_ID,
+        max_length=4096,
+        records_per_shard=8,
+        num_workers=2,
+        overflow_mode="split",
+        message_lengths_path=lengths,
+        val_fraction=0.25,
     )
     assert proc.returncode == 0, proc.stderr
 
@@ -349,10 +386,16 @@ def test_stage_06_writes_only_train_without_a_val_fraction(tmp_path: Path, omega
     source = make_source(tmp_path / "conv")
     out_dir = tmp_path / "records"
     proc = _run(
-        "stage_06_training_records.py", omegalax["env"],
-        output_dir=out_dir, source_path=source, omegalax_repo=omegalax["repo"],
-        model_id=MODEL_ID, processor=MODEL_ID, max_length=4096,
-        records_per_shard=8, num_workers=2,
+        "stage_06_training_records.py",
+        omegalax["env"],
+        output_dir=out_dir,
+        source_path=source,
+        omegalax_repo=omegalax["repo"],
+        model_id=MODEL_ID,
+        processor=MODEL_ID,
+        max_length=4096,
+        records_per_shard=8,
+        num_workers=2,
     )
     assert proc.returncode == 0, proc.stderr
     builds = _builds(omegalax["log"])
@@ -383,25 +426,52 @@ def test_the_records_stage_forwards_no_image_geometry_and_records_no_patch_count
     lengths = _measure(tmp_path, omegalax, source)
     out_dir = tmp_path / "records"
     proc = _run(
-        "stage_06_training_records.py", omegalax["env"],
-        output_dir=out_dir, source_path=source, omegalax_repo=omegalax["repo"],
-        model_id=MODEL_ID, processor=MODEL_ID, max_length=4096,
-        records_per_shard=8, num_workers=2, message_lengths_path=lengths,
+        "stage_06_training_records.py",
+        omegalax["env"],
+        output_dir=out_dir,
+        source_path=source,
+        omegalax_repo=omegalax["repo"],
+        model_id=MODEL_ID,
+        processor=MODEL_ID,
+        max_length=4096,
+        records_per_shard=8,
+        num_workers=2,
+        message_lengths_path=lengths,
     )
     assert proc.returncode == 0, proc.stderr
     (build,) = _builds(omegalax["log"])
     flags = _flags_of(build)
     assert set(flags) == {
-        "data_path", "out_dir", "model_id", "processor", "max_length",
-        "records_per_shard", "num_workers", "overflow_mode", "val_fraction",
-        "split", "message_lengths_path",
+        "data_path",
+        "out_dir",
+        "model_id",
+        "processor",
+        "max_length",
+        "records_per_shard",
+        "num_workers",
+        "overflow_mode",
+        "val_fraction",
+        "split",
+        "message_lengths_path",
     }
-    assert not {"preprocessor_config", "min_pixels", "max_pixels", "patch_size",
-                "merge_size"} & set(flags)
+    assert not {
+        "preprocessor_config",
+        "min_pixels",
+        "max_pixels",
+        "patch_size",
+        "merge_size",
+    } & set(flags)
     manifest = json.loads((out_dir / "manifest.json").read_text())
     assert set(manifest["params"]) == {
-        "model_id", "processor", "max_length", "records_per_shard", "num_workers",
-        "omegalax_repo", "overflow_mode", "message_lengths_path", "val_fraction",
+        "model_id",
+        "processor",
+        "max_length",
+        "records_per_shard",
+        "num_workers",
+        "omegalax_repo",
+        "overflow_mode",
+        "message_lengths_path",
+        "val_fraction",
     }
     assert set(manifest["stats"]["per_split"][0]) == {"split", "n_shards", "elapsed_s"}
 
@@ -419,10 +489,16 @@ def test_a_cache_measured_under_a_different_processor_is_still_accepted(
     source = make_source(tmp_path / "conv")
     lengths = _measure(tmp_path, omegalax, source, processor="OtherOrg/OtherProcessor")
     proc = _run(
-        "stage_06_training_records.py", omegalax["env"],
-        output_dir=tmp_path / "records", source_path=source,
-        omegalax_repo=omegalax["repo"], model_id=MODEL_ID, processor=MODEL_ID,
-        max_length=4096, records_per_shard=8, num_workers=2,
+        "stage_06_training_records.py",
+        omegalax["env"],
+        output_dir=tmp_path / "records",
+        source_path=source,
+        omegalax_repo=omegalax["repo"],
+        model_id=MODEL_ID,
+        processor=MODEL_ID,
+        max_length=4096,
+        records_per_shard=8,
+        num_workers=2,
         message_lengths_path=lengths,
     )
     assert proc.returncode == 0, proc.stderr
@@ -452,9 +528,7 @@ def test_the_patch_count_a_record_carries_is_a_function_of_the_processor_budget(
     assert recorded_max % (MERGE_SIZE**2) == 0
     assert vision_tokens(default) == recorded_max // MERGE_SIZE**2 == 4
 
-    raised = _grid_thw(
-        clip.FRAME_H, clip.FRAME_W, min_pixels=16 * 28 * 28, max_pixels=MAX_PIXELS
-    )
+    raised = _grid_thw(clip.FRAME_H, clip.FRAME_W, min_pixels=16 * 28 * 28, max_pixels=MAX_PIXELS)
     assert raised == (1, 8, 10)
     produced = vision_patches(raised)
     assert produced == 80

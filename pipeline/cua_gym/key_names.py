@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import re
 
-_NAME_RE = re.compile(r"[^\s(),;]+")
 _FUNCTION_KEY_RE = re.compile(r"f([1-9]|1[0-9]|2[0-4])", re.IGNORECASE)
 
-_ALIASES = {
+_PYAUTOGUI_TO_RDEV = {
     "enter": "Return",
     "return": "Return",
     "esc": "Escape",
@@ -65,8 +64,8 @@ def key_name(value: object) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"key name must be non-empty text, got {value!r}")
     lowered = value.lower()
-    if lowered in _ALIASES:
-        return _ALIASES[lowered]
+    if lowered in _PYAUTOGUI_TO_RDEV:
+        return _PYAUTOGUI_TO_RDEV[lowered]
     if len(lowered) == 1 and lowered.isascii() and lowered.isalpha():
         return f"Key{lowered.upper()}"
     if len(lowered) == 1 and lowered.isascii() and lowered.isdigit():
@@ -74,6 +73,4 @@ def key_name(value: object) -> str:
     match = _FUNCTION_KEY_RE.fullmatch(lowered)
     if match:
         return f"F{match.group(1)}"
-    if _NAME_RE.fullmatch(value):
-        return value
-    raise ValueError(f"key name violates the action grammar: {value!r}")
+    raise ValueError(f"unsupported pyautogui key name: {value!r}")

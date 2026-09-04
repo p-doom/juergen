@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
 from desktop.geometry import DisplayGeometry
 
 from grammars.ordered_events_v3_relative_1000_grid_v1.codec import CODEC
+from pipeline.cua_gym.stage_01_image_store import validate_image_store
 from pipeline.cua_gym.translate import (
     UnsupportedSourceAction,
     rewrite_assistant,
@@ -84,35 +85,21 @@ class ImageResolver(Protocol):
 class ImageIndex:
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
-        manifest_path = self.root / "manifest.json"
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(
-                f"cannot read image-store manifest {manifest_path}: {exc}"
-            ) from exc
-        required = {
-            "artifact_type": "cuagym_stage_01_image_store",
-            "schema_version": 1,
-            "uri_scheme": "ar:///abs/path/images.array_record#idx",
-            "jpeg_quality": 92,
-            "width": SCREEN[0],
-            "height": SCREEN[1],
-            "image_domain": "jpeg_q92_1920x1080",
-        }
-        observed = {key: manifest.get(key) for key in required}
-        if observed != required:
-            raise ValueError(
-                f"image-store contract mismatch: expected {required}, got {observed}"
-            )
+        manifest = validate_image_store(self.root)
+        self.generation = self.root / str(manifest["generation"])
+        self.source_tars = set(manifest["source_tars"])
         self._shards: dict[str, dict[str, str]] = {}
 
     def uri(self, shard: str, member: str) -> str:
+        if shard not in self.source_tars:
+            raise ValueError(f"unknown screenshot shard: {shard!r}")
         shard_name = shard.removesuffix(".tar")
         if shard_name not in self._shards:
-            expected_path = (self.root / shard_name / "images.array_record").resolve()
+            expected_path = (
+                self.generation / shard_name / "images.array_record"
+            ).resolve()
             mapping: dict[str, str] = {}
-            index_path = self.root / shard_name / "index.jsonl"
+            index_path = self.generation / shard_name / "index.jsonl"
             try:
                 lines = index_path.read_text(encoding="utf-8").splitlines()
                 for expected_index, line in enumerate(lines):
@@ -149,7 +136,8 @@ class ImageIndex:
 
 def _sample_failure(task_id: str, step: int) -> bool:
     digest = hashlib.sha256(f"{task_id}:{step}".encode()).digest()
-    return digest[0] % 100 < FAILURE_STEP_PERCENT
+    value = int.from_bytes(digest[:8], "big")
+    return value < (1 << 64) * FAILURE_STEP_PERCENT // 100
 
 
 def _text(value: str) -> dict[str, str]:
@@ -359,6 +347,7 @@ def build_dataset(
         "artifact_type": "cuagym_stage_04_conversations",
         "schema_version": 1,
         "chat": "chat.jsonl",
+        "chat_sha256": _file_sha256(output_dir / "chat.jsonl"),
         "grammar": CODEC.name,
         "failure_step_percent": FAILURE_STEP_PERCENT,
         "inputs": {
@@ -384,8 +373,8 @@ def build_dataset(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--trajectories", type=Path, required=True)
-    parser.add_argument("--image-store", "--image_store", type=Path, required=True)
-    parser.add_argument("--output-dir", "--output_dir", type=Path, required=True)
+    parser.add_argument("--image_store", type=Path, required=True)
+    parser.add_argument("--output_dir", type=Path, required=True)
     return parser.parse_args(argv)
 
 
