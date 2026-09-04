@@ -15,6 +15,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from cua_parity_contract import (
+    JPEG_QUALITY,
+    MAX_COMPLETED_TURNS,
+    OBSERVATION_CONTRACT as OBSERVATION_ID,
+    OBSERVATION_SIZE,
+    PREVIOUS_ACTIONS_MAX_CHARS,
+    render_history,
+)
 from grammars.ordered_events_v3_relative_1000_grid_v1.codec import (
     CODEC,
     action_from_dict,
@@ -24,15 +32,14 @@ from pipeline.cua_gym.stage_03_curate_trajectories import resolve_curated_artifa
 from pipeline.lib.image_store import parse_arrayrecord_image_uri
 from pipeline.lib.manifest import make_artifact_id
 
-SCREEN = (1920, 1080)
-MAX_COMPLETED_TURNS = 4
-PREVIOUS_ACTIONS_MAX_CHARS = 160
-OBSERVATION_CONTRACT = {
-    "image_domain": "jpeg_q92_1920x1080",
+SCREEN = OBSERVATION_SIZE
+OBSERVATION_SPEC = {
+    "image_domain": OBSERVATION_ID,
     "media_type": "image/jpeg",
-    "jpeg_quality": 92,
-    "width": 1920,
-    "height": 1080,
+    "jpeg_quality": JPEG_QUALITY,
+    "jpeg_subsampling": "4:2:0",
+    "width": OBSERVATION_SIZE[0],
+    "height": OBSERVATION_SIZE[1],
 }
 
 
@@ -64,9 +71,9 @@ def render_contract() -> dict[str, Any]:
         "system_prompt": system_prompt,
         "system_prompt_sha256": hashlib.sha256(system_prompt.encode()).hexdigest(),
         "action_spec_sha256": _canonical_digest(action),
-        "observation_spec_sha256": _canonical_digest(OBSERVATION_CONTRACT),
+        "observation_spec_sha256": _canonical_digest(OBSERVATION_SPEC),
         "render_spec_sha256": _canonical_digest(render),
-        "observation": OBSERVATION_CONTRACT,
+        "observation": OBSERVATION_SPEC,
         "render": render,
     }
 
@@ -137,52 +144,32 @@ def _image(value: str) -> dict[str, str]:
     return {"type": "image", "image": value}
 
 
-def _previous_actions(evicted: list[tuple[int, str]]) -> str:
-    if not evicted:
-        return "None"
-    value = "\n".join(
-        f"Step {step}: {action.replace(chr(10), ' | ')}" for step, action in evicted
-    )
-    if len(value) <= PREVIOUS_ACTIONS_MAX_CHARS:
-        return value
-    marker = "…[earlier actions omitted]\n"
-    return marker + value[-(PREVIOUS_ACTIONS_MAX_CHARS - len(marker)) :]
-
-
-def _instruction(instruction: str, evicted: list[tuple[int, str]]) -> str:
-    return (
-        "Please generate the next move according to the UI screenshot, instruction "
-        "and previous actions.\n\n"
-        f"Instruction: {instruction}\n\nPrevious actions:\n{_previous_actions(evicted)}"
-    )
-
-
 def _messages(
     instruction: str,
     steps: list[dict[str, Any]],
     target_index: int,
-    contract: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    window_start = max(0, target_index - MAX_COMPLETED_TURNS)
-    evicted = [
-        (steps[index]["step"], steps[index]["action_text"])
-        for index in range(window_start)
-    ]
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": [_text(contract["system_prompt"])]}
-    ]
-    for index in range(window_start, target_index + 1):
-        content = [_image(steps[index]["image"])]
-        if index == window_start:
-            content.append(_text(_instruction(instruction, evicted)))
-        messages.append({"role": "user", "content": content})
-        assistant = {
-            "role": "assistant",
-            "content": [_text(steps[index]["assistant"])],
+    history = [
+        {
+            **step,
+            "image": _image(step["image"]),
         }
-        if index < target_index:
-            assistant["loss"] = False
-        messages.append(assistant)
+        for step in steps
+    ]
+    messages = render_history(
+        instruction=instruction,
+        steps=history,
+        target_index=target_index,
+    )
+    for message in messages:
+        if message["role"] == "assistant":
+            message["loss"] = False
+    messages.append(
+        {
+            "role": "assistant",
+            "content": [_text(steps[target_index]["assistant"])],
+        }
+    )
     return messages
 
 
@@ -252,8 +239,9 @@ def build_episode_records(
     counters["rollouts"] += 1
     rows = []
     for index, step in enumerate(translated):
-        messages = _messages(instruction, translated, index, contract)
-        if "<tool_call>" in json.dumps(messages, ensure_ascii=False):
+        messages = _messages(instruction, translated, index)
+        serialized = json.dumps(messages, ensure_ascii=False)
+        if "<tool_call>" in serialized:
             raise AssertionError(
                 "native computer_use syntax leaked into parity history"
             )

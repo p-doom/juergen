@@ -17,10 +17,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from cua_parity_contract import (
+    JPEG_QUALITY,
+    OBSERVATION_CONTRACT,
+    OBSERVATION_SIZE,
+)
 from pipeline.lib.image_store import make_arrayrecord_image_uri
 
-JPEG_QUALITY = 92
-SCREEN = (1920, 1080)
+SCREEN = OBSERVATION_SIZE
 SHARD_NAME = "images.array_record"
 INDEX_NAME = "index.jsonl"
 
@@ -48,6 +52,8 @@ def _transcode(job: tuple[str, bytes]) -> tuple[str, bytes]:
     member, source = job
     with Image.open(io.BytesIO(source)) as image:
         image.load()
+        if image.format != "PNG":
+            raise ValueError(f"{member} must be PNG, got {image.format!r}")
         rgb = image.convert("RGB")
     if rgb.size != SCREEN:
         raise ValueError(
@@ -167,7 +173,7 @@ def validate_image_store(
         "jpeg_quality": JPEG_QUALITY,
         "width": SCREEN[0],
         "height": SCREEN[1],
-        "image_domain": "jpeg_q92_1920x1080",
+        "image_domain": OBSERVATION_CONTRACT,
     }
     if {key: manifest.get(key) for key in required} != required:
         raise ValueError(f"image-store contract mismatch: {manifest!r}")
@@ -341,7 +347,7 @@ def build_store(screenshots_dir: Path, output_dir: Path, *, workers: int) -> dic
         "jpeg_quality": JPEG_QUALITY,
         "width": SCREEN[0],
         "height": SCREEN[1],
-        "image_domain": "jpeg_q92_1920x1080",
+        "image_domain": OBSERVATION_CONTRACT,
         "generation": generation_name,
         "num_tars": len(shards),
         "total_images": sum(int(item["num_images"]) for item in shards.values()),
