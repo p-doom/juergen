@@ -89,7 +89,7 @@
         },
         "verifier": {
           "kind": "guest_command_regex",
-          "command": "pgrep -a -f '^/usr/libexec/gnome-terminal-server'",
+          "command": "command -v pgrep >/dev/null && { pgrep -a -f '^/usr/libexec/gnome-terminal-server' || true; }",
           "pattern": "gnome-terminal-server"
         }
       },
@@ -102,33 +102,29 @@
       "setup": {
         "kind": "native_terminal_capture"
       },
-      "turn_mode": "multiturn",
-      "turn": {
-        "target": {
-          "kind": "fixed_norm",
-          "bbox": [
-            100,
-            150,
-            900,
-            850
-          ],
-          "label": "Terminal input"
-        },
-        "cursor": {
-          "kind": "target_center"
-        },
-        "expected": {
-          "kind": "type",
-          "text": "echo This is a typing test. I am trained by omegalax"
-        },
-        "verifier": {
-          "kind": "guest_json_equals",
-          "path": "/tmp/cua_native_terminal_state.json",
-          "field": "value",
-          "value": "echo This is a typing test. I am trained by omegalax"
-        }
+      "target": {
+        "kind": "fixed_norm",
+        "bbox": [
+          100,
+          150,
+          900,
+          850
+        ],
+        "label": "Terminal input"
       },
-      "max_turns": 32
+      "cursor": {
+        "kind": "target_center"
+      },
+      "expected": {
+        "kind": "type",
+        "text": "echo This is a typing test. I am trained by omegalax"
+      },
+      "verifier": {
+        "kind": "guest_json_equals",
+        "path": "/tmp/cua_native_terminal_state.json",
+        "field": "value",
+        "value": "echo This is a typing test. I am trained by omegalax"
+      }
     },
     {
       "id": "type.text_editor.native_exact",
@@ -138,32 +134,28 @@
         "kind": "native_app",
         "app": "text_editor"
       },
-        "turn_mode": "multiturn",
-        "turn": {
-        "target": {
-          "kind": "fixed_norm",
-          "bbox": [
-            150,
-            150,
-            850,
-            850
-          ],
-          "label": "Text Editor document"
-        },
-        "cursor": {
-          "kind": "target_center"
-        },
-        "expected": {
-          "kind": "type",
-          "text": "Hello, World! This is a typing test. I am trained by omegalax"
-        },
-        "verifier": {
-          "kind": "saved_file_equals",
-          "path": "/tmp/cua_native_editor.txt",
-          "value": "Hello, World! This is a typing test. I am trained by omegalax"
-        }
+      "target": {
+        "kind": "fixed_norm",
+        "bbox": [
+          150,
+          150,
+          850,
+          850
+        ],
+        "label": "Text Editor document"
       },
-      "max_turns": 32
+      "cursor": {
+        "kind": "target_center"
+      },
+      "expected": {
+        "kind": "type",
+        "text": "Hello, World! This is a typing test. I am trained by omegalax"
+      },
+      "verifier": {
+        "kind": "saved_file_equals",
+        "path": "/tmp/cua_native_editor.txt",
+        "value": "Hello, World! This is a typing test. I am trained by omegalax"
+      }
     },
     {
       "id": "key.writer.open_save_as",
@@ -488,7 +480,8 @@
       "category": "multi_turn",
       "instruction": "Open chrome and search for Wikipedia, then click the first result to open it.",
       "setup": {
-        "kind": "desktop"
+        "kind": "desktop",
+        "chrome_startup": "wikipedia"
       },
       "turn_mode": "multiturn",
       "turn": {
@@ -510,7 +503,7 @@
         },
         "verifier": {
           "kind": "active_title_regex",
-          "pattern": "Wikipedia"
+          "pattern": "PASS_TRANSFORMERS_ARTICLE"
         }
       },
       "max_turns": 64

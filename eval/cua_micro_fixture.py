@@ -1,15 +1,7 @@
-"""Deterministic, instrumented desktop fixtures for CUA micro-evals.
-
-This script is copied into the OSWorld guest and launched there.  It uses only
-the Python standard library, renders a real desktop window, and atomically
-writes semantic UI state plus exact widget bounding boxes to JSON.  The model
-never sees the state file; the evaluator uses it after the action so progress is
-machine-verifiable rather than judged from screenshots.
-"""
+"""Deterministic calculator fixture for the CUA micro-evaluation."""
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
@@ -17,123 +9,36 @@ import tempfile
 import tkinter as tk
 from pathlib import Path
 
+STATE_PATH = Path("/tmp/cua_micro_fixture_state.json")
 
-class Fixture:
-    def __init__(self, mode: str, state_path: Path) -> None:
-        self.mode = mode
-        self.state_path = state_path
+
+class Calculator:
+    def __init__(self) -> None:
         self.root = tk.Tk()
-        self.root.title(
-            {
-                "editor": "Text Editor — CUA Micro Eval",
-                "terminal": "Terminal — CUA Micro Eval",
-                "calculator": "Calculator — CUA Micro Eval",
-                "files": "Files — CUA Micro Eval",
-                "settings": "Settings — CUA Micro Eval",
-            }[mode]
-        )
+        self.root.title("Calculator — CUA Micro Eval")
         self.root.geometry("1100x720+410+180")
         self.root.minsize(900, 600)
-        self.widgets: dict[str, tk.Widget] = {}
-        self.item_widgets: dict[str, tuple[tk.Listbox, int]] = {}
-        self.values: dict[str, object] = {}
+        self.expression = ""
+        self.values = {"display": "0", "expression": "", "submitted": ""}
 
-        getattr(self, f"build_{mode}")()
-        self.root.after(250, self._ready)
-
-    def _base(self, title: str, subtitle: str) -> tk.Frame:
         frame = tk.Frame(self.root, bg="#f6f7fb", padx=48, pady=32)
         frame.pack(fill="both", expand=True)
         tk.Label(
             frame,
-            text=title,
+            text="Calculator",
             font=("Sans", 28, "bold"),
             bg="#f6f7fb",
             fg="#172033",
         ).pack(anchor="w")
-        tk.Label(
+        self.display = tk.StringVar(value="0")
+        tk.Entry(
             frame,
-            text=subtitle,
-            font=("Sans", 14),
-            bg="#f6f7fb",
-            fg="#526078",
-            pady=8,
-        ).pack(anchor="w")
-        return frame
-
-    def build_editor(self) -> None:
-        frame = self._base("Text Editor", "Type the requested text into the focused document.")
-        text = tk.Text(frame, font=("Monospace", 20), padx=20, pady=20, wrap="word")
-        text.pack(fill="both", expand=True, pady=(20, 0))
-
-        def snapshot(_event: object | None = None) -> None:
-            ranges = text.tag_ranges("sel")
-            selected = text.get(ranges[0], ranges[1]) if ranges else ""
-            self.values.update({"text": text.get("1.0", "end-1c"), "selection": selected})
-            self.write_state()
-
-        text.bind("<KeyRelease>", snapshot)
-        text.bind("<ButtonRelease>", snapshot)
-        self.widgets["editor"] = text
-        self.values["text"] = ""
-        self.values["selection"] = ""
-        self.root.after(350, text.focus_force)
-
-    def build_terminal(self) -> None:
-        frame = tk.Frame(self.root, bg="#171421", padx=40, pady=35)
-        frame.pack(fill="both", expand=True)
-        tk.Label(
-            frame,
-            text="CUA deterministic terminal",
-            font=("Monospace", 18, "bold"),
-            bg="#171421",
-            fg="#ffffff",
-        ).pack(anchor="w")
-        row = tk.Frame(frame, bg="#171421")
-        row.pack(fill="x", pady=(45, 0))
-        tk.Label(
-            row,
-            text="eval@ubuntu:~$ ",
-            font=("Monospace", 22),
-            bg="#171421",
-            fg="#8ae234",
-        ).pack(side="left")
-        value = tk.StringVar()
-        entry = tk.Entry(
-            row,
-            textvariable=value,
-            font=("Monospace", 22),
-            bg="#171421",
-            fg="#ffffff",
-            insertbackground="#ffffff",
-            relief="flat",
-        )
-        entry.pack(side="left", fill="x", expand=True)
-        value.trace_add("write", lambda *_: self._set("command", value.get()))
-
-        def submit(_event: object) -> str:
-            self.values["submitted"] = value.get()
-            self.write_state()
-            return "break"
-
-        entry.bind("<Return>", submit)
-        self.widgets["terminal_input"] = entry
-        self.values["command"] = ""
-        self.values["submitted"] = ""
-        self.root.after(350, entry.focus_force)
-
-    def build_calculator(self) -> None:
-        frame = self._base("Calculator", "Click exactly one digit or operator.")
-        display = tk.StringVar(value="0")
-        entry = tk.Entry(
-            frame,
-            textvariable=display,
+            textvariable=self.display,
             font=("Sans", 34),
             justify="right",
             state="readonly",
             readonlybackground="#ffffff",
-        )
-        entry.pack(fill="x", pady=(18, 16), ipady=12)
+        ).pack(fill="x", pady=(18, 16), ipady=12)
         grid = tk.Frame(frame, bg="#f6f7fb")
         grid.pack(fill="both", expand=True)
         labels = (
@@ -142,173 +47,67 @@ class Fixture:
             ("1", "2", "3", "x"),
             ("0", ".", "=", "/"),
         )
-
-        expression = ""
-
-        def update(value: str, *, submitted: bool = False) -> None:
-            nonlocal expression
-            expression = value
-            display.set(value or "0")
-            self.values.update({"display": display.get(), "expression": expression})
-            if submitted:
-                self.values["submitted"] = display.get()
-            self.write_state()
-
-        def press(label: str) -> None:
-            # Real addition, not a hardcoded literal-string match: any path
-            # that keys in a valid "digits+digits" expression -- via the
-            # keyboard, on-screen buttons, or a mix -- submits the correct
-            # sum. Outcome-verified tasks rely on this being genuine
-            # arithmetic rather than one scripted answer.
-            if label.isdigit():
-                update(expression + label)
-            elif label == "+" and expression and expression[-1].isdigit():
-                update(expression + "+")
-            elif label == "=":
-                match = re.fullmatch(r"(\d+)\+(\d+)", expression)
-                if match:
-                    update(str(int(match.group(1)) + int(match.group(2))), submitted=True)
-
-        def keypress(event: tk.Event) -> str | None:
-            if event.char.isdigit():
-                press(event.char)
-                return "break"
-            if event.char == "+":
-                press("+")
-                return "break"
-            if event.keysym in {"Return", "KP_Enter"}:
-                press("=")
-                return "break"
-            return None
-
-        for row, values in enumerate(labels):
+        for row, row_labels in enumerate(labels):
             grid.rowconfigure(row, weight=1)
-            for col, label in enumerate(values):
-                grid.columnconfigure(col, weight=1)
-                button = tk.Button(
+            for column, label in enumerate(row_labels):
+                grid.columnconfigure(column, weight=1)
+                tk.Button(
                     grid,
                     text=label,
                     font=("Sans", 24, "bold"),
-                    command=lambda value=label: press(value),
-                    bg="#ffffff" if col < 3 else "#dbe7ff",
-                )
-                button.grid(row=row, column=col, sticky="nsew", padx=6, pady=6)
-                key = {
-                    "+": "plus",
-                    "-": "minus",
-                    "x": "multiply",
-                    "/": "divide",
-                    "=": "equals",
-                    ".": "decimal",
-                }.get(label, f"digit_{label}")
-                self.widgets[key] = button
-        self.values.update({"display": "0", "expression": "", "submitted": ""})
-        self.root.bind_all("<KeyPress>", keypress)
-        self.root.after(350, self.root.focus_force)
+                    command=lambda value=label: self.press(value),
+                    bg="#ffffff" if column < 3 else "#dbe7ff",
+                ).grid(row=row, column=column, sticky="nsew", padx=6, pady=6)
+        self.root.bind_all("<KeyPress>", self.keypress)
+        self.root.after(250, self.ready)
 
-    def build_files(self) -> None:
-        frame = self._base("Files", "Select the requested folder from the current directory.")
-        listing = tk.Listbox(
-            frame,
-            font=("Sans", 22),
-            activestyle="none",
-            selectbackground="#3584e4",
-            selectforeground="#ffffff",
-        )
-        listing.pack(fill="both", expand=True, pady=(20, 0))
-        items = ("Documents", "Downloads", "EvalTarget", "Pictures", "Projects")
-        for item in items:
-            listing.insert("end", f"📁  {item}")
-        listing.bind(
-            "<<ListboxSelect>>",
-            lambda _event: self._set(
-                "selected",
-                items[listing.curselection()[0]] if listing.curselection() else "",
-            ),
-        )
-        self.item_widgets["folder_eval_target"] = (listing, items.index("EvalTarget"))
-        self.values["selected"] = ""
-
-    def build_settings(self) -> None:
-        frame = self._base("Settings", "Mouse & Touchpad")
-        card = tk.Frame(frame, bg="#ffffff", padx=32, pady=28, relief="groove", borderwidth=1)
-        card.pack(fill="x", pady=(30, 0))
-        enabled = tk.BooleanVar(value=False)
-        check = tk.Checkbutton(
-            card,
-            text="Natural scrolling",
-            variable=enabled,
-            font=("Sans", 21),
-            bg="#ffffff",
-            activebackground="#ffffff",
-            command=lambda: self._set("natural_scroll", bool(enabled.get())),
-            padx=20,
-            pady=20,
-        )
-        check.pack(fill="x", anchor="w")
-        self.widgets["natural_scroll"] = check
-        self.values["natural_scroll"] = False
-
-    def _set(self, key: str, value: object) -> None:
-        self.values[key] = value
+    def press(self, label: str) -> None:
+        if label.isdigit():
+            self.expression += label
+        elif label == "+" and self.expression and self.expression[-1].isdigit():
+            self.expression += label
+        elif label == "=":
+            match = re.fullmatch(r"(\d+)\+(\d+)", self.expression)
+            if match:
+                self.expression = str(int(match[1]) + int(match[2]))
+                self.values["submitted"] = self.expression
+        self.display.set(self.expression or "0")
+        self.values.update({"display": self.display.get(), "expression": self.expression})
         self.write_state()
 
-    @staticmethod
-    def _widget_bbox(widget: tk.Widget) -> list[int]:
-        return [
-            widget.winfo_rootx(),
-            widget.winfo_rooty(),
-            widget.winfo_rootx() + widget.winfo_width(),
-            widget.winfo_rooty() + widget.winfo_height(),
-        ]
+    def keypress(self, event: tk.Event) -> str | None:
+        if event.char.isdigit() or event.char == "+":
+            self.press(event.char)
+            return "break"
+        if event.keysym in {"Return", "KP_Enter"}:
+            self.press("=")
+            return "break"
+        return None
 
-    def _ready(self) -> None:
+    def ready(self) -> None:
         self.root.deiconify()
         self.root.lift()
-        self.root.attributes("-topmost", True)
-        self.root.after_idle(self.root.attributes, "-topmost", False)
         self.root.focus_force()
-        self.root.update_idletasks()
         self.write_state()
 
     def write_state(self) -> None:
-        self.root.update_idletasks()
-        boxes = {key: self._widget_bbox(widget) for key, widget in self.widgets.items()}
-        boxes["__window_content__"] = self._widget_bbox(self.root)
-        for key, (listing, index) in self.item_widgets.items():
-            item = listing.bbox(index)
-            if item:
-                x, y, width, height = item
-                boxes[key] = [
-                    listing.winfo_rootx() + x,
-                    listing.winfo_rooty() + y,
-                    listing.winfo_rootx() + x + width,
-                    listing.winfo_rooty() + y + height,
-                ]
-        payload = {"ready": True, "mode": self.mode, "values": self.values, "widgets": boxes}
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(prefix=self.state_path.name, dir=self.state_path.parent)
+        payload = {"ready": True, "mode": "calculator", "values": self.values}
+        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=STATE_PATH.name + ".", dir=STATE_PATH.parent
+        )
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle, sort_keys=True)
-            Path(tmp).replace(self.state_path)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, STATE_PATH)
         finally:
-            if Path(tmp).exists():
-                Path(tmp).unlink()
+            Path(temporary).unlink(missing_ok=True)
 
     def run(self) -> None:
         self.root.mainloop()
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--mode", choices=("editor", "terminal", "calculator", "files", "settings"), required=True
-    )
-    parser.add_argument("--state", type=Path, required=True)
-    args = parser.parse_args()
-    Fixture(args.mode, args.state).run()
-
-
 if __name__ == "__main__":
-    main()
+    Calculator().run()
