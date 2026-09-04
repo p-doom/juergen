@@ -1,26 +1,4 @@
-"""One spelling of which pixels a model was shown.
-
-Two producers write it: `datasets/convert.py` for the rollout frames its records
-point at, and `pipeline/stage_04_build_conversations` for the crowd-cast master
-frames its conversations point at. Comparing those means one string, built here.
-
-NOTHING ENFORCES IT RIGHT NOW. The consumer was `evals/harness.py`, which refused
-to score a checkpoint through a domain other than the one its dataset named, and
-it left with the eval harness. Both producers still write the string, so the
-comparison is recorded but not checked: the refusal has to be re-homed onto
-whatever scores a checkpoint next, or a train/serve pixel mismatch goes unnoticed
-again.
-
-The geometry token names the knob that bounded the frame, not the size that came
-out. `max_pixels_0` (`ImageBudget` never downscales) and `height_0` (ffmpeg
-`scale=null`) both read as "the source's own pixels", but one source is a guest
-framebuffer and the other is whatever the crowd-cast screen recording was.
-Collapsing them would turn a real train/serve mismatch into a silent match; kept
-apart, the worst case is a loud refusal an arm can vouch for in writing.
-
-This module imports nothing, deliberately: `pipeline/` runs in a venv without
-`verifiers`, so it cannot reach `agent/history.py`, where `ImageBudget` lives.
-"""
+"""One spelling of the image encoding and geometry a dataset contains."""
 
 from __future__ import annotations
 

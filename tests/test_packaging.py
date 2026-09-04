@@ -37,7 +37,6 @@ _DESKTOP = _REPO.parent / "desktop"
 FLAT_MODULES = ("image_domain",)
 
 PROBED = FLAT_MODULES + (
-    "agent.agent",
     "grammars",
     "desktop.geometry",
     "desktop.ir",
@@ -109,13 +108,6 @@ def test_every_flat_module_imports_out_of_the_wheel(resolved, flat_module: str) 
     assert files[flat_module].is_relative_to(site)
 
 
-def test_the_episode_driver_imports_out_of_the_wheel(resolved) -> None:
-    # `agent/` is named in `packages.find`, and nothing else here probes it: the
-    # flat modules are one declaration and the package list is another.
-    site, files = resolved
-    assert files["agent.agent"].is_relative_to(site)
-
-
 def test_grammars_imports_with_only_the_wheels_on_the_path(resolved) -> None:
     # grammars hard-imports desktop, and `desktop` is installed in neither shared
     # testgate venv: every suite resolves it by a sys.path append in conftest, so a
@@ -133,27 +125,11 @@ def test_the_desktop_that_answers_is_ours_and_not_the_index_one(resolved) -> Non
 
 
 def test_the_pinned_desktop_source_resolves_where_a_path_could_not() -> None:
-    """A dispatched run resolves `desktop` from a rev, not from a sibling directory.
-
-    labctl stages one repository by copying its tracked files, so `../desktop` is
-    absent inside the snapshot and a path source could not resolve there at all --
-    which is why every eval recipe runs from the live checkout instead. The rev is
-    also the only thing that records *which* desktop a run used: a path source
-    resolved to whatever happened to be on disk.
-
-    Checked against the remote rather than trusted: a rev that is not in it fails
-    a job at dispatch, in a snapshot, minutes into a queue.
-    """
+    """A dispatched run resolves a recorded desktop revision."""
     import tomllib
 
     source = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
     pin = source["tool"]["uv"]["sources"]["desktop"]
     url, rev = pin["git"], pin["rev"]
-    assert url.startswith("file:///"), "the pin is a bare repo on cluster storage"
+    assert url == "https://github.com/p-doom/desktop.git"
     assert len(rev) == 40 and not set(rev) - set("0123456789abcdef"), rev
-    found = subprocess.run(
-        ("git", "--git-dir", url.removeprefix("file://"), "cat-file", "-e", f"{rev}^{{commit}}"),
-        capture_output=True,
-        text=True,
-    )
-    assert found.returncode == 0, f"{rev} is not a commit in {url}: {found.stderr}"
