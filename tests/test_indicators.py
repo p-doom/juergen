@@ -7,8 +7,8 @@ loop over `grammars.available()` that stops a fourth shape from appearing unnoti
 legacy `(kind, value)` element pairs are still accepted so a cached trace does not
 silently read 0 (which would look like a fixed defect).
 
-`on_lattice` / `delta_histogram` implement a documented finding
-(`{0, ±1, ±10, ±100}`, mode `(±10, ±10)` = 14.1 px).
+`on_lattice` / `delta_histogram` implement the collapse detector over
+`{0, ±1, ±10, ±100}`.
 """
 
 from __future__ import annotations
@@ -363,7 +363,7 @@ def test_the_error_counters_ride_the_same_metric() -> None:
     assert trace.metrics["executor_errors"] == 3.0
 
 
-def test_the_lattice_is_the_documented_output_support() -> None:
+def test_the_lattice_is_the_detector_support() -> None:
     assert DIGIT_LATTICE == frozenset({0, 1, 10, 100})
 
 
@@ -387,7 +387,7 @@ def test_on_lattice_is_per_axis_and_sign_free(delta, expected) -> None:
     assert on_lattice(delta) is expected
 
 
-def test_the_documented_mode_is_on_lattice_at_14_1_px() -> None:
+def test_a_diagonal_ten_step_is_on_lattice_at_14_1_px() -> None:
     assert on_lattice((10, 10))
     assert abs(math.hypot(10, 10) - 14.142) < 0.01
 

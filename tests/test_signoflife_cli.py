@@ -988,11 +988,10 @@ def test_an_unattended_model_arm_samples_at_its_own_knobs(tmp_path, monkeypatch)
     """The arm decides, the flag overrides, and the record says which ran.
 
     `--temperature` used to default to 0.0, so every arm was scored greedy unless
-    an operator remembered the flag — and greedy is a measurement of the decoder on
-    the eov3 family, which confines 100% of its mouse deltas to
-    {0, ±1, ±10, ±100} at temperature 0. The dispatcher supplying its own default
-    is the defect; `sampling` in `result.json` is where a reader would have caught
-    it, so it has to carry what actually ran rather than what was typed.
+    an operator remembered the flag — and greedy measures the decoder rather than
+    the checkpoint. The dispatcher supplying its own default is the defect;
+    `sampling` in `result.json` is where a reader would have caught it, so it has
+    to carry what actually ran rather than what was typed.
     """
     from evals.signoflife.cells import ARMS
 

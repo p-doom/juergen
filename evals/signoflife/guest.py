@@ -476,9 +476,9 @@ def _lattice_move_count(low: int, high: int, support: tuple[int, ...]) -> int:
 def _assert_off_lattice(task: DesktopTaskData, state: dict[str, Any]) -> int:
     """The cell's premise, checked against the measured target.
 
-    A collapsed policy's observed output support is {0, +-1, +-10, +-100} per
-    axis, so a cell that means to require chained moves must name a target no
-    single support value reaches — and one a chain still reaches inside the step
+    The cell names the per-axis move support it means to defeat
+    (`single_move_support`), so a cell that requires chained moves must name a
+    target no single support value reaches — and one a chain still reaches inside the step
     budget, or it measures nothing but the budget. Both are properties of the
     measured bbox, so both are asserted here instead of assumed from the nominal
     window position.

@@ -84,8 +84,8 @@ depends on model output.
     instruction names the goal and only the screen names the second stage. HELD
     on the same clean evidence: base 3/3, no click involved.
   * `tk_target_click` -- a target no single move from the declared cursor start
-    reaches, since the observed output support collapses to {0, +-1, +-10,
-    +-100}. The premise is asserted at setup from the measured bbox.
+    reaches, so passing it requires chaining moves rather than one lucky jump.
+    The premise is asserted at setup from the measured bbox.
   * `tk_no_submit_entry` -- the reflexive Return: type into a field and click a
     named button *without* submitting, with `submitted` sticky in the fixture.
 

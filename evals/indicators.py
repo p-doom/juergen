@@ -42,10 +42,10 @@ __all__ = [
 SUBMIT_KEYS = frozenset({"Return", "Enter", "KpEnter", "NumpadEnter", "ENTER", "RETURN"})
 
 DIGIT_LATTICE = frozenset({0, 1, 10, 100})
-"""The observed output support of the collapsed relative-delta checkpoints:
-`{0, ±1, ±10, ±100}` per axis, 400/400 samples, mode literally `(±10, ±10)` —
-14.1 px = hypot(10, 10). On-lattice rate is therefore a collapse detector: a
-healthy relative policy emits arbitrary integers, a collapsed one emits digits."""
+"""Single-digit-and-round magnitudes, `{0, ±1, ±10, ±100}` per axis. On-lattice
+rate is a collapse detector: a healthy relative policy emits arbitrary integers,
+a collapsed one emits only these. It measures the sampled output, so a greedy
+decode reads as collapse whatever the checkpoint does."""
 
 _LITERAL_ESCAPES = ("\\n", "\\r", "\\t")
 
