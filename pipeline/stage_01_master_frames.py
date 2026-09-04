@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Stage 01a (frames-master): decode every segment's mp4 once into a JPEG
 ArrayRecord frame store, so downstream fps experiments never re-decode.
 
@@ -62,28 +61,25 @@ from pipeline.lib.frames_actions import (
     resolve_ffmpeg_bin,
 )
 from pipeline.lib.image_store import make_arrayrecord_image_uri
-from pipeline.lib.manifest import file_sha256_short
+from pipeline.lib.manifest import file_sha256_short, make_artifact_id
+from pipeline.lib.source_clips import resolve_source_clips
 
 DEFAULT_MASTER_FPS = 4.0
 
 
-def _luma_metrics(jpeg: bytes) -> tuple[float | None, float | None]:
+def _luma_metrics(jpeg: bytes) -> tuple[float, float]:
     """Black-frame detection for one JPEG, computed in a single grayscale
     histogram pass: ``(mean_luma, frac_dark)`` where mean_luma is 0-255 and
     frac_dark is the fraction of pixels below ``config.BLACK_DARK_CUTOFF``.
 
-    These are raw metrics, not a boolean -- the sampler (01b) applies the
-    threshold, so it stays tunable without re-decoding. Returns ``(None, None)``
-    if the frame can't be decoded; such a frame is never dropped as black."""
-    try:
-        import io
+    These are raw metrics, not a boolean; the filter applies the threshold."""
+    import io
 
-        from PIL import Image
+    from PIL import Image
 
-        with Image.open(io.BytesIO(jpeg)) as im:
-            hist = im.convert("L").histogram()  # 256 luma bins
-    except Exception:  # noqa: BLE001 — detection is best-effort, never fatal
-        return None, None
+    with Image.open(io.BytesIO(jpeg)) as im:
+        im.load()
+        hist = im.convert("L").histogram()
     total = sum(hist) or 1
     mean_luma = sum(i * c for i, c in enumerate(hist)) / total
     frac_dark = sum(hist[: config.BLACK_DARK_CUTOFF]) / total
@@ -246,11 +242,15 @@ def build_segment_master(task: dict[str, Any]) -> dict[str, Any]:
         "video_sha256": row["video_sha256"],
     }
 
-    if not row.get("video_ok"):
-        return {**base_row, "status": "skipped_video_not_ok", "num_records": 0}
     video_path = row.get("video_path")
-    if not video_path or not Path(video_path).exists():
-        return {**base_row, "status": "skipped_no_video", "num_records": 0}
+    if row.get("video_ok") is not True or not isinstance(video_path, str):
+        raise ValueError(f"source segment {seg} has no canonical video")
+    video = Path(video_path)
+    if not video.is_file() or video.stat().st_size == 0:
+        raise FileNotFoundError(f"source video is missing or empty: {video}")
+    observed_video_sha = file_sha256_short(video, n=64)
+    if observed_video_sha != row.get("video_sha256"):
+        raise ValueError(f"source video digest mismatch: {video}")
 
     cache_inputs = {
         "jpeg_quality": task["jpeg_quality"],
@@ -258,28 +258,18 @@ def build_segment_master(task: dict[str, Any]) -> dict[str, Any]:
         "target_height": task["target_height"],
         "video_sha256": row["video_sha256"],
     }
-    if not task["force"] and (
-        cached := _cached_segment(segment_frame_dir, cache_inputs)
-    ):
+    if cached := _cached_segment(segment_frame_dir, cache_inputs):
         return {**base_row, "status": "ok", **cached}
     (segment_frame_dir / "segment_manifest.json").unlink(missing_ok=True)
 
-    try:
-        extract_frames_ffmpeg(
-            video_path=Path(video_path),
-            output_dir=segment_frame_dir,
-            target_fps=task["master_fps"],
-            target_height=task["target_height"],
-            jpeg_quality=task["jpeg_quality"],
-            ffmpeg_bin=task["ffmpeg_bin"],
-        )
-    except Exception as exc:  # noqa: BLE001 - one segment failing must not kill the run
-        return {
-            **base_row,
-            "status": "failed",
-            "num_records": 0,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
+    extract_frames_ffmpeg(
+        video_path=video,
+        output_dir=segment_frame_dir,
+        target_fps=task["master_fps"],
+        target_height=task["target_height"],
+        jpeg_quality=task["jpeg_quality"],
+        ffmpeg_bin=task["ffmpeg_bin"],
+    )
 
     frame_paths = sorted(segment_frame_dir.glob("frame_*.jpg"))
     packed = pack_master_arrayrecord(
@@ -290,7 +280,7 @@ def build_segment_master(task: dict[str, Any]) -> dict[str, Any]:
         video_frame_count=int(row.get("video_frame_count") or 0),
     )
     if not packed["num_records"]:
-        return {**base_row, "status": "empty", "num_records": 0}
+        raise ValueError(f"source video decoded no frames: {video}")
     outputs = {
         key: packed[key]
         for key in (
@@ -352,6 +342,7 @@ def aggregate_summary(
         "ffmpeg_bin": ffmpeg_bin,
         "source_clips_manifest": source_clips_manifest,
         "source_clips_sha256": file_sha256_short(Path(source_clips_manifest), n=64),
+        "source_clips_id": make_artifact_id(Path(source_clips_manifest).parent),
     }
 
 
@@ -371,32 +362,23 @@ def write_summary_and_manifest(out_dir: Path, summary: dict[str, Any]) -> None:
 
 
 def run_merge(args: argparse.Namespace) -> None:
-    """Fold the per-shard segment_index.shard*_of_<N>.jsonl files (written by the
-    array-job shard tasks into a shared --output-dir) into the canonical
-    segment_index.jsonl, then write the summary + manifest.json marker. Scoped to
-    ``_of_<num_shards>`` so stale files from a run with a different shard count are
-    ignored, and deduped by segment_id so any accidental overlap can't double-count.
-    """
+    """Publish one master-frame artifact from a complete shard set."""
     out_dir = args.output_dir
     n = args.num_shards
     if n < 2:
         raise SystemExit("--merge requires --num-shards > 1")
     if not out_dir.is_dir():
         raise SystemExit(f"--merge: --output-dir does not exist: {out_dir}")
+    (out_dir / "manifest.json").unlink(missing_ok=True)
 
     suffix = f"_of_{n:04d}"
-    shard_index_files = sorted(out_dir.glob(f"segment_index.shard*{suffix}.jsonl"))
-    if not shard_index_files:
-        raise SystemExit(
-            f"[merge] no segment_index.shard*{suffix}.jsonl under {out_dir} "
-            f"(did the shard tasks run with --num-shards {n}?)"
-        )
-    present = sorted(
-        int(p.name.split(".shard")[1].split("_of_")[0]) for p in shard_index_files
-    )
-    missing = sorted(set(range(n)) - set(present))
-    if missing:
-        raise RuntimeError(f"missing shard indexes: {missing}")
+    shard_index_files = [
+        out_dir / f"segment_index.shard{index:04d}{suffix}.jsonl" for index in range(n)
+    ]
+    observed_indexes = set(out_dir.glob(f"segment_index.shard*{suffix}.jsonl"))
+    if observed_indexes != set(shard_index_files):
+        raise RuntimeError("master-frame shard index set is incomplete or noncanonical")
+    present = list(range(n))
 
     by_seg: dict[str, dict[str, Any]] = {}
     for sf in shard_index_files:
@@ -413,18 +395,59 @@ def run_merge(args: argparse.Namespace) -> None:
             "cannot publish an empty or incomplete master frame artifact"
         )
 
-    # Decode scalars (ffmpeg_bin / source manifest) live in the shard summaries;
-    # fall back to the first index row for the numerics if a summary is missing.
-    shard_summaries = sorted(out_dir.glob(f"frames_master_summary.shard*{suffix}.json"))
-    scalars = json.loads(shard_summaries[0].read_text()) if shard_summaries else {}
-    first = index_rows[0] if index_rows else {}
+    shard_summaries = [
+        out_dir / f"frames_master_summary.shard{index:04d}{suffix}.json"
+        for index in range(n)
+    ]
+    observed_summaries = set(out_dir.glob(f"frames_master_summary.shard*{suffix}.json"))
+    if observed_summaries != set(shard_summaries):
+        raise RuntimeError(
+            "master-frame shard summary set is incomplete or noncanonical"
+        )
+    summary_by_index = {
+        int(path.name.split(".shard")[1].split("_of_")[0]): json.loads(path.read_text())
+        for path in shard_summaries
+    }
+    if set(summary_by_index) != set(range(n)):
+        raise RuntimeError(
+            f"missing or duplicate shard summaries: "
+            f"{sorted(set(range(n)) - set(summary_by_index))}"
+        )
+    scalar_fields = (
+        "ffmpeg_bin",
+        "jpeg_quality",
+        "master_fps",
+        "num_shards",
+        "source_clips_id",
+        "source_clips_manifest",
+        "source_clips_sha256",
+        "target_height",
+    )
+    scalars = summary_by_index[0]
+    for index, shard_summary in summary_by_index.items():
+        shard_rows = read_jsonl(shard_index_files[index])
+        if shard_summary.get("shard_index") != index or any(
+            shard_summary.get(field) != scalars.get(field) for field in scalar_fields
+        ):
+            raise ValueError(f"master-frame shard summary mismatch: {index}")
+        expected_counts = {
+            "n_segments": len(shard_rows),
+            "n_records_total": sum(row["num_records"] for row in shard_rows),
+            "total_jpeg_bytes": sum(row["total_jpeg_bytes"] for row in shard_rows),
+            "status_counts": {"ok": len(shard_rows)},
+        }
+        if any(
+            shard_summary.get(field) != value
+            for field, value in expected_counts.items()
+        ):
+            raise ValueError(f"master-frame shard summary counts mismatch: {index}")
     summary = aggregate_summary(
         index_rows,
-        master_fps=scalars.get("master_fps", first.get("master_fps")),
-        target_height=scalars.get("target_height", first.get("target_height")),
-        jpeg_quality=scalars.get("jpeg_quality", first.get("jpeg_quality")),
-        ffmpeg_bin=scalars.get("ffmpeg_bin"),
-        source_clips_manifest=scalars.get("source_clips_manifest"),
+        master_fps=scalars["master_fps"],
+        target_height=scalars["target_height"],
+        jpeg_quality=scalars["jpeg_quality"],
+        ffmpeg_bin=scalars["ffmpeg_bin"],
+        source_clips_manifest=scalars["source_clips_manifest"],
     )
     summary["num_shards"] = n
     summary["merged_shards"] = present
@@ -447,10 +470,8 @@ def parse_args() -> argparse.Namespace:
         "--clips-manifest",
         type=Path,
         default=None,
-        help="discover clips_manifest.jsonl (or any manifest with segment_id/"
-        "video_path/video_ok/video_fps/video_duration_s rows). Keylog-free: the "
-        "decode is alignment-agnostic, so realignment is not needed here. Required "
-        "for decoding; ignored in --merge mode.",
+        help="Stage00 clips_manifest.jsonl. Required for decoding; ignored in "
+        "--merge mode.",
     )
     p.add_argument("--output-dir", type=Path, required=True)
     p.add_argument(
@@ -471,17 +492,6 @@ def parse_args() -> argparse.Namespace:
         help="Parallel segment decodes (0 = cpu_count()). Each spawns one ffmpeg "
         "(itself capped via JUERGEN_ANNOTATION_FFMPEG_THREADS, default 4). Run on "
         "a CPU allocation, not the shared login node.",
-    )
-    p.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Process only the first N segments (debug).",
-    )
-    p.add_argument(
-        "--force",
-        action="store_true",
-        help="Re-decode segments that already have a frame_manifest.jsonl.",
     )
     p.add_argument(
         "--num-shards",
@@ -515,6 +525,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    out_dir = ensure_dir(args.output_dir)
+    (out_dir / "manifest.json").unlink(missing_ok=True)
     if args.merge:
         run_merge(args)
         return
@@ -532,14 +544,9 @@ def main() -> None:
         )
     ffmpeg_bin = resolve_ffmpeg_bin(args.ffmpeg_bin)
 
-    out_dir = ensure_dir(args.output_dir)
     frames_dir = ensure_dir(out_dir / "frames")
 
-    rows = read_jsonl(args.clips_manifest)
-    if not rows:
-        raise RuntimeError(f"Empty clip manifest: {args.clips_manifest}")
-    if args.limit is not None:
-        rows = rows[: args.limit]
+    rows, _ = resolve_source_clips(args.clips_manifest)
     sharded = args.num_shards > 1
     if sharded:
         # Round-robin stride: disjoint and exhaustive across shard 0..N-1, and
@@ -558,7 +565,6 @@ def main() -> None:
             "target_height": args.target_height,
             "jpeg_quality": args.jpeg_quality,
             "ffmpeg_bin": ffmpeg_bin,
-            "force": args.force,
         }
         for row in rows
     ]

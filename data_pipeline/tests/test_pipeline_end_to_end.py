@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -14,11 +15,12 @@ import pytest
 import synthetic_clip as clip
 from grammars.deltatype_v2 import CODEC
 from image_domain import image_domain
+from PIL import Image
 
 from pipeline.annotation import stage_annotate
 from pipeline.annotation.lib.labeler import LabelResult
 from pipeline.lib import config
-from pipeline.lib.image_store import open_image_pil
+from pipeline.lib.image_store import read_jpeg_bytes
 from pipeline.lib.manifest import make_artifact_id, resolve_chat_artifact
 from pipeline.lib.views import FilterArtifact
 from pipeline.stage_01_master_frames import build_segment_master
@@ -29,7 +31,7 @@ STAGES = REPO_ROOT / "pipeline"
 
 
 def _run_stage(script: str, *args: object) -> None:
-    roots = [REPO_ROOT, DATA_PIPELINE_DIR, REPO_ROOT.parent / "desktop"]
+    roots = [REPO_ROOT, DATA_PIPELINE_DIR]
     environment = dict(os.environ, PYTHONPATH=os.pathsep.join(map(str, roots)))
     process = subprocess.run(
         [sys.executable, str(STAGES / script), *map(str, args)],
@@ -71,7 +73,10 @@ class Chain:
         )
         self.realigned = self.stage_02 / "clips_manifest.jsonl"
         self.master = clip.build_master_store(
-            root / "stage_01", self.clip_rows[0], self.source["frames"]
+            root / "stage_01",
+            self.clip_rows[0],
+            self.source["frames"],
+            self.stage_00,
         )
         self.filter = root / "stage_03"
         _run_stage(
@@ -155,6 +160,14 @@ def test_discovery_realign_and_filter_artifacts_are_joined(chain: Chain):
     assert source["segment_id"] == clip.SEGMENT_ID
     assert realigned["raw_keylog_path"] == source["keylog_path"]
     assert realigned["alignment_status"] == "aligned"
+    source_id = make_artifact_id(chain.stage_00.parent)
+    source_sha256 = hashlib.sha256(chain.stage_00.read_bytes()).hexdigest()
+    realigned_manifest = json.loads((chain.stage_02 / "manifest.json").read_text())
+    master_manifest = json.loads((chain.master / "manifest.json").read_text())
+    assert realigned_manifest["source_clips_id"] == source_id
+    assert master_manifest["source_clips_id"] == source_id
+    assert realigned_manifest["source_clips_sha256"] == source_sha256
+    assert master_manifest["source_clips_sha256"] == source_sha256
     filter_manifest = json.loads((chain.filter / "manifest.json").read_text())
     assert filter_manifest["master_store_id"] == make_artifact_id(chain.master)
     segment = json.loads((chain.filter / "filter" / f"{clip.SEGMENT_ID}.json").read_text())
@@ -204,8 +217,29 @@ def test_stage_04_attests_prompt_inputs_and_q92_images(chain: Chain):
     )
     assert resolve_chat_artifact(chain.conversations) == chain.conversations / "chat.jsonl"
     for image in _images(_jsonl(chain.conversations / "chat.jsonl")[0]):
-        with open_image_pil(image) as frame:
+        with Image.open(io.BytesIO(read_jpeg_bytes(image))) as frame:
             assert frame.format == "JPEG"
+
+
+def test_chat_resolver_refuses_a_forged_crowdcast_image(chain: Chain, tmp_path: Path):
+    artifact = tmp_path / "conversations"
+    shutil.copytree(chain.conversations, artifact)
+    chat = artifact / "chat.jsonl"
+    rows = _jsonl(chat)
+    image = next(
+        part
+        for message in rows[0]["messages"]
+        for part in message["content"]
+        if part["type"] == "image"
+    )
+    image["image"] = "ar:///outside.array_record#0"
+    chat.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    manifest_path = artifact / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["chat_sha256"] = hashlib.sha256(chat.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="chat rows do not match"):
+        resolve_chat_artifact(artifact)
 
 
 def test_stage_04_requires_the_describe_extract_artifact_contract(chain: Chain, tmp_path: Path):
@@ -274,6 +308,42 @@ def test_stage_04_rejects_mutated_goals_and_filter_payloads(chain: Chain, tmp_pa
         segment_path.write_bytes(original)
 
 
+def test_stage_04_refuses_an_unprojectable_goal(chain: Chain, tmp_path: Path):
+    goals = tmp_path / "goals"
+    shutil.copytree(chain.goals, goals)
+    goals_path = goals / "goals.jsonl"
+    rows = _jsonl(goals_path)
+    rows[0]["start_master_idx"] = 10_000
+    rows[0]["end_master_idx"] = 10_001
+    goals_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    manifest_path = goals / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["goals_sha256"] = hashlib.sha256(goals_path.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+    process = subprocess.run(
+        [
+            sys.executable,
+            str(STAGES / "stage_04_build_conversations.py"),
+            "--filter_dir",
+            str(chain.filter),
+            "--goals_dir",
+            str(goals),
+            "--fps",
+            str(clip.TRAIN_FPS),
+            "--output_dir",
+            str(tmp_path / "out"),
+            "--num_workers",
+            "1",
+        ],
+        env=dict(os.environ, PYTHONPATH=str(REPO_ROOT)),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert process.returncode != 0
+    assert "goal projection failed" in process.stderr
+
+
 def test_stage_01_cache_validates_closed_payload(chain: Chain, tmp_path: Path):
     source_segment = chain.master / "frames" / clip.SEGMENT_ID
     frames_dir = tmp_path / "frames"
@@ -307,9 +377,16 @@ def test_stage_01_cache_validates_closed_payload(chain: Chain, tmp_path: Path):
         "target_height": index_row["target_height"],
         "jpeg_quality": index_row["jpeg_quality"],
         "ffmpeg_bin": "must-not-run",
-        "force": False,
     }
     assert build_segment_master(task)["status"] == "ok"
+    source_video = Path(chain.clip_rows[0]["video_path"])
+    original_video = source_video.read_bytes()
+    try:
+        source_video.write_bytes(original_video + b"mutated")
+        with pytest.raises(ValueError, match="source video digest mismatch"):
+            build_segment_master(task)
+    finally:
+        source_video.write_bytes(original_video)
     with (segment_dir / "frame_manifest.jsonl").open("a") as target:
         target.write("{}\n")
     with pytest.raises(ValueError, match="frame manifest digest mismatch"):

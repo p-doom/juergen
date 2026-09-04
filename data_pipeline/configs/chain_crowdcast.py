@@ -86,7 +86,7 @@ def get_config():
     omegalax = _required_dir("OMEGALAX_REPO")
     attest_omegalax(omegalax)
     processor_snapshot = attest_processor_snapshot(_required_dir("SFT_PROCESSOR_SNAPSHOT"))
-    _manifest(
+    master_manifest = _manifest(
         master / "manifest.json",
         {
             "artifact_type": "juergen_annotation_frames_master",
@@ -109,6 +109,10 @@ def get_config():
         raise RuntimeError("CROWDCAST_CLIPS_MANIFEST is not the Stage02 canonical clips file")
     if file_sha256_short(clips, n=64) != realigned.get("clips_sha256"):
         raise RuntimeError("CROWDCAST_CLIPS_MANIFEST digest does not match Stage02")
+    if master_manifest.get("source_clips_sha256") != realigned.get(
+        "source_clips_sha256"
+    ) or master_manifest.get("source_clips_id") != realigned.get("source_clips_id"):
+        raise RuntimeError("Crowd-Cast Stage01 and Stage02 source inventories differ")
     clip_rows = [json.loads(line) for line in clips.read_text().splitlines() if line.strip()]
     if not clip_rows:
         raise RuntimeError("CROWDCAST_CLIPS_MANIFEST is empty")

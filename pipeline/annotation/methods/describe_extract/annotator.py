@@ -73,11 +73,13 @@ def clean_goals(
         instr = instr.strip()
         if not instr:
             raise ValueError(f"goal {index} instruction is empty")
-        try:
-            start = int(g["start_frame"])
-            end = int(g["end_frame"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError(f"goal {index} has invalid frame bounds") from exc
+        start = g["start_frame"]
+        end = g["end_frame"]
+        if any(
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in (start, end)
+        ):
+            raise ValueError(f"goal {index} has invalid frame bounds")
         if end < start:
             raise ValueError(f"goal {index} end_frame precedes start_frame")
         if start > own_hi:
@@ -161,7 +163,7 @@ def run_unit(unit: AnnotationUnit, ctx: Context) -> dict[str, Any]:
         describe_prompt,
         images=imgs,
         image_labels=labels,
-        cache_path=ctx.cache_dir / "describe_prose.txt",
+        cache_path=ctx.cache_dir / "describe_prose.json",
     )
     description = res_d.content
 
@@ -177,7 +179,7 @@ def run_unit(unit: AnnotationUnit, ctx: Context) -> dict[str, Any]:
         extract_prompt,
         images=imgs,
         image_labels=labels,
-        cache_path=ctx.cache_dir / "extract_from_prose.txt",
+        cache_path=ctx.cache_dir / "extract_from_prose.json",
     )
     goals = clean_goals(
         parsed,

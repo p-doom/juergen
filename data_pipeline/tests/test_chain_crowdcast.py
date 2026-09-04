@@ -46,6 +46,8 @@ def chain(monkeypatch, tmp_path: Path):
     datasets.mkdir()
     master = tmp_path / "master"
     master.mkdir()
+    source_id = "/source::0123456789abcdef"
+    source_sha256 = "0" * 64
     (master / "manifest.json").write_text(
         json.dumps(
             {
@@ -53,6 +55,8 @@ def chain(monkeypatch, tmp_path: Path):
                 "schema_version": 1,
                 "target_height": 720,
                 "jpeg_quality": 92,
+                "source_clips_id": source_id,
+                "source_clips_sha256": source_sha256,
             }
         )
     )
@@ -76,6 +80,8 @@ def chain(monkeypatch, tmp_path: Path):
                 "schema_version": 1,
                 "clips_file": clips.name,
                 "clips_sha256": hashlib.sha256(clips.read_bytes()).hexdigest(),
+                "source_clips_id": source_id,
+                "source_clips_sha256": source_sha256,
             }
         )
     )
@@ -171,4 +177,14 @@ def test_chain_refuses_unclosed_stage02_alignment(chain):
     manifest["clips_sha256"] = hashlib.sha256(clips.read_bytes()).hexdigest()
     manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(RuntimeError, match="unclosed alignment"):
+        module.get_config()
+
+
+def test_chain_refuses_mismatched_stage00_provenance(chain):
+    module, master, _ = chain
+    manifest_path = master / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["source_clips_sha256"] = "f" * 64
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(RuntimeError, match="source inventories differ"):
         module.get_config()

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Build the canonical manifest for a complete Crowd-Cast uploads tree."""
 
 from __future__ import annotations
@@ -73,9 +72,7 @@ def build_row(video: Path) -> dict[str, Any]:
         "video_sha256": _sha256(video),
         "keylog_sha256": _sha256(keylog),
         "user_id": user_dir.name,
-        "version": user_dir.parent.name
-        if user_dir.parent.name != "uploads"
-        else user_dir.parent.parent.name,
+        "version": user_dir.parent.name,
     }
     row.update(video_info)
     return row
@@ -93,8 +90,13 @@ def main() -> None:
     args = parse_args()
     if args.workers <= 0:
         raise SystemExit("--workers must be positive")
-    root = args.dataset_root
-    videos = sorted(root.glob("uploads/**/recordings/*.mp4"))
+    if args.out.name != "clips_manifest.jsonl":
+        raise SystemExit("--out must end in clips_manifest.jsonl")
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path = args.out.parent / "manifest.json"
+    manifest_path.unlink(missing_ok=True)
+    root = args.dataset_root.resolve()
+    videos = sorted(root.glob("uploads/*/*/recordings/*.mp4"))
     print(f"found {len(videos)} mp4 under {root}/uploads", file=sys.stderr)
     if not videos:
         raise SystemExit("no videos found")
@@ -113,10 +115,25 @@ def main() -> None:
     segment_ids = [row["segment_id"] for row in rows]
     if len(set(segment_ids)) != len(segment_ids):
         raise ValueError("Crowd-Cast uploads contain duplicate segment IDs")
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    with args.out.open("w") as f:
+    temporary = args.out.with_suffix(".tmp")
+    with temporary.open("w") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")
+    temporary.replace(args.out)
+
+    clips_sha256 = _sha256(args.out)
+    manifest = {
+        "artifact_type": "crowdcast_source_clips",
+        "schema_version": 1,
+        "clips_file": "clips_manifest.jsonl",
+        "clips_sha256": clips_sha256,
+        "source_root": str(root),
+        "n_segments": len(rows),
+        "n_recordings": len({row["recording_id"] for row in rows}),
+    }
+    temporary_manifest = args.out.parent / ".manifest.json.tmp"
+    temporary_manifest.write_text(json.dumps(manifest, indent=2) + "\n")
+    temporary_manifest.replace(manifest_path)
 
     total_dur = sum(r.get("video_duration_s", 0.0) for r in rows)
     print(

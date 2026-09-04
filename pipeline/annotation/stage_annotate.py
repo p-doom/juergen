@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -88,6 +89,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    output = ensure_dir(args.output_dir)
+    (output / "manifest.json").unlink(missing_ok=True)
     if args.target_tpm <= 0:
         raise SystemExit("--target-tpm must be positive")
     if args.max_workers <= 0:
@@ -97,10 +100,12 @@ def main() -> None:
     prompts = PromptPack(PROMPTS_PATH)
     labeler = Labeler(LabelerConfig.from_env(model=args.model))
 
-    output = ensure_dir(args.output_dir)
+    if (output / "units").exists():
+        shutil.rmtree(output / "units")
     units_dir = ensure_dir(output / "units")
     calls_dir = ensure_dir(output / "calls")
     progress_path = output / "progress.jsonl"
+    progress_path.unlink(missing_ok=True)
     items = [
         {"id": str(row["segment_id"]), "row": row} for row in artifact.usable_rows()
     ]
@@ -192,7 +197,7 @@ def main() -> None:
     )
     goals_path = output / "goals.jsonl"
     write_jsonl(goals_path, goals)
-    prompts.snapshot_to(output)
+    prompt_snapshot = prompts.snapshot_to(output)
     write_json(
         output / "manifest.json",
         {
@@ -203,6 +208,8 @@ def main() -> None:
             "method": METHOD,
             "input_kind": "frames",
             "prompt_pack_sha": prompts.sha,
+            "prompts": prompt_snapshot.name,
+            "prompts_sha256": file_sha256_short(prompt_snapshot, n=64),
             "model": args.model,
             "fps": args.fps,
             "stride": stride,

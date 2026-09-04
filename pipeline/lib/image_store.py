@@ -14,12 +14,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlparse
-
-if TYPE_CHECKING:  # avoid importing heavy deps at module load
-    import numpy as np
-    from PIL import Image
 
 ARRAYRECORD_IMAGE_URI_SCHEME = "ar"
 
@@ -52,49 +47,15 @@ def parse_arrayrecord_image_uri(uri: str) -> tuple[Path, int]:
     return Path(unquote(parsed.path)), record_index
 
 
-def is_arrayrecord_image_uri(value: object) -> bool:
-    return isinstance(value, str) and value.startswith(f"{ARRAYRECORD_IMAGE_URI_SCHEME}://")
-
-
 @lru_cache(maxsize=32)
 def _reader(shard_path: str):
     """Cache one ArrayRecordReader per shard (frames of a segment read together)."""
-    from array_record.python.array_record_module import ArrayRecordReader  # noqa: PLC0415
+    from array_record.python.array_record_module import ArrayRecordReader
 
     return ArrayRecordReader(shard_path)
 
 
-def read_jpeg_bytes(ref: str | Path) -> bytes:
-    """Return raw JPEG bytes for an ``ar://`` URI or a plain file path."""
-    if is_arrayrecord_image_uri(str(ref)):
-        shard, idx = parse_arrayrecord_image_uri(str(ref))
-        return _reader(str(shard)).read([idx])[0]
-    return Path(ref).read_bytes()
-
-
-def read_image_bgr(ref: str | Path) -> np.ndarray:
-    """Decode ``ref`` (``ar://`` URI or file path) into an OpenCV BGR array."""
-    import cv2  # noqa: PLC0415
-    import numpy as np  # noqa: PLC0415
-
-    if is_arrayrecord_image_uri(str(ref)):
-        buf = np.frombuffer(read_jpeg_bytes(ref), dtype=np.uint8)
-        frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-        if frame is None:
-            raise RuntimeError(f"could not decode ArrayRecord frame: {ref}")
-        return frame
-    frame = cv2.imread(str(ref))
-    if frame is None:
-        raise RuntimeError(f"could not read frame: {ref}")
-    return frame
-
-
-def open_image_pil(ref: str | Path) -> Image.Image:
-    """Open ``ref`` (``ar://`` URI or file path) as a PIL image."""
-    import io  # noqa: PLC0415
-
-    from PIL import Image  # noqa: PLC0415
-
-    if is_arrayrecord_image_uri(str(ref)):
-        return Image.open(io.BytesIO(read_jpeg_bytes(ref)))
-    return Image.open(ref)
+def read_jpeg_bytes(uri: str) -> bytes:
+    """Read one JPEG from the canonical ArrayRecord URI domain."""
+    shard, index = parse_arrayrecord_image_uri(uri)
+    return _reader(str(shard)).read([index])[0]

@@ -150,8 +150,10 @@ def _validate_generation(
         _validate_shard(physical / name, published / name, expected)
 
 
-def validate_image_store(output_dir: Path) -> dict[str, object]:
-    manifest_path = output_dir / "manifest.json"
+def validate_image_store(
+    output_dir: Path, *, manifest_path: Path | None = None
+) -> dict[str, object]:
+    manifest_path = manifest_path or output_dir / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -217,9 +219,10 @@ def validate_image_store(output_dir: Path) -> dict[str, object]:
 def _existing_manifest(
     output_dir: Path,
     source_tars: dict[str, str],
+    previous_manifest: Path,
 ) -> dict[str, object] | None:
     try:
-        manifest = validate_image_store(output_dir)
+        manifest = validate_image_store(output_dir, manifest_path=previous_manifest)
     except (OSError, KeyError, TypeError, ValueError):
         return None
     return manifest if manifest["source_tars"] == source_tars else None
@@ -288,14 +291,19 @@ def _publish_manifest(output_dir: Path, manifest: dict[str, object]) -> None:
 def build_store(screenshots_dir: Path, output_dir: Path, *, workers: int) -> dict:
     if workers <= 0:
         raise ValueError(f"workers must be positive, got {workers}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "manifest.json"
+    previous_manifest = output_dir / ".manifest.previous.json"
+    if manifest_path.exists():
+        manifest_path.replace(previous_manifest)
     sources = sorted(screenshots_dir.glob("screenshots-*.tar"))
     if not sources:
         raise ValueError(f"no screenshots-*.tar files under {screenshots_dir}")
     source_tars = {source.name: _sha256(source) for source in sources}
-    output_dir.mkdir(parents=True, exist_ok=True)
-    if manifest := _existing_manifest(output_dir, source_tars):
+    if manifest := _existing_manifest(output_dir, source_tars, previous_manifest):
+        _publish_manifest(output_dir, manifest)
+        previous_manifest.unlink(missing_ok=True)
         return manifest
-    (output_dir / "manifest.json").unlink(missing_ok=True)
 
     generation_name = f"generation-{_canonical_sha256(source_tars)[:16]}"
     generation = output_dir / generation_name
@@ -344,6 +352,7 @@ def build_store(screenshots_dir: Path, output_dir: Path, *, workers: int) -> dic
         if path != generation:
             shutil.rmtree(path)
     _publish_manifest(output_dir, manifest)
+    previous_manifest.unlink(missing_ok=True)
     return manifest
 
 

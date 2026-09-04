@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import re
 from collections.abc import Iterable
@@ -109,11 +108,3 @@ def load_keylog_entries(keylog_path: Path) -> list[Any]:
     if not isinstance(entries, list):
         raise TypeError(f"keylog must contain a list: {keylog_path}")
     return entries
-
-
-def image_data_url(path: Path) -> str:
-    suffix = path.suffix.lower()
-    if suffix not in {".jpg", ".jpeg"}:
-        raise ValueError(f"annotation image must be JPEG: {path}")
-    data = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:image/jpeg;base64,{data}"

@@ -92,6 +92,16 @@ def _screenshot_tar(root: Path, count: int = 6) -> Path:
             "down(ControlLeft); down(KeyC); up(KeyC); up(ControlLeft)",
         ),
         (
+            {"action": "key", "keys": ["ctrl", "k", "ctrl", "s"]},
+            "down(ControlLeft); down(KeyK); up(KeyK); up(ControlLeft); "
+            "down(ControlLeft); down(KeyS); up(KeyS); up(ControlLeft)",
+        ),
+        (
+            {"action": "key", "keys": ["backspace", "backspace", "backspace"]},
+            "down(Backspace); up(Backspace); down(Backspace); up(Backspace); "
+            "down(Backspace); up(Backspace)",
+        ),
+        (
             {"action": "type", "text": "a\nb\tc"},
             'type("a"); down(Return); up(Return); type("b"); down(Tab); up(Tab); type("c")',
         ),
@@ -479,6 +489,8 @@ def test_curator_accounts_for_nonrepresentable_source_key():
     assert curated is not None
     assert [step["step"] for step in curated["steps"]] == [1]
     assert counters["executed_calls"] == 2
+    assert counters["logical_targets"] == 2
+    assert counters["executable_targets"] == 1
     assert counters["nonexecutable_calls"] == 1
     assert dispositions == [
         {
@@ -598,6 +610,7 @@ def test_actual_source_schema_normalizes_executed_type_and_null_steps():
     assert counters["source_events"] == 3
     assert counters["nonexecuted_events"] == 1
     assert counters["logical_targets"] == 2
+    assert counters["executable_targets"] == 2
     assert rows[0]["messages"][-1]["content"][0]["text"].endswith('type("hello")')
     assert rows[1]["messages"][-1]["content"][0]["text"].endswith(
         "move(-111,-192); down(LMB); up(LMB)"
@@ -637,6 +650,7 @@ def test_stage_01_to_stage_04_manifest_and_digest_contract(tmp_path: Path):
     assert manifest["grammar"] == CODEC.name
     assert manifest["stats"] == {"records": 1, "rollouts": 1}
     assert curated_manifest["stats"]["logical_targets"] == 1
+    assert curated_manifest["stats"]["executable_targets"] == 1
     contract = render_contract()
     assert manifest["contract"]["render_spec_sha256"] == contract["render_spec_sha256"]
     row = json.loads((output / "chat.jsonl").read_text())

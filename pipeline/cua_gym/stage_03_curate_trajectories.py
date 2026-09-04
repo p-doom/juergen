@@ -17,9 +17,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from desktop.execute.protocol import build_action_request
 from desktop.geometry import DisplayGeometry
 
 from grammars.ordered_events_v3_relative_1000_grid_v1.codec import (
+    CODEC,
     OrderedEventsV3Action,
 )
 from pipeline.cua_gym.translate import translate_step
@@ -90,9 +92,9 @@ _FAILED_FIELDS = {
 }
 _STAT_FIELDS = {
     "excluded_rollouts",
+    "executable_targets",
     "executed_calls",
     "logical_targets",
-    "logical_turns",
     "multicall_extra_calls",
     "multicall_turns",
     "nonexecutable_calls",
@@ -283,7 +285,7 @@ def _curate_group(
     if parsed_calls != raw_calls:
         raise ValueError(f"{task_id} step {step}: parsed and recorded calls differ")
     counters["executed_calls"] += len(rows)
-    counters["logical_turns"] += 1
+    counters["logical_targets"] += 1
     if actions == [{"action": "key", "keys": ["center"]}]:
         counters["nonexecutable_calls"] += 1
         dispositions.append(
@@ -328,7 +330,7 @@ def _curate_group(
             terminate = translation.action.terminate
         primitives.extend(translation.action.primitives)
 
-    counters["logical_targets"] += 1
+    counters["executable_targets"] += 1
     counters[f"reasoning_{reasoning_kind}"] += 1
     if len(rows) > 1:
         counters["multicall_turns"] += 1
@@ -338,6 +340,13 @@ def _curate_group(
         no_op=not primitives,
         terminate=terminate,
     )
+    operations = CODEC.compile_action(action, GEOMETRY, tuple(rows[0]["cursor_before"]))
+    if operations:
+        build_action_request(
+            operations,
+            initial_buttons=set(),
+            initial_keys=set(),
+        )
     return {
         "step": step,
         "shard": rows[0]["shard"],
@@ -528,12 +537,12 @@ def resolve_curated_artifact(root: Path) -> tuple[Path, dict[str, Any]]:
         )
         or stats["source_events"]
         != stats["executed_calls"] + stats["nonexecuted_events"]
-        or stats["logical_turns"]
-        != stats["logical_targets"] + stats["nonexecutable_calls"]
+        or stats["logical_targets"]
+        != stats["executable_targets"] + stats["nonexecutable_calls"]
         or stats["source_rollouts"]
         != stats["retained_rollouts"] + stats["excluded_rollouts"]
         or stats["retained_rollouts"] <= 0
-        or stats["logical_targets"] <= 0
+        or stats["executable_targets"] <= 0
     ):
         raise ValueError(f"invalid curated trajectory statistics: {manifest_path}")
     if len(exclusions) != stats["excluded_rollouts"] or any(
@@ -573,7 +582,7 @@ def resolve_curated_artifact(root: Path) -> tuple[Path, dict[str, Any]]:
         rows.append(row)
     if (
         len(rows) != stats["retained_rollouts"]
-        or sum(len(row.get("steps", ())) for row in rows) != stats["logical_targets"]
+        or sum(len(row.get("steps", ())) for row in rows) != stats["executable_targets"]
     ):
         raise ValueError(f"curated trajectory counts mismatch: {path}")
     return path, manifest

@@ -147,7 +147,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _goals(art: FilterArtifact, goals_dir: Path) -> tuple[dict[str, list[dict]], str]:
+def resolve_goals(
+    art: FilterArtifact, goals_dir: Path
+) -> tuple[dict[str, list[dict]], str]:
     manifest_path = goals_dir / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text())
@@ -155,17 +157,49 @@ def _goals(art: FilterArtifact, goals_dir: Path) -> tuple[dict[str, list[dict]],
         raise ValueError(
             f"cannot read Crowd-Cast goals manifest {manifest_path}: {exc}"
         ) from exc
+    expected_fields = {
+        "artifact_type",
+        "filter_id",
+        "fps",
+        "goals",
+        "goals_sha256",
+        "input_kind",
+        "master_fps",
+        "master_store_id",
+        "method",
+        "model",
+        "n_goals",
+        "prompt_pack_sha",
+        "prompts",
+        "prompts_sha256",
+        "schema_version",
+        "stride",
+    }
     required = {
         "artifact_type": "crowdcast_describe_extract_goals",
         "schema_version": 1,
         "method": "describe_extract",
         "input_kind": "frames",
         "goals": "goals.jsonl",
+        "prompts": "prompts.yaml",
     }
     observed = {key: manifest.get(key) for key in required}
-    if observed != required:
+    if set(manifest) != expected_fields or observed != required:
         raise ValueError(
             f"goals contract mismatch: expected {required}, got {observed}"
+        )
+    annotation_fps = manifest.get("fps")
+    if (
+        isinstance(annotation_fps, bool)
+        or not isinstance(annotation_fps, (int, float))
+        or annotation_fps <= 0
+        or manifest.get("master_fps") != art.master_fps
+        or manifest.get("stride") != art.stride_for(annotation_fps)
+        or not isinstance(manifest.get("model"), str)
+        or not manifest["model"]
+    ):
+        raise ValueError(
+            f"Crowd-Cast goals sampling contract mismatch: {manifest_path}"
         )
     goals_path = goals_dir / "goals.jsonl"
     expected_sha = manifest.get("goals_sha256")
@@ -176,6 +210,12 @@ def _goals(art: FilterArtifact, goals_dir: Path) -> tuple[dict[str, list[dict]],
         raise ValueError(
             f"goals digest mismatch: expected {expected_sha}, got {observed_sha}"
         )
+    prompts_path = goals_dir / "prompts.yaml"
+    prompt_sha = file_sha256_short(prompts_path, n=64)
+    if prompt_sha != manifest.get("prompts_sha256") or prompt_sha != manifest.get(
+        "prompt_pack_sha"
+    ):
+        raise ValueError(f"Crowd-Cast prompt artifact mismatch: {prompts_path}")
     assert_same_artifact(
         str(manifest.get("master_store_id")),
         art.master_store_id,
@@ -187,6 +227,11 @@ def _goals(art: FilterArtifact, goals_dir: Path) -> tuple[dict[str, list[dict]],
     goals = load_goals(goals_path)
     if not goals:
         raise ValueError(f"goals artifact is empty: {goals_dir}")
+    if manifest.get("n_goals") != len(goals) or any(
+        goal["prompt_pack_sha"] != prompt_sha or goal["model"] != manifest.get("model")
+        for goal in goals
+    ):
+        raise ValueError(f"Crowd-Cast goal receipt mismatch: {manifest_path}")
     return goals_by_segment(goals), make_artifact_id(goals_dir)
 
 
@@ -194,9 +239,11 @@ def main() -> None:
     args = parse_args()
     if args.num_workers <= 0:
         raise SystemExit("--num_workers must be positive")
+    output = ensure_dir(args.output_dir)
+    (output / "manifest.json").unlink(missing_ok=True)
     art = FilterArtifact(args.filter_dir)
     stride = art.stride_for(args.fps)
-    goals, goals_id = _goals(art, args.goals_dir)
+    goals, goals_id = resolve_goals(art, args.goals_dir)
 
     master = json.loads((art.master_dir / "manifest.json").read_text())
     if master.get("jpeg_quality") != JPEG_QUALITY:
@@ -221,6 +268,12 @@ def main() -> None:
     source_rows = art.usable_rows()
     if not source_rows:
         raise ValueError(f"no usable segments in {art.dir}")
+    source_segments = {str(row["segment_id"]) for row in source_rows}
+    unknown_goal_segments = set(goals) - source_segments
+    if unknown_goal_segments:
+        raise ValueError(
+            f"Crowd-Cast goals reference unknown segments: {sorted(unknown_goal_segments)}"
+        )
     tasks = [
         {
             "index_row": row,
@@ -243,6 +296,14 @@ def main() -> None:
     projection_totals: Counter[str] = Counter()
     try:
         for result in results:
+            projection = result.get("projection")
+            if isinstance(projection, dict) and projection.get(
+                "n_projected"
+            ) != projection.get("n_goals"):
+                raise ValueError(
+                    f"Crowd-Cast goal projection failed for {result['segment_id']}: "
+                    f"{projection.get('rejected')}"
+                )
             statuses[result["status"]] += 1
             records.extend(result["rows"])
             for key, value in result.get("projection", {}).items():
@@ -256,7 +317,6 @@ def main() -> None:
         raise ValueError("no Crowd-Cast conversations survived goal projection")
     records.sort(key=lambda record: record["conversation_id"])
 
-    output = ensure_dir(args.output_dir)
     write_jsonl(output / "chat.jsonl", records)
     write_json(
         output / "manifest.json",

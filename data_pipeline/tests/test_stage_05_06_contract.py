@@ -16,7 +16,7 @@ import pytest
 from PIL import Image
 
 from pipeline.cua_gym.stage_01_image_store import build_store
-from pipeline.cua_gym.stage_04_build_conversations import render_contract
+from pipeline.cua_gym.stage_04_build_conversations import build_dataset
 from pipeline.lib.manifest import make_artifact_id
 from pipeline.lib.omegalax import attest_processor_snapshot
 
@@ -29,23 +29,6 @@ SNAPSHOT_REVISION = "c" * 40
 
 def make_source(root: Path, image_store: Path, *, n_conversations: int = 2) -> Path:
     root.mkdir(parents=True)
-    rows = [
-        {
-            "conversation_id": f"conversation-{index}",
-            "task_id": f"task-{index}",
-            "messages": [
-                {"role": "system", "content": [{"type": "text", "text": "system"}]},
-                {
-                    "role": "user",
-                    "content": [{"type": "image", "image": "ar:///image#0"}],
-                },
-                {"role": "assistant", "content": [{"type": "text", "text": "target"}]},
-            ],
-        }
-        for index in range(n_conversations)
-    ]
-    chat = root / "chat.jsonl"
-    chat.write_text("".join(json.dumps(row) + "\n" for row in rows))
     curated = root / "curated"
     curated.mkdir()
     curated_rows = curated / "trajectories.jsonl"
@@ -91,9 +74,9 @@ def make_source(root: Path, image_store: Path, *, n_conversations: int = 2) -> P
                 "dispositions_sha256": empty_digest,
                 "stats": {
                     "excluded_rollouts": 0,
+                    "executable_targets": n_conversations,
                     "executed_calls": n_conversations,
                     "logical_targets": n_conversations,
-                    "logical_turns": n_conversations,
                     "multicall_extra_calls": 0,
                     "multicall_turns": 0,
                     "nonexecutable_calls": 0,
@@ -111,32 +94,7 @@ def make_source(root: Path, image_store: Path, *, n_conversations: int = 2) -> P
         )
         + "\n"
     )
-    contract = render_contract()
-    contract.pop("system_prompt")
-    (root / "manifest.json").write_text(
-        json.dumps(
-            {
-                "artifact_type": "cuagym_stage_04_conversations",
-                "schema_version": 1,
-                "chat": "chat.jsonl",
-                "chat_sha256": hashlib.sha256(chat.read_bytes()).hexdigest(),
-                "grammar": contract["grammar"],
-                "contract": contract,
-                "inputs": {
-                    "curated_trajectories": str(curated.resolve()),
-                    "curated_trajectories_id": make_artifact_id(curated),
-                    "source_sha256": "0" * 64,
-                    "image_store": str(image_store.resolve()),
-                    "image_store_id": make_artifact_id(image_store),
-                },
-                "stats": {
-                    "records": n_conversations,
-                    "rollouts": n_conversations,
-                },
-            }
-        )
-        + "\n"
-    )
+    build_dataset(curated, image_store, root)
     return root
 
 
@@ -281,7 +239,7 @@ def production_inputs(tmp_path: Path) -> dict[str, Any]:
     env = dict(
         os.environ,
         PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-        PYTHONPATH=os.pathsep.join((str(REPO_ROOT), str(REPO_ROOT.parent / "desktop"))),
+        PYTHONPATH=str(REPO_ROOT),
         FAKE_UV_LOG=str(log),
     )
     return {
@@ -397,6 +355,32 @@ def test_stage_05_refuses_missing_chat_before_launch(tmp_path: Path, production_
     )
     assert result.returncode != 0
     assert "chat artifact is missing" in result.stderr
+    assert _invocations(production_inputs["log"]) == []
+
+
+def test_stage_05_refuses_chat_images_outside_the_attested_store(
+    tmp_path: Path, production_inputs
+) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    chat = source / "chat.jsonl"
+    rows = [json.loads(line) for line in chat.read_text().splitlines()]
+    rows[0]["messages"][1]["content"][0]["image"] = "ar:///outside.array_record#0"
+    chat.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    manifest_path = source / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["chat_sha256"] = hashlib.sha256(chat.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+    result = _run(
+        "stage_05_measure_lengths.py",
+        production_inputs["env"],
+        output_dir=tmp_path / "lengths",
+        source_path=source,
+        omegalax_repo=production_inputs["repo"],
+        processor_snapshot=production_inputs["snapshot"],
+        num_workers=2,
+    )
+    assert result.returncode != 0
+    assert "chat rows do not match" in result.stderr
     assert _invocations(production_inputs["log"]) == []
 
 

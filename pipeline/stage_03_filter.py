@@ -177,6 +177,9 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
         for item in dropped
         if item["reason"] == "idle_interior"
     )
+    n_kept = len(master_manifest) - n_black - n_idle
+    if n_kept <= 0:
+        raise ValueError(f"Crowd-Cast filter retained no frames: {segment_id}")
     output = Path(task["filter_dir"]) / f"{segment_id}.json"
     write_json(
         output,
@@ -196,7 +199,7 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
             "params": FILTER_PARAMS,
             "kept_ranges": kept_ranges,
             "dropped": dropped,
-            "n_kept": len(master_manifest) - n_black - n_idle,
+            "n_kept": n_kept,
             "n_black": n_black,
             "n_idle_interior": n_idle,
         },
@@ -210,7 +213,7 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
         "filter_sha256": file_sha256_short(output, n=64),
         "status": "ok",
         "n_records": len(master_manifest),
-        "n_kept": len(master_manifest) - n_black - n_idle,
+        "n_kept": n_kept,
         "n_black": n_black,
         "n_idle_interior": n_idle,
     }
@@ -229,6 +232,8 @@ def main() -> None:
     args = parse_args()
     if args.num_workers <= 0:
         raise SystemExit("--num_workers must be positive")
+    output = ensure_dir(args.output_dir)
+    (output / "manifest.json").unlink(missing_ok=True)
     master_manifest_path = args.frames_master_dir / "manifest.json"
     master = json.loads(master_manifest_path.read_text(encoding="utf-8"))
     required_master = {
@@ -265,6 +270,10 @@ def main() -> None:
         "clips_sha256"
     ):
         raise ValueError(f"Crowd-Cast clips digest mismatch: {args.clips_manifest}")
+    if master.get("source_clips_sha256") != clips_artifact.get(
+        "source_clips_sha256"
+    ) or master.get("source_clips_id") != clips_artifact.get("source_clips_id"):
+        raise ValueError("Crowd-Cast Stage01 and Stage02 source inventories differ")
     manifest_rows = read_jsonl(args.clips_manifest)
     if not index_rows or not manifest_rows:
         raise ValueError("Crowd-Cast master and clips artifacts must be non-empty")
@@ -288,7 +297,6 @@ def main() -> None:
                 f"Crowd-Cast frame manifest digest mismatch: {frame_manifest}"
             )
 
-    output = ensure_dir(args.output_dir)
     filter_dir = ensure_dir(output / "filter")
     tasks = [
         {

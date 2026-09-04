@@ -143,6 +143,20 @@ def _keys(value: object) -> list[str]:
     return [key_name(item) for item in value]
 
 
+def _key_chords(names: list[str]) -> list[Primitive]:
+    primitives: list[Primitive] = []
+    chord: list[str] = []
+    for name in names:
+        if name in chord:
+            primitives.extend(Primitive("down", name=key) for key in chord)
+            primitives.extend(Primitive("up", name=key) for key in reversed(chord))
+            chord.clear()
+        chord.append(name)
+    primitives.extend(Primitive("down", name=key) for key in chord)
+    primitives.extend(Primitive("up", name=key) for key in reversed(chord))
+    return primitives
+
+
 def _typing(text: str) -> list[Primitive]:
     if not text:
         return []
@@ -232,9 +246,7 @@ def translate_step(
             Primitive("down" if action == "left_mouse_down" else "up", name="LMB")
         )
     elif action == "key":
-        names = _keys(arguments.get("keys"))
-        primitives.extend(Primitive("down", name=name) for name in names)
-        primitives.extend(Primitive("up", name=name) for name in reversed(names))
+        primitives.extend(_key_chords(_keys(arguments.get("keys"))))
     elif action in ("key_down", "key_up"):
         primitives.extend(
             Primitive("down" if action == "key_down" else "up", name=name)

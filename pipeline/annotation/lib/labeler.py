@@ -12,8 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pipeline.lib.common import image_data_url
-
 
 @dataclass(frozen=True)
 class LabelerConfig:
@@ -51,12 +49,16 @@ class LabelResult:
     model: str
 
 
-def _reasoning_path(path: Path) -> Path:
-    return path.with_suffix(".reasoning.txt")
-
-
-def _meta_path(path: Path) -> Path:
-    return path.with_suffix(".meta.json")
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
 
 
 def _validate_usage(value: object) -> dict[str, Any]:
@@ -81,25 +83,52 @@ class Labeler:
         )
 
     def _cached(self, path: Path, request_sha256: str) -> LabelResult:
-        content = path.read_text()
-        meta = json.loads(_meta_path(path).read_text())
-        if not content.strip():
+        cached = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(cached, dict) or set(cached) != {
+            "provider",
+            "request_sha256",
+            "response",
+            "response_sha256",
+        }:
+            raise ValueError(f"invalid cached label contract: {path}")
+        response = cached["response"]
+        if not isinstance(response, dict) or set(response) != {
+            "content",
+            "finish_reason",
+            "model",
+            "reasoning",
+            "usage",
+        }:
+            raise ValueError(f"invalid cached label response: {path}")
+        if cached["response_sha256"] != _canonical_sha256(response):
+            raise ValueError(f"cached label response digest mismatch: {path}")
+        content = response["content"]
+        reasoning = response["reasoning"]
+        if not isinstance(content, str) or not content.strip():
             raise ValueError(f"cached label response is empty: {path}")
-        if meta.get("model") != self.config.model:
+        if not isinstance(reasoning, str):
+            raise TypeError(f"cached label reasoning must be text: {path}")
+        if response["model"] != self.config.model:
             raise ValueError(
-                f"cached label model mismatch: {meta.get('model')!r} != {self.config.model!r}"
+                f"cached label model mismatch: {response['model']!r} != {self.config.model!r}"
             )
-        if meta.get("base_url") != self.config.base_url:
-            raise ValueError(f"cached label base_url mismatch: {path}")
-        if meta.get("request_sha256") != request_sha256:
+        if cached["provider"] != {
+            "base_url": self.config.base_url,
+            "model": self.config.model,
+            "max_completion_tokens": self.config.max_completion_tokens,
+        }:
+            raise ValueError(
+                f"cached label base_url mismatch or model mismatch: {path}"
+            )
+        if cached["request_sha256"] != request_sha256:
             raise ValueError(f"cached label request mismatch: {path}")
-        if meta.get("finish_reason") != "stop":
+        if response["finish_reason"] != "stop":
             raise ValueError(f"cached label finish_reason is not stop: {path}")
         return LabelResult(
             content=content,
-            reasoning=_reasoning_path(path).read_text(),
+            reasoning=reasoning,
             finish_reason="stop",
-            usage=_validate_usage(meta.get("usage")),
+            usage=_validate_usage(response["usage"]),
             model=self.config.model,
         )
 
@@ -125,7 +154,7 @@ class Labeler:
         system: str,
         user_text: str,
         *,
-        images: list[Path | str],
+        images: list[str],
         image_labels: list[str],
         cache_path: Path,
     ) -> LabelResult:
@@ -133,32 +162,26 @@ class Labeler:
             raise ValueError("every annotation image requires one frame label")
         parts: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
         for image, label in zip(images, image_labels, strict=True):
-            url = str(image)
-            if not url.startswith("data:"):
-                url = image_data_url(Path(image))
+            if not image.startswith("data:image/jpeg;base64,"):
+                raise ValueError("annotation images must use the JPEG data URL domain")
             parts.extend(
                 (
                     {"type": "text", "text": label},
-                    {"type": "image_url", "image_url": {"url": url}},
+                    {"type": "image_url", "image_url": {"url": image}},
                 )
             )
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": parts},
         ]
-        request_sha256 = hashlib.sha256(
-            json.dumps(
-                {
-                    "model": self.config.model,
-                    "base_url": self.config.base_url,
-                    "max_completion_tokens": self.config.max_completion_tokens,
-                    "messages": messages,
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
+        request_sha256 = _canonical_sha256(
+            {
+                "model": self.config.model,
+                "base_url": self.config.base_url,
+                "max_completion_tokens": self.config.max_completion_tokens,
+                "messages": messages,
+            }
+        )
         if cache_path.exists():
             return self._cached(cache_path, request_sha256)
         response = None
@@ -204,22 +227,29 @@ class Labeler:
             model=response_model,
         )
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(content)
-        _reasoning_path(cache_path).write_text(reasoning)
-        _meta_path(cache_path).write_text(
-            json.dumps(
-                {
-                    "finish_reason": finish_reason,
-                    "usage": usage_dict,
-                    "model": self.config.model,
-                    "base_url": self.config.base_url,
-                    "request_sha256": request_sha256,
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n"
+        response_payload = {
+            "content": content,
+            "reasoning": reasoning,
+            "finish_reason": finish_reason,
+            "usage": usage_dict,
+            "model": self.config.model,
+        }
+        cache_payload = {
+            "provider": {
+                "base_url": self.config.base_url,
+                "model": self.config.model,
+                "max_completion_tokens": self.config.max_completion_tokens,
+            },
+            "request_sha256": request_sha256,
+            "response": response_payload,
+            "response_sha256": _canonical_sha256(response_payload),
+        }
+        temporary = cache_path.with_suffix(cache_path.suffix + ".tmp")
+        temporary.write_text(
+            json.dumps(cache_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
         )
+        temporary.replace(cache_path)
         return result
 
     def call_json_full(

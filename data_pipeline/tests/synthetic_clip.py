@@ -194,7 +194,12 @@ def build_uploads_tree(root: Path) -> dict[str, Any]:
     }
 
 
-def build_master_store(out_dir: Path, clip_row: dict[str, Any], source: list[np.ndarray]) -> Path:
+def build_master_store(
+    out_dir: Path,
+    clip_row: dict[str, Any],
+    source: list[np.ndarray],
+    source_clips_manifest: Path,
+) -> Path:
     """Pack a stage-01 frames-master artifact from the clip's source frames.
 
     Stage 01's own packer, index writer and summary writer; only the ffmpeg
@@ -236,8 +241,6 @@ def build_master_store(out_dir: Path, clip_row: dict[str, Any], source: list[np.
         "frame_manifest_sha256": packed["frame_manifest_sha256"],
         "total_jpeg_bytes": packed["total_jpeg_bytes"],
     }
-    source_manifest = out_dir / "source_clips_manifest.jsonl"
-    source_manifest.write_text(json.dumps(clip_row) + "\n")
     write_index_jsonl(out_dir / "segment_index.jsonl", [index_row])
     write_summary_and_manifest(
         out_dir,
@@ -247,7 +250,7 @@ def build_master_store(out_dir: Path, clip_row: dict[str, Any], source: list[np.
             target_height=FRAME_H,
             jpeg_quality=config.DEFAULT_JPEG_QUALITY,
             ffmpeg_bin=None,
-            source_clips_manifest=str(source_manifest),
+            source_clips_manifest=str(source_clips_manifest),
         ),
     )
     return out_dir
@@ -258,6 +261,14 @@ def write_goals(
 ) -> Path:
     """A minimal stage-03b goals artifact: goals.jsonl + the join manifest."""
     goals_dir.mkdir(parents=True, exist_ok=True)
+    prompt_source = (
+        Path(__file__).resolve().parents[2]
+        / "pipeline/annotation/methods/describe_extract/prompts.yaml"
+    )
+    prompt_snapshot = goals_dir / "prompts.yaml"
+    prompt_snapshot.write_bytes(prompt_source.read_bytes())
+    prompt_sha = file_sha256_short(prompt_snapshot, n=64)
+    rows = [row | {"prompt_pack_sha": prompt_sha} for row in rows]
     goals_path = goals_dir / "goals.jsonl"
     with goals_path.open("w") as f:
         for row in rows:
@@ -271,6 +282,14 @@ def write_goals(
                 "goals_sha256": file_sha256_short(goals_path, n=64),
                 "method": "describe_extract",
                 "input_kind": "frames",
+                "prompt_pack_sha": prompt_sha,
+                "prompts": "prompts.yaml",
+                "prompts_sha256": prompt_sha,
+                "model": "test-model",
+                "fps": TRAIN_FPS,
+                "stride": STRIDE,
+                "master_fps": MASTER_FPS,
+                "n_goals": len(rows),
                 "master_store_id": master_store_id,
                 "filter_id": filter_id,
             },

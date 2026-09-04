@@ -288,13 +288,13 @@ def _file_sha256(path: Path) -> str:
 def build_dataset(
     curated_trajectories: Path, image_store: Path, output_dir: Path
 ) -> dict[str, Any]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "manifest.json").unlink(missing_ok=True)
     trajectory_path, curated_manifest = resolve_curated_artifact(curated_trajectories)
     images = ImageIndex(image_store)
     contract = render_contract()
     image_store_id = make_artifact_id(image_store)
     curated_id = make_artifact_id(curated_trajectories)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "manifest.json").unlink(missing_ok=True)
     temporary = output_dir / f".chat.{os.getpid()}.jsonl"
     counters: Counter[str] = Counter()
     try:

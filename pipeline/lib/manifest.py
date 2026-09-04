@@ -16,6 +16,7 @@ import json
 import os
 import re
 import time
+from collections import Counter
 from pathlib import Path
 
 SCHEMA_VERSION = 1
@@ -100,31 +101,6 @@ def resolve_chat_artifact(artifact_dir: Path) -> Path:
         raise ValueError(
             f"chat digest mismatch for {chat}: expected {expected}, got {observed}"
         )
-    rows = []
-    for line_number, line in enumerate(
-        chat.read_text(encoding="utf-8").splitlines(), 1
-    ):
-        if not line:
-            raise ValueError(f"blank chat row at {chat}:{line_number}")
-        row = json.loads(line)
-        if not isinstance(row, dict):
-            raise TypeError(f"chat row must be an object at {chat}:{line_number}")
-        rows.append(row)
-    if not rows:
-        raise ValueError(f"chat artifact is empty: {chat}")
-    if artifact_type == "crowdcast_stage_04_conversations":
-        if (
-            len(rows) != manifest["n_conversations"]
-            or sum(row.get("n_turns", 0) for row in rows) != manifest["n_turns"]
-        ):
-            raise ValueError(f"Crowd-Cast chat counts mismatch: {chat}")
-    else:
-        stats = manifest["stats"]
-        if (
-            len(rows) != stats["records"]
-            or len({row.get("task_id") for row in rows}) != stats["rollouts"]
-        ):
-            raise ValueError(f"CUA-Gym chat counts mismatch: {chat}")
     if artifact_type == "crowdcast_stage_04_conversations":
         master_id = manifest.get("master_store_id")
         if not isinstance(master_id, str):
@@ -138,6 +114,7 @@ def resolve_chat_artifact(artifact_dir: Path) -> Path:
                 f"Crowd-Cast chat image domain must be {expected_domain}: "
                 f"{manifest_path}"
             )
+        _validate_crowdcast_chat_rows(chat, manifest)
     else:
         inputs = manifest.get("inputs")
         image_store = inputs.get("image_store") if isinstance(inputs, dict) else None
@@ -154,7 +131,117 @@ def resolve_chat_artifact(artifact_dir: Path) -> Path:
         from pipeline.cua_gym.stage_01_image_store import validate_image_store
 
         validate_image_store(store)
+        _validate_cuagym_chat_rows(chat, manifest, store)
     return chat
+
+
+def _chat_rows(path: Path):
+    with path.open(encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                raise ValueError(f"blank chat row at {path}:{line_number}")
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise TypeError(f"chat row must be an object at {path}:{line_number}")
+            yield row
+
+
+def _next_chat_row(rows, path: Path) -> dict:
+    try:
+        return next(rows)
+    except StopIteration as exc:
+        raise ValueError(f"chat artifact ended before its source rows: {path}") from exc
+
+
+def _validate_crowdcast_chat_rows(chat: Path, manifest: dict) -> None:
+    import grammars
+    from pipeline.lib.views import FilterArtifact
+    from pipeline.stage_04_build_conversations import (
+        build_segment_conversations,
+        resolve_goals,
+    )
+
+    filter_dir = check_artifact_id(manifest["filter_id"], what="Crowd-Cast filter")
+    goals_dir = check_artifact_id(manifest["goals_id"], what="Crowd-Cast goals")
+    artifact = FilterArtifact(filter_dir)
+    if artifact.master_store_id != manifest["master_store_id"]:
+        raise ValueError("Crowd-Cast chat master/filter identity mismatch")
+    goals, goals_id = resolve_goals(artifact, goals_dir)
+    if goals_id != manifest["goals_id"]:
+        raise ValueError("Crowd-Cast chat goals identity mismatch")
+    system_prompt = grammars.describe("deltatype_v2")
+    observed = iter(_chat_rows(chat))
+    n_conversations = 0
+    n_turns = 0
+    statuses: Counter[str] = Counter()
+    projections: Counter[str] = Counter()
+    for index_row in sorted(
+        artifact.usable_rows(), key=lambda row: str(row["segment_id"])
+    ):
+        result = build_segment_conversations(
+            {
+                "index_row": index_row,
+                "filter_segment": artifact.load_segment(str(index_row["segment_id"])),
+                "fps": manifest["fps"],
+                "goals_by_segment": goals,
+                "system_prompt": system_prompt,
+            }
+        )
+        statuses[result["status"]] += 1
+        for expected in sorted(result["rows"], key=lambda row: row["conversation_id"]):
+            if _next_chat_row(observed, chat) != expected:
+                raise ValueError(
+                    "Crowd-Cast chat rows do not match their source artifacts"
+                )
+            n_conversations += 1
+            n_turns += expected["n_turns"]
+        for key, value in result.get("projection", {}).items():
+            if isinstance(value, int):
+                projections[key] += value
+    if next(observed, None) is not None:
+        raise ValueError("Crowd-Cast chat has rows absent from its source artifacts")
+    if (
+        n_conversations == 0
+        or n_conversations != manifest["n_conversations"]
+        or n_turns != manifest["n_turns"]
+    ):
+        raise ValueError(f"Crowd-Cast chat counts mismatch: {chat}")
+    if manifest["status_counts"] != dict(statuses) or manifest[
+        "projection_counts"
+    ] != dict(projections):
+        raise ValueError("Crowd-Cast chat receipt counts mismatch")
+
+
+def _validate_cuagym_chat_rows(chat: Path, manifest: dict, image_store: Path) -> None:
+    from pipeline.cua_gym.stage_03_curate_trajectories import resolve_curated_artifact
+    from pipeline.cua_gym.stage_04_build_conversations import (
+        ImageIndex,
+        build_episode_records,
+        render_contract,
+    )
+
+    curated_root = Path(manifest["inputs"]["curated_trajectories"])
+    trajectories, _ = resolve_curated_artifact(curated_root)
+    images = ImageIndex(image_store)
+    contract = render_contract()
+    counters: Counter[str] = Counter()
+    observed = iter(_chat_rows(chat))
+    for line_number, line in enumerate(
+        trajectories.read_text(encoding="utf-8").splitlines(), 1
+    ):
+        if not line:
+            raise ValueError(f"blank curated row at {trajectories}:{line_number}")
+        for expected in build_episode_records(
+            json.loads(line), images, contract, counters
+        ):
+            if _next_chat_row(observed, chat) != expected:
+                raise ValueError(
+                    "CUA-Gym chat rows do not match their curated/image artifacts"
+                )
+    if next(observed, None) is not None:
+        raise ValueError("CUA-Gym chat has rows absent from its source artifacts")
+    if manifest["stats"] != dict(sorted(counters.items())):
+        raise ValueError("CUA-Gym chat receipt counts mismatch")
 
 
 def _validate_crowdcast_chat_manifest(manifest: dict, path: Path) -> None:
@@ -273,7 +360,7 @@ def _validate_cuagym_chat_manifest(manifest: dict, path: Path) -> None:
             isinstance(value, bool) or not isinstance(value, int) or value <= 0
             for value in stats.values()
         )
-        or stats["records"] != curated_manifest["stats"]["logical_targets"]
+        or stats["records"] != curated_manifest["stats"]["executable_targets"]
         or stats["rollouts"] != curated_manifest["stats"]["retained_rollouts"]
     ):
         raise ValueError(f"invalid CUA-Gym chat counts: {path}")

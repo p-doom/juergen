@@ -114,6 +114,19 @@ def test_filter_requires_complete_inputs(tmp_path: Path):
         filter_segment(task)
 
 
+def test_filter_refuses_a_segment_with_no_kept_frames(tmp_path: Path):
+    task = _task(tmp_path)
+    frame_manifest = Path(task["master_row"]["shard_path"]).parent / "frame_manifest.jsonl"
+    rows = [json.loads(line) for line in frame_manifest.read_text().splitlines()]
+    for row in rows:
+        row["mean_luma"] = 0.0
+        row["frac_dark"] = 1.0
+    frame_manifest.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    task["master_row"]["frame_manifest_sha256"] = file_sha256_short(frame_manifest, n=64)
+    with pytest.raises(ValueError, match="retained no frames"):
+        filter_segment(task)
+
+
 def test_mask_helpers_preserve_half_open_intervals():
     assert _idle_interiors([True, *([False] * 10), True], 1.0, 4.0, 2.0, 2.0) == [(3, 9)]
     reasons = [REASON_KEPT] * 3 + [REASON_BLACK] * 2 + [REASON_IDLE] * 2

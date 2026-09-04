@@ -1,15 +1,4 @@
-"""Per-method prompt packs.
-
-Each annotation method owns a ``prompts.yaml`` next to its ``annotator.py``;
-prompt text stays out of the Python so it can be iterated on directly. The
-pack's SHA (over the raw yaml bytes) is stamped on every goal row
-(``prompt_pack_sha``) and into the artifact manifest, and the stage snapshots
-the yaml into the output dir — so an artifact is always traceable to the exact
-prompts that produced it.
-
-``${name}`` placeholders are filled with ``string.Template.substitute`` so a
-missing render field fails before a labeler call.
-"""
+"""Load and attest the describe-extract prompt pack."""
 
 from __future__ import annotations
 
@@ -25,22 +14,27 @@ class PromptPack:
     def __init__(self, path: Path):
         self.path = Path(path)
         raw = self.path.read_bytes()
-        self.sha = hashlib.sha256(raw).hexdigest()[:16]
+        self.sha = hashlib.sha256(raw).hexdigest()
         data = yaml.safe_load(raw)
-        if not isinstance(data, dict):
-            raise TypeError(f"{self.path} must be a mapping of prompt-name -> text")
+        expected = {"system", "describe_prose", "extract_system", "extract"}
+        if (
+            not isinstance(data, dict)
+            or set(data) != expected
+            or any(
+                not isinstance(value, str) or not value.strip()
+                for value in data.values()
+            )
+        ):
+            raise TypeError(f"{self.path} must contain the canonical prompt pack")
         self._prompts: dict[str, str] = data
 
     def get(self, key: str) -> str:
-        """A prompt with no placeholders (e.g. 'system')."""
         return self._prompts[key]
 
     def render(self, key: str, **fields: Any) -> str:
-        """Prompt ``key`` with ${...} placeholders substituted."""
         return Template(self._prompts[key]).substitute(**fields)
 
     def snapshot_to(self, dest_dir: Path) -> Path:
-        """Copy the yaml into the artifact (audit trail)."""
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / "prompts.yaml"
         dest.write_bytes(self.path.read_bytes())

@@ -1,46 +1,16 @@
-#!/usr/bin/env python3
-"""Stage 00b (realign): recover the keylog->video time-map and emit corrected keylogs.
-
-Slots into the annotation pipeline between `discover` (build_manifest -> clip
-manifest) and `frames` (stage_01). Reads the discover clip manifest, groups
-segments by recording, threads idle pauses across segment boundaries, and:
-
-  * writes corrected keylogs (event timestamps re-stamped from the OBS global
-    clock to recorded-video PTS) for every segment that has a non-trivial map;
-  * writes a realigned clip manifest -- the discover rows verbatim, plus the
-    alignment status, with ``keylog_path`` repointed at the corrected keylog for
-    corrected segments (``aligned`` segments keep their raw keylog).
-
-Stage 01 then reads this manifest unchanged: bucketing the corrected keylog by
-raw timestamp == bucketing the raw keylog by corrected video time, so actions
-land on the right frames. The realignment math lives in ``realign``
-(per-segment naive vs cross-segment global, overhang-refined leading collapse,
-5-status taxonomy). Cross-segment threading needs every segment of a recording,
-so siblings are enumerated from the source uploads tree, not just manifest rows.
-
-Source keylogs/mp4s are read-only; corrected keylogs go to the output artifact.
-
-Outputs (under --output-dir):
-  clips_manifest.jsonl         realigned manifest (frames stage consumes this).
-  corrected_keylogs/<sid>.msgpack   video-PTS keylogs for corrected segments.
-  alignment.jsonl              per-segment map + spec-v2 status certificate.
-  realign_summary.json         status counts + params.
-  manifest.json                artifact marker.
-"""
+"""Realign the complete attested Crowd-Cast source inventory."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import multiprocessing as mp
-import re
 
 # Make the ``pipeline`` package importable when this stage is run
 # directly as a script (mirrors the other stages' PYTHONPATH setup).
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any
 
 import msgpack
 
@@ -49,47 +19,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from pipeline.lib import realign as R
-from pipeline.lib.common import ensure_dir, read_jsonl, write_json
+from pipeline.lib.common import ensure_dir, write_json
 from pipeline.lib.manifest import file_sha256_short
-
-_KEYLOG_RE = re.compile(r"^input_(?P<rid>.+)_(?P<tag>seg(?P<idx>\d{4}))\.msgpack$")
-
-
-def build_keylog_index(uploads_roots: set[Path]) -> dict[str, list[Path]]:
-    """Index every source keylog by recording_id (uuid), across all version/user
-    dirs (a recording's segments can be split across recorder-version dirs).
-    Globs each uploads root once."""
-    index: dict[str, list[Path]] = defaultdict(list)
-    for root in uploads_roots:
-        for kp in root.glob("*/*/keylogs/input_*_seg*.msgpack"):
-            match = _KEYLOG_RE.fullmatch(kp.name)
-            if match is not None:
-                index[match.group("rid")].append(kp)
-    return index
-
-
-def sibling_segments(recording_id: str, keylogs: list[Path]) -> list[dict[str, Any]]:
-    """Build seg dicts for all segments of a recording from its indexed keylogs,
-    deduped by segment index (preferring the copy with a decodable video)."""
-    by_idx: dict[int, dict[str, Any]] = {}
-    for kp in keylogs:
-        match = _KEYLOG_RE.fullmatch(kp.name)
-        if match is None or match.group("rid") != recording_id:
-            continue
-        seg_idx = int(match.group("idx"))
-        seg_tag = match.group("tag")
-        rec_dir = kp.parent.parent / "recordings"
-        vp = rec_dir / f"recording_{recording_id}_{seg_tag}.mp4"
-        cand = {
-            "segment_id": f"{recording_id}_{seg_tag}",
-            "segment_idx": seg_idx,
-            "keylog_path": str(kp),
-            "video_path": str(vp) if vp.exists() else None,
-        }
-        prev = by_idx.get(seg_idx)
-        if prev is None or (prev["video_path"] is None and cand["video_path"]):
-            by_idx[seg_idx] = cand
-    return [by_idx[i] for i in sorted(by_idx)]
+from pipeline.lib.source_clips import resolve_source_clips
 
 
 def write_corrected_keylog(
@@ -107,7 +39,7 @@ def write_corrected_keylog(
         except (TypeError, ValueError):
             corrected.append(entry)
             continue
-        corrected.append([int(round(R.keylog_to_video(kt, splices) * 1e6)), entry[1]])
+        corrected.append([round(R.keylog_to_video(kt, splices) * 1e6), entry[1]])
     ensure_dir(out_path.parent)
     out_path.write_bytes(msgpack.packb(corrected, use_bin_type=True))
 
@@ -117,19 +49,18 @@ def realign_one_recording(task: dict) -> dict:
     dataset-kept segments that have splices; returns per-segment alignment rows
     (with the corrected keylog path, if any). Picklable; no shared state."""
     rec_id = task["recording_id"]
-    segs = sibling_segments(rec_id, [Path(p) for p in task["keylogs"]])
-    kept = task["kept"]  # {segment_id: {video_dur_s, src_keylog_path}}
-    for s in segs:
-        vd = (kept.get(s["segment_id"]) or {}).get("video_dur_s")
-        if vd is not None:
-            s["video_dur_s"] = vd
+    segs = task["segments"]
+    kept = {
+        segment["segment_id"]: {
+            "src_keylog": segment["keylog_path"],
+        }
+        for segment in segs
+    }
     results = R.realign_recording(segs, task["idle_timeout"], task["closure_tol"])
     out_dir = Path(task["out_dir"])
 
     rows: list[dict] = []
     for sid, res in results.items():
-        if sid not in kept:
-            continue  # threading used all siblings; emit only dataset-kept
         corrected_path = None
         if res["splices"]:
             corrected_path = out_dir / "corrected_keylogs" / f"{sid}.msgpack"
@@ -190,14 +121,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     out_dir = ensure_dir(args.output_dir)
+    (out_dir / "manifest.json").unlink(missing_ok=True)
 
-    clip_rows = read_jsonl(args.clips_manifest)
-    if not clip_rows:
-        raise RuntimeError(f"Empty clip manifest: {args.clips_manifest}")
-
-    segment_ids = [str(row.get("segment_id")) for row in clip_rows]
-    if len(set(segment_ids)) != len(segment_ids):
-        raise ValueError("clip manifest contains duplicate segment_id values")
+    clip_rows, source = resolve_source_clips(args.clips_manifest)
+    segment_ids = [str(row["segment_id"]) for row in clip_rows]
     for row in clip_rows:
         video = Path(row["video_path"])
         keylog = Path(row["keylog_path"])
@@ -210,29 +137,19 @@ def main() -> None:
     for r in clip_rows:
         by_rec[r["recording_id"]].append(r)
 
-    uploads_roots = {Path(r["keylog_path"]).parents[3] for r in clip_rows}
-    print(
-        f"indexing source keylogs under {len(uploads_roots)} uploads root(s)...",
-        flush=True,
-    )
-    keylog_index = build_keylog_index(uploads_roots)
-
     tasks = [
         {
             "recording_id": rec_id,
-            # union the global index with this recording's own keylogs so a manifest
-            # segment can never be dropped from the threading.
-            "keylogs": sorted(
-                {str(p) for p in keylog_index.get(rec_id, [])}
-                | {r["keylog_path"] for r in kept}
-            ),
-            "kept": {
-                r["segment_id"]: {
-                    "video_dur_s": r.get("video_duration_s"),
-                    "src_keylog": r["keylog_path"],
+            "segments": [
+                {
+                    "segment_id": row["segment_id"],
+                    "segment_idx": row["segment_idx"],
+                    "keylog_path": row["keylog_path"],
+                    "video_path": row["video_path"],
+                    "video_dur_s": row["video_duration_s"],
                 }
-                for r in kept
-            },
+                for row in sorted(kept, key=lambda item: item["segment_idx"])
+            ],
             "idle_timeout": args.idle_timeout,
             "closure_tol": args.closure_tol,
             "out_dir": str(out_dir),
@@ -256,6 +173,11 @@ def main() -> None:
 
     if set(align_by_sid) != set(segment_ids):
         raise ValueError("alignment certificate set does not match clip manifest")
+    if any(
+        row["closed"] is not True or row["status"] not in R.CLOSED_STATUSES
+        for row in align_by_sid.values()
+    ):
+        raise ValueError("cannot publish an unclosed Crowd-Cast alignment")
 
     alignment_path = out_dir / "alignment.jsonl"
     with alignment_path.open("w") as f:
@@ -292,7 +214,9 @@ def main() -> None:
         "n_closed": sum(counts[s] for s in R.CLOSED_STATUSES),
         "n_corrected": n - counts.get("aligned", 0),
         "n_keylogs_repointed": n_repointed,
-        "source_clips_manifest": str(args.clips_manifest),
+        "source_clips_manifest": source["path"],
+        "source_clips_sha256": source["sha256"],
+        "source_clips_id": source["artifact_id"],
     }
     write_json(out_dir / "realign_summary.json", summary)
     write_json(

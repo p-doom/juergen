@@ -135,6 +135,7 @@ class SchemaTest(unittest.TestCase):
             _goal(30, 30),  # empty interval
             _goal(-1, 30),  # negative start
             _goal(0, 30) | {"start_master_idx": 0.5},  # float coordinate
+            _goal(0, 30) | {"start_master_idx": True},
             _goal(0, 30) | {"instruction": "  "},  # blank instruction
             _goal(0, 30) | {"method": "other_method"},
             _goal(0, 30) | {"plan": "unsupported"},

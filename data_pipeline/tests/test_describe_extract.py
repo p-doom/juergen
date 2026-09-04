@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -39,6 +40,8 @@ def test_describe_extract_goal_contract_is_strict_and_clamped():
         ({"anchor": ""}, "anchor"),
         ({"grounding": ""}, "grounding"),
         ({"start_frame": "bad"}, "frame bounds"),
+        ({"start_frame": 2.0}, "frame bounds"),
+        ({"start_frame": True}, "frame bounds"),
         ({"start_frame": 8, "end_frame": 7}, "precedes"),
     ],
 )
@@ -50,11 +53,16 @@ def test_describe_extract_rejects_malformed_goal_fields(change, message):
 
 def test_prompt_render_requires_every_field(tmp_path: Path):
     path = tmp_path / "prompts.yaml"
-    path.write_text("prompt: 'frames=${count}'\n")
+    path.write_text(
+        "system: system\n"
+        "describe_prose: 'frames=${count}'\n"
+        "extract_system: extract-system\n"
+        "extract: extract\n"
+    )
     prompts = PromptPack(path)
-    assert prompts.render("prompt", count=3) == "frames=3"
+    assert prompts.render("describe_prose", count=3) == "frames=3"
     with pytest.raises(KeyError, match="count"):
-        prompts.render("prompt")
+        prompts.render("describe_prose")
 
 
 def test_annotation_driver_propagates_worker_failure(tmp_path: Path):
@@ -118,8 +126,8 @@ def test_labeler_attests_provider_model_finish_usage_and_cache(tmp_path: Path):
     assert result.model == "test-model"
     assert result.finish_reason == "stop"
     assert result.usage["total_tokens"] == 7
-    meta = cache.with_suffix(".meta.json").read_text()
-    assert '"base_url": "https://labeler.example/v1"' in meta
+    payload = cache.read_text()
+    assert '"response_sha256"' in payload
 
     changed = _labeler(tmp_path)
     changed.config = LabelerConfig(
@@ -130,6 +138,18 @@ def test_labeler_attests_provider_model_finish_usage_and_cache(tmp_path: Path):
     )
     with pytest.raises(ValueError, match="base_url mismatch"):
         _call(changed, cache)
+
+
+@pytest.mark.parametrize("field", ["content", "reasoning"])
+def test_labeler_cache_seals_response_content(tmp_path: Path, field: str):
+    cache = tmp_path / "call.json"
+    labeler = _labeler(tmp_path)
+    _call(labeler, cache)
+    payload = json.loads(cache.read_text())
+    payload["response"][field] += "tampered"
+    cache.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="response digest mismatch"):
+        _call(labeler, cache)
 
 
 @pytest.mark.parametrize(

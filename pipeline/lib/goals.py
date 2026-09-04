@@ -51,7 +51,9 @@ def validate_goal_row(row: dict[str, Any]) -> None:
     if extra:
         raise ValueError(f"goal row has unsupported keys {sorted(extra)}")
     start, end = row["start_master_idx"], row["end_master_idx"]
-    if not (isinstance(start, int) and isinstance(end, int)):
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) for value in (start, end)
+    ):
         raise TypeError(
             f"goal {row['goal_id']!r}: master indices must be integers "
             f"(got {start!r}, {end!r}) — view-local or float coordinates are a bug"
