@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 from desktop import ir
-from desktop.codec_protocol import Codec
 from desktop.geometry import DisplayGeometry
 
 import grammars
@@ -148,7 +147,7 @@ def test_every_vector_section_is_executed():
 @pytest.mark.parametrize("name", NAMES)
 def test_codec_contract_and_prompt_pin(name):
     codec = _codec(name)
-    assert isinstance(codec, Codec)
+    assert codec is importlib.import_module(f"grammars.{name}.codec").CODEC
     assert codec.name == name
     assert codec.stop_sequences == ()
     described = codec.describe()

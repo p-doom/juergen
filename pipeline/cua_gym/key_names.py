@@ -59,9 +59,8 @@ _PYAUTOGUI_TO_RDEV = {
     "grave": "Backquote",
     "[": "BracketLeft",
     "]": "BracketRight",
-    "center": "Center",
     "mod": "ControlLeft",
-    "print": "Print",
+    "print": "PrintScreen",
 }
 
 

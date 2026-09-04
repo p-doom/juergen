@@ -87,14 +87,25 @@ def chain(monkeypatch, tmp_path: Path):
         "build_sft_records_from_chat.py",
     ):
         (scripts / name).touch()
+    snapshot = tmp_path / "model" / "snapshots" / ("a" * 40)
+    snapshot.mkdir(parents=True)
+    for name in (
+        "config.json",
+        "preprocessor_config.json",
+        "tokenizer_config.json",
+        "tokenizer.json",
+    ):
+        (snapshot / name).write_text("{}")
 
     monkeypatch.setenv("LABCTL_DATASETS_ROOT", str(datasets))
     monkeypatch.setenv("JUERGEN_REPO", str(REPO_ROOT))
     monkeypatch.setenv("CROWDCAST_MASTER_DIR", str(master))
     monkeypatch.setenv("CROWDCAST_CLIPS_MANIFEST", str(clips))
     monkeypatch.setenv("OMEGALAX_REPO", str(omegalax))
+    monkeypatch.setenv("SFT_PROCESSOR_SNAPSHOT", str(snapshot))
     sys.modules.pop("configs.chain_crowdcast", None)
     module = importlib.import_module("configs.chain_crowdcast")
+    monkeypatch.setattr(module, "attest_omegalax", lambda path: {"path": str(path)})
     return module, master, clips
 
 

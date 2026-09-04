@@ -19,7 +19,7 @@ from pipeline.annotation import stage_annotate
 from pipeline.annotation.lib.labeler import LabelResult
 from pipeline.lib import config
 from pipeline.lib.image_store import open_image_pil
-from pipeline.lib.manifest import make_artifact_id
+from pipeline.lib.manifest import make_artifact_id, resolve_chat_artifact
 from pipeline.lib.views import FilterArtifact
 from pipeline.stage_01_master_frames import build_segment_master
 
@@ -202,6 +202,7 @@ def test_stage_04_attests_prompt_inputs_and_q92_images(chain: Chain):
         geometry="height",
         extent=clip.FRAME_H,
     )
+    assert resolve_chat_artifact(chain.conversations) == chain.conversations / "chat.jsonl"
     for image in _images(_jsonl(chain.conversations / "chat.jsonl")[0]):
         with open_image_pil(image) as frame:
             assert frame.format == "JPEG"

@@ -1,59 +1,138 @@
-"""Stage 05/06 enforce one tokenizer and one measured-cache contract."""
+"""Stage 05/06 seal the compiler, processor, cache, and record artifacts."""
 
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 from typing import Any
 
-import grammars
 import pytest
-import synthetic_clip as clip
+from PIL import Image
 
+from pipeline.cua_gym.stage_01_image_store import build_store
+from pipeline.cua_gym.stage_04_build_conversations import render_contract
 from pipeline.lib.manifest import make_artifact_id
-from pipeline.stage_04_build_conversations import build_messages
+from pipeline.lib.omegalax import attest_processor_snapshot
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DATA_PIPELINE_DIR = REPO_ROOT / "data_pipeline"
 STAGES = REPO_ROOT / "pipeline"
-MODEL_ID = "Qwen/Qwen3-VL-8B-Instruct"
+COMMIT = "a" * 40
+TREE = "b" * 40
+SNAPSHOT_REVISION = "c" * 40
 
 
-def _chat_row(index: int) -> dict[str, Any]:
-    shard = f"/nonexistent/{clip.SEGMENT_ID}/images.array_record"
-    turns = [(f"ar://{shard}#{turn * clip.STRIDE}", "NO_OP") for turn in range(3)]
-    return {
-        "conversation_id": f"{clip.SEGMENT_ID}:{index}",
-        "recording_id": clip.RECORDING_ID,
-        "segment_id": clip.SEGMENT_ID,
-        "n_frames": 3,
-        "n_turns": 3,
-        "messages": build_messages(
-            turns,
-            instruction="do the synthetic thing",
-            system_prompt=grammars.describe("deltatype_v2"),
-        ),
-    }
-
-
-def make_source(root: Path, *, n_conversations: int = 2) -> Path:
+def make_source(root: Path, image_store: Path, *, n_conversations: int = 2) -> Path:
     root.mkdir(parents=True)
-    rows = [_chat_row(index) for index in range(n_conversations)]
+    rows = [
+        {
+            "conversation_id": f"conversation-{index}",
+            "task_id": f"task-{index}",
+            "messages": [
+                {"role": "system", "content": [{"type": "text", "text": "system"}]},
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "image": "ar:///image#0"}],
+                },
+                {"role": "assistant", "content": [{"type": "text", "text": "target"}]},
+            ],
+        }
+        for index in range(n_conversations)
+    ]
     chat = root / "chat.jsonl"
     chat.write_text("".join(json.dumps(row) + "\n" for row in rows))
-    digest = hashlib.sha256(chat.read_bytes()).hexdigest()
+    curated = root / "curated"
+    curated.mkdir()
+    curated_rows = curated / "trajectories.jsonl"
+    curated_rows.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "task_id": f"source-{index}",
+                    "instruction": "instruction",
+                    "app": "writer",
+                    "screen": [1920, 1080],
+                    "steps": [
+                        {
+                            "step": 0,
+                            "shard": "screenshots-0000.tar",
+                            "member": "task/step_000.png",
+                            "reasoning": "reason",
+                            "action": {
+                                "primitives": [],
+                                "no_op": True,
+                                "terminate": None,
+                            },
+                        }
+                    ],
+                }
+            )
+            + "\n"
+            for index in range(n_conversations)
+        )
+    )
+    empty_digest = hashlib.sha256(b"[]").hexdigest()
+    (curated / "manifest.json").write_text(
+        json.dumps(
+            {
+                "artifact_type": "cuagym_stage_03_curated_trajectories",
+                "schema_version": 1,
+                "trajectories": "trajectories.jsonl",
+                "trajectories_sha256": hashlib.sha256(curated_rows.read_bytes()).hexdigest(),
+                "inputs": {"source": "/source", "source_sha256": "0" * 64},
+                "exclusions": [],
+                "exclusions_sha256": empty_digest,
+                "dispositions": [],
+                "dispositions_sha256": empty_digest,
+                "stats": {
+                    "excluded_rollouts": 0,
+                    "executed_calls": n_conversations,
+                    "logical_targets": n_conversations,
+                    "logical_turns": n_conversations,
+                    "multicall_extra_calls": 0,
+                    "multicall_turns": 0,
+                    "nonexecutable_calls": 0,
+                    "nonexecuted_events": 0,
+                    "reasoning_closed": n_conversations,
+                    "reasoning_double_open_tool_tag": 0,
+                    "reasoning_missing_closer": 0,
+                    "reasoning_prose_after_closer": 0,
+                    "reasoning_thinking_closer_typo": 0,
+                    "retained_rollouts": n_conversations,
+                    "source_events": n_conversations,
+                    "source_rollouts": n_conversations,
+                },
+            }
+        )
+        + "\n"
+    )
+    contract = render_contract()
+    contract.pop("system_prompt")
     (root / "manifest.json").write_text(
         json.dumps(
             {
-                "artifact_type": "juergen_annotation_conversations",
-                "schema_version": 2,
+                "artifact_type": "cuagym_stage_04_conversations",
+                "schema_version": 1,
                 "chat": "chat.jsonl",
-                "chat_sha256": digest,
-                "n_conversations": len(rows),
+                "chat_sha256": hashlib.sha256(chat.read_bytes()).hexdigest(),
+                "grammar": contract["grammar"],
+                "contract": contract,
+                "inputs": {
+                    "curated_trajectories": str(curated.resolve()),
+                    "curated_trajectories_id": make_artifact_id(curated),
+                    "source_sha256": "0" * 64,
+                    "image_store": str(image_store.resolve()),
+                    "image_store_id": make_artifact_id(image_store),
+                },
+                "stats": {
+                    "records": n_conversations,
+                    "rollouts": n_conversations,
+                },
             }
         )
         + "\n"
@@ -61,45 +140,157 @@ def make_source(root: Path, *, n_conversations: int = 2) -> Path:
     return root
 
 
+_FAKE_GIT = """#!{python}
+import os, sys
+args = sys.argv[1:]
+if args == ["rev-parse", "HEAD"]:
+    print(os.environ.get("FAKE_GIT_HEAD", "{commit}"))
+elif args == ["rev-parse", "HEAD^{{tree}}"]:
+    print(os.environ.get("FAKE_GIT_TREE", "{tree}"))
+elif args[:2] == ["status", "--porcelain=v1"]:
+    print(os.environ.get("FAKE_GIT_STATUS", ""))
+elif args[:2] == ["ls-files", "-z"]:
+    names = [
+        "scripts/measure_message_lengths_from_chat.py",
+        "scripts/build_sft_records_from_chat.py",
+        "omegalax/data/qwen3_encoding.py",
+        "pyproject.toml",
+        "uv.lock",
+    ]
+    sys.stdout.buffer.write(("\\0".join(names) + "\\0").encode())
+else:
+    raise SystemExit(f"unexpected git invocation: {{args}}")
+"""
+
+
 _FAKE_UV = """#!{python}
 import json, os, sys
 from pathlib import Path
 
 Path(os.environ["FAKE_UV_LOG"]).open("a").write(json.dumps(sys.argv[1:]) + "\\n")
+if "-c" in sys.argv:
+    print(os.environ.get("FAKE_LOSS_PROBE", "[false, true]"))
+    raise SystemExit(0)
 flags = dict(a[2:].split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
-script = next((a for a in sys.argv[1:] if a.endswith(".py")), "")
+script = next(a for a in sys.argv[1:] if a.endswith(".py"))
 out = Path(flags["out_dir"])
 out.mkdir(parents=True, exist_ok=True)
 if "measure_message_lengths" in script:
     mode = os.environ.get("FAKE_UV_CACHE", "valid")
     if mode != "absent":
-        with (out / "message_lengths.jsonl").open("w") as target:
-            if mode == "valid":
-                for index in range(6):
-                    target.write(json.dumps({{"conv_idx": 0, "msg_offset": index}}) + "\\n")
-elif os.environ.get("FAKE_UV_SHARDS", "1") != "0":
-    (out / "part-00000.array_record").write_bytes(b"shard")
+        with Path(flags["data_path"]).open() as source, (out / "message_lengths.jsonl").open("w") as target:
+            if mode != "empty":
+                for conv_idx, line in enumerate(row for row in source if row.strip()):
+                    messages = json.loads(line)["messages"]
+                    for msg_offset, message in enumerate(messages):
+                        num_images = sum(
+                            part.get("type") == "image"
+                            for part in message["content"]
+                            if isinstance(part, dict)
+                        )
+                        measurement = {{
+                            "length": 10,
+                            "vision_tokens": 4 * num_images,
+                            "vision_patches": 4 * num_images,
+                            "num_images": num_images,
+                            "image_grid_thw": [[1, 2, 2]] * num_images,
+                        }}
+                        if mode == "malformed":
+                            measurement.pop("length")
+                        target.write(json.dumps({{
+                            "conv_idx": conv_idx,
+                            "msg_offset": msg_offset,
+                            "measurement": measurement,
+                        }}) + "\\n")
+elif os.environ.get("FAKE_UV_RECORDS", "valid") != "absent":
+    from array_record.python.array_record_module import ArrayRecordWriter
+    mode = os.environ.get("FAKE_UV_RECORDS", "valid")
+    shard = out / "part-00000.array_record"
+    writer = ArrayRecordWriter(str(shard), "group_size:1")
+    if mode != "empty":
+        writer.write(b'{{"messages":[]}}')
+    writer.close()
+    if mode == "corrupt":
+        shard.write_bytes(b"corrupt")
+    metadata = {{
+        "inline_records": True,
+        "source_chat_path": str(Path(flags["data_path"]).resolve()),
+        "max_length": int(flags["max_length"]),
+        "overflow_mode": "split",
+        "split": flags["split"],
+        "val_fraction": float(flags["val_fraction"]),
+        "profile_metadata": {{
+            "model_id": flags["model_id"],
+            "tokenizer": flags["model_id"],
+            "processor": flags["processor"],
+            "preprocessor_config": None,
+        }},
+        "version": 1,
+        "num_records": 2 if mode == "count_mismatch" else (0 if mode == "empty" else 1),
+        "num_shards": 1,
+        "shard_paths": ["part-00000.array_record"],
+    }}
+    if mode == "bad_metadata":
+        metadata["overflow_mode"] = "drop"
+    (out / "metadata.json").write_text(json.dumps(metadata))
 """
 
 
 @pytest.fixture
-def omegalax(tmp_path: Path) -> dict[str, Any]:
+def production_inputs(tmp_path: Path) -> dict[str, Any]:
     repo = tmp_path / "omegalax"
-    (repo / "scripts").mkdir(parents=True)
+    for relative in (
+        "scripts/measure_message_lengths_from_chat.py",
+        "scripts/build_sft_records_from_chat.py",
+        "omegalax/data/qwen3_encoding.py",
+        "pyproject.toml",
+        "uv.lock",
+    ):
+        path = repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(relative)
+    snapshot = tmp_path / "models--test" / "snapshots" / SNAPSHOT_REVISION
+    snapshot.mkdir(parents=True)
+    for name in (
+        "config.json",
+        "preprocessor_config.json",
+        "tokenizer_config.json",
+        "tokenizer.json",
+        "special_tokens_map.json",
+    ):
+        (snapshot / name).write_text("{}")
+    screenshots = tmp_path / "screenshots"
+    screenshots.mkdir()
+    image = io.BytesIO()
+    Image.new("RGB", (1920, 1080), (10, 20, 30)).save(image, format="PNG")
+    with tarfile.open(screenshots / "screenshots-0000.tar", "w") as archive:
+        info = tarfile.TarInfo("task/step_000.png")
+        info.size = len(image.getvalue())
+        archive.addfile(info, io.BytesIO(image.getvalue()))
+    image_store = tmp_path / "image-store"
+    build_store(screenshots, image_store, workers=1)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    git = bin_dir / "git"
+    git.write_text(_FAKE_GIT.format(python=sys.executable, commit=COMMIT, tree=TREE))
+    git.chmod(0o755)
     uv = bin_dir / "uv"
     uv.write_text(_FAKE_UV.format(python=sys.executable))
     uv.chmod(0o755)
     log = tmp_path / "uv_argv.jsonl"
-    roots = [REPO_ROOT, DATA_PIPELINE_DIR, REPO_ROOT.parent / "desktop"]
     env = dict(
         os.environ,
         PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-        PYTHONPATH=os.pathsep.join(str(root) for root in roots),
+        PYTHONPATH=os.pathsep.join((str(REPO_ROOT), str(REPO_ROOT.parent / "desktop"))),
         FAKE_UV_LOG=str(log),
     )
-    return {"repo": repo, "env": env, "log": log}
+    return {
+        "repo": repo,
+        "snapshot": snapshot,
+        "image_store": image_store,
+        "env": env,
+        "log": log,
+    }
 
 
 def _run(stage: str, env: dict[str, str], **flags: object) -> subprocess.CompletedProcess:
@@ -122,6 +313,10 @@ def _invocations(log: Path) -> list[list[str]]:
     return [json.loads(line) for line in log.read_text().splitlines()]
 
 
+def _script_invocations(log: Path) -> list[list[str]]:
+    return [argv for argv in _invocations(log) if any(arg.endswith(".py") for arg in argv)]
+
+
 def _flags_of(argv: list[str]) -> dict[str, str]:
     return dict(
         argument[2:].split("=", 1)
@@ -130,22 +325,15 @@ def _flags_of(argv: list[str]) -> dict[str, str]:
     )
 
 
-def _measure(
-    tmp_path: Path,
-    omegalax: dict[str, Any],
-    source: Path,
-    *,
-    processor: str = MODEL_ID,
-) -> Path:
-    output = tmp_path / f"lengths-{processor.rsplit('/', 1)[-1]}"
+def _measure(tmp_path: Path, inputs: dict[str, Any], source: Path) -> Path:
+    output = tmp_path / f"lengths-{source.name}"
     result = _run(
         "stage_05_measure_lengths.py",
-        omegalax["env"],
+        inputs["env"],
         output_dir=output,
         source_path=source,
-        omegalax_repo=omegalax["repo"],
-        model_id=MODEL_ID,
-        processor=processor,
+        omegalax_repo=inputs["repo"],
+        processor_snapshot=inputs["snapshot"],
         num_workers=2,
     )
     assert result.returncode == 0, result.stderr
@@ -154,7 +342,7 @@ def _measure(
 
 def _record_flags(
     tmp_path: Path,
-    omegalax: dict[str, Any],
+    inputs: dict[str, Any],
     source: Path,
     lengths: Path,
     **overrides: object,
@@ -162,9 +350,8 @@ def _record_flags(
     values: dict[str, object] = {
         "output_dir": tmp_path / "records",
         "source_path": source,
-        "omegalax_repo": omegalax["repo"],
-        "model_id": MODEL_ID,
-        "processor": MODEL_ID,
+        "omegalax_repo": inputs["repo"],
+        "processor_snapshot": inputs["snapshot"],
         "max_length": 4096,
         "records_per_shard": 8,
         "num_workers": 2,
@@ -174,39 +361,60 @@ def _record_flags(
     return values
 
 
-def test_stage_05_refuses_missing_chat_before_launch(tmp_path: Path, omegalax) -> None:
-    source = make_source(tmp_path / "source")
+def test_processor_snapshot_hashes_every_file_and_rejects_weights(tmp_path: Path) -> None:
+    snapshot = tmp_path / "model" / "snapshots" / SNAPSHOT_REVISION
+    snapshot.mkdir(parents=True)
+    for name in (
+        "config.json",
+        "preprocessor_config.json",
+        "tokenizer_config.json",
+        "tokenizer.json",
+    ):
+        (snapshot / name).write_text(name)
+    identity = attest_processor_snapshot(snapshot)
+    assert set(identity["files"]) == {
+        "config.json",
+        "preprocessor_config.json",
+        "tokenizer_config.json",
+        "tokenizer.json",
+    }
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+    with pytest.raises(ValueError, match="must not contain model weights"):
+        attest_processor_snapshot(snapshot)
+
+
+def test_stage_05_refuses_missing_chat_before_launch(tmp_path: Path, production_inputs) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
     (source / "chat.jsonl").unlink()
     result = _run(
         "stage_05_measure_lengths.py",
-        omegalax["env"],
+        production_inputs["env"],
         output_dir=tmp_path / "lengths",
         source_path=source,
-        omegalax_repo=omegalax["repo"],
-        model_id=MODEL_ID,
-        processor=MODEL_ID,
+        omegalax_repo=production_inputs["repo"],
+        processor_snapshot=production_inputs["snapshot"],
         num_workers=2,
     )
     assert result.returncode != 0
     assert "chat artifact is missing" in result.stderr
-    assert _invocations(omegalax["log"]) == []
+    assert _invocations(production_inputs["log"]) == []
 
 
-def test_stage_05_records_cache_digest_and_processor(tmp_path: Path, omegalax) -> None:
-    source = make_source(tmp_path / "source")
-    output = _measure(tmp_path, omegalax, source)
-    (argv,) = _invocations(omegalax["log"])
-    assert _flags_of(argv) == {
-        "data_path": str(source / "chat.jsonl"),
-        "out_dir": str(output),
-        "model_id": MODEL_ID,
-        "processor": MODEL_ID,
-        "num_workers": "2",
-    }
+def test_stage_05_records_sealed_inputs_and_exact_cache(tmp_path: Path, production_inputs) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    output = _measure(tmp_path, production_inputs, source)
+    (argv,) = _script_invocations(production_inputs["log"])
+    assert "--locked" in argv
+    flags = _flags_of(argv)
+    assert flags["model_id"] == flags["processor"] == str(production_inputs["snapshot"].resolve())
     manifest = json.loads((output / "manifest.json").read_text())
     cache = output / "message_lengths.jsonl"
     assert manifest["inputs"]["source_id"] == make_artifact_id(source)
-    assert manifest["params"]["processor"] == MODEL_ID
+    assert manifest["params"]["omegalax"]["commit"] == COMMIT
+    assert manifest["params"]["omegalax"]["tree"] == TREE
+    assert manifest["params"]["omegalax"]["capability"] == "assistant_loss_false_v1"
+    assert manifest["params"]["processor_snapshot"]["revision"] == SNAPSHOT_REVISION
+    assert "tokenizer.json" in manifest["params"]["processor_snapshot"]["files"]
     assert manifest["stats"]["cache"] == {
         "file": "message_lengths.jsonl",
         "sha256": hashlib.sha256(cache.read_bytes()).hexdigest(),
@@ -215,71 +423,97 @@ def test_stage_05_records_cache_digest_and_processor(tmp_path: Path, omegalax) -
     }
 
 
-@pytest.mark.parametrize("mode, message", [("absent", "no cache"), ("empty", "empty cache")])
-def test_stage_05_rejects_success_without_cache(
-    tmp_path: Path, omegalax, mode: str, message: str
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [("absent", "no cache"), ("empty", "cache keys"), ("malformed", "measurement")],
+)
+def test_stage_05_rejects_invalid_cache(
+    tmp_path: Path, production_inputs, mode: str, message: str
 ) -> None:
-    source = make_source(tmp_path / "source")
-    env = {**omegalax["env"], "FAKE_UV_CACHE": mode}
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    output = tmp_path / "lengths"
+    output.mkdir()
+    (output / "manifest.json").write_text("stale")
+    env = {**production_inputs["env"], "FAKE_UV_CACHE": mode}
+    result = _run(
+        "stage_05_measure_lengths.py",
+        env,
+        output_dir=output,
+        source_path=source,
+        omegalax_repo=production_inputs["repo"],
+        processor_snapshot=production_inputs["snapshot"],
+        num_workers=2,
+    )
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert not (output / "manifest.json").exists()
+
+
+def test_omegalax_capability_probe_is_required(tmp_path: Path, production_inputs) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    env = {**production_inputs["env"], "FAKE_LOSS_PROBE": "[true, true]"}
     result = _run(
         "stage_05_measure_lengths.py",
         env,
         output_dir=tmp_path / "lengths",
         source_path=source,
-        omegalax_repo=omegalax["repo"],
-        model_id=MODEL_ID,
-        processor=MODEL_ID,
+        omegalax_repo=production_inputs["repo"],
+        processor_snapshot=production_inputs["snapshot"],
         num_workers=2,
     )
     assert result.returncode != 0
-    assert message in result.stderr
+    assert "exclude loss:false" in result.stderr
 
 
-def test_stage_06_requires_matching_source_model_processor_and_digest(
-    tmp_path: Path, omegalax
+def test_stage_06_requires_matching_source_compiler_processor_and_digest(
+    tmp_path: Path, production_inputs
 ) -> None:
-    source = make_source(tmp_path / "source")
-    other = make_source(tmp_path / "other", n_conversations=3)
-    other_lengths = _measure(tmp_path, omegalax, other)
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    other = make_source(tmp_path / "other", production_inputs["image_store"], n_conversations=3)
+    other_lengths = _measure(tmp_path, production_inputs, other)
     result = _run(
         "stage_06_training_records.py",
-        omegalax["env"],
-        **_record_flags(tmp_path, omegalax, source, other_lengths),
+        production_inputs["env"],
+        **_record_flags(tmp_path, production_inputs, source, other_lengths),
     )
     assert result.returncode != 0
     assert "cache source mismatch" in result.stderr
 
-    lengths = _measure(tmp_path, omegalax, source)
-    for field, value in (("model_id", "Other/model"), ("processor", "Other/processor")):
-        result = _run(
-            "stage_06_training_records.py",
-            omegalax["env"],
-            **_record_flags(tmp_path, omegalax, source, lengths, **{field: value}),
-        )
-        assert result.returncode != 0
-        assert f"cache {field} mismatch" in result.stderr
+    lengths = _measure(tmp_path, production_inputs, source)
+    manifest_path = lengths / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["params"]["processor_snapshot"]["revision"] = "d" * 40
+    manifest_path.write_text(json.dumps(manifest))
+    result = _run(
+        "stage_06_training_records.py",
+        production_inputs["env"],
+        **_record_flags(tmp_path, production_inputs, source, lengths),
+    )
+    assert result.returncode != 0
+    assert "processor snapshot mismatch" in result.stderr
 
+    lengths = _measure(tmp_path, production_inputs, source)
     with (lengths / "message_lengths.jsonl").open("a") as target:
         target.write("{}\n")
     result = _run(
         "stage_06_training_records.py",
-        omegalax["env"],
-        **_record_flags(tmp_path, omegalax, source, lengths),
+        production_inputs["env"],
+        **_record_flags(tmp_path, production_inputs, source, lengths),
     )
     assert result.returncode != 0
     assert "cache digest mismatch" in result.stderr
 
 
-def test_stage_06_reuses_cache_and_builds_each_split(tmp_path: Path, omegalax) -> None:
-    source = make_source(tmp_path / "source")
-    lengths = _measure(tmp_path, omegalax, source)
+def test_stage_06_builds_verified_nonempty_arrayrecords(tmp_path: Path, production_inputs) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    lengths = _measure(tmp_path, production_inputs, source)
     output = tmp_path / "records"
     result = _run(
         "stage_06_training_records.py",
-        omegalax["env"],
+        production_inputs["env"],
         **_record_flags(
             tmp_path,
-            omegalax,
+            production_inputs,
             source,
             lengths,
             output_dir=output,
@@ -289,34 +523,49 @@ def test_stage_06_reuses_cache_and_builds_each_split(tmp_path: Path, omegalax) -
     assert result.returncode == 0, result.stderr
     builds = [
         argv
-        for argv in _invocations(omegalax["log"])
+        for argv in _script_invocations(production_inputs["log"])
         if any("build_sft_records" in argument for argument in argv)
     ]
     assert [_flags_of(argv)["split"] for argv in builds] == ["train", "val"]
-    for argv in builds:
-        flags = _flags_of(argv)
-        assert flags["message_lengths_path"] == str(lengths / "message_lengths.jsonl")
-        assert flags["overflow_mode"] == "split"
-        assert "--overwrite" in argv
+    assert all("--locked" in argv for argv in builds)
     manifest = json.loads((output / "manifest.json").read_text())
     assert manifest["inputs"]["source_id"] == make_artifact_id(source)
     assert manifest["inputs"]["message_lengths_id"] == make_artifact_id(lengths)
-    assert [row["split"] for row in manifest["stats"]["per_split"]] == [
-        "train",
-        "val",
-    ]
     for row in manifest["stats"]["per_split"]:
-        assert row["shards"] == {"part-00000.array_record": hashlib.sha256(b"shard").hexdigest()}
+        shard = output / row["split"] / "part-00000.array_record"
+        assert row["num_records"] == 1
+        assert row["shards"] == {
+            "part-00000.array_record": {
+                "sha256": hashlib.sha256(shard.read_bytes()).hexdigest(),
+                "num_records": 1,
+            }
+        }
 
 
-def test_stage_06_rejects_zero_output_shards(tmp_path: Path, omegalax) -> None:
-    source = make_source(tmp_path / "source")
-    lengths = _measure(tmp_path, omegalax, source)
-    env = {**omegalax["env"], "FAKE_UV_SHARDS": "0"}
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("absent", "metadata.json"),
+        ("empty", "counts must be positive"),
+        ("corrupt", "invalid Omegalax ArrayRecord"),
+        ("count_mismatch", "record count"),
+        ("bad_metadata", "metadata values"),
+    ],
+)
+def test_stage_06_rejects_invalid_record_artifacts(
+    tmp_path: Path, production_inputs, mode: str, message: str
+) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    lengths = _measure(tmp_path, production_inputs, source)
+    output = tmp_path / "records"
+    output.mkdir()
+    (output / "manifest.json").write_text("stale")
+    env = {**production_inputs["env"], "FAKE_UV_RECORDS": mode}
     result = _run(
         "stage_06_training_records.py",
         env,
-        **_record_flags(tmp_path, omegalax, source, lengths),
+        **_record_flags(tmp_path, production_inputs, source, lengths, output_dir=output),
     )
     assert result.returncode != 0
-    assert "produced no shards" in result.stderr
+    assert message in result.stderr
+    assert not (output / "manifest.json").exists()

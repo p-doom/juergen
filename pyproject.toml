@@ -12,7 +12,7 @@ dev = ["pytest>=8"]
 members = ["data_pipeline"]
 
 [tool.uv.sources]
-desktop = { git = "https://github.com/p-doom/desktop.git", rev = "b1be21fadaeb624dd2f635257be42f7fc4602aa2" }
+desktop = { git = "https://github.com/p-doom/desktop.git", rev = "1db6ae2499afc16d87dee15453a57042dff13f64" }
 
 [build-system]
 requires = ["setuptools>=68"]

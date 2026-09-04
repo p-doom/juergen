@@ -9,11 +9,11 @@ from pathlib import Path
 from pmanager.configs.schema import pipeline_task
 
 from pipeline.lib.manifest import file_sha256_short
+from pipeline.lib.omegalax import attest_omegalax, attest_processor_snapshot
 from pipeline.lib.realign import CLOSED_STATUSES
 
 TAG = "crowdcast_canonical_v1"
 ANNOTATION_MODEL = "Kimi-K2.6"
-TRAINING_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
 ANNOTATION_FPS = 0.5
 TRAINING_FPS = 1.0
 
@@ -84,6 +84,8 @@ def get_config():
     master = _required_dir("CROWDCAST_MASTER_DIR")
     clips = _required_file("CROWDCAST_CLIPS_MANIFEST")
     omegalax = _required_dir("OMEGALAX_REPO")
+    attest_omegalax(omegalax)
+    processor_snapshot = attest_processor_snapshot(_required_dir("SFT_PROCESSOR_SNAPSHOT"))
     _manifest(
         master / "manifest.json",
         {
@@ -154,8 +156,7 @@ def get_config():
     stage_05 = _task(lengths_name, repo, "pipeline/stage_05_measure_lengths.py")
     stage_05.entrypoint.args.source_path = str(datasets / conversations_name)
     stage_05.entrypoint.args.omegalax_repo = str(omegalax)
-    stage_05.entrypoint.args.model_id = TRAINING_MODEL
-    stage_05.entrypoint.args.processor = TRAINING_MODEL
+    stage_05.entrypoint.args.processor_snapshot = processor_snapshot["path"]
     stage_05.entrypoint.args.num_workers = 32
     stage_05.inputs.source = {"kind": "dataset", "version": conversations_name}
 
@@ -163,8 +164,7 @@ def get_config():
     stage_06.entrypoint.args.source_path = str(datasets / conversations_name)
     stage_06.entrypoint.args.message_lengths_path = str(datasets / lengths_name)
     stage_06.entrypoint.args.omegalax_repo = str(omegalax)
-    stage_06.entrypoint.args.model_id = TRAINING_MODEL
-    stage_06.entrypoint.args.processor = TRAINING_MODEL
+    stage_06.entrypoint.args.processor_snapshot = processor_snapshot["path"]
     stage_06.entrypoint.args.max_length = 32768
     stage_06.entrypoint.args.records_per_shard = 1024
     stage_06.entrypoint.args.num_workers = 32

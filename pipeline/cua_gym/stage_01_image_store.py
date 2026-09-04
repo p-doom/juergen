@@ -295,6 +295,7 @@ def build_store(screenshots_dir: Path, output_dir: Path, *, workers: int) -> dic
     output_dir.mkdir(parents=True, exist_ok=True)
     if manifest := _existing_manifest(output_dir, source_tars):
         return manifest
+    (output_dir / "manifest.json").unlink(missing_ok=True)
 
     generation_name = f"generation-{_canonical_sha256(source_tars)[:16]}"
     generation = output_dir / generation_name
@@ -339,10 +340,10 @@ def build_store(screenshots_dir: Path, output_dir: Path, *, workers: int) -> dic
         "source_tars": source_tars,
         "shards": shards,
     }
-    _publish_manifest(output_dir, manifest)
     for path in output_dir.glob("generation-*"):
         if path != generation:
             shutil.rmtree(path)
+    _publish_manifest(output_dir, manifest)
     return manifest
 
 

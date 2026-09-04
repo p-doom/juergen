@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import os
 import subprocess
 import sys
 import time
@@ -21,6 +21,11 @@ from pipeline.lib.manifest import (
     make_artifact_id,
     resolve_chat_artifact,
     write_manifest,
+)
+from pipeline.lib.omegalax import (
+    attest_omegalax,
+    attest_processor_snapshot,
+    validate_message_lengths,
 )
 
 FLAGS = flags.FLAGS
@@ -45,12 +50,9 @@ flags.DEFINE_string(
     required=True,
 )
 flags.DEFINE_string(
-    "model_id", None, "Model id (resolves the tokenizer).", required=True
-)
-flags.DEFINE_string(
-    "processor",
+    "processor_snapshot",
     None,
-    "Exact HF image processor identity.",
+    "Immutable local Hugging Face snapshot used for tokenizer and processor.",
     required=True,
 )
 flags.DEFINE_integer(
@@ -63,42 +65,43 @@ flags.DEFINE_integer(
 )
 
 
-def _run_measure(src_chat: Path, out_dir: Path) -> dict:
+def _run_measure(src_chat: Path, out_dir: Path, processor_snapshot: dict) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     cache = out_dir / MESSAGE_LENGTHS_FILENAME
     cache.unlink(missing_ok=True)
     cmd = [
         "uv",
         "run",
+        "--locked",
         "--project",
         FLAGS.omegalax_repo,
         "python",
         "scripts/measure_message_lengths_from_chat.py",
         f"--data_path={src_chat}",
         f"--out_dir={out_dir}",
-        f"--model_id={FLAGS.model_id}",
-        f"--processor={FLAGS.processor}",
+        f"--model_id={processor_snapshot['path']}",
+        f"--processor={processor_snapshot['path']}",
         f"--num_workers={FLAGS.num_workers}",
     ]
     print(f"[stage_measure_chat] {' '.join(cmd)}", flush=True)
     t0 = time.time()
-    rc = subprocess.run(cmd, cwd=FLAGS.omegalax_repo, check=False).returncode
+    environment = dict(
+        os.environ,
+        HF_HUB_OFFLINE="1",
+        TRANSFORMERS_OFFLINE="1",
+    )
+    rc = subprocess.run(
+        cmd,
+        cwd=FLAGS.omegalax_repo,
+        env=environment,
+        check=False,
+    ).returncode
     elapsed = time.time() - t0
     if rc != 0:
         raise RuntimeError(f"measure_message_lengths_from_chat.py failed (rc={rc})")
     if not cache.is_file():
         raise RuntimeError(f"measurement produced no cache: {cache}")
-    n_messages = 0
-    with cache.open(encoding="utf-8") as source:
-        for line_number, line in enumerate(source, 1):
-            if not line.strip():
-                raise ValueError(f"blank cache row at {cache}:{line_number}")
-            row = json.loads(line)
-            if not isinstance(row, dict):
-                raise TypeError(f"cache row must be an object at {cache}:{line_number}")
-            n_messages += 1
-    if n_messages == 0:
-        raise RuntimeError(f"measurement produced an empty cache: {cache}")
+    n_messages = validate_message_lengths(cache, src_chat)
     return {
         "file": MESSAGE_LENGTHS_FILENAME,
         "sha256": file_sha256_short(cache, n=64),
@@ -108,22 +111,25 @@ def _run_measure(src_chat: Path, out_dir: Path) -> dict:
 
 
 def main(_) -> None:
-    output_dir = Path(FLAGS.output_dir)
-    source_path = Path(FLAGS.source_path)
+    output_dir = Path(FLAGS.output_dir).resolve()
+    source_path = Path(FLAGS.source_path).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "manifest.json").unlink(missing_ok=True)
 
     src_chat = resolve_chat_artifact(source_path)
     source_id = make_artifact_id(source_path)
-    cache = _run_measure(src_chat, output_dir)
+    omegalax = attest_omegalax(Path(FLAGS.omegalax_repo))
+    processor_snapshot = attest_processor_snapshot(Path(FLAGS.processor_snapshot))
+    cache = _run_measure(src_chat, output_dir, processor_snapshot)
 
     write_manifest(
         output_dir,
         stage="message_lengths",
         params={
-            "model_id": FLAGS.model_id,
-            "processor": FLAGS.processor,
+            "processor_snapshot": processor_snapshot,
             "num_workers": FLAGS.num_workers,
             "omegalax_repo": FLAGS.omegalax_repo,
+            "omegalax": omegalax,
         },
         inputs={"source": str(source_path), "source_id": source_id},
         stats={"cache": cache},

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -21,6 +23,12 @@ from pipeline.lib.manifest import (
     make_artifact_id,
     resolve_chat_artifact,
     write_manifest,
+)
+from pipeline.lib.omegalax import (
+    attest_omegalax,
+    attest_processor_snapshot,
+    validate_message_lengths,
+    validate_record_dataset,
 )
 
 FLAGS = flags.FLAGS
@@ -43,12 +51,9 @@ flags.DEFINE_string(
     required=True,
 )
 flags.DEFINE_string(
-    "model_id", None, "Model id (resolves the tokenizer).", required=True
-)
-flags.DEFINE_string(
-    "processor",
+    "processor_snapshot",
     None,
-    "Exact HF image processor identity.",
+    "Immutable local Hugging Face snapshot used for tokenizer and processor.",
     required=True,
 )
 flags.DEFINE_integer(
@@ -87,7 +92,11 @@ flags.DEFINE_float(
 
 
 def _run_split(
-    split: str, src_chat: Path, out_split_dir: Path, cache_path: Path
+    split: str,
+    src_chat: Path,
+    out_split_dir: Path,
+    cache_path: Path,
+    processor_snapshot: dict,
 ) -> dict:
     out_split_dir.mkdir(parents=True, exist_ok=True)
     for shard in out_split_dir.glob("*.array_record"):
@@ -95,14 +104,15 @@ def _run_split(
     cmd = [
         "uv",
         "run",
+        "--locked",
         "--project",
         FLAGS.omegalax_repo,
         "python",
         "scripts/build_sft_records_from_chat.py",
         f"--data_path={src_chat}",
         f"--out_dir={out_split_dir}",
-        f"--model_id={FLAGS.model_id}",
-        f"--processor={FLAGS.processor}",
+        f"--model_id={processor_snapshot['path']}",
+        f"--processor={processor_snapshot['path']}",
         f"--max_length={FLAGS.max_length}",
         f"--records_per_shard={FLAGS.records_per_shard}",
         f"--num_workers={FLAGS.num_workers}",
@@ -114,44 +124,100 @@ def _run_split(
     ]
     print(f"[stage_records] {split}: {' '.join(cmd)}", flush=True)
     t0 = time.time()
-    rc = subprocess.run(cmd, cwd=FLAGS.omegalax_repo, check=False).returncode
+    environment = dict(
+        os.environ,
+        HF_HUB_OFFLINE="1",
+        TRANSFORMERS_OFFLINE="1",
+    )
+    rc = subprocess.run(
+        cmd,
+        cwd=FLAGS.omegalax_repo,
+        env=environment,
+        check=False,
+    ).returncode
     elapsed = time.time() - t0
     if rc != 0:
         raise RuntimeError(
             f"build_sft_records_from_chat.py failed (rc={rc}) for {split}"
         )
-    shards = sorted(out_split_dir.glob("*.array_record"))
-    if not shards:
-        raise RuntimeError(f"record builder produced no shards for {split}")
-    empty = [shard.name for shard in shards if shard.stat().st_size == 0]
-    if empty:
-        raise RuntimeError(f"record builder produced empty shards for {split}: {empty}")
-    return {
-        "split": split,
-        "shards": {shard.name: file_sha256_short(shard, n=64) for shard in shards},
-        "elapsed_s": int(elapsed),
-    }
+    validated = validate_record_dataset(
+        out_split_dir,
+        source_chat=src_chat,
+        processor_snapshot=processor_snapshot,
+        max_length=FLAGS.max_length,
+        split=split,
+        val_fraction=FLAGS.val_fraction,
+    )
+    return {"split": split, **validated, "elapsed_s": int(elapsed)}
 
 
-def _resolve_cache(root: Path, source_id: str) -> tuple[Path, str]:
+def _resolve_cache(
+    root: Path,
+    source_id: str,
+    source_chat: Path,
+    processor_snapshot: dict,
+    omegalax: dict,
+) -> tuple[Path, str]:
     manifest_path = root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if (
-        manifest.get("schema_version") != 1
+        not isinstance(manifest, dict)
+        or set(manifest)
+        != {
+            "built_at",
+            "inputs",
+            "params",
+            "pmanager_parent_run_id",
+            "pmanager_run_id",
+            "schema_version",
+            "stage",
+            "stats",
+        }
+        or manifest.get("schema_version") != 1
         or manifest.get("stage") != "message_lengths"
+        or isinstance(manifest.get("built_at"), bool)
+        or not isinstance(manifest.get("built_at"), int)
+        or manifest["built_at"] <= 0
+        or not isinstance(manifest.get("pmanager_run_id"), str)
+        or not isinstance(manifest.get("pmanager_parent_run_id"), str)
     ):
         raise ValueError(f"invalid message-length manifest: {manifest_path}")
     inputs = manifest.get("inputs")
     params = manifest.get("params")
     stats = manifest.get("stats")
-    if not isinstance(inputs, dict) or inputs.get("source_id") != source_id:
+    if (
+        not isinstance(inputs, dict)
+        or set(inputs) != {"source", "source_id"}
+        or inputs.get("source") != str(source_chat.parent.resolve())
+        or inputs.get("source_id") != source_id
+    ):
         raise ValueError("message-length cache source mismatch")
-    if not isinstance(params, dict) or params.get("model_id") != FLAGS.model_id:
-        raise ValueError("message-length cache model_id mismatch")
-    if params.get("processor") != FLAGS.processor:
-        raise ValueError("message-length cache processor mismatch")
-    cache = stats.get("cache") if isinstance(stats, dict) else None
-    if not isinstance(cache, dict) or cache.get("file") != MESSAGE_LENGTHS_FILENAME:
+    if (
+        not isinstance(params, dict)
+        or set(params)
+        != {"processor_snapshot", "num_workers", "omegalax_repo", "omegalax"}
+        or params.get("processor_snapshot") != processor_snapshot
+        or params.get("omegalax_repo") != omegalax["path"]
+        or isinstance(params.get("num_workers"), bool)
+        or not isinstance(params.get("num_workers"), int)
+        or params["num_workers"] < 2
+    ):
+        raise ValueError("message-length cache processor snapshot mismatch")
+    if params.get("omegalax") != omegalax:
+        raise ValueError("message-length cache Omegalax identity mismatch")
+    cache = (
+        stats.get("cache")
+        if isinstance(stats, dict) and set(stats) == {"cache"}
+        else None
+    )
+    if (
+        not isinstance(cache, dict)
+        or set(cache) != {"elapsed_s", "file", "n_messages", "sha256"}
+        or cache.get("file") != MESSAGE_LENGTHS_FILENAME
+        or isinstance(cache.get("elapsed_s"), bool)
+        or not isinstance(cache.get("elapsed_s"), int)
+        or cache["elapsed_s"] < 0
+    ):
         raise ValueError(f"invalid message-length cache contract: {manifest_path}")
     expected = cache.get("sha256")
     if not isinstance(expected, str) or len(expected) != 64:
@@ -166,33 +232,57 @@ def _resolve_cache(root: Path, source_id: str) -> tuple[Path, str]:
         raise ValueError(
             f"message-length cache digest mismatch: expected {expected}, got {observed}"
         )
+    if validate_message_lengths(path, source_chat) != cache["n_messages"]:
+        raise ValueError("message-length cache count mismatch")
     return path, make_artifact_id(root)
 
 
 def main(_) -> None:
     if FLAGS.val_fraction >= 1.0:
         raise ValueError("val_fraction must be less than 1")
-    output_dir = Path(FLAGS.output_dir)
-    source_path = Path(FLAGS.source_path)
-    lengths_root = Path(FLAGS.message_lengths_path)
+    output_dir = Path(FLAGS.output_dir).resolve()
+    source_path = Path(FLAGS.source_path).resolve()
+    lengths_root = Path(FLAGS.message_lengths_path).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "manifest.json").unlink(missing_ok=True)
 
     src_chat = resolve_chat_artifact(source_path)
     source_id = make_artifact_id(source_path)
-    cache_path, cache_id = _resolve_cache(lengths_root, source_id)
+    omegalax = attest_omegalax(Path(FLAGS.omegalax_repo))
+    processor_snapshot = attest_processor_snapshot(Path(FLAGS.processor_snapshot))
+    cache_path, cache_id = _resolve_cache(
+        lengths_root,
+        source_id,
+        src_chat,
+        processor_snapshot,
+        omegalax,
+    )
     splits = ("train", "val") if FLAGS.val_fraction > 0.0 else ("train",)
-    per_split = [_run_split(s, src_chat, output_dir / s, cache_path) for s in splits]
+    for split in ("train", "val"):
+        path = output_dir / split
+        if path.exists():
+            shutil.rmtree(path)
+    per_split = [
+        _run_split(
+            split,
+            src_chat,
+            output_dir / split,
+            cache_path,
+            processor_snapshot,
+        )
+        for split in splits
+    ]
 
     write_manifest(
         output_dir,
         stage="inline_records",
         params={
-            "model_id": FLAGS.model_id,
-            "processor": FLAGS.processor,
+            "processor_snapshot": processor_snapshot,
             "max_length": FLAGS.max_length,
             "records_per_shard": FLAGS.records_per_shard,
             "num_workers": FLAGS.num_workers,
             "omegalax_repo": FLAGS.omegalax_repo,
+            "omegalax": omegalax,
             "message_lengths_path": FLAGS.message_lengths_path,
             "val_fraction": FLAGS.val_fraction,
         },

@@ -1,4 +1,4 @@
-"""Build the single-target CUA-Gym action-format parity conversations."""
+"""Render curated CUA-Gym turns as loss-masked parity conversations."""
 
 from __future__ import annotations
 
@@ -15,20 +15,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from desktop.geometry import DisplayGeometry
-
-from grammars.ordered_events_v3_relative_1000_grid_v1.codec import CODEC
-from pipeline.cua_gym.stage_01_image_store import validate_image_store
-from pipeline.cua_gym.translate import (
-    rewrite_assistant,
-    translate_step,
+from grammars.ordered_events_v3_relative_1000_grid_v1.codec import (
+    CODEC,
+    action_from_dict,
 )
+from pipeline.cua_gym.stage_01_image_store import validate_image_store
+from pipeline.cua_gym.stage_03_curate_trajectories import resolve_curated_artifact
 from pipeline.lib.image_store import parse_arrayrecord_image_uri
 from pipeline.lib.manifest import make_artifact_id
 
 SCREEN = (1920, 1080)
-GEOMETRY = DisplayGeometry(desktop_width=SCREEN[0], desktop_height=SCREEN[1])
-FAILURE_STEP_PERCENT = 25
 MAX_COMPLETED_TURNS = 4
 PREVIOUS_ACTIONS_MAX_CHARS = 160
 OBSERVATION_CONTRACT = {
@@ -37,14 +33,6 @@ OBSERVATION_CONTRACT = {
     "jpeg_quality": 92,
     "width": 1920,
     "height": 1080,
-}
-_COORDINATE_ACTIONS = {
-    "click",
-    "double_click",
-    "left_click",
-    "left_click_drag",
-    "mouse_move",
-    "right_click",
 }
 
 
@@ -55,7 +43,7 @@ def _canonical_digest(value: Any) -> str:
         allow_nan=False,
         separators=(",", ":"),
         sort_keys=True,
-    ).encode("utf-8")
+    ).encode()
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -74,9 +62,7 @@ def render_contract() -> dict[str, Any]:
     return {
         "grammar": CODEC.name,
         "system_prompt": system_prompt,
-        "system_prompt_sha256": hashlib.sha256(
-            system_prompt.encode("utf-8")
-        ).hexdigest(),
+        "system_prompt_sha256": hashlib.sha256(system_prompt.encode()).hexdigest(),
         "action_spec_sha256": _canonical_digest(action),
         "observation_spec_sha256": _canonical_digest(OBSERVATION_CONTRACT),
         "render_spec_sha256": _canonical_digest(render),
@@ -87,49 +73,6 @@ def render_contract() -> dict[str, Any]:
 
 class ImageResolver(Protocol):
     def uri(self, shard: str, member: str) -> str: ...
-
-
-def _source_action(step: dict[str, Any]) -> dict[str, Any] | None:
-    raw = step.get("raw_action_args")
-    if raw is None:
-        if any(
-            step.get(key) is not None
-            for key in ("assistant_raw", "meta", "coordinate_screen")
-        ):
-            raise ValueError("null source action must not carry action metadata")
-        return None
-    if not isinstance(raw, dict):
-        raise TypeError("raw_action_args must be an object or null")
-    meta = step.get("meta")
-    if not isinstance(meta, dict):
-        raise TypeError("non-null source action requires executed meta")
-    action = raw.get("action")
-    if not isinstance(action, str):
-        raise TypeError("source action must be text")
-    if action in _COORDINATE_ACTIONS:
-        if set(raw) != {"action", "coordinate"}:
-            raise ValueError(f"unexpected source fields for {action}: {sorted(raw)}")
-        if set(meta) != {"action", "pixel"} or meta.get("action") != action:
-            raise ValueError(f"executed metadata mismatch for {action}")
-        if meta["pixel"] != step.get("coordinate_screen"):
-            raise ValueError(f"executed pixel mismatch for {action}")
-        return raw
-    if action == "type":
-        if set(meta) != {"action", "text"} or meta != {
-            "action": "type",
-            "text": raw.get("text"),
-        }:
-            raise ValueError("executed metadata mismatch for type")
-        return meta
-    if action == "wait":
-        if set(raw) != {"action", "time"} or set(meta) != {"action", "time"}:
-            raise ValueError("wait requires raw and executed time")
-        if meta.get("action") != action:
-            raise ValueError("executed metadata mismatch for wait")
-        return meta
-    if raw != meta:
-        raise ValueError(f"raw and executed action differ for {action}")
-    return raw
 
 
 class ImageIndex:
@@ -154,6 +97,8 @@ class ImageIndex:
                 lines = index_path.read_text(encoding="utf-8").splitlines()
                 for expected_index, line in enumerate(lines):
                     row = json.loads(line)
+                    if set(row) != {"member", "uri", "jpeg_sha256"}:
+                        raise ValueError(f"invalid image index row {expected_index}")
                     name = row["member"]
                     uri = row["uri"]
                     if not isinstance(name, str) or not isinstance(uri, str):
@@ -184,12 +129,6 @@ class ImageIndex:
             ) from exc
 
 
-def _sample_failure(task_id: str, step: int) -> bool:
-    digest = hashlib.sha256(f"{task_id}:{step}".encode()).digest()
-    value = int.from_bytes(digest[:8], "big")
-    return value < (1 << 64) * FAILURE_STEP_PERCENT // 100
-
-
 def _text(value: str) -> dict[str, str]:
     return {"type": "text", "text": value}
 
@@ -211,11 +150,10 @@ def _previous_actions(evicted: list[tuple[int, str]]) -> str:
 
 
 def _instruction(instruction: str, evicted: list[tuple[int, str]]) -> str:
-    previous = _previous_actions(evicted)
     return (
         "Please generate the next move according to the UI screenshot, instruction "
         "and previous actions.\n\n"
-        f"Instruction: {instruction}\n\nPrevious actions:\n{previous}"
+        f"Instruction: {instruction}\n\nPrevious actions:\n{_previous_actions(evicted)}"
     )
 
 
@@ -248,97 +186,74 @@ def _messages(
     return messages
 
 
+def _action_text(value: object) -> str:
+    if not isinstance(value, dict) or set(value) != {
+        "primitives",
+        "no_op",
+        "terminate",
+    }:
+        raise ValueError("curated action must use the canonical action object")
+    action = action_from_dict(value)
+    if action.to_dict() != value or action.no_op != (not action.primitives):
+        raise ValueError("curated action object is not canonical")
+    return CODEC.format(action)
+
+
 def build_episode_records(
     record: dict[str, Any],
     images: ImageResolver,
     contract: dict[str, Any],
     counters: Counter[str],
 ) -> list[dict[str, Any]]:
-    if tuple(record.get("screen") or ()) != SCREEN:
-        raise ValueError(
-            f"CUA-Gym parity requires screen {list(SCREEN)}, got {record.get('screen')!r}"
-        )
-    task_id = record.get("task_id")
-    instruction = record.get("instruction")
+    if set(record) != {"task_id", "instruction", "app", "screen", "steps"}:
+        raise ValueError(f"invalid curated rollout fields: {sorted(record)}")
+    if tuple(record["screen"]) != SCREEN:
+        raise ValueError(f"CUA-Gym parity requires screen {list(SCREEN)}")
+    task_id = record["task_id"]
+    instruction = record["instruction"]
     if not isinstance(task_id, str) or not task_id:
-        raise ValueError("trajectory task_id must be non-empty text")
+        raise ValueError("curated task_id must be non-empty text")
     if not isinstance(instruction, str) or not instruction.strip():
-        raise ValueError("trajectory instruction must be non-empty text")
-    source_steps = record.get("steps")
+        raise ValueError(f"curated trajectory {task_id!r} has no instruction")
+    source_steps = record["steps"]
     if not isinstance(source_steps, list) or not source_steps:
-        raise ValueError(f"trajectory {task_id!r} has no steps")
-    translated: list[dict[str, Any]] = []
-    seen_steps: set[int] = set()
+        raise ValueError(f"curated trajectory {task_id!r} has no steps")
+    translated = []
     previous_step = -1
     for source in source_steps:
-        if not isinstance(source, dict):
-            raise TypeError(f"trajectory step must be an object, got {source!r}")
-        step = source.get("step")
-        if (
-            isinstance(step, bool)
-            or not isinstance(step, int)
-            or step < 0
-            or step in seen_steps
-        ):
-            raise ValueError(
-                f"trajectory step id must be unique and non-negative, got {step!r}"
-            )
-        if step <= previous_step:
-            raise ValueError(
-                f"trajectory steps must be strictly increasing, got {previous_step}, {step}"
-            )
-        seen_steps.add(step)
+        if not isinstance(source, dict) or set(source) != {
+            "step",
+            "shard",
+            "member",
+            "reasoning",
+            "action",
+        }:
+            raise ValueError(f"{task_id}: invalid curated step")
+        step = source["step"]
+        if isinstance(step, bool) or not isinstance(step, int) or step <= previous_step:
+            raise ValueError(f"{task_id}: curated steps are not strictly increasing")
         previous_step = step
-        counters["source_steps"] += 1
-        arguments = _source_action(source)
-        if arguments is None:
-            counters["source_null_steps"] += 1
-            continue
-        shard = source.get("shard")
-        member = source.get("member")
-        if (
-            not isinstance(shard, str)
-            or not shard
-            or not isinstance(member, str)
-            or not member
-        ):
-            raise ValueError(f"trajectory step {step} has no screenshot identity")
-        assistant_raw = source.get("assistant_raw")
-        if not isinstance(assistant_raw, str):
-            raise TypeError(f"trajectory step {step} has no assistant_raw")
-        translation = translate_step(arguments, source.get("cursor_before"), GEOMETRY)
-        if translation.target_pixel is not None and translation.target_pixel != tuple(
-            source["coordinate_screen"]
-        ):
-            raise ValueError(
-                f"trajectory step {step} coordinate does not match executed pixel"
-            )
-        action_text = translation.text
+        reasoning = source["reasoning"]
+        if not isinstance(reasoning, str) or not reasoning.strip():
+            raise ValueError(f"{task_id} step {step}: reasoning is empty")
+        shard = source["shard"]
+        member = source["member"]
+        if not isinstance(shard, str) or not isinstance(member, str):
+            raise TypeError(f"{task_id} step {step}: image identity is invalid")
+        action_text = _action_text(source["action"])
         translated.append(
             {
                 "step": step,
                 "image": images.uri(shard, member),
                 "action_text": action_text,
-                "assistant": rewrite_assistant(assistant_raw, translation.action),
+                "assistant": f"<think>{reasoning.strip()}</think>\n\n{action_text}",
             }
         )
-        counters["translated_steps"] += 1
-    if not translated:
-        raise ValueError(
-            f"recording_id={task_id!r} has no successfully parsed, executed actions"
-        )
-    counters["translated_rollouts"] += 1
-    reward = record.get("reward")
-    if isinstance(reward, bool) or not isinstance(reward, (int, float)):
-        raise TypeError(f"trajectory reward must be numeric, got {reward!r}")
-    success = reward > 0
+    counters["rollouts"] += 1
     rows = []
     for index, step in enumerate(translated):
-        if not success and not _sample_failure(task_id, step["step"]):
-            continue
         messages = _messages(instruction, translated, index, contract)
-        serialized = json.dumps(messages, ensure_ascii=False)
-        if "<tool_call>" in serialized:
+        if "<tool_call>" in json.dumps(messages, ensure_ascii=False):
             raise AssertionError(
                 "native computer_use syntax leaked into parity history"
             )
@@ -347,9 +262,7 @@ def build_episode_records(
                 "conversation_id": f"{task_id}__s{step['step']:03d}",
                 "recording_id": task_id,
                 "task_id": task_id,
-                "app": record.get("app"),
-                "reward": reward,
-                "pool": "success" if success else "failure",
+                "app": record["app"],
                 "target_step": step["step"],
                 "n_history_turns": min(MAX_COMPLETED_TURNS, index),
                 "grammar": CODEC.name,
@@ -360,6 +273,7 @@ def build_episode_records(
                 "messages": messages,
             }
         )
+        counters["records"] += 1
     return rows
 
 
@@ -372,35 +286,33 @@ def _file_sha256(path: Path) -> str:
 
 
 def build_dataset(
-    trajectories: Path, image_store: Path, output_dir: Path
+    curated_trajectories: Path, image_store: Path, output_dir: Path
 ) -> dict[str, Any]:
+    trajectory_path, curated_manifest = resolve_curated_artifact(curated_trajectories)
     images = ImageIndex(image_store)
     contract = render_contract()
     image_store_id = make_artifact_id(image_store)
+    curated_id = make_artifact_id(curated_trajectories)
     output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "manifest.json").unlink(missing_ok=True)
     temporary = output_dir / f".chat.{os.getpid()}.jsonl"
     counters: Counter[str] = Counter()
     try:
         with (
-            trajectories.open(encoding="utf-8") as source,
+            trajectory_path.open(encoding="utf-8") as source,
             temporary.open("w", encoding="utf-8") as target,
         ):
-            for line in source:
+            for line_number, line in enumerate(source, 1):
                 if not line.strip():
-                    continue
-                record = json.loads(line)
-                counters["rollouts"] += 1
-                rows = build_episode_records(record, images, contract, counters)
-                for row in rows:
+                    raise ValueError(
+                        f"blank curated row at {trajectory_path}:{line_number}"
+                    )
+                for row in build_episode_records(
+                    json.loads(line), images, contract, counters
+                ):
                     target.write(json.dumps(row, ensure_ascii=False) + "\n")
-                    counters["records"] += 1
-                    counters[f"records_{row['pool']}"] += 1
-        if counters["rollouts"] == 0:
-            raise ValueError(f"trajectory file is empty: {trajectories}")
-        if counters["records"] == 0:
-            raise ValueError(
-                "no target records survived translation and deterministic sampling"
-            )
+        if not counters["records"]:
+            raise ValueError("curated artifact produced no training records")
         temporary.replace(output_dir / "chat.jsonl")
     finally:
         temporary.unlink(missing_ok=True)
@@ -410,10 +322,10 @@ def build_dataset(
         "chat": "chat.jsonl",
         "chat_sha256": _file_sha256(output_dir / "chat.jsonl"),
         "grammar": CODEC.name,
-        "failure_step_percent": FAILURE_STEP_PERCENT,
         "inputs": {
-            "trajectories": str(trajectories.resolve()),
-            "trajectories_sha256": _file_sha256(trajectories),
+            "curated_trajectories": str(curated_trajectories.resolve()),
+            "curated_trajectories_id": curated_id,
+            "source_sha256": curated_manifest["inputs"]["source_sha256"],
             "image_store": str(image_store.resolve()),
             "image_store_id": image_store_id,
         },
@@ -424,8 +336,7 @@ def build_dataset(
     }
     temporary_manifest = output_dir / ".manifest.json.tmp"
     temporary_manifest.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     temporary_manifest.replace(output_dir / "manifest.json")
     return manifest
@@ -433,7 +344,7 @@ def build_dataset(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--trajectories", type=Path, required=True)
+    parser.add_argument("--curated_trajectories", type=Path, required=True)
     parser.add_argument("--image_store", type=Path, required=True)
     parser.add_argument("--output_dir", type=Path, required=True)
     return parser.parse_args(argv)
@@ -443,7 +354,7 @@ def main() -> None:
     args = parse_args()
     print(
         json.dumps(
-            build_dataset(args.trajectories, args.image_store, args.output_dir),
+            build_dataset(args.curated_trajectories, args.image_store, args.output_dir),
             indent=2,
             sort_keys=True,
         )

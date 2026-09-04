@@ -262,16 +262,3 @@ def translate_step(
         ),
         target_pixel=target,
     )
-
-
-def rewrite_assistant(source: str, action: OrderedEventsV3Action) -> str:
-    if not isinstance(source, str):
-        raise TypeError("assistant_raw must be text")
-    thinking, separator, remainder = source.partition("</think>")
-    if not separator or "<tool_call>" not in remainder:
-        raise ValueError("assistant_raw must contain reasoning followed by a tool call")
-    if "</think>" in remainder:
-        raise ValueError("assistant_raw must contain exactly one reasoning block")
-    if thinking.lstrip().startswith("<think>"):
-        raise ValueError("assistant_raw unexpectedly contains an opening <think> tag")
-    return f"<think>{thinking.strip()}</think>\n\n{CODEC.format(action)}"

@@ -88,7 +88,7 @@ dev = [
 requires-dist = [
     { name = "absl-py", specifier = ">=2.0" },
     { name = "array-record", specifier = ">=0.5.1" },
-    { name = "desktop", git = "https://github.com/p-doom/desktop.git?rev=b1be21fadaeb624dd2f635257be42f7fc4602aa2" },
+    { name = "desktop", git = "https://github.com/p-doom/desktop.git?rev=1db6ae2499afc16d87dee15453a57042dff13f64" },
     { name = "msgpack", specifier = ">=1.0" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "openai", specifier = ">=2.26.0" },
@@ -104,7 +104,7 @@ dev = [{ name = "pytest", specifier = ">=8" }]
 [[package]]
 name = "desktop"
 version = "0.1.0"
-source = { git = "https://github.com/p-doom/desktop.git?rev=b1be21fadaeb624dd2f635257be42f7fc4602aa2#b1be21fadaeb624dd2f635257be42f7fc4602aa2" }
+source = { git = "https://github.com/p-doom/desktop.git?rev=1db6ae2499afc16d87dee15453a57042dff13f64#1db6ae2499afc16d87dee15453a57042dff13f64" }
 dependencies = [
     { name = "pillow" },
 ]
@@ -241,7 +241,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "desktop", git = "https://github.com/p-doom/desktop.git?rev=b1be21fadaeb624dd2f635257be42f7fc4602aa2" },
+    { name = "desktop", git = "https://github.com/p-doom/desktop.git?rev=1db6ae2499afc16d87dee15453a57042dff13f64" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
 ]
 provides-extras = ["dev"]
