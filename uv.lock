@@ -703,6 +703,8 @@ source = { editable = "." }
 dependencies = [
     { name = "av" },
     { name = "desktop" },
+    { name = "pillow" },
+    { name = "requests" },
     { name = "verifiers" },
 ]
 
@@ -715,7 +717,9 @@ dev = [
 requires-dist = [
     { name = "av", specifier = ">=16.1.0" },
     { name = "desktop", git = "file:///fast/project/HFMI_SynergyUnit/p-doom_shared/git/desktop.git?rev=b1be21fadaeb624dd2f635257be42f7fc4602aa2" },
+    { name = "pillow", specifier = ">=10" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "requests", specifier = ">=2.31" },
     { name = "verifiers", specifier = "==0.2.1" },
 ]
 provides-extras = ["dev"]

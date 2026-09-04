@@ -22,6 +22,13 @@ dependencies = [
     # is excluded from this resolve (see project_harbor_migration -- audit-only,
     # opt-in).
     "verifiers==0.2.1",
+    # `eval/` imports both directly (the in-guest agent client is `requests`,
+    # every frame is a `PIL.Image`). Both are already in the resolve as
+    # transitives -- `requests` via verifiers, `pillow` via desktop -- and a
+    # transitive is not a promise: either dependency could drop it and the
+    # micro-eval would break at import with nothing in this file to explain why.
+    "requests>=2.31",
+    "pillow>=10",
 ]
 
 [project.optional-dependencies]
@@ -115,8 +122,11 @@ py-modules = [
 [tool.setuptools.packages.find]
 # Their import closure: they re-export from evals/, evals/ imports agent/, and
 # agent/ imports grammars/. Shipping only grammars/ made every one of them
-# uninstallable. pipeline/ is deliberately absent: labctl invokes its stages as
-# file paths in a checkout, nothing imports it.
+# uninstallable. pipeline/ and eval/ are deliberately absent: labctl invokes both
+# as file paths in a checkout, nothing imports them. eval/ additionally *cannot*
+# be packaged -- its modules import each other flat (`import cua_micro_oracle`),
+# so it only resolves with itself on sys.path, and `eval` as a top-level module
+# name shadows the builtin.
 include = ["agent", "agent.*", "evals", "evals.*", "grammars", "grammars.*"]
 
 [tool.setuptools.package-data]
