@@ -65,10 +65,14 @@ def _transcode(job: tuple[str, bytes]) -> tuple[str, bytes]:
 
 
 def _members(path: Path):
+    seen: set[str] = set()
     with tarfile.open(path, mode="r|*") as archive:
         for member in archive:
             if not member.isfile() or not member.name.endswith(".png"):
                 continue
+            if member.name in seen:
+                raise ValueError(f"duplicate PNG member in {path}: {member.name!r}")
+            seen.add(member.name)
             source = archive.extractfile(member)
             if source is None:
                 raise ValueError(f"cannot read tar member {member.name!r}")
@@ -201,6 +205,11 @@ def validate_image_store(output_dir: Path) -> dict[str, object]:
     if set(source_tars) != {f"{name}.tar" for name in shards}:
         raise ValueError(f"image-store source/shard set mismatch: {manifest_path}")
     path = output_dir / generation
+    generations = {item.name for item in output_dir.glob("generation-*")}
+    if generations != {generation}:
+        raise ValueError(
+            f"image-store generation set mismatch: expected {generation!r}, got {generations}"
+        )
     _validate_generation(path, path, shards)
     return manifest
 

@@ -47,6 +47,7 @@ _PYAUTOGUI_TO_RDEV = {
     "del": "Delete",
     "insert": "Insert",
     ",": "Comma",
+    "comma": "Comma",
     ".": "Period",
     "/": "Slash",
     "\\": "Backslash",
@@ -55,8 +56,12 @@ _PYAUTOGUI_TO_RDEV = {
     "-": "Minus",
     "=": "Equal",
     "`": "Backquote",
+    "grave": "Backquote",
     "[": "BracketLeft",
     "]": "BracketRight",
+    "center": "Center",
+    "mod": "ControlLeft",
+    "print": "Print",
 }
 
 

@@ -6,13 +6,14 @@ import json
 import sys
 import tarfile
 import types
+from collections import Counter
 from pathlib import Path
 
 import pytest
 from desktop.geometry import DisplayGeometry
 from grammars.ordered_events_v3_relative_1000_grid_v1.codec import (
     CODEC,
-    grid_from_pixels,
+    grid_delta,
     pixels_from_grid,
 )
 from PIL import Image
@@ -77,6 +78,7 @@ def _screenshot_tar(root: Path, count: int = 6) -> Path:
     ("arguments", "expected"),
     [
         ({"action": "right_click"}, "down(RMB); up(RMB)"),
+        ({"action": "click"}, "down(LMB); up(LMB)"),
         ({"action": "double_click"}, "down(LMB); up(LMB); down(LMB); up(LMB)"),
         (
             {"action": "key", "keys": ["ctrl", "c"]},
@@ -90,6 +92,16 @@ def _screenshot_tar(root: Path, count: int = 6) -> Path:
         ({"action": "hscroll", "pixels": 4}, "scroll(4,0)"),
         ({"action": "wait", "time": 1}, "NO_OP"),
         ({"action": "screenshot"}, "NO_OP"),
+        ({"action": "type", "text": ""}, "NO_OP"),
+        (
+            {
+                "action": "key",
+                "keys": ["mod", "comma", "grave", "print", "center"],
+            },
+            "down(ControlLeft); down(Comma); down(Backquote); down(Print); "
+            "down(Center); up(Center); up(Print); up(Backquote); up(Comma); "
+            "up(ControlLeft)",
+        ),
     ],
 )
 def test_native_action_translation_matrix(arguments, expected):
@@ -121,15 +133,42 @@ def test_relative_grid_boundary_uses_the_pixel_delta():
     assert translated.text == "move(999,0)"
     assert CODEC.compile(translated.text, GEOMETRY, (1, 0))[0].args == (1919, 0)
 
+    from_origin = translate_step(
+        {"action": "mouse_move", "coordinate": [1000, 1000]},
+        (0, 0),
+        GEOMETRY,
+    )
+    assert from_origin.text == "move(1000,999)"
+    assert CODEC.compile(from_origin.text, GEOMETRY, (0, 0))[0].args == (1919, 1079)
 
-@pytest.mark.parametrize("dimension", [1080, 1920, 2560])
-def test_integer_thousandth_delta_is_nearest_representable_pixel(dimension):
-    for coordinate in range(1001):
-        target = min(round(coordinate / 1000 * dimension), dimension - 1)
-        for cursor in range(dimension):
-            encoded = grid_from_pixels(target - cursor, dimension)
-            landed = cursor + pixels_from_grid(encoded, dimension)
-            assert abs(landed - target) <= 1
+
+def _landing(cursor: int, unit: int, dimension: int) -> int:
+    return min(max(cursor + pixels_from_grid(unit, dimension), 0), dimension - 1)
+
+
+@pytest.mark.parametrize("dimension", range(1, 51))
+def test_integer_thousandth_delta_is_nearest_on_bounded_domains(dimension):
+    for cursor in range(dimension):
+        for target in range(dimension):
+            encoded = grid_delta(cursor, target, dimension)
+            error = abs(_landing(cursor, encoded, dimension) - target)
+            assert error == min(
+                abs(_landing(cursor, unit, dimension) - target)
+                for unit in range(encoded - 3, encoded + 4)
+            )
+
+
+@pytest.mark.parametrize("dimension", [720, 1080, 1920, 2560, 3840])
+def test_integer_thousandth_delta_samples_large_displays(dimension):
+    positions = sorted({0, 1, dimension // 4, dimension // 2, dimension - 2, dimension - 1})
+    for cursor in positions:
+        for target in positions:
+            encoded = grid_delta(cursor, target, dimension)
+            error = abs(_landing(cursor, encoded, dimension) - target)
+            assert error == min(
+                abs(_landing(cursor, unit, dimension) - target)
+                for unit in range(encoded - 3, encoded + 4)
+            )
 
 
 @pytest.mark.parametrize("width,height", [(1280, 720), (1920, 1080), (2560, 1440)])
@@ -222,6 +261,23 @@ def test_stage_01_rebuilds_corruption_and_closes_the_source_set(tmp_path: Path):
     assert {path.name for path in current.iterdir()} == {"screenshots-0001"}
     assert {path.name for path in output.glob("generation-*")} == {changed["generation"]}
 
+    orphan = output / "generation-orphan"
+    orphan.mkdir()
+    assert build_store(screenshots, output, workers=1) == changed
+    assert not orphan.exists()
+
+
+def test_stage_01_rejects_duplicate_png_members(tmp_path: Path):
+    screenshots = tmp_path / "screenshots"
+    path = _screenshot_tar(screenshots, count=1)
+    payload = _png()
+    with tarfile.open(path, "a") as archive:
+        info = tarfile.TarInfo("task/step_000.png")
+        info.size = len(payload)
+        archive.addfile(info, io.BytesIO(payload))
+    with pytest.raises(ValueError, match="duplicate PNG member"):
+        build_store(screenshots, tmp_path / "images", workers=1)
+
 
 class _Images:
     def uri(self, shard: str, member: str) -> str:
@@ -241,6 +297,7 @@ def _trajectory(*, task_id: str = "task", reward: int = 1, turns: int = 6) -> di
                 "member": f"task/step_{index:03d}.png",
                 "assistant_raw": f"reason {index}</think>\nAction: wait\n<tool_call>{{}}</tool_call>",
                 "raw_action_args": {"action": "wait", "time": 1},
+                "meta": {"action": "wait", "time": 1},
                 "cursor_before": [960, 540],
             }
             for index in range(turns)
@@ -253,7 +310,7 @@ def _image_count(messages: list[dict]) -> int:
 
 
 def test_stage_04_bounds_history_masks_loss_and_summarizes_evictions():
-    rows = build_episode_records(_trajectory(), _Images())
+    rows = build_episode_records(_trajectory(), _Images(), render_contract(), Counter())
     assert [row["n_history_turns"] for row in rows] == [0, 1, 2, 3, 4, 4]
     assert [_image_count(row["messages"]) for row in rows] == [1, 2, 3, 4, 5, 5]
     final = rows[-1]["messages"]
@@ -271,6 +328,23 @@ def test_stage_04_bounds_history_masks_loss_and_summarizes_evictions():
     )
 
 
+def test_evicted_action_summary_has_one_total_bound():
+    trajectory = _trajectory(turns=100)
+    trajectory["steps"] = [
+        {
+            **step,
+            "raw_action_args": {"action": "type", "text": "x" * 500},
+            "meta": {"action": "type", "text": "x" * 500},
+        }
+        for step in trajectory["steps"]
+    ]
+    rows = build_episode_records(trajectory, _Images(), render_contract(), Counter())
+    prompt = rows[-1]["messages"][1]["content"][1]["text"]
+    previous = prompt.split("Previous actions:\n", 1)[1]
+    assert len(previous) <= 160
+    assert previous.startswith("…[earlier actions omitted]")
+
+
 def test_rewrite_keeps_only_the_thinking_block():
     source = "reason</think>\nAction: wait\n<tool_call>{}</tool_call>"
     action = translate_step({"action": "wait", "time": 1}, (0, 0), GEOMETRY).action
@@ -280,10 +354,63 @@ def test_rewrite_keeps_only_the_thinking_block():
 def test_failure_sampling_is_deterministic_and_failure_control_survives():
     trajectory = _trajectory(task_id="task-6", reward=0, turns=1)
     trajectory["steps"][0]["raw_action_args"] = {"action": "terminate", "status": "failure"}
-    rows = build_episode_records(trajectory, _Images())
+    trajectory["steps"][0]["meta"] = {"action": "terminate", "status": "failure"}
+    rows = build_episode_records(trajectory, _Images(), render_contract(), Counter())
     assert len(rows) == 1
     assert rows[0]["messages"][-1]["content"][0]["text"].endswith("TERMINATE: failure")
-    assert build_episode_records(trajectory, _Images()) == rows
+    assert build_episode_records(trajectory, _Images(), render_contract(), Counter()) == rows
+
+
+def test_actual_source_schema_normalizes_executed_type_and_null_steps():
+    trajectory = _trajectory(turns=3)
+    trajectory["steps"][0] |= {
+        "raw_action_args": {
+            "action": "type",
+            "text": "hello",
+            "clear": True,
+            "enter": 2,
+        },
+        "meta": {"action": "type", "text": "hello"},
+    }
+    trajectory["steps"][1] |= {
+        "raw_action_args": None,
+        "assistant_raw": None,
+        "meta": None,
+        "coordinate_screen": None,
+    }
+    trajectory["steps"][2] |= {
+        "raw_action_args": {"action": "click", "coordinate": [389, 308]},
+        "meta": {"action": "click", "pixel": [747, 333]},
+        "coordinate_screen": [747, 333],
+    }
+    counters = Counter()
+    rows = build_episode_records(trajectory, _Images(), render_contract(), counters)
+    assert len(rows) == 2
+    assert counters == {
+        "source_steps": 3,
+        "source_null_steps": 1,
+        "translated_steps": 2,
+        "translated_rollouts": 1,
+    }
+    assert rows[0]["messages"][-1]["content"][0]["text"].endswith('type("hello")')
+    assert rows[1]["messages"][-1]["content"][0]["text"].endswith(
+        "move(-111,-192); down(LMB); up(LMB)"
+    )
+
+
+def test_all_null_rollout_fails_with_recording_identity():
+    trajectory = _trajectory(task_id="broken-recording", turns=1)
+    trajectory["steps"][0] |= {
+        "raw_action_args": None,
+        "assistant_raw": None,
+        "meta": None,
+        "coordinate_screen": None,
+    }
+    with pytest.raises(
+        ValueError,
+        match=r"recording_id='broken-recording'.*no successfully parsed, executed actions",
+    ):
+        build_episode_records(trajectory, _Images(), render_contract(), Counter())
 
 
 def test_stage_01_to_stage_04_manifest_and_digest_contract(tmp_path: Path):
@@ -299,6 +426,14 @@ def test_stage_01_to_stage_04_manifest_and_digest_contract(tmp_path: Path):
     assert ImageIndex(image_store).uri("screenshots-0000.tar", "task/step_000.png")
     assert manifest["artifact_type"] == "cuagym_stage_04_conversations"
     assert manifest["grammar"] == CODEC.name
+    assert manifest["stats"] == {
+        "records": 1,
+        "records_success": 1,
+        "rollouts": 1,
+        "source_steps": 1,
+        "translated_rollouts": 1,
+        "translated_steps": 1,
+    }
     contract = render_contract()
     assert manifest["contract"]["render_spec_sha256"] == contract["render_spec_sha256"]
     row = json.loads((output / "chat.jsonl").read_text())
@@ -337,6 +472,7 @@ def test_labctl_chain_requires_and_connects_omegalax_scripts(monkeypatch, tmp_pa
     monkeypatch.setenv("CUA_GYM_SCREENSHOTS_DIR", str(screenshots))
     monkeypatch.setenv("CUA_GYM_TRAJECTORIES", str(trajectories))
     monkeypatch.setenv("OMEGALAX_REPO", str(omegalax))
+    monkeypatch.setenv("JUERGEN_REPO", str(Path(__file__).resolve().parents[2]))
 
     with pytest.raises(RuntimeError, match="measure_message_lengths_from_chat"):
         module.get_config()

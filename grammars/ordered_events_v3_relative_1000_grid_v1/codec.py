@@ -41,6 +41,27 @@ def grid_from_pixels(value: int, dimension: int) -> int:
     return round(value / dimension * GRID)
 
 
+def grid_delta(cursor: int, target: int, dimension: int) -> int:
+    """Encode the nearest compiled landing, including display-edge clamping."""
+    if dimension <= 0:
+        raise OrderedEventsV3Error(
+            f"display dimension must be positive, got {dimension}"
+        )
+    if not 0 <= cursor < dimension or not 0 <= target < dimension:
+        raise OrderedEventsV3Error(
+            f"cursor and target must be inside a {dimension}-pixel axis"
+        )
+    center = grid_from_pixels(target - cursor, dimension)
+
+    def landing(unit: int) -> int:
+        return min(max(cursor + pixels_from_grid(unit, dimension), 0), dimension - 1)
+
+    return min(
+        range(center - 2, center + 3),
+        key=lambda unit: (abs(landing(unit) - target), abs(unit - center), abs(unit)),
+    )
+
+
 def escape(text: str) -> str:
     """Encode a ``type()`` payload. Only ``\\`` and ``"`` are escaped."""
     return text.replace("\\", "\\\\").replace('"', '\\"')
@@ -372,10 +393,8 @@ class OrderedEventsV3Codec:
             if kind in ("move", "stroke"):
                 assert group.target is not None
                 delta = (
-                    grid_from_pixels(group.target[0], width)
-                    - grid_from_pixels(here[0], width),
-                    grid_from_pixels(group.target[1], height)
-                    - grid_from_pixels(here[1], height),
+                    grid_delta(here[0], group.target[0], width),
+                    grid_delta(here[1], group.target[1], height),
                 )
                 if delta != (0, 0):
                     primitives.append(Primitive("move", dx=delta[0], dy=delta[1]))

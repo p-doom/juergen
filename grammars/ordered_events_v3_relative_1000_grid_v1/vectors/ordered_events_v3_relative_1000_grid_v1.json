@@ -699,7 +699,7 @@
           ]
         ]
       ],
-      "documents": "the most faithful lift of the seven: this grammar can interleave, so each absolute endpoint folds back into its own relative move."
+      "documents": "Each absolute endpoint becomes one relative move in sequence."
     },
     {
       "name": "drag_stroke_is_preserved_as_a_drag",
@@ -798,7 +798,7 @@
           ]
         ]
       ],
-      "documents": "the only grammar of the seven that can say a two-axis scroll, which is why the IR's scroll is two-axis."
+      "documents": "Both scroll axes are preserved."
     },
     {
       "name": "type_then_return",
@@ -898,7 +898,7 @@
           {
             "kind": "move",
             "dx": 73,
-            "dy": 55
+            "dy": 56
           },
           {
             "kind": "up",
@@ -907,7 +907,7 @@
         ],
         "no_op": false
       },
-      "canonical": "move(73,93); down(LMB); move(73,55); up(LMB)",
+      "canonical": "move(73,93); down(LMB); move(73,56); up(LMB)",
       "recompiled": [
         [
           "move_to",
@@ -926,7 +926,7 @@
           "move_to",
           [
             1240,
-            699
+            700
           ]
         ],
         [
@@ -936,7 +936,7 @@
           ]
         ]
       ],
-      "documents": "the most faithful lift of the seven: the approach move, the press, the stroke as its own relative move INSIDE the held button, and the release. Only the stroke's timing is dropped, because this grammar has no timing primitive."
+      "documents": "The drag preserves movement, press, stroke, and release order."
     },
     {
       "name": "ascii_type_becomes_one_burst",

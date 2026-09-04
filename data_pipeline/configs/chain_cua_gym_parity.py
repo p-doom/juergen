@@ -11,19 +11,28 @@ TAG = "cuagym_action_format_parity_v1"
 MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
 
 
-def _required_path(name: str) -> str:
+def _required_dir(name: str) -> str:
     value = os.environ.get(name)
     if not value:
         raise RuntimeError(f"{name} is required")
     path = Path(value).resolve()
-    if not path.exists():
-        raise RuntimeError(f"{name} does not exist: {path}")
+    if not path.is_dir():
+        raise RuntimeError(f"{name} is not a directory: {path}")
+    return str(path)
+
+
+def _required_file(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"{name} is required")
+    path = Path(value).resolve()
+    if not path.is_file():
+        raise RuntimeError(f"{name} is not a file: {path}")
     return str(path)
 
 
 def _repo() -> str:
-    value = os.environ.get("JUERGEN_REPO")
-    path = Path(value).resolve() if value else Path(__file__).resolve().parents[2]
+    path = Path(_required_dir("JUERGEN_REPO"))
     if not (path / "pipeline").is_dir():
         raise RuntimeError(f"JUERGEN_REPO is not a Juergen checkout: {path}")
     return str(path)
@@ -57,10 +66,10 @@ def _task(name: str, repo: str, entrypoint: str):
 
 def get_config():
     repo = _repo()
-    datasets = Path(_required_path("LABCTL_DATASETS_ROOT"))
-    screenshots = _required_path("CUA_GYM_SCREENSHOTS_DIR")
-    trajectories = _required_path("CUA_GYM_TRAJECTORIES")
-    omegalax = _required_path("OMEGALAX_REPO")
+    datasets = Path(_required_dir("LABCTL_DATASETS_ROOT"))
+    screenshots = _required_dir("CUA_GYM_SCREENSHOTS_DIR")
+    trajectories = _required_file("CUA_GYM_TRAJECTORIES")
+    omegalax = _required_dir("OMEGALAX_REPO")
     for relative in (
         "scripts/measure_message_lengths_from_chat.py",
         "scripts/build_sft_records_from_chat.py",

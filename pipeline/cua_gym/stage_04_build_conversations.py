@@ -20,7 +20,6 @@ from desktop.geometry import DisplayGeometry
 from grammars.ordered_events_v3_relative_1000_grid_v1.codec import CODEC
 from pipeline.cua_gym.stage_01_image_store import validate_image_store
 from pipeline.cua_gym.translate import (
-    UnsupportedSourceAction,
     rewrite_assistant,
     translate_step,
 )
@@ -31,13 +30,21 @@ SCREEN = (1920, 1080)
 GEOMETRY = DisplayGeometry(desktop_width=SCREEN[0], desktop_height=SCREEN[1])
 FAILURE_STEP_PERCENT = 25
 MAX_COMPLETED_TURNS = 4
-SUMMARY_ACTION_MAX_CHARS = 160
+PREVIOUS_ACTIONS_MAX_CHARS = 160
 OBSERVATION_CONTRACT = {
     "image_domain": "jpeg_q92_1920x1080",
     "media_type": "image/jpeg",
     "jpeg_quality": 92,
     "width": 1920,
     "height": 1080,
+}
+_COORDINATE_ACTIONS = {
+    "click",
+    "double_click",
+    "left_click",
+    "left_click_drag",
+    "mouse_move",
+    "right_click",
 }
 
 
@@ -61,7 +68,7 @@ def render_contract() -> dict[str, Any]:
     }
     render = {
         "max_completed_turns": MAX_COMPLETED_TURNS,
-        "summary_action_max_chars": SUMMARY_ACTION_MAX_CHARS,
+        "previous_actions_max_chars": PREVIOUS_ACTIONS_MAX_CHARS,
         "history_assistant_loss": False,
     }
     return {
@@ -80,6 +87,49 @@ def render_contract() -> dict[str, Any]:
 
 class ImageResolver(Protocol):
     def uri(self, shard: str, member: str) -> str: ...
+
+
+def _source_action(step: dict[str, Any]) -> dict[str, Any] | None:
+    raw = step.get("raw_action_args")
+    if raw is None:
+        if any(
+            step.get(key) is not None
+            for key in ("assistant_raw", "meta", "coordinate_screen")
+        ):
+            raise ValueError("null source action must not carry action metadata")
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError("raw_action_args must be an object or null")
+    meta = step.get("meta")
+    if not isinstance(meta, dict):
+        raise TypeError("non-null source action requires executed meta")
+    action = raw.get("action")
+    if not isinstance(action, str):
+        raise TypeError("source action must be text")
+    if action in _COORDINATE_ACTIONS:
+        if set(raw) != {"action", "coordinate"}:
+            raise ValueError(f"unexpected source fields for {action}: {sorted(raw)}")
+        if set(meta) != {"action", "pixel"} or meta.get("action") != action:
+            raise ValueError(f"executed metadata mismatch for {action}")
+        if meta["pixel"] != step.get("coordinate_screen"):
+            raise ValueError(f"executed pixel mismatch for {action}")
+        return raw
+    if action == "type":
+        if set(meta) != {"action", "text"} or meta != {
+            "action": "type",
+            "text": raw.get("text"),
+        }:
+            raise ValueError("executed metadata mismatch for type")
+        return meta
+    if action == "wait":
+        if set(raw) != {"action", "time"} or set(meta) != {"action", "time"}:
+            raise ValueError("wait requires raw and executed time")
+        if meta.get("action") != action:
+            raise ValueError("executed metadata mismatch for wait")
+        return meta
+    if raw != meta:
+        raise ValueError(f"raw and executed action differ for {action}")
+    return raw
 
 
 class ImageIndex:
@@ -148,20 +198,20 @@ def _image(value: str) -> dict[str, str]:
     return {"type": "image", "image": value}
 
 
-def _summary_action(value: str) -> str:
-    one_line = value.replace("\n", " | ")
-    if len(one_line) <= SUMMARY_ACTION_MAX_CHARS:
-        return one_line
-    retained = SUMMARY_ACTION_MAX_CHARS - 10
-    return f"{one_line[:retained]}…[+{len(one_line) - retained}]"
+def _previous_actions(evicted: list[tuple[int, str]]) -> str:
+    if not evicted:
+        return "None"
+    value = "\n".join(
+        f"Step {step}: {action.replace(chr(10), ' | ')}" for step, action in evicted
+    )
+    if len(value) <= PREVIOUS_ACTIONS_MAX_CHARS:
+        return value
+    marker = "…[earlier actions omitted]\n"
+    return marker + value[-(PREVIOUS_ACTIONS_MAX_CHARS - len(marker)) :]
 
 
 def _instruction(instruction: str, evicted: list[tuple[int, str]]) -> str:
-    previous = (
-        "\n".join(f"Step {step}: {_summary_action(action)}" for step, action in evicted)
-        if evicted
-        else "None"
-    )
+    previous = _previous_actions(evicted)
     return (
         "Please generate the next move according to the UI screenshot, instruction "
         "and previous actions.\n\n"
@@ -201,8 +251,8 @@ def _messages(
 def build_episode_records(
     record: dict[str, Any],
     images: ImageResolver,
-    *,
-    contract: dict[str, Any] | None = None,
+    contract: dict[str, Any],
+    counters: Counter[str],
 ) -> list[dict[str, Any]]:
     if tuple(record.get("screen") or ()) != SCREEN:
         raise ValueError(
@@ -239,6 +289,11 @@ def build_episode_records(
             )
         seen_steps.add(step)
         previous_step = step
+        counters["source_steps"] += 1
+        arguments = _source_action(source)
+        if arguments is None:
+            counters["source_null_steps"] += 1
+            continue
         shard = source.get("shard")
         member = source.get("member")
         if (
@@ -248,21 +303,31 @@ def build_episode_records(
             or not member
         ):
             raise ValueError(f"trajectory step {step} has no screenshot identity")
-        translation = translate_step(
-            source.get("raw_action_args"), source.get("cursor_before"), GEOMETRY
-        )
+        assistant_raw = source.get("assistant_raw")
+        if not isinstance(assistant_raw, str):
+            raise TypeError(f"trajectory step {step} has no assistant_raw")
+        translation = translate_step(arguments, source.get("cursor_before"), GEOMETRY)
+        if translation.target_pixel is not None and translation.target_pixel != tuple(
+            source["coordinate_screen"]
+        ):
+            raise ValueError(
+                f"trajectory step {step} coordinate does not match executed pixel"
+            )
         action_text = translation.text
         translated.append(
             {
                 "step": step,
                 "image": images.uri(shard, member),
                 "action_text": action_text,
-                "assistant": rewrite_assistant(
-                    source.get("assistant_raw"), translation.action
-                ),
+                "assistant": rewrite_assistant(assistant_raw, translation.action),
             }
         )
-    contract = contract or render_contract()
+        counters["translated_steps"] += 1
+    if not translated:
+        raise ValueError(
+            f"recording_id={task_id!r} has no successfully parsed, executed actions"
+        )
+    counters["translated_rollouts"] += 1
     reward = record.get("reward")
     if isinstance(reward, bool) or not isinstance(reward, (int, float)):
         raise TypeError(f"trajectory reward must be numeric, got {reward!r}")
@@ -325,11 +390,7 @@ def build_dataset(
                     continue
                 record = json.loads(line)
                 counters["rollouts"] += 1
-                try:
-                    rows = build_episode_records(record, images, contract=contract)
-                except UnsupportedSourceAction as exc:
-                    counters[f"dropped_episode_{exc}"] += 1
-                    continue
+                rows = build_episode_records(record, images, contract, counters)
                 for row in rows:
                     target.write(json.dumps(row, ensure_ascii=False) + "\n")
                     counters["records"] += 1

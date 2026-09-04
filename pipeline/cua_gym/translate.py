@@ -9,13 +9,14 @@ from grammars.ordered_events_v3_relative_1000_grid_v1.codec import (
     CODEC,
     OrderedEventsV3Action,
     Primitive,
-    grid_from_pixels,
+    grid_delta,
     pixels_from_grid,
 )
 from pipeline.cua_gym.key_names import key_name
 
 _BUTTONS = {"left": "LMB", "middle": "MMB", "right": "RMB"}
 _CLICKS = {
+    "click": ("left", 1),
     "left_click": ("left", 1),
     "right_click": ("right", 1),
     "middle_click": ("middle", 1),
@@ -30,6 +31,7 @@ _FIELDS = {
     "screenshot": ({"action"}, set()),
     "mouse_move": ({"action", "coordinate"}, {"coordinate"}),
     "left_click": ({"action", "coordinate"}, set()),
+    "click": ({"action", "coordinate"}, set()),
     "right_click": ({"action", "coordinate"}, set()),
     "middle_click": ({"action", "coordinate"}, set()),
     "double_click": ({"action", "coordinate"}, set()),
@@ -118,8 +120,8 @@ def _move(
         return [], None
     width, height = _size(geometry)
     delta = (
-        grid_from_pixels(target[0] - cursor[0], width),
-        grid_from_pixels(target[1] - cursor[1], height),
+        grid_delta(cursor[0], target[0], width),
+        grid_delta(cursor[1], target[1], height),
     )
     return (
         [] if delta == (0, 0) else [Primitive("move", dx=delta[0], dy=delta[1])]
@@ -143,7 +145,7 @@ def _keys(value: object) -> list[str]:
 
 def _typing(text: str) -> list[Primitive]:
     if not text:
-        raise ValueError("type text must be non-empty")
+        return []
     primitives: list[Primitive] = []
     run: list[str] = []
 

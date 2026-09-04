@@ -16,6 +16,9 @@ The Crowd-Cast chain begins at Stage03 and requires two immutable upstream
 artifacts: `CROWDCAST_MASTER_DIR` must be a 720p/q92 Stage01 master image store,
 and `CROWDCAST_CLIPS_MANIFEST` must be the canonical file from a Stage02
 realigned artifact. The parity chain begins at its raw screenshot tar source.
+`CUA_GYM_TRAJECTORIES` must be a curated native `computer_use` JSONL in which
+every rollout has at least one successfully parsed, executed action. Parse
+failures may remain only as non-action steps inside an otherwise valid rollout.
 
 ```bash
 pmanager launch data_pipeline/configs/chain_crowdcast.py
