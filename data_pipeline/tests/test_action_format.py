@@ -68,7 +68,9 @@ def test_canonical_format_is_stable_and_parseable(tmp_path: Path):
     assert all(CODEC.format(CODEC.parse(label)) == label for label in canonical)
 
 
-def test_canonical_format_preserves_held_state_and_transition_order(tmp_path: Path):
+def test_canonical_format_preserves_transition_order_and_drops_terminal_press(
+    tmp_path: Path,
+):
     entries = [
         (0.2, ["KeyRelease", [0, "KeyZ"]]),
         (0.5, ["KeyPress", [0, "ShiftLeft"]]),
@@ -84,7 +86,7 @@ def test_canonical_format_preserves_held_state_and_transition_order(tmp_path: Pa
         "0 0 0 ; +ShiftLeft",
         "0 0 0 ; +KeyA -KeyA +KeyA -KeyA",
         "0 0 0 ; -ShiftLeft",
-        "0 0 0 ; +KeyB",
+        "NO_OP",
     ]
 
 

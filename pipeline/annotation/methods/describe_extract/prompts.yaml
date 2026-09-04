@@ -93,7 +93,6 @@ extract: |-
     "goals": [
       {
         "instruction": "string",
-        "instruction_variants": ["string", "string"],
         "anchor": "string",
         "grounding": "string",
         "start_frame": <integer frame index>,
@@ -101,4 +100,3 @@ extract: |-
       }
     ]
   }
-

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import sys
@@ -58,13 +59,23 @@ def chain(monkeypatch, tmp_path: Path):
     realigned = tmp_path / "realigned"
     realigned.mkdir()
     clips = realigned / "clips_manifest.jsonl"
-    clips.write_text('{"segment_id":"s"}\n')
+    clips.write_text(
+        json.dumps(
+            {
+                "segment_id": "s",
+                "alignment_closed": True,
+                "alignment_status": "aligned",
+            }
+        )
+        + "\n"
+    )
     (realigned / "manifest.json").write_text(
         json.dumps(
             {
                 "artifact_type": "juergen_annotation_clip_manifest_realigned",
                 "schema_version": 1,
                 "clips_file": clips.name,
+                "clips_sha256": hashlib.sha256(clips.read_bytes()).hexdigest(),
             }
         )
     )
@@ -129,4 +140,24 @@ def test_chain_refuses_a_noncanonical_stage02_file(chain, monkeypatch, tmp_path:
     alternate.touch()
     monkeypatch.setenv("CROWDCAST_CLIPS_MANIFEST", str(alternate))
     with pytest.raises(RuntimeError, match="canonical clips file"):
+        module.get_config()
+
+
+def test_chain_refuses_unclosed_stage02_alignment(chain):
+    module, _, clips = chain
+    clips.write_text(
+        json.dumps(
+            {
+                "segment_id": "s",
+                "alignment_closed": False,
+                "alignment_status": "needs_review",
+            }
+        )
+        + "\n"
+    )
+    manifest_path = clips.parent / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["clips_sha256"] = hashlib.sha256(clips.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(RuntimeError, match="unclosed alignment"):
         module.get_config()

@@ -35,6 +35,7 @@ Outputs (under --output-dir):
   frames_master_summary.json                aggregate stats.
   manifest.json                             artifact marker.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -54,18 +55,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from pipeline.lib import config  # noqa: E402
-from pipeline.lib.common import ensure_dir, read_jsonl, write_json  # noqa: E402
-from pipeline.lib.image_store import make_arrayrecord_image_uri  # noqa: E402
-from pipeline.lib.frames_actions import (  # noqa: E402
+from pipeline.lib import config
+from pipeline.lib.common import ensure_dir, read_jsonl, write_json
+from pipeline.lib.frames_actions import (
     extract_frames_ffmpeg,
     resolve_ffmpeg_bin,
 )
+from pipeline.lib.image_store import make_arrayrecord_image_uri
+from pipeline.lib.manifest import file_sha256_short
 
 DEFAULT_MASTER_FPS = 4.0
 
 
-def _luma_metrics(jpeg: bytes) -> "tuple[float | None, float | None]":
+def _luma_metrics(jpeg: bytes) -> tuple[float | None, float | None]:
     """Black-frame detection for one JPEG, computed in a single grayscale
     histogram pass: ``(mean_luma, frac_dark)`` where mean_luma is 0-255 and
     frac_dark is the fraction of pixels below ``config.BLACK_DARK_CUTOFF``.
@@ -74,8 +76,9 @@ def _luma_metrics(jpeg: bytes) -> "tuple[float | None, float | None]":
     threshold, so it stays tunable without re-decoding. Returns ``(None, None)``
     if the frame can't be decoded; such a frame is never dropped as black."""
     try:
-        import io  # noqa: PLC0415
-        from PIL import Image  # noqa: PLC0415
+        import io
+
+        from PIL import Image
 
         with Image.open(io.BytesIO(jpeg)) as im:
             hist = im.convert("L").histogram()  # 256 luma bins
@@ -102,7 +105,9 @@ def pack_master_arrayrecord(
     loose ``frame_*.jpg`` afterwards, so the segment dir keeps only the shard +
     its sidecar.
     """
-    from array_record.python.array_record_module import ArrayRecordWriter  # noqa: PLC0415
+    from array_record.python.array_record_module import (
+        ArrayRecordWriter,
+    )
 
     shard_path = segment_frame_dir / "images.array_record"
     manifest_path = segment_frame_dir / "frame_manifest.jsonl"
@@ -133,7 +138,9 @@ def pack_master_arrayrecord(
                     json.dumps(
                         {
                             "record_index": record_index,
-                            "image": make_arrayrecord_image_uri(shard_path, record_index),
+                            "image": make_arrayrecord_image_uri(
+                                shard_path, record_index
+                            ),
                             "shard_path": str(shard_path),
                             "source_time_s": round(source_time_s, 6),
                             "source_frame_idx": source_frame_idx,
@@ -155,20 +162,78 @@ def pack_master_arrayrecord(
     return {
         "shard_path": str(shard_path),
         "manifest_path": str(manifest_path),
+        "shard_sha256": file_sha256_short(shard_path, n=64),
+        "frame_manifest_sha256": file_sha256_short(manifest_path, n=64),
         "num_records": len(frame_paths),
         "total_jpeg_bytes": total_jpeg_bytes,
     }
 
 
+def _cached_segment(
+    segment_frame_dir: Path, expected_inputs: dict[str, Any]
+) -> dict[str, Any] | None:
+    marker_path = segment_frame_dir / "segment_manifest.json"
+    if not marker_path.is_file():
+        return None
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(marker, dict)
+        or set(marker) != {"schema_version", "inputs", "outputs"}
+        or marker.get("schema_version") != 1
+    ):
+        raise ValueError(f"invalid cached segment marker: {marker_path}")
+    if marker.get("inputs") != expected_inputs:
+        return None
+    outputs = marker.get("outputs")
+    required = {
+        "frame_manifest_sha256",
+        "num_records",
+        "shard_sha256",
+        "total_jpeg_bytes",
+    }
+    if not isinstance(outputs, dict) or set(outputs) != required:
+        raise ValueError(f"invalid cached segment marker: {marker_path}")
+    shard = segment_frame_dir / "images.array_record"
+    frame_manifest = segment_frame_dir / "frame_manifest.jsonl"
+    if not shard.is_file() or not frame_manifest.is_file():
+        raise FileNotFoundError(
+            f"cached segment payload is incomplete: {segment_frame_dir}"
+        )
+    if file_sha256_short(shard, n=64) != outputs["shard_sha256"]:
+        raise ValueError(f"cached segment shard digest mismatch: {shard}")
+    if file_sha256_short(frame_manifest, n=64) != outputs["frame_manifest_sha256"]:
+        raise ValueError(f"cached frame manifest digest mismatch: {frame_manifest}")
+    rows = read_jsonl(frame_manifest)
+    if not rows or len(rows) != outputs["num_records"]:
+        raise ValueError(f"cached frame count mismatch: {frame_manifest}")
+    if sum(int(row["jpeg_bytes"]) for row in rows) != outputs["total_jpeg_bytes"]:
+        raise ValueError(f"cached JPEG byte count mismatch: {frame_manifest}")
+    from array_record.python.array_record_module import ArrayRecordReader
+
+    reader = ArrayRecordReader(str(shard))
+    try:
+        if reader.num_records() != len(rows):
+            raise ValueError(f"cached ArrayRecord count mismatch: {shard}")
+    finally:
+        reader.close()
+    return {
+        "shard_path": str(shard),
+        "frame_manifest": str(frame_manifest),
+        **outputs,
+    }
+
+
+def _write_atomic_json(path: Path, value: dict[str, Any]) -> None:
+    temporary = path.with_suffix(".tmp")
+    write_json(temporary, value)
+    temporary.replace(path)
+
+
 def build_segment_master(task: dict[str, Any]) -> dict[str, Any]:
-    """Worker: decode one segment's mp4 into its master frame store and return
-    an index row. Picklable; no shared state. Failures are captured, not raised,
-    so one bad segment never aborts the pool."""
+    """Decode one segment and return its canonical index row."""
     row = task["row"]
     seg = str(row["segment_id"])
     segment_frame_dir = ensure_dir(Path(task["frames_dir"]) / seg)
-    manifest_path = segment_frame_dir / "frame_manifest.jsonl"
-
     base_row = {
         "segment_id": seg,
         "recording_id": row.get("recording_id"),
@@ -178,6 +243,7 @@ def build_segment_master(task: dict[str, Any]) -> dict[str, Any]:
         "jpeg_quality": task["jpeg_quality"],
         "video_duration_s": row.get("video_duration_s"),
         "video_fps": row.get("video_fps"),
+        "video_sha256": row["video_sha256"],
     }
 
     if not row.get("video_ok"):
@@ -186,17 +252,17 @@ def build_segment_master(task: dict[str, Any]) -> dict[str, Any]:
     if not video_path or not Path(video_path).exists():
         return {**base_row, "status": "skipped_no_video", "num_records": 0}
 
-    # Resume: a finished segment already has its per-frame manifest (written
-    # last, after the shard is closed). --force reprocesses regardless.
-    if manifest_path.exists() and not task["force"]:
-        existing = read_jsonl(manifest_path)
-        return {
-            **base_row,
-            "status": "cached",
-            "num_records": len(existing),
-            "shard_path": str(segment_frame_dir / "images.array_record"),
-            "total_jpeg_bytes": sum(int(r.get("jpeg_bytes", 0)) for r in existing),
-        }
+    cache_inputs = {
+        "jpeg_quality": task["jpeg_quality"],
+        "master_fps": task["master_fps"],
+        "target_height": task["target_height"],
+        "video_sha256": row["video_sha256"],
+    }
+    if not task["force"] and (
+        cached := _cached_segment(segment_frame_dir, cache_inputs)
+    ):
+        return {**base_row, "status": "ok", **cached}
+    (segment_frame_dir / "segment_manifest.json").unlink(missing_ok=True)
 
     try:
         extract_frames_ffmpeg(
@@ -208,7 +274,12 @@ def build_segment_master(task: dict[str, Any]) -> dict[str, Any]:
             ffmpeg_bin=task["ffmpeg_bin"],
         )
     except Exception as exc:  # noqa: BLE001 - one segment failing must not kill the run
-        return {**base_row, "status": "failed", "num_records": 0, "error": f"{type(exc).__name__}: {exc}"}
+        return {
+            **base_row,
+            "status": "failed",
+            "num_records": 0,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
     frame_paths = sorted(segment_frame_dir.glob("frame_*.jpg"))
     packed = pack_master_arrayrecord(
@@ -218,13 +289,27 @@ def build_segment_master(task: dict[str, Any]) -> dict[str, Any]:
         video_fps=float(row.get("video_fps") or 0.0),
         video_frame_count=int(row.get("video_frame_count") or 0),
     )
+    if not packed["num_records"]:
+        return {**base_row, "status": "empty", "num_records": 0}
+    outputs = {
+        key: packed[key]
+        for key in (
+            "frame_manifest_sha256",
+            "num_records",
+            "shard_sha256",
+            "total_jpeg_bytes",
+        )
+    }
+    _write_atomic_json(
+        segment_frame_dir / "segment_manifest.json",
+        {"schema_version": 1, "inputs": cache_inputs, "outputs": outputs},
+    )
     return {
         **base_row,
-        "status": "ok" if packed["num_records"] else "empty",
-        "num_records": packed["num_records"],
-        "shard_path": packed.get("shard_path"),
-        "frame_manifest": packed.get("manifest_path"),
-        "total_jpeg_bytes": packed["total_jpeg_bytes"],
+        "status": "ok",
+        "shard_path": packed["shard_path"],
+        "frame_manifest": packed["manifest_path"],
+        **outputs,
     }
 
 
@@ -249,7 +334,7 @@ def aggregate_summary(
     target_height: int,
     jpeg_quality: int,
     ffmpeg_bin: str | None,
-    source_clips_manifest: str | None,
+    source_clips_manifest: str,
 ) -> dict[str, Any]:
     """Roll per-segment index rows up into the summary dict. Shared by the
     single-shard decode path and the merge path so both emit the same shape."""
@@ -261,16 +346,28 @@ def aggregate_summary(
         "n_segments": len(index_rows),
         "status_counts": dict(counts),
         "n_records_total": sum(int(r.get("num_records") or 0) for r in index_rows),
-        "total_jpeg_bytes": sum(int(r.get("total_jpeg_bytes") or 0) for r in index_rows),
+        "total_jpeg_bytes": sum(
+            int(r.get("total_jpeg_bytes") or 0) for r in index_rows
+        ),
         "ffmpeg_bin": ffmpeg_bin,
         "source_clips_manifest": source_clips_manifest,
+        "source_clips_sha256": file_sha256_short(Path(source_clips_manifest), n=64),
     }
 
 
 def write_summary_and_manifest(out_dir: Path, summary: dict[str, Any]) -> None:
     """Write the aggregate summary + the manifest.json artifact marker."""
     write_json(out_dir / "frames_master_summary.json", summary)
-    write_json(out_dir / "manifest.json", {**ARTIFACT_MARKER, **summary})
+    _write_atomic_json(
+        out_dir / "manifest.json",
+        {
+            **ARTIFACT_MARKER,
+            **summary,
+            "segment_index_sha256": file_sha256_short(
+                out_dir / "segment_index.jsonl", n=64
+            ),
+        },
+    )
 
 
 def run_merge(args: argparse.Namespace) -> None:
@@ -294,16 +391,27 @@ def run_merge(args: argparse.Namespace) -> None:
             f"[merge] no segment_index.shard*{suffix}.jsonl under {out_dir} "
             f"(did the shard tasks run with --num-shards {n}?)"
         )
-    present = sorted(int(p.name.split(".shard")[1].split("_of_")[0]) for p in shard_index_files)
+    present = sorted(
+        int(p.name.split(".shard")[1].split("_of_")[0]) for p in shard_index_files
+    )
     missing = sorted(set(range(n)) - set(present))
     if missing:
-        print(f"[merge] WARNING: no shard index for shards {missing}", flush=True)
+        raise RuntimeError(f"missing shard indexes: {missing}")
 
     by_seg: dict[str, dict[str, Any]] = {}
     for sf in shard_index_files:
         for row in read_jsonl(sf):
-            by_seg[str(row["segment_id"])] = row
+            segment_id = str(row["segment_id"])
+            if segment_id in by_seg:
+                raise ValueError(
+                    f"duplicate segment across shard indexes: {segment_id}"
+                )
+            by_seg[segment_id] = row
     index_rows = list(by_seg.values())
+    if not index_rows or any(row.get("status") != "ok" for row in index_rows):
+        raise RuntimeError(
+            "cannot publish an empty or incomplete master frame artifact"
+        )
 
     # Decode scalars (ffmpeg_bin / source manifest) live in the shard summaries;
     # fall back to the first index row for the numerics if a summary is missing.
@@ -332,7 +440,9 @@ def run_merge(args: argparse.Namespace) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument(
         "--clips-manifest",
         type=Path,
@@ -362,8 +472,17 @@ def parse_args() -> argparse.Namespace:
         "(itself capped via JUERGEN_ANNOTATION_FFMPEG_THREADS, default 4). Run on "
         "a CPU allocation, not the shared login node.",
     )
-    p.add_argument("--limit", type=int, default=None, help="Process only the first N segments (debug).")
-    p.add_argument("--force", action="store_true", help="Re-decode segments that already have a frame_manifest.jsonl.")
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Process only the first N segments (debug).",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-decode segments that already have a frame_manifest.jsonl.",
+    )
     p.add_argument(
         "--num-shards",
         type=int,
@@ -404,9 +523,13 @@ def main() -> None:
     if args.num_shards < 1:
         raise SystemExit("--num-shards must be >= 1")
     if not (0 <= args.shard_index < args.num_shards):
-        raise SystemExit(f"--shard-index must be in [0, {args.num_shards}); got {args.shard_index}")
+        raise SystemExit(
+            f"--shard-index must be in [0, {args.num_shards}); got {args.shard_index}"
+        )
     if args.clips_manifest is None:
-        raise SystemExit("--clips-manifest is required for decoding (only --merge omits it)")
+        raise SystemExit(
+            "--clips-manifest is required for decoding (only --merge omits it)"
+        )
     ffmpeg_bin = resolve_ffmpeg_bin(args.ffmpeg_bin)
 
     out_dir = ensure_dir(args.output_dir)
@@ -424,6 +547,8 @@ def main() -> None:
         # together in the manifest. read_jsonl preserves file order, so the split
         # is deterministic given the same clips_manifest.
         rows = rows[args.shard_index :: args.num_shards]
+    if not rows:
+        raise RuntimeError("selected master-frame shard has no segments")
 
     tasks = [
         {
@@ -456,8 +581,12 @@ def main() -> None:
         # completions. mininterval throttles redraws so a slurm log isn't spammed.
         bar = tqdm(
             pool.imap_unordered(build_segment_master, tasks, chunksize=4),
-            total=len(tasks), unit="seg", desc="[frames_master] decode",
-            smoothing=0.05, mininterval=2.0, dynamic_ncols=True,
+            total=len(tasks),
+            unit="seg",
+            desc="[frames_master] decode",
+            smoothing=0.05,
+            mininterval=2.0,
+            dynamic_ncols=True,
         )
         for res in bar:
             counts[res["status"]] += 1
@@ -467,11 +596,15 @@ def main() -> None:
             if res["status"] == "failed":
                 bar.write(f"  FAIL {res['segment_id']}: {res.get('error')}")
             bar.set_postfix(
-                ok=counts.get("ok", 0), cached=counts.get("cached", 0),
-                fail=counts.get("failed", 0), gb=round(total_jpeg_bytes / 1e9, 2),
+                ok=counts.get("ok", 0),
+                fail=counts.get("failed", 0),
+                gb=round(total_jpeg_bytes / 1e9, 2),
                 refresh=False,
             )
         bar.close()
+
+    if any(row.get("status") != "ok" for row in index_rows):
+        raise RuntimeError("master-frame decode did not complete every segment")
 
     summary = aggregate_summary(
         index_rows,

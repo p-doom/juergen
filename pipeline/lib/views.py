@@ -34,7 +34,7 @@ from typing import Any
 from pipeline.lib.common import read_jsonl
 from pipeline.lib.events import DeadZone, Window
 from pipeline.lib.image_store import make_arrayrecord_image_uri
-from pipeline.lib.manifest import check_artifact_id, make_artifact_id
+from pipeline.lib.manifest import check_artifact_id, file_sha256_short, make_artifact_id
 
 _FPS_EPS = 1e-9
 
@@ -169,11 +169,7 @@ def build_segment_view(filter_seg: dict[str, Any], *, fps: float) -> SegmentView
 
 
 class FilterArtifact:
-    """A stage-03 filter output: manifest + per-segment filter files.
-
-    Construction verifies (a) the filter's own manifest exists (yielding
-    ``filter_id``) and (b) the ``master_store_id`` it recorded still matches
-    the master store on disk."""
+    """A verified stage-03 filter output."""
 
     def __init__(self, filter_dir: Path):
         self.dir = Path(filter_dir).resolve()
@@ -192,7 +188,20 @@ class FilterArtifact:
         self.master_fps = float(self.manifest["master_fps"])
         self.master_store_id = str(self.manifest["master_store_id"])
         self.master_dir = check_artifact_id(self.master_store_id, what="master store")
-        self.index_rows = read_jsonl(self.dir / "filter_index.jsonl")
+        self.source_clips_dir = check_artifact_id(
+            str(self.manifest["source_clips_id"]), what="realigned clips"
+        )
+        index_path = self.dir / "filter_index.jsonl"
+        if file_sha256_short(index_path, n=64) != self.manifest.get(
+            "filter_index_sha256"
+        ):
+            raise ValueError(f"filter index digest mismatch: {index_path}")
+        self.index_rows = read_jsonl(index_path)
+        if not self.index_rows:
+            raise ValueError(f"filter artifact contains no segments: {self.dir}")
+        self._index = {str(row["segment_id"]): row for row in self.index_rows}
+        if len(self._index) != len(self.index_rows):
+            raise ValueError(f"filter artifact contains duplicate segments: {self.dir}")
 
     def usable_rows(self) -> list[dict[str, Any]]:
         rows = [row for row in self.index_rows if row.get("status") == "ok"]
@@ -209,7 +218,25 @@ class FilterArtifact:
         return self.dir / "filter" / f"{segment_id}.json"
 
     def load_segment(self, segment_id: str) -> dict[str, Any]:
-        return json.loads(self.segment_path(segment_id).read_text())
+        row = self._index[segment_id]
+        path = self.segment_path(segment_id)
+        if Path(row["filter_path"]).resolve() != path.resolve():
+            raise ValueError(f"filter index path mismatch for {segment_id}")
+        if file_sha256_short(path, n=64) != row.get("filter_sha256"):
+            raise ValueError(f"filter digest mismatch: {path}")
+        segment = json.loads(path.read_text())
+        keylog = Path(segment["keylog_path"])
+        if file_sha256_short(keylog, n=64) != segment.get("keylog_sha256"):
+            raise ValueError(f"filter keylog digest mismatch: {keylog}")
+        shard = Path(segment["shard_path"])
+        if file_sha256_short(shard, n=64) != segment.get("shard_sha256"):
+            raise ValueError(f"filter master shard digest mismatch: {shard}")
+        frame_manifest = shard.parent / "frame_manifest.jsonl"
+        if file_sha256_short(frame_manifest, n=64) != segment.get(
+            "frame_manifest_sha256"
+        ):
+            raise ValueError(f"filter frame manifest digest mismatch: {frame_manifest}")
+        return segment
 
     def segment_view(self, segment_id: str, fps: float) -> SegmentView:
         return build_segment_view(self.load_segment(segment_id), fps=fps)

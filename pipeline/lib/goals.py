@@ -34,7 +34,6 @@ REQUIRED_GOAL_KEYS = (
     "start_master_idx",
     "end_master_idx",
     "instruction",
-    "instruction_variants",
     "anchor",
     "grounding",
     "method",
@@ -64,22 +63,6 @@ def validate_goal_row(row: dict[str, Any]) -> None:
     if row["method"] != "describe_extract":
         raise ValueError(
             f"goal {row['goal_id']!r}: unsupported method {row['method']!r}"
-        )
-    variants = row["instruction_variants"]
-    if not (
-        isinstance(variants, list)
-        and len(variants) == 2
-        and all(isinstance(variant, str) and variant.strip() for variant in variants)
-    ):
-        raise ValueError(
-            f"goal {row['goal_id']!r}: instruction_variants must contain two non-empty strings"
-        )
-    if (
-        len({row["instruction"].strip(), *(variant.strip() for variant in variants)})
-        != 3
-    ):
-        raise ValueError(
-            f"goal {row['goal_id']!r}: instruction phrasings must be distinct"
         )
     for key in ("anchor", "grounding", "model", "prompt_pack_sha"):
         if not isinstance(row[key], str) or not row[key].strip():

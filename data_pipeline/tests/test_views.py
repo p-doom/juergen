@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 from pipeline.lib.events import RawEvent, apply_label_policy
-from pipeline.lib.manifest import make_artifact_id
+from pipeline.lib.manifest import file_sha256_short, make_artifact_id
 from pipeline.lib.views import (
     FilterArtifact,
     build_segment_view,
@@ -158,13 +158,29 @@ class ArtifactJoinTest(unittest.TestCase):
     def _make_filter(self, root: Path, master: Path) -> Path:
         fdir = root / "filter_art"
         (fdir / "filter").mkdir(parents=True)
-        (fdir / "filter_index.jsonl").write_text("")
+        clips = root / "clips"
+        clips.mkdir()
+        (clips / "manifest.json").write_text(json.dumps({"artifact_type": "clips"}))
+        index = fdir / "filter_index.jsonl"
+        index.write_text(
+            json.dumps(
+                {
+                    "segment_id": "seg0",
+                    "status": "ok",
+                    "filter_path": str(fdir / "filter" / "seg0.json"),
+                    "filter_sha256": "0" * 64,
+                }
+            )
+            + "\n"
+        )
         (fdir / "manifest.json").write_text(
             json.dumps(
                 {
                     "artifact_type": "realigned_filter_mask",
                     "master_fps": 15.0,
                     "master_store_id": make_artifact_id(master),
+                    "source_clips_id": make_artifact_id(clips),
+                    "filter_index_sha256": file_sha256_short(index, n=64),
                 }
             )
         )

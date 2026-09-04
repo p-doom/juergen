@@ -120,10 +120,17 @@ def _run_split(
         raise RuntimeError(
             f"build_sft_records_from_chat.py failed (rc={rc}) for {split}"
         )
-    n_shards = sum(1 for _ in out_split_dir.glob("*.array_record"))
-    if n_shards == 0:
+    shards = sorted(out_split_dir.glob("*.array_record"))
+    if not shards:
         raise RuntimeError(f"record builder produced no shards for {split}")
-    return {"split": split, "n_shards": n_shards, "elapsed_s": int(elapsed)}
+    empty = [shard.name for shard in shards if shard.stat().st_size == 0]
+    if empty:
+        raise RuntimeError(f"record builder produced empty shards for {split}: {empty}")
+    return {
+        "split": split,
+        "shards": {shard.name: file_sha256_short(shard, n=64) for shard in shards},
+        "elapsed_s": int(elapsed),
+    }
 
 
 def _resolve_cache(root: Path, source_id: str) -> tuple[Path, str]:

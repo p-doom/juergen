@@ -58,7 +58,6 @@ def clean_goals(
             raise TypeError(f"goal {index} must be an object")
         expected = {
             "instruction",
-            "instruction_variants",
             "anchor",
             "grounding",
             "start_frame",
@@ -69,23 +68,11 @@ def clean_goals(
                 f"goal {index} fields must be exactly {sorted(expected)}, got {sorted(g)}"
             )
         instr = g.get("instruction")
-        variants = g.get("instruction_variants")
         if not isinstance(instr, str):
             raise TypeError(f"goal {index} instruction must be text")
         instr = instr.strip()
         if not instr:
             raise ValueError(f"goal {index} instruction is empty")
-        if not isinstance(variants, list) or len(variants) != 2:
-            raise ValueError(
-                f"goal {index} must contain exactly two instruction variants"
-            )
-        normalized_variants = []
-        for variant in variants:
-            if not isinstance(variant, str) or not variant.strip():
-                raise ValueError(f"goal {index} contains an empty instruction variant")
-            normalized_variants.append(variant.strip())
-        if len({instr, *normalized_variants}) != 3:
-            raise ValueError(f"goal {index} instruction phrasings must be distinct")
         try:
             start = int(g["start_frame"])
             end = int(g["end_frame"])
@@ -104,7 +91,6 @@ def clean_goals(
         goals.append(
             {
                 "instruction": instr,
-                "instruction_variants": normalized_variants,
                 "anchor": anchor.strip(),
                 "grounding": grounding.strip(),
                 "start_frame": max(frame_lo, min(start, frame_hi)),
@@ -152,12 +138,8 @@ def snap_goal_starts(
     return goals
 
 
-def _tokens(usage: dict[str, Any] | None) -> int:
-    if not isinstance(usage, dict):
-        return 0
-    return usage.get("total_tokens") or (
-        (usage.get("prompt_tokens") or 0) + (usage.get("completion_tokens") or 0)
-    )
+def _tokens(usage: dict[str, Any]) -> int:
+    return int(usage["total_tokens"])
 
 
 def run_unit(unit: AnnotationUnit, ctx: Context) -> dict[str, Any]:

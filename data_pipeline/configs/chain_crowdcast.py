@@ -8,6 +8,9 @@ from pathlib import Path
 
 from pmanager.configs.schema import pipeline_task
 
+from pipeline.lib.manifest import file_sha256_short
+from pipeline.lib.realign import CLOSED_STATUSES
+
 TAG = "crowdcast_canonical_v1"
 ANNOTATION_MODEL = "Kimi-K2.6"
 TRAINING_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
@@ -102,6 +105,17 @@ def get_config():
     )
     if clips != (clips.parent / str(realigned["clips_file"])).resolve():
         raise RuntimeError("CROWDCAST_CLIPS_MANIFEST is not the Stage02 canonical clips file")
+    if file_sha256_short(clips, n=64) != realigned.get("clips_sha256"):
+        raise RuntimeError("CROWDCAST_CLIPS_MANIFEST digest does not match Stage02")
+    clip_rows = [json.loads(line) for line in clips.read_text().splitlines() if line.strip()]
+    if not clip_rows:
+        raise RuntimeError("CROWDCAST_CLIPS_MANIFEST is empty")
+    if any(
+        row.get("alignment_closed") is not True
+        or row.get("alignment_status") not in CLOSED_STATUSES
+        for row in clip_rows
+    ):
+        raise RuntimeError("CROWDCAST_CLIPS_MANIFEST contains an unclosed alignment")
     for relative in (
         "scripts/measure_message_lengths_from_chat.py",
         "scripts/build_sft_records_from_chat.py",

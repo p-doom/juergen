@@ -47,7 +47,7 @@ class LabelResult:
     content: str
     reasoning: str
     finish_reason: str
-    usage: dict[str, Any] | None
+    usage: dict[str, Any]
     model: str
 
 
@@ -57,6 +57,15 @@ def _reasoning_path(path: Path) -> Path:
 
 def _meta_path(path: Path) -> Path:
     return path.with_suffix(".meta.json")
+
+
+def _validate_usage(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise TypeError("label response usage must be an object")
+    total = value.get("total_tokens")
+    if isinstance(total, bool) or not isinstance(total, int) or total <= 0:
+        raise ValueError("label response usage.total_tokens must be positive")
+    return value
 
 
 class Labeler:
@@ -80,13 +89,17 @@ class Labeler:
             raise ValueError(
                 f"cached label model mismatch: {meta.get('model')!r} != {self.config.model!r}"
             )
+        if meta.get("base_url") != self.config.base_url:
+            raise ValueError(f"cached label base_url mismatch: {path}")
         if meta.get("request_sha256") != request_sha256:
             raise ValueError(f"cached label request mismatch: {path}")
+        if meta.get("finish_reason") != "stop":
+            raise ValueError(f"cached label finish_reason is not stop: {path}")
         return LabelResult(
             content=content,
             reasoning=_reasoning_path(path).read_text(),
-            finish_reason=str(meta["finish_reason"]),
-            usage=meta.get("usage"),
+            finish_reason="stop",
+            usage=_validate_usage(meta.get("usage")),
             model=self.config.model,
         )
 
@@ -137,6 +150,7 @@ class Labeler:
             json.dumps(
                 {
                     "model": self.config.model,
+                    "base_url": self.config.base_url,
                     "max_completion_tokens": self.config.max_completion_tokens,
                     "messages": messages,
                 },
@@ -163,28 +177,31 @@ class Labeler:
                 time.sleep(wait)
         if response is None:
             raise AssertionError("labeler retry loop produced no response")
+        if len(response.choices) != 1:
+            raise ValueError("label response must contain exactly one choice")
+        response_model = str(getattr(response, "model", "") or "")
+        if response_model != self.config.model:
+            raise ValueError(
+                f"label response model mismatch: {response_model!r} != {self.config.model!r}"
+            )
         choice = response.choices[0]
         content = (choice.message.content or "").strip()
         reasoning = (getattr(choice.message, "reasoning_content", None) or "").strip()
         finish_reason = str(getattr(choice, "finish_reason", "") or "")
-        if finish_reason == "length":
-            raise ValueError("label response reached max_completion_tokens")
+        if finish_reason != "stop":
+            raise ValueError(f"unsupported label finish_reason: {finish_reason!r}")
         if not content:
             raise ValueError("label response content is empty")
         usage = getattr(response, "usage", None)
-        usage_dict = (
-            usage.model_dump()
-            if hasattr(usage, "model_dump")
-            else dict(usage)
-            if usage
-            else None
-        )
+        if usage is None or not hasattr(usage, "model_dump"):
+            raise TypeError("label response has no structured usage")
+        usage_dict = _validate_usage(usage.model_dump())
         result = LabelResult(
             content=content,
             reasoning=reasoning,
             finish_reason=finish_reason,
             usage=usage_dict,
-            model=self.config.model,
+            model=response_model,
         )
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(content)
@@ -195,6 +212,7 @@ class Labeler:
                     "finish_reason": finish_reason,
                     "usage": usage_dict,
                     "model": self.config.model,
+                    "base_url": self.config.base_url,
                     "request_sha256": request_sha256,
                 },
                 indent=2,

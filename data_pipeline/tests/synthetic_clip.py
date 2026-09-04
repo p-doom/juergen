@@ -31,8 +31,8 @@ carries one instance of every disposition the dead-zone label policy can reach:
   * a press inside the black span that is never released (``KeyQ``), which is
     dropped rather than clamped forward — clamping it would emit a press with
     no matching release;
-  * a press in the last window that is never released (``KeyC``), the
-    held-at-end case, which IS emitted (it is a real observed transition);
+  * a press in the last window that is never released (``KeyC``), which is
+    dropped so a conversation cannot end with held input state;
   * a mouse move inside the black span, and one past the end of video
     coverage, both of which are discarded from labels;
   * a balanced ``ShiftLeft``-enclosed typing run in W6 (``Hi``), which
@@ -61,6 +61,7 @@ import numpy as np
 from PIL import Image
 
 from pipeline.lib import config
+from pipeline.lib.manifest import file_sha256_short
 from pipeline.stage_01_master_frames import (
     aggregate_summary,
     pack_master_arrayrecord,
@@ -226,12 +227,17 @@ def build_master_store(out_dir: Path, clip_row: dict[str, Any], source: list[np.
         "jpeg_quality": config.DEFAULT_JPEG_QUALITY,
         "video_duration_s": clip_row["video_duration_s"],
         "video_fps": clip_row["video_fps"],
+        "video_sha256": clip_row["video_sha256"],
         "status": "ok",
         "num_records": packed["num_records"],
         "shard_path": packed["shard_path"],
         "frame_manifest": packed["manifest_path"],
+        "shard_sha256": packed["shard_sha256"],
+        "frame_manifest_sha256": packed["frame_manifest_sha256"],
         "total_jpeg_bytes": packed["total_jpeg_bytes"],
     }
+    source_manifest = out_dir / "source_clips_manifest.jsonl"
+    source_manifest.write_text(json.dumps(clip_row) + "\n")
     write_index_jsonl(out_dir / "segment_index.jsonl", [index_row])
     write_summary_and_manifest(
         out_dir,
@@ -241,7 +247,7 @@ def build_master_store(out_dir: Path, clip_row: dict[str, Any], source: list[np.
             target_height=FRAME_H,
             jpeg_quality=config.DEFAULT_JPEG_QUALITY,
             ffmpeg_bin=None,
-            source_clips_manifest=None,
+            source_clips_manifest=str(source_manifest),
         ),
     )
     return out_dir
@@ -252,7 +258,8 @@ def write_goals(
 ) -> Path:
     """A minimal stage-03b goals artifact: goals.jsonl + the join manifest."""
     goals_dir.mkdir(parents=True, exist_ok=True)
-    with (goals_dir / "goals.jsonl").open("w") as f:
+    goals_path = goals_dir / "goals.jsonl"
+    with goals_path.open("w") as f:
         for row in rows:
             f.write(json.dumps(row) + "\n")
     (goals_dir / "manifest.json").write_text(
@@ -261,6 +268,7 @@ def write_goals(
                 "artifact_type": "crowdcast_describe_extract_goals",
                 "schema_version": 1,
                 "goals": "goals.jsonl",
+                "goals_sha256": file_sha256_short(goals_path, n=64),
                 "method": "describe_extract",
                 "input_kind": "frames",
                 "master_store_id": master_store_id,
@@ -282,7 +290,6 @@ def goal_row(goal_id: str, start: int, end: int, instruction: str, **extra: Any)
         "start_master_idx": start,
         "end_master_idx": end,
         "instruction": instruction,
-        "instruction_variants": [f"please {instruction}", f"could you {instruction}"],
         "anchor": instruction,
         "grounding": "Synthetic user action.",
         "method": "describe_extract",

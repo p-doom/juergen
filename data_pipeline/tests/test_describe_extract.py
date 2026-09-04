@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from pipeline.annotation.lib.driver import run_driver
+from pipeline.annotation.lib.labeler import Labeler, LabelerConfig
 from pipeline.annotation.lib.prompts import PromptPack
 from pipeline.annotation.methods.describe_extract.annotator import clean_goals
 
@@ -12,7 +14,6 @@ from pipeline.annotation.methods.describe_extract.annotator import clean_goals
 def _goal() -> dict:
     return {
         "instruction": "send the report",
-        "instruction_variants": ["send it", "please send the report"],
         "anchor": "Send",
         "grounding": "The user submits the report.",
         "start_frame": 2,
@@ -24,7 +25,6 @@ def test_describe_extract_goal_contract_is_strict_and_clamped():
     assert clean_goals({"goals": [_goal()]}, 3, 6, 5) == [
         {
             "instruction": "send the report",
-            "instruction_variants": ["send it", "please send the report"],
             "anchor": "Send",
             "grounding": "The user submits the report.",
             "start_frame": 3,
@@ -36,8 +36,6 @@ def test_describe_extract_goal_contract_is_strict_and_clamped():
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        ({"instruction_variants": ["one"]}, "exactly two"),
-        ({"instruction_variants": ["send the report", "other"]}, "distinct"),
         ({"anchor": ""}, "anchor"),
         ({"grounding": ""}, "grounding"),
         ({"start_frame": "bad"}, "frame bounds"),
@@ -73,3 +71,77 @@ def test_annotation_driver_propagates_worker_failure(tmp_path: Path):
             target_tpm=1000,
             max_workers=2,
         )
+
+
+def _labeler(tmp_path: Path, **response_values) -> Labeler:
+    values = {
+        "model": "test-model",
+        "content": "result",
+        "finish_reason": "stop",
+        "usage": {"total_tokens": 7},
+        **response_values,
+    }
+    message = SimpleNamespace(content=values["content"], reasoning_content="reason")
+    choice = SimpleNamespace(message=message, finish_reason=values["finish_reason"])
+    usage = values["usage"]
+    response = SimpleNamespace(
+        model=values["model"],
+        choices=[choice],
+        usage=(SimpleNamespace(model_dump=lambda: usage) if usage is not None else None),
+    )
+    instance = Labeler.__new__(Labeler)
+    instance.config = LabelerConfig(
+        model="test-model",
+        base_url="https://labeler.example/v1",
+        api_key="secret",
+        transient_retries=0,
+    )
+    instance._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **_: response))
+    )
+    return instance
+
+
+def _call(labeler: Labeler, cache: Path):
+    return labeler.call_full(
+        "system",
+        "user",
+        images=["data:image/jpeg;base64,AA=="],
+        image_labels=["frame 0"],
+        cache_path=cache,
+    )
+
+
+def test_labeler_attests_provider_model_finish_usage_and_cache(tmp_path: Path):
+    cache = tmp_path / "call.txt"
+    result = _call(_labeler(tmp_path), cache)
+    assert result.model == "test-model"
+    assert result.finish_reason == "stop"
+    assert result.usage["total_tokens"] == 7
+    meta = cache.with_suffix(".meta.json").read_text()
+    assert '"base_url": "https://labeler.example/v1"' in meta
+
+    changed = _labeler(tmp_path)
+    changed.config = LabelerConfig(
+        model="test-model",
+        base_url="https://other.example/v1",
+        api_key="secret",
+        transient_retries=0,
+    )
+    with pytest.raises(ValueError, match="base_url mismatch"):
+        _call(changed, cache)
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"model": "other-model"}, "model mismatch"),
+        ({"finish_reason": "length"}, "finish_reason"),
+        ({"finish_reason": "tool_calls"}, "finish_reason"),
+        ({"usage": None}, "structured usage"),
+        ({"usage": {"total_tokens": 0}}, "total_tokens"),
+    ],
+)
+def test_labeler_rejects_unaccounted_provider_responses(tmp_path: Path, change: dict, message: str):
+    with pytest.raises((TypeError, ValueError), match=message):
+        _call(_labeler(tmp_path, **change), tmp_path / "call.txt")

@@ -410,6 +410,9 @@ def apply_label_policy(
             counters.n_presses_clamped += 1
 
         if release is None:
+            press.window = None
+            press.discard_reason = "unreleased_press"
+            counters.n_unreleased_press_dropped += 1
             continue
         r_win, r_zone = loc.locate(_tick(release.event.t_s, master_fps))
         if r_win is not None:

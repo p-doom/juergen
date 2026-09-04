@@ -21,6 +21,7 @@ from pipeline.lib.action_format import WindowKeyboard, format_segment
 from pipeline.lib.common import ensure_dir, write_json, write_jsonl
 from pipeline.lib.events import load_events
 from pipeline.lib.goals import validate_goal_row, view_span_to_master
+from pipeline.lib.manifest import file_sha256_short
 from pipeline.lib.views import FilterArtifact
 
 METHOD = "describe_extract"
@@ -47,7 +48,6 @@ def _goal_rows(
     result: dict[str, Any],
     *,
     model: str,
-    fps: float,
     prompt_sha: str,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -64,14 +64,11 @@ def _goal_rows(
             "start_master_idx": start,
             "end_master_idx": end,
             "instruction": goal["instruction"],
-            "instruction_variants": goal["instruction_variants"],
             "anchor": goal["anchor"],
             "grounding": goal["grounding"],
             "method": METHOD,
             "model": model,
             "prompt_pack_sha": prompt_sha,
-            "unit_id": unit.unit_id,
-            "annotation_fps": fps,
         }
         validate_goal_row(row)
         rows.append(row)
@@ -102,7 +99,6 @@ def main() -> None:
 
     output = ensure_dir(args.output_dir)
     units_dir = ensure_dir(output / "units")
-    describe_dir = ensure_dir(output / "describe")
     calls_dir = ensure_dir(output / "calls")
     progress_path = output / "progress.jsonl"
     items = [
@@ -147,11 +143,8 @@ def main() -> None:
                 unit,
                 result,
                 model=args.model,
-                fps=args.fps,
                 prompt_sha=prompts.sha,
             )
-            narration = result["narration"]
-            (describe_dir / f"{unit.unit_id}.txt").write_text(narration + "\n")
             write_json(
                 unit_path,
                 {
@@ -197,7 +190,8 @@ def main() -> None:
             goal["end_master_idx"],
         )
     )
-    write_jsonl(output / "goals.jsonl", goals)
+    goals_path = output / "goals.jsonl"
+    write_jsonl(goals_path, goals)
     prompts.snapshot_to(output)
     write_json(
         output / "manifest.json",
@@ -205,6 +199,7 @@ def main() -> None:
             "artifact_type": "crowdcast_describe_extract_goals",
             "schema_version": 1,
             "goals": "goals.jsonl",
+            "goals_sha256": file_sha256_short(goals_path, n=64),
             "method": METHOD,
             "input_kind": "frames",
             "prompt_pack_sha": prompts.sha,

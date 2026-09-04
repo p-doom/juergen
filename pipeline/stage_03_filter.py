@@ -18,7 +18,8 @@ from pipeline.lib import config
 from pipeline.lib.action_format import format_segment
 from pipeline.lib.common import ensure_dir, read_jsonl, write_json, write_jsonl
 from pipeline.lib.events import Window, load_events
-from pipeline.lib.manifest import make_artifact_id
+from pipeline.lib.manifest import file_sha256_short, make_artifact_id
+from pipeline.lib.realign import CLOSED_STATUSES
 
 REASON_KEPT = 0
 REASON_BLACK = 1
@@ -134,11 +135,20 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(
             f"master segment {segment_id} is not complete: {master_row['status']!r}"
         )
+    if (
+        manifest_row.get("alignment_closed") is not True
+        or manifest_row.get("alignment_status") not in CLOSED_STATUSES
+    ):
+        raise ValueError(f"segment {segment_id} has no closed alignment")
     master_fps = float(master_row["master_fps"])
     master_manifest = read_jsonl(_master_frame_manifest(master_row))
     if not master_manifest:
         raise ValueError(f"master segment has no frames: {segment_id}")
     keylog = Path(manifest_row["keylog_path"])
+    if not keylog.is_file():
+        raise FileNotFoundError(f"Crowd-Cast keylog is missing: {keylog}")
+    if file_sha256_short(keylog, n=64) != manifest_row.get("keylog_sha256"):
+        raise ValueError(f"keylog digest mismatch: {keylog}")
     active = _rounded_activity_mask(
         keylog,
         len(master_manifest),
@@ -178,7 +188,10 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
             "n_master_records": len(master_manifest),
             "video_duration_s": manifest_row["video_duration_s"],
             "shard_path": master_row["shard_path"],
+            "shard_sha256": master_row["shard_sha256"],
+            "frame_manifest_sha256": master_row["frame_manifest_sha256"],
             "keylog_path": str(keylog),
+            "keylog_sha256": manifest_row["keylog_sha256"],
             "alignment_status": manifest_row["alignment_status"],
             "params": FILTER_PARAMS,
             "kept_ranges": kept_ranges,
@@ -194,6 +207,7 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
         "segment_idx": manifest_row["segment_idx"],
         "alignment_status": manifest_row["alignment_status"],
         "filter_path": str(output),
+        "filter_sha256": file_sha256_short(output, n=64),
         "status": "ok",
         "n_records": len(master_manifest),
         "n_kept": len(master_manifest) - n_black - n_idle,
@@ -224,14 +238,55 @@ def main() -> None:
     }
     if {key: master.get(key) for key in required_master} != required_master:
         raise ValueError(f"Crowd-Cast master contract mismatch: {master_manifest_path}")
-    index_rows = read_jsonl(args.frames_master_dir / "segment_index.jsonl")
+    master_index_path = args.frames_master_dir / "segment_index.jsonl"
+    if file_sha256_short(master_index_path, n=64) != master.get("segment_index_sha256"):
+        raise ValueError(
+            f"Crowd-Cast master index digest mismatch: {master_index_path}"
+        )
+    index_rows = read_jsonl(master_index_path)
+
+    clips_artifact_manifest = args.clips_manifest.parent / "manifest.json"
+    clips_artifact = json.loads(clips_artifact_manifest.read_text(encoding="utf-8"))
+    required_clips = {
+        "artifact_type": "juergen_annotation_clip_manifest_realigned",
+        "schema_version": 1,
+        "clips_file": "clips_manifest.jsonl",
+    }
+    if {key: clips_artifact.get(key) for key in required_clips} != required_clips:
+        raise ValueError(
+            f"Crowd-Cast clips contract mismatch: {clips_artifact_manifest}"
+        )
+    if (
+        args.clips_manifest.resolve()
+        != (args.clips_manifest.parent / clips_artifact["clips_file"]).resolve()
+    ):
+        raise ValueError("--clips_manifest must be the canonical Stage02 clips file")
+    if file_sha256_short(args.clips_manifest, n=64) != clips_artifact.get(
+        "clips_sha256"
+    ):
+        raise ValueError(f"Crowd-Cast clips digest mismatch: {args.clips_manifest}")
     manifest_rows = read_jsonl(args.clips_manifest)
     if not index_rows or not manifest_rows:
         raise ValueError("Crowd-Cast master and clips artifacts must be non-empty")
     master_by_segment = {str(row["segment_id"]): row for row in index_rows}
     manifest_by_segment = {str(row["segment_id"]): row for row in manifest_rows}
+    if len(master_by_segment) != len(index_rows):
+        raise ValueError("Crowd-Cast master contains duplicate segments")
+    if len(manifest_by_segment) != len(manifest_rows):
+        raise ValueError("Crowd-Cast clips contain duplicate segments")
     if set(master_by_segment) != set(manifest_by_segment):
         raise ValueError("Crowd-Cast master and clips segment sets differ")
+    if any(row.get("status") != "ok" for row in index_rows):
+        raise ValueError("Crowd-Cast master contains incomplete segments")
+    for row in index_rows:
+        shard = Path(row["shard_path"])
+        frame_manifest = _master_frame_manifest(row)
+        if file_sha256_short(shard, n=64) != row.get("shard_sha256"):
+            raise ValueError(f"Crowd-Cast master shard digest mismatch: {shard}")
+        if file_sha256_short(frame_manifest, n=64) != row.get("frame_manifest_sha256"):
+            raise ValueError(
+                f"Crowd-Cast frame manifest digest mismatch: {frame_manifest}"
+            )
 
     output = ensure_dir(args.output_dir)
     filter_dir = ensure_dir(output / "filter")
@@ -250,7 +305,8 @@ def main() -> None:
         with mp.Pool(workers) as pool:
             results = list(pool.imap_unordered(filter_segment, tasks, chunksize=8))
     results.sort(key=lambda row: row["segment_id"])
-    write_jsonl(output / "filter_index.jsonl", results)
+    filter_index_path = output / "filter_index.jsonl"
+    write_jsonl(filter_index_path, results)
     totals = Counter()
     for result in results:
         for key in ("n_records", "n_kept", "n_black", "n_idle_interior"):
@@ -275,7 +331,9 @@ def main() -> None:
             "schema_version": 1,
             "master_fps": summary["master_fps"],
             "master_store_id": make_artifact_id(args.frames_master_dir),
+            "source_clips_id": make_artifact_id(args.clips_manifest.parent),
             "filter_index": "filter_index.jsonl",
+            "filter_index_sha256": file_sha256_short(filter_index_path, n=64),
             "filter_layout": "filter/<segment_id>.json",
             "params": FILTER_PARAMS,
             **summary,

@@ -25,7 +25,6 @@ def _goal(start: int, end: int, *, goal_id: str = "g0", segment_id: str = "s0", 
         "start_master_idx": start,
         "end_master_idx": end,
         "instruction": "do the thing",
-        "instruction_variants": ["do it", "please do the thing"],
         "anchor": "do",
         "grounding": "The user initiated the action.",
         "method": "describe_extract",
@@ -137,8 +136,6 @@ class SchemaTest(unittest.TestCase):
             _goal(-1, 30),  # negative start
             _goal(0, 30) | {"start_master_idx": 0.5},  # float coordinate
             _goal(0, 30) | {"instruction": "  "},  # blank instruction
-            _goal(0, 30) | {"instruction_variants": "not-a-list"},
-            _goal(0, 30) | {"instruction_variants": ["do the thing", "other"]},
             _goal(0, 30) | {"method": "other_method"},
             _goal(0, 30) | {"plan": "unsupported"},
         ]

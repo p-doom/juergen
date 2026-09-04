@@ -122,12 +122,10 @@ class StraddleClampTest(unittest.TestCase):
         self.assertEqual(counters.n_held_at_end, 1)
         _assert_balanced(self, labels)
 
-    def test_unreleased_visible_press_still_emitted(self) -> None:
-        # A press on a visible frame with no release is real supervision at a
-        # real time: it stays emitted (raw-keylog stickiness, counted only).
+    def test_unreleased_visible_press_is_dropped(self) -> None:
         labels, counters = _format(_events((6.0, "press", "KeyJ")))
-        self.assertEqual(labels, ["NO_OP", "0 0 0 ; +KeyJ", "NO_OP"])
-        self.assertEqual(counters.n_unreleased_press_dropped, 0)
+        self.assertEqual(labels, ["NO_OP", "NO_OP", "NO_OP"])
+        self.assertEqual(counters.n_unreleased_press_dropped, 1)
         self.assertEqual(counters.n_held_at_end, 1)
 
     def test_pair_spanning_adjacent_zones_is_dropped(self) -> None:

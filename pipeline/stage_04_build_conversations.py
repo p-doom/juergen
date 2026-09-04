@@ -65,13 +65,9 @@ def build_messages(
     return messages
 
 
-def instruction_phrasings(goal: dict[str, Any]) -> list[str]:
-    return [goal["instruction"], *goal["instruction_variants"]]
-
-
 def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
     segment_id = str(task["index_row"]["segment_id"])
-    filter_segment = json.loads(Path(task["filter_segment_path"]).read_text())
+    filter_segment = task["filter_segment"]
     view = build_segment_view(filter_segment, fps=task["fps"])
     base = {
         "segment_id": segment_id,
@@ -111,30 +107,28 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
             (str(frame.image), formatted.labels[index])
             for index, frame in enumerate(projection.frames)
         ]
-        for variant_index, instruction in enumerate(instruction_phrasings(goal)):
-            suffix = f"_v{variant_index}" if variant_index else ""
-            rows.append(
-                {
-                    "conversation_id": f"{segment_id}:{goal['goal_id']}{suffix}",
-                    **base,
-                    "target_fps": task["fps"],
-                    "action_format": ACTION_FORMAT,
-                    "goal_id": goal["goal_id"],
-                    "instruction": instruction,
-                    "variant_idx": variant_index,
-                    "start_master_idx": int(goal["start_master_idx"]),
-                    "end_master_idx": int(goal["end_master_idx"]),
-                    "snapped_start": projection.snapped_start,
-                    "n_frames": len(turns),
-                    "n_turns": len(turns),
-                    "n_non_noop": sum(action != "NO_OP" for _, action in turns),
-                    "messages": build_messages(
-                        turns,
-                        instruction=instruction,
-                        system_prompt=task["system_prompt"],
-                    ),
-                }
-            )
+        instruction = goal["instruction"]
+        rows.append(
+            {
+                "conversation_id": f"{segment_id}:{goal['goal_id']}",
+                **base,
+                "target_fps": task["fps"],
+                "action_format": ACTION_FORMAT,
+                "goal_id": goal["goal_id"],
+                "instruction": instruction,
+                "start_master_idx": int(goal["start_master_idx"]),
+                "end_master_idx": int(goal["end_master_idx"]),
+                "snapped_start": projection.snapped_start,
+                "n_frames": len(turns),
+                "n_turns": len(turns),
+                "n_non_noop": sum(action != "NO_OP" for _, action in turns),
+                "messages": build_messages(
+                    turns,
+                    instruction=instruction,
+                    system_prompt=task["system_prompt"],
+                ),
+            }
+        )
     return {
         **base,
         "status": "ok" if rows else "no_projected_goals",
@@ -173,6 +167,15 @@ def _goals(art: FilterArtifact, goals_dir: Path) -> tuple[dict[str, list[dict]],
         raise ValueError(
             f"goals contract mismatch: expected {required}, got {observed}"
         )
+    goals_path = goals_dir / "goals.jsonl"
+    expected_sha = manifest.get("goals_sha256")
+    if not isinstance(expected_sha, str) or len(expected_sha) != 64:
+        raise ValueError(f"goals artifact has no SHA-256: {manifest_path}")
+    observed_sha = file_sha256_short(goals_path, n=64)
+    if observed_sha != expected_sha:
+        raise ValueError(
+            f"goals digest mismatch: expected {expected_sha}, got {observed_sha}"
+        )
     assert_same_artifact(
         str(manifest.get("master_store_id")),
         art.master_store_id,
@@ -181,7 +184,7 @@ def _goals(art: FilterArtifact, goals_dir: Path) -> tuple[dict[str, list[dict]],
     assert_same_artifact(
         str(manifest.get("filter_id")), art.filter_id, what="filter_id"
     )
-    goals = load_goals(goals_dir / "goals.jsonl")
+    goals = load_goals(goals_path)
     if not goals:
         raise ValueError(f"goals artifact is empty: {goals_dir}")
     return goals_by_segment(goals), make_artifact_id(goals_dir)
@@ -221,7 +224,7 @@ def main() -> None:
     tasks = [
         {
             "index_row": row,
-            "filter_segment_path": str(art.segment_path(str(row["segment_id"]))),
+            "filter_segment": art.load_segment(str(row["segment_id"])),
             "fps": args.fps,
             "goals_by_segment": goals,
             "system_prompt": system_prompt,

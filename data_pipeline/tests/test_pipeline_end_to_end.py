@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -14,9 +15,13 @@ import synthetic_clip as clip
 from grammars.deltatype_v2 import CODEC
 from image_domain import image_domain
 
+from pipeline.annotation import stage_annotate
+from pipeline.annotation.lib.labeler import LabelResult
 from pipeline.lib import config
 from pipeline.lib.image_store import open_image_pil
 from pipeline.lib.manifest import make_artifact_id
+from pipeline.lib.views import FilterArtifact
+from pipeline.stage_01_master_frames import build_segment_master
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_PIPELINE_DIR = REPO_ROOT / "data_pipeline"
@@ -128,7 +133,7 @@ def _images(row: dict[str, Any]) -> list[str]:
     ]
 
 
-def _orphaned_releases(row: dict[str, Any]) -> list[str]:
+def _terminal_keyboard_state(row: dict[str, Any]) -> tuple[list[str], set[str]]:
     held: set[str] = set()
     orphaned: list[str] = []
     for text in _assistant_texts(row):
@@ -141,7 +146,7 @@ def _orphaned_releases(row: dict[str, Any]) -> list[str]:
                 held.remove(element.name)
             else:
                 orphaned.append(element.name)
-    return orphaned
+    return orphaned, held
 
 
 def test_discovery_realign_and_filter_artifacts_are_joined(chain: Chain):
@@ -161,9 +166,8 @@ def test_discovery_realign_and_filter_artifacts_are_joined(chain: Chain):
 
 def test_stage_04_is_only_goal_conditioned_canonical_deltatype(chain: Chain):
     rows = _jsonl(chain.conversations / "chat.jsonl")
-    assert len(rows) == 6
+    assert len(rows) == 2
     assert {row["goal_id"] for row in rows} == {"g_head", "g_mid"}
-    assert {row["variant_idx"] for row in rows} == {0, 1, 2}
     prompt = grammars.describe("deltatype_v2")
     for row in rows:
         assert row["action_format"] == "canonical"
@@ -174,7 +178,7 @@ def test_stage_04_is_only_goal_conditioned_canonical_deltatype(chain: Chain):
 
 def test_goal_slices_never_emit_a_release_without_its_press(chain: Chain):
     rows = _jsonl(chain.conversations / "chat.jsonl")
-    assert all(_orphaned_releases(row) == [] for row in rows)
+    assert all(_terminal_keyboard_state(row) == ([], set()) for row in rows)
     mid = next(row for row in rows if row["goal_id"] == "g_mid")
     first = CODEC.parse(_assistant_texts(mid)[0])
     assert any(
@@ -231,3 +235,164 @@ def test_stage_04_requires_the_describe_extract_artifact_contract(chain: Chain, 
     )
     assert process.returncode != 0
     assert "goals contract mismatch" in process.stderr
+
+
+def test_stage_04_rejects_mutated_goals_and_filter_payloads(chain: Chain, tmp_path: Path):
+    goals = tmp_path / "goals"
+    shutil.copytree(chain.goals, goals)
+    with (goals / "goals.jsonl").open("a") as target:
+        target.write("{}\n")
+    process = subprocess.run(
+        [
+            sys.executable,
+            str(STAGES / "stage_04_build_conversations.py"),
+            "--filter_dir",
+            str(chain.filter),
+            "--goals_dir",
+            str(goals),
+            "--fps",
+            str(clip.TRAIN_FPS),
+            "--output_dir",
+            str(tmp_path / "out"),
+        ],
+        env=dict(os.environ, PYTHONPATH=str(REPO_ROOT)),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert process.returncode != 0
+    assert "goals digest mismatch" in process.stderr
+
+    segment_path = chain.filter / "filter" / f"{clip.SEGMENT_ID}.json"
+    original = segment_path.read_bytes()
+    try:
+        segment_path.write_bytes(original + b"\n")
+        with pytest.raises(ValueError, match="filter digest mismatch"):
+            FilterArtifact(chain.filter).load_segment(clip.SEGMENT_ID)
+    finally:
+        segment_path.write_bytes(original)
+
+
+def test_stage_01_cache_validates_closed_payload(chain: Chain, tmp_path: Path):
+    source_segment = chain.master / "frames" / clip.SEGMENT_ID
+    frames_dir = tmp_path / "frames"
+    segment_dir = frames_dir / clip.SEGMENT_ID
+    segment_dir.mkdir(parents=True)
+    for name in ("images.array_record", "frame_manifest.jsonl"):
+        shutil.copy2(source_segment / name, segment_dir / name)
+    (index_row,) = _jsonl(chain.master / "segment_index.jsonl")
+    inputs = {
+        "jpeg_quality": index_row["jpeg_quality"],
+        "master_fps": index_row["master_fps"],
+        "target_height": index_row["target_height"],
+        "video_sha256": index_row["video_sha256"],
+    }
+    outputs = {
+        key: index_row[key]
+        for key in (
+            "frame_manifest_sha256",
+            "num_records",
+            "shard_sha256",
+            "total_jpeg_bytes",
+        )
+    }
+    (segment_dir / "segment_manifest.json").write_text(
+        json.dumps({"schema_version": 1, "inputs": inputs, "outputs": outputs})
+    )
+    task = {
+        "row": chain.clip_rows[0],
+        "frames_dir": str(frames_dir),
+        "master_fps": index_row["master_fps"],
+        "target_height": index_row["target_height"],
+        "jpeg_quality": index_row["jpeg_quality"],
+        "ffmpeg_bin": "must-not-run",
+        "force": False,
+    }
+    assert build_segment_master(task)["status"] == "ok"
+    with (segment_dir / "frame_manifest.jsonl").open("a") as target:
+        target.write("{}\n")
+    with pytest.raises(ValueError, match="frame manifest digest mismatch"):
+        build_segment_master(task)
+
+
+def test_real_describe_extract_artifact_builds_stage_04(chain: Chain, tmp_path: Path, monkeypatch):
+    class FakeLabeler:
+        def __init__(self, config):
+            self.config = config
+
+        def call_full(self, *args, **kwargs):
+            return LabelResult("Observed work.", "", "stop", {"total_tokens": 3}, self.config.model)
+
+        def call_json_full(self, *args, **kwargs):
+            goal = {
+                "instruction": "complete the observed work",
+                "anchor": "The user starts the work.",
+                "grounding": "The screen shows the work complete.",
+                "start_frame": 0,
+                "end_frame": 1,
+            }
+            return {"goals": [goal]}, LabelResult(
+                json.dumps({"goals": [goal]}),
+                "",
+                "stop",
+                {"total_tokens": 5},
+                self.config.model,
+            )
+
+    monkeypatch.setattr(stage_annotate, "Labeler", FakeLabeler)
+    monkeypatch.setenv("LABELER_BASE_URL", "https://labeler.example/v1")
+    monkeypatch.setenv("LABELER_API_KEY", "secret")
+    goals = tmp_path / "annotated-goals"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "stage_annotate.py",
+            "--filter_dir",
+            str(chain.filter),
+            "--fps",
+            str(clip.TRAIN_FPS),
+            "--output_dir",
+            str(goals),
+            "--model",
+            "test-model",
+            "--target_tpm",
+            "100000",
+            "--max_workers",
+            "1",
+        ],
+    )
+    stage_annotate.main()
+    produced = _jsonl(goals / "goals.jsonl")
+    assert len(produced) == 1
+    assert set(produced[0]) == {
+        "goal_id",
+        "segment_id",
+        "recording_id",
+        "start_master_idx",
+        "end_master_idx",
+        "instruction",
+        "anchor",
+        "grounding",
+        "method",
+        "model",
+        "prompt_pack_sha",
+    }
+
+    conversations = tmp_path / "annotated-conversations"
+    _run_stage(
+        "stage_04_build_conversations.py",
+        "--filter_dir",
+        chain.filter,
+        "--goals_dir",
+        goals,
+        "--fps",
+        clip.TRAIN_FPS,
+        "--output_dir",
+        conversations,
+        "--num_workers",
+        1,
+    )
+    rows = _jsonl(conversations / "chat.jsonl")
+    assert len(rows) == 1
+    assert rows[0]["instruction"] == "complete the observed work"

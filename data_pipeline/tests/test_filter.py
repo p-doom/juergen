@@ -6,6 +6,7 @@ from pathlib import Path
 import msgpack
 import pytest
 
+from pipeline.lib.manifest import file_sha256_short
 from pipeline.stage_03_filter import (
     FILTER_PARAMS,
     REASON_BLACK,
@@ -23,6 +24,7 @@ def _task(root: Path) -> dict:
     frames = root / "frames" / segment
     frames.mkdir(parents=True)
     shard = frames / "images.array_record"
+    shard.write_bytes(b"fixture")
     rows = [
         {
             "record_index": index,
@@ -32,7 +34,8 @@ def _task(root: Path) -> dict:
         }
         for index in range(12)
     ]
-    (frames / "frame_manifest.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    frame_manifest = frames / "frame_manifest.jsonl"
+    frame_manifest.write_text("".join(json.dumps(row) + "\n" for row in rows))
     keylog = root / "keylog.msgpack"
     keylog.write_bytes(
         msgpack.packb(
@@ -42,6 +45,7 @@ def _task(root: Path) -> dict:
             ]
         )
     )
+    keylog_sha256 = file_sha256_short(keylog, n=64)
     (root / "filter").mkdir()
     return {
         "manifest_row": {
@@ -49,13 +53,17 @@ def _task(root: Path) -> dict:
             "recording_id": "rec0",
             "segment_idx": 0,
             "keylog_path": str(keylog),
+            "keylog_sha256": keylog_sha256,
             "alignment_status": "aligned",
+            "alignment_closed": True,
             "video_duration_s": 12.0,
         },
         "master_row": {
             "status": "ok",
             "master_fps": 1.0,
             "shard_path": str(shard),
+            "shard_sha256": file_sha256_short(shard, n=64),
+            "frame_manifest_sha256": file_sha256_short(frame_manifest, n=64),
         },
         "filter_dir": str(root / "filter"),
     }
@@ -96,8 +104,13 @@ def test_filter_requires_complete_inputs(tmp_path: Path):
     Path(task["manifest_row"]["keylog_path"]).unlink()
     with pytest.raises(FileNotFoundError, match="keylog is missing"):
         filter_segment(task)
-    task["master_row"]["status"] = "cached"
+    task["master_row"]["status"] = "failed"
     with pytest.raises(ValueError, match="not complete"):
+        filter_segment(task)
+
+    task = _task(tmp_path / "unclosed")
+    task["manifest_row"]["alignment_closed"] = False
+    with pytest.raises(ValueError, match="no closed alignment"):
         filter_segment(task)
 
 

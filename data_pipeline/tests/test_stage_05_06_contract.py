@@ -78,7 +78,7 @@ if "measure_message_lengths" in script:
                 for index in range(6):
                     target.write(json.dumps({{"conv_idx": 0, "msg_offset": index}}) + "\\n")
 elif os.environ.get("FAKE_UV_SHARDS", "1") != "0":
-    (out / "part-00000.array_record").write_bytes(b"")
+    (out / "part-00000.array_record").write_bytes(b"shard")
 """
 
 
@@ -305,6 +305,8 @@ def test_stage_06_reuses_cache_and_builds_each_split(tmp_path: Path, omegalax) -
         "train",
         "val",
     ]
+    for row in manifest["stats"]["per_split"]:
+        assert row["shards"] == {"part-00000.array_record": hashlib.sha256(b"shard").hexdigest()}
 
 
 def test_stage_06_rejects_zero_output_shards(tmp_path: Path, omegalax) -> None:
