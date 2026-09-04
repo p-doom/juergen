@@ -186,6 +186,8 @@ def test_control_line_is_exact_and_final():
         "terminate: success",
         "TERMINATE: success\nNO_OP",
         "I will TERMINATE: success",
+        '<tool_call>{"name":"computer_use","arguments":{"action":"terminate"}}</tool_call>',
+        '{"action":"terminate","status":"success"}',
     ):
         control = _support.split_control(text)
         assert control.status is None

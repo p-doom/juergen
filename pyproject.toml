@@ -3,7 +3,9 @@ name = "juergen"
 version = "0.1.0"
 description = "Crowd-Cast and CUA-Gym SFT data pipelines with shared action grammars."
 requires-python = ">=3.12,<3.13"
-dependencies = ["desktop"]
+dependencies = [
+    "desktop @ git+https://github.com/p-doom/desktop.git@1db6ae2499afc16d87dee15453a57042dff13f64",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
@@ -11,15 +13,12 @@ dev = ["pytest>=8"]
 [tool.uv.workspace]
 members = ["data_pipeline"]
 
-[tool.uv.sources]
-desktop = { git = "https://github.com/p-doom/desktop.git", rev = "1db6ae2499afc16d87dee15453a57042dff13f64" }
-
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["image_domain"]
+py-modules = ["cua_parity_contract", "image_domain"]
 
 [tool.setuptools.packages.find]
 include = ["grammars", "grammars.*"]

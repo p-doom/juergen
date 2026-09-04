@@ -1005,9 +1005,7 @@ class Control:
 
     ``body`` is the completion with the control removed, and is the only text a
     codec is given — so nothing on the far side of a termination can be parsed or
-    dispatched. ``ignored`` counts the actions the turn placed after its own
-    termination; the line spelling has to be last, so only the vendor tool-call
-    spelling can have any.
+    dispatched. ``ignored`` remains zero because the control line must be last.
     """
 
     status: str | None
@@ -1036,20 +1034,7 @@ def with_control(
 
 
 def split_control(text: str) -> Control:
-    """One completion -> its control decision and the text a codec may read.
-
-    Two spellings are accepted and one is written. ``CONTROL_SPEC``'s line is
-    ours. The other is the vendor's ``computer_use`` ``terminate`` call, which we
-    read but never emit: an off-the-shelf Qwen3-VL emits its own termination
-    whatever our prompt says, and that model in ``native_absolute`` is the only
-    calibrated reference this program has (33.9% OSWorld-Verified). Refusing it
-    would turn every off-the-shelf termination into a parse error.
-
-    Anything close but not exact — a mistyped token, an unknown status — is NOT a
-    control. It stays in ``body``, where the codec rejects it as the action it
-    is not, so a malformed termination is a scored parse error rather than a
-    silent success or a crashed episode.
-    """
+    """Remove one exact final ``TERMINATE: success|failure`` control line."""
     if not isinstance(text, str):
         raise TypeError(f"expected str, got {type(text)!r}")
     lines = text.splitlines()
@@ -1060,52 +1045,6 @@ def split_control(text: str) -> Control:
         if match is None:
             break
         return Control(match[1], "\n".join(lines[:index]))
-    return _vendor_control(text)
-
-
-def _vendor_terminate_status(payload: Any) -> str | None:
-    """The status of a vendor ``terminate`` call, or ``None`` if it is not one.
-
-    A ``terminate`` with no ``status`` reads as success. That default is not
-    invented here — it is the one the 33.9% reference was measured under — so
-    changing it would move the only calibrated number we have. A status that is
-    present and unrecognised is refused instead of guessed.
-    """
-    arguments = _arguments_of(payload)
-    if arguments is None or arguments.get("action") != "terminate":
-        return None
-    status = str(arguments.get("status", "success")).strip()
-    return status if status in ("success", "failure") else None
-
-
-def _vendor_control(text: str) -> Control:
-    """The vendor spelling: a ``computer_use`` ``terminate`` among the turn's calls.
-
-    Tagged blocks are cut at the terminate's own ``<tool_call>``, so ``body`` is
-    the source text of the calls that preceded it. An untagged payload — how the
-    RL rollout path sees vLLM-parsed output — is re-emitted in canonical tagged
-    form, because there is no substring to cut.
-    """
-    tagged = list(_TOOL_CALL_RE.finditer(text))
-    if tagged:
-        for index, match in enumerate(tagged):
-            try:
-                payload = json.loads(match.group(1))
-            except json.JSONDecodeError:
-                continue
-            status = _vendor_terminate_status(payload)
-            if status is not None:
-                return Control(
-                    status, text[: match.start()].rstrip(), len(tagged) - index - 1
-                )
-        return Control(None, text)
-    calls = list(iter_tool_calls(text))
-    for index, arguments in enumerate(calls):
-        status = _vendor_terminate_status({"arguments": arguments})
-        if status is not None:
-            return Control(
-                status, render_tool_calls(calls[:index]), len(calls) - index - 1
-            )
     return Control(None, text)
 
 

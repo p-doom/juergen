@@ -9,7 +9,7 @@ requires-python = ">=3.11"
 dependencies = [
     "absl-py>=2.0",
     "array-record>=0.5.1",
-    "desktop",
+    "desktop @ git+https://github.com/p-doom/desktop.git@1db6ae2499afc16d87dee15453a57042dff13f64",
     "msgpack>=1.0",
     "numpy>=2.0",
     "openai>=2.26.0",

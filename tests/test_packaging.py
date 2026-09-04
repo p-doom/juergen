@@ -1,24 +1,8 @@
-"""What a dispatched run gets: the built distribution, not the checkout.
-
-Resolving an id in-process proves nothing: the repo root is already
-`sys.path[0]` there, so it passes whether or not the module is packaged at all.
-It did: `py-modules = []` shipped none of the flat ids, and `top_level.txt` read
-`grammars` alone. Nothing noticed, because every caller so far has run with the
-checkout as its working directory.
-
-So this file builds the wheels and imports out of them with the checkout nowhere
-on `sys.path`, which is the only arrangement that can tell the two apart.
-
-`desktop` is built here too rather than taken from the sibling directory: it is
-the dependency whose import name PyPI's unrelated `desktop` 0.4.2 also owns, and
-asserting every module resolves *out of our wheel* is what distinguishes ours
-from the index's.
-"""
+"""Exercise the published wheel contract outside the checkout."""
 
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -28,23 +12,17 @@ from pathlib import Path
 import pytest
 
 _REPO = Path(__file__).resolve().parent.parent
-_DESKTOP = _REPO.parent / "desktop"
-
-# The one flat module left in `[tool.setuptools] py-modules`. It is not a plugin
-# id -- it is the image-domain spelling `agent/` and `pipeline/` both write, flat
-# because `pipeline/` runs in a venv without `verifiers` and so can import nothing
-# under `agent/`.
-FLAT_MODULES = ("image_domain",)
-
-PROBED = FLAT_MODULES + (
+_DESKTOP_REQUIREMENT = (
+    "desktop @ git+https://github.com/p-doom/desktop.git@"
+    "1db6ae2499afc16d87dee15453a57042dff13f64"
+)
+_PROBED = (
+    "cua_parity_contract",
+    "image_domain",
     "grammars",
     "desktop.geometry",
     "desktop.ir",
 )
-
-# Nothing a build reads, and `build/` in particular is poison: setuptools copies
-# the packages into it and reuses whatever is already there, so a wheel built in a
-# tree with a stale one carries files the current declaration does not name.
 _NOT_SOURCE = shutil.ignore_patterns(
     ".git",
     ".venv",
@@ -56,80 +34,72 @@ _NOT_SOURCE = shutil.ignore_patterns(
     ".ruff_cache",
     ".mypy_cache",
 )
-
-# Every module in one interpreter: `verifiers` costs six seconds to import, so a
-# subprocess per module is a minute of gate for nothing.
 _PROBE = """
 import importlib, json, sys
 print(json.dumps({name: importlib.import_module(name).__file__ for name in sys.argv[1:]}))
 """
 
 
+def _metadata(wheel: Path) -> str:
+    with zipfile.ZipFile(wheel) as archive:
+        (name,) = [
+            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+        ]
+        return archive.read(name).decode()
+
+
 @pytest.fixture(scope="module")
-def resolved(tmp_path_factory) -> tuple[Path, dict[str, Path]]:
-    """Both wheels unpacked into one directory that is not a checkout, and the
-    file that answered each import made from a working directory outside both."""
+def wheels(tmp_path_factory) -> tuple[Path, Path, Path]:
     uv = shutil.which("uv")
-    assert uv, "uv is the estate's build front end and is in none of the suites' venvs"
+    assert uv is not None
     root = tmp_path_factory.mktemp("dist")
-    site = root / "site"
-    for project in (_REPO, _DESKTOP):
-        # Built from a copy, never in place: a build writes `build/` and an
-        # egg-info into the project directory, and `tests/test_suite_and_gate.py`
-        # walks the repo looking for duplicated files.
-        source = root / f"src-{project.name}"
-        shutil.copytree(project, source, ignore=_NOT_SOURCE, symlinks=True)
+    source = root / "source"
+    shutil.copytree(_REPO, source, ignore=_NOT_SOURCE, symlinks=True)
+    for project in (source, source / "data_pipeline"):
         subprocess.run(
-            [uv, "build", "--wheel", "--out-dir", str(root), str(source)],
+            [uv, "build", "--wheel", "--out-dir", str(root), str(project)],
             check=True,
             capture_output=True,
             text=True,
         )
-    wheels = sorted(root.glob("*.whl"))
-    assert len(wheels) == 2, f"expected a juergen and a desktop wheel, got {wheels}"
-    for wheel in wheels:
-        with zipfile.ZipFile(wheel) as archive:
-            archive.extractall(site)
+    return (
+        root,
+        root / next(path.name for path in root.glob("juergen-*.whl")),
+        root / next(path.name for path in root.glob("crowdcast_data_pipeline-*.whl")),
+    )
 
-    process = subprocess.run(
-        [sys.executable, "-c", _PROBE, *PROBED],
-        cwd=root,
-        env=dict(os.environ, PYTHONPATH=str(site)),
+
+def test_both_published_wheels_record_the_exact_desktop_requirement(wheels):
+    _, juergen, data_pipeline = wheels
+    requirement = f"Requires-Dist: {_DESKTOP_REQUIREMENT}"
+    assert requirement in _metadata(juergen)
+    assert requirement in _metadata(data_pipeline)
+
+
+def test_normal_wheel_install_resolves_the_pinned_desktop(wheels):
+    root, juergen, _ = wheels
+    uv = shutil.which("uv")
+    environment = root / "venv"
+    subprocess.run(
+        [uv, "venv", "--python", sys.executable, str(environment)],
+        check=True,
         capture_output=True,
         text=True,
     )
-    assert process.returncode == 0, f"importing {PROBED} failed:\n{process.stderr}"
-    return site, {name: Path(path) for name, path in json.loads(process.stdout).items()}
-
-
-@pytest.mark.parametrize("flat_module", FLAT_MODULES)
-def test_every_flat_module_imports_out_of_the_wheel(resolved, flat_module: str) -> None:
-    site, files = resolved
-    assert files[flat_module].is_relative_to(site)
-
-
-def test_grammars_imports_with_only_the_wheels_on_the_path(resolved) -> None:
-    # grammars hard-imports desktop, and `desktop` is installed in neither shared
-    # testgate venv: every suite resolves it by a sys.path append in conftest, so a
-    # declared dependency that does not actually install cannot fail a test.
-    site, files = resolved
-    assert files["grammars"].is_relative_to(site)
-
-
-def test_the_desktop_that_answers_is_ours_and_not_the_index_one(resolved) -> None:
-    # PyPI's `desktop` 0.4.2 imports fine and has neither submodule, so resolving
-    # the two `grammars/_support.py` needs out of our wheel is the whole check.
-    site, files = resolved
-    assert files["desktop.geometry"].is_relative_to(site)
-    assert files["desktop.ir"].is_relative_to(site)
-
-
-def test_the_pinned_desktop_source_resolves_where_a_path_could_not() -> None:
-    """A dispatched run resolves a recorded desktop revision."""
-    import tomllib
-
-    source = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
-    pin = source["tool"]["uv"]["sources"]["desktop"]
-    url, rev = pin["git"], pin["rev"]
-    assert url == "https://github.com/p-doom/desktop.git"
-    assert len(rev) == 40 and not set(rev) - set("0123456789abcdef"), rev
+    python = environment / "bin" / "python"
+    subprocess.run(
+        [uv, "pip", "install", "--python", str(python), str(juergen)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    process = subprocess.run(
+        [str(python), "-I", "-c", _PROBE, *_PROBED],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    files = {name: Path(path) for name, path in json.loads(process.stdout).items()}
+    site_packages = environment / "lib" / "python3.12" / "site-packages"
+    assert all(path.is_relative_to(site_packages) for path in files.values())
