@@ -19,7 +19,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from pipeline.lib import realign as R
-from pipeline.lib.common import ensure_dir, write_json
+from pipeline.lib.common import ensure_dir, write_json, write_json_atomic
 from pipeline.lib.manifest import file_sha256_short
 from pipeline.lib.source_clips import resolve_source_clips
 
@@ -31,14 +31,7 @@ def write_corrected_keylog(
     structure; only timestamps change."""
     corrected = []
     for entry in R.load_keylog(str(src_keylog)):
-        if not isinstance(entry, list) or len(entry) < 2:
-            corrected.append(entry)
-            continue
-        try:
-            kt = int(entry[0]) / 1e6
-        except (TypeError, ValueError):
-            corrected.append(entry)
-            continue
+        kt = entry[0] / 1e6
         corrected.append([round(R.keylog_to_video(kt, splices) * 1e6), entry[1]])
     ensure_dir(out_path.parent)
     out_path.write_bytes(msgpack.packb(corrected, use_bin_type=True))
@@ -210,7 +203,7 @@ def main() -> None:
         "n_recordings": len(by_rec),
         "idle_timeout_s": args.idle_timeout,
         "closure_tol_s": args.closure_tol,
-        "status_counts": dict(counts),
+        "status_counts": dict(sorted(counts.items())),
         "n_closed": sum(counts[s] for s in R.CLOSED_STATUSES),
         "n_corrected": n - counts.get("aligned", 0),
         "n_keylogs_repointed": n_repointed,
@@ -219,7 +212,7 @@ def main() -> None:
         "source_clips_id": source["artifact_id"],
     }
     write_json(out_dir / "realign_summary.json", summary)
-    write_json(
+    write_json_atomic(
         out_dir / "manifest.json",
         {
             "artifact_type": "juergen_annotation_clip_manifest_realigned",

@@ -46,6 +46,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
 from tqdm import tqdm
 
 # Make the ``pipeline`` package importable when this script
@@ -54,6 +55,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from image_domain import encode_jpeg_q92
 from pipeline.lib import config
 from pipeline.lib.common import ensure_dir, read_jsonl, write_json
 from pipeline.lib.frames_actions import (
@@ -61,7 +63,8 @@ from pipeline.lib.frames_actions import (
     resolve_ffmpeg_bin,
 )
 from pipeline.lib.image_store import make_arrayrecord_image_uri
-from pipeline.lib.manifest import file_sha256_short, make_artifact_id
+from pipeline.lib.manifest import file_sha256_short
+from pipeline.lib.master_frames import resolve_master_artifact, validate_master_segment
 from pipeline.lib.source_clips import resolve_source_clips
 
 DEFAULT_MASTER_FPS = 4.0
@@ -120,7 +123,9 @@ def pack_master_arrayrecord(
     try:
         with manifest_path.open("w") as manifest_f:
             for record_index, frame_path in enumerate(frame_paths):
-                jpeg = frame_path.read_bytes()
+                with Image.open(frame_path) as frame:
+                    frame.load()
+                    jpeg = encode_jpeg_q92(frame)
                 writer.write(jpeg)
                 source_time_s = record_index / master_fps
                 source_frame_idx = (
@@ -259,7 +264,13 @@ def build_segment_master(task: dict[str, Any]) -> dict[str, Any]:
         "video_sha256": row["video_sha256"],
     }
     if cached := _cached_segment(segment_frame_dir, cache_inputs):
-        return {**base_row, "status": "ok", **cached}
+        result = {**base_row, "status": "ok", **cached}
+        validate_master_segment(
+            result,
+            root=Path(task["frames_dir"]).parent,
+            source_row=row,
+        )
+        return result
     (segment_frame_dir / "segment_manifest.json").unlink(missing_ok=True)
 
     extract_frames_ffmpeg(
@@ -294,13 +305,19 @@ def build_segment_master(task: dict[str, Any]) -> dict[str, Any]:
         segment_frame_dir / "segment_manifest.json",
         {"schema_version": 1, "inputs": cache_inputs, "outputs": outputs},
     )
-    return {
+    result = {
         **base_row,
         "status": "ok",
         "shard_path": packed["shard_path"],
         "frame_manifest": packed["manifest_path"],
         **outputs,
     }
+    validate_master_segment(
+        result,
+        root=Path(task["frames_dir"]).parent,
+        source_row=row,
+    )
+    return result
 
 
 ARTIFACT_MARKER = {
@@ -324,7 +341,7 @@ def aggregate_summary(
     target_height: int,
     jpeg_quality: int,
     ffmpeg_bin: str | None,
-    source_clips_manifest: str,
+    source: dict[str, str],
 ) -> dict[str, Any]:
     """Roll per-segment index rows up into the summary dict. Shared by the
     single-shard decode path and the merge path so both emit the same shape."""
@@ -334,15 +351,15 @@ def aggregate_summary(
         "target_height": target_height,
         "jpeg_quality": jpeg_quality,
         "n_segments": len(index_rows),
-        "status_counts": dict(counts),
+        "status_counts": dict(sorted(counts.items())),
         "n_records_total": sum(int(r.get("num_records") or 0) for r in index_rows),
         "total_jpeg_bytes": sum(
             int(r.get("total_jpeg_bytes") or 0) for r in index_rows
         ),
         "ffmpeg_bin": ffmpeg_bin,
-        "source_clips_manifest": source_clips_manifest,
-        "source_clips_sha256": file_sha256_short(Path(source_clips_manifest), n=64),
-        "source_clips_id": make_artifact_id(Path(source_clips_manifest).parent),
+        "source_clips_manifest": source["path"],
+        "source_clips_sha256": source["sha256"],
+        "source_clips_id": source["artifact_id"],
     }
 
 
@@ -424,6 +441,17 @@ def run_merge(args: argparse.Namespace) -> None:
         "target_height",
     )
     scalars = summary_by_index[0]
+    source_rows, source = resolve_source_clips(Path(scalars["source_clips_manifest"]))
+    if any(
+        scalars[field] != source[key]
+        for field, key in (
+            ("source_clips_manifest", "path"),
+            ("source_clips_sha256", "sha256"),
+            ("source_clips_id", "artifact_id"),
+        )
+    ):
+        raise ValueError("master-frame shard source identity is stale")
+    source_by_segment = {str(row["segment_id"]): row for row in source_rows}
     for index, shard_summary in summary_by_index.items():
         shard_rows = read_jsonl(shard_index_files[index])
         if shard_summary.get("shard_index") != index or any(
@@ -441,19 +469,44 @@ def run_merge(args: argparse.Namespace) -> None:
             for field, value in expected_counts.items()
         ):
             raise ValueError(f"master-frame shard summary counts mismatch: {index}")
+        expected_segments = [str(row["segment_id"]) for row in source_rows[index::n]]
+        if [str(row.get("segment_id")) for row in shard_rows] != expected_segments:
+            raise ValueError(f"master-frame shard source coverage mismatch: {index}")
+    if set(by_seg) != set(source_by_segment):
+        raise ValueError("master-frame shards do not cover the exact Stage00 inventory")
+    for row in index_rows:
+        if any(
+            row.get(field) != scalars[field]
+            for field in ("jpeg_quality", "master_fps", "target_height")
+        ):
+            raise ValueError(
+                f"master-frame row parameters mismatch: {row['segment_id']}"
+            )
+        validate_master_segment(
+            row,
+            root=out_dir,
+            source_row=source_by_segment[str(row["segment_id"])],
+        )
     summary = aggregate_summary(
         index_rows,
         master_fps=scalars["master_fps"],
         target_height=scalars["target_height"],
         jpeg_quality=scalars["jpeg_quality"],
         ffmpeg_bin=scalars["ffmpeg_bin"],
-        source_clips_manifest=scalars["source_clips_manifest"],
+        source=source,
     )
     summary["num_shards"] = n
     summary["merged_shards"] = present
 
+    for path in (*shard_index_files, *shard_summaries):
+        path.unlink()
     write_index_jsonl(out_dir / "segment_index.jsonl", index_rows)
     write_summary_and_manifest(out_dir, summary)
+    try:
+        resolve_master_artifact(out_dir)
+    except Exception:
+        (out_dir / "manifest.json").unlink(missing_ok=True)
+        raise
     print(
         f"[merge] {len(shard_index_files)} shards -> {len(index_rows)} segments, "
         f"{summary['n_records_total']} records, {summary['total_jpeg_bytes'] / 1e9:.2f} GB "
@@ -525,13 +578,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    out_dir = ensure_dir(args.output_dir)
+    out_dir = ensure_dir(args.output_dir.resolve())
     (out_dir / "manifest.json").unlink(missing_ok=True)
     if args.merge:
         run_merge(args)
         return
     if args.master_fps <= 0:
         raise SystemExit("--master-fps must be > 0")
+    if args.target_height <= 0:
+        raise SystemExit("--target-height must be > 0")
+    if args.jpeg_quality != config.DEFAULT_JPEG_QUALITY:
+        raise SystemExit(f"--jpeg-quality must be {config.DEFAULT_JPEG_QUALITY}")
     if args.num_shards < 1:
         raise SystemExit("--num-shards must be >= 1")
     if not (0 <= args.shard_index < args.num_shards):
@@ -546,7 +603,7 @@ def main() -> None:
 
     frames_dir = ensure_dir(out_dir / "frames")
 
-    rows, _ = resolve_source_clips(args.clips_manifest)
+    rows, source = resolve_source_clips(args.clips_manifest)
     sharded = args.num_shards > 1
     if sharded:
         # Round-robin stride: disjoint and exhaustive across shard 0..N-1, and
@@ -599,8 +656,6 @@ def main() -> None:
             n_records_total += int(res.get("num_records") or 0)
             total_jpeg_bytes += int(res.get("total_jpeg_bytes") or 0)
             index_rows.append(res)
-            if res["status"] == "failed":
-                bar.write(f"  FAIL {res['segment_id']}: {res.get('error')}")
             bar.set_postfix(
                 ok=counts.get("ok", 0),
                 fail=counts.get("failed", 0),
@@ -612,13 +667,16 @@ def main() -> None:
     if any(row.get("status") != "ok" for row in index_rows):
         raise RuntimeError("master-frame decode did not complete every segment")
 
+    _, current_source = resolve_source_clips(args.clips_manifest)
+    if current_source != source:
+        raise RuntimeError("Stage00 source identity changed during Stage01")
     summary = aggregate_summary(
         index_rows,
         master_fps=args.master_fps,
         target_height=args.target_height,
         jpeg_quality=args.jpeg_quality,
         ffmpeg_bin=ffmpeg_bin,
-        source_clips_manifest=str(args.clips_manifest),
+        source=source,
     )
     if sharded:
         # Shard task: write a uniquely-named index + summary (no collision between
@@ -636,8 +694,22 @@ def main() -> None:
             flush=True,
         )
     else:
+        source_by_segment = {str(row["segment_id"]): row for row in rows}
+        if {str(row["segment_id"]) for row in index_rows} != set(source_by_segment):
+            raise ValueError("Stage01 index does not cover the exact Stage00 inventory")
+        for row in index_rows:
+            validate_master_segment(
+                row,
+                root=out_dir,
+                source_row=source_by_segment[str(row["segment_id"])],
+            )
         write_index_jsonl(out_dir / "segment_index.jsonl", index_rows)
         write_summary_and_manifest(out_dir, summary)
+        try:
+            resolve_master_artifact(out_dir)
+        except Exception:
+            (out_dir / "manifest.json").unlink(missing_ok=True)
+            raise
         print(
             f"[frames_master] done: {dict(counts)} | {n_records_total} records, "
             f"{total_jpeg_bytes / 1e9:.2f} GB -> {out_dir}",

@@ -119,6 +119,13 @@ def resolve_source_clips(path: Path) -> tuple[list[dict[str, Any]], dict[str, An
             or _SHA256.fullmatch(row["keylog_sha256"]) is None
         ):
             raise ValueError(f"invalid Crowd-Cast source path or digest: {row!r}")
+        if (
+            not Path(video).is_file()
+            or not Path(keylog).is_file()
+            or file_sha256_short(Path(video), n=64) != row["video_sha256"]
+            or file_sha256_short(Path(keylog), n=64) != row["keylog_sha256"]
+        ):
+            raise ValueError(f"Crowd-Cast source payload digest mismatch: {row!r}")
         for field in ("video_frame_count", "video_width", "video_height"):
             value = row[field]
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:

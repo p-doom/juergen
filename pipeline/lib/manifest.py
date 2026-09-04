@@ -173,6 +173,7 @@ def _validate_crowdcast_chat_rows(chat: Path, manifest: dict) -> None:
     observed = iter(_chat_rows(chat))
     n_conversations = 0
     n_turns = 0
+    produced_goal_ids: set[str] = set()
     statuses: Counter[str] = Counter()
     projections: Counter[str] = Counter()
     for index_row in sorted(
@@ -187,6 +188,11 @@ def _validate_crowdcast_chat_rows(chat: Path, manifest: dict) -> None:
                 "system_prompt": system_prompt,
             }
         )
+        projection = result.get("projection")
+        if isinstance(projection, dict) and projection.get(
+            "n_projected"
+        ) != projection.get("n_goals"):
+            raise ValueError("Crowd-Cast sealed chat has an unprojectable goal")
         statuses[result["status"]] += 1
         for expected in sorted(result["rows"], key=lambda row: row["conversation_id"]):
             if _next_chat_row(observed, chat) != expected:
@@ -195,15 +201,21 @@ def _validate_crowdcast_chat_rows(chat: Path, manifest: dict) -> None:
                 )
             n_conversations += 1
             n_turns += expected["n_turns"]
+            produced_goal_ids.add(expected["goal_id"])
         for key, value in result.get("projection", {}).items():
             if isinstance(value, int):
                 projections[key] += value
     if next(observed, None) is not None:
         raise ValueError("Crowd-Cast chat has rows absent from its source artifacts")
+    expected_goal_ids = {
+        goal["goal_id"] for segment_goals in goals.values() for goal in segment_goals
+    }
     if (
         n_conversations == 0
         or n_conversations != manifest["n_conversations"]
         or n_turns != manifest["n_turns"]
+        or produced_goal_ids != expected_goal_ids
+        or n_conversations != len(expected_goal_ids)
     ):
         raise ValueError(f"Crowd-Cast chat counts mismatch: {chat}")
     if manifest["status_counts"] != dict(statuses) or manifest[
@@ -367,58 +379,9 @@ def _validate_cuagym_chat_manifest(manifest: dict, path: Path) -> None:
 
 
 def _validate_crowdcast_master(root: Path) -> dict:
-    manifest_path = root / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    required = {
-        "artifact_type": "juergen_annotation_frames_master",
-        "schema_version": 1,
-        "segment_index": "segment_index.jsonl",
-        "jpeg_quality": 92,
-    }
-    if {key: manifest.get(key) for key in required} != required:
-        raise ValueError(f"invalid Crowd-Cast master artifact: {manifest_path}")
-    target_height = manifest.get("target_height")
-    if (
-        isinstance(target_height, bool)
-        or not isinstance(target_height, int)
-        or target_height <= 0
-    ):
-        raise ValueError(f"invalid Crowd-Cast master height: {manifest_path}")
-    index_path = root / "segment_index.jsonl"
-    if file_sha256_short(index_path, n=64) != manifest.get("segment_index_sha256"):
-        raise ValueError(f"Crowd-Cast master index digest mismatch: {index_path}")
-    rows = [json.loads(line) for line in index_path.read_text().splitlines() if line]
-    if not rows or any(row.get("status") != "ok" for row in rows):
-        raise ValueError(
-            f"Crowd-Cast master index is empty or incomplete: {index_path}"
-        )
-    from array_record.python.array_record_module import ArrayRecordReader
+    from pipeline.lib.master_frames import resolve_master_artifact
 
-    for row in rows:
-        segment_id = str(row["segment_id"])
-        shard = (root / "frames" / segment_id / "images.array_record").resolve()
-        frame_manifest = shard.parent / "frame_manifest.jsonl"
-        if (
-            Path(row["shard_path"]).resolve() != shard
-            or Path(row["frame_manifest"]).resolve() != frame_manifest
-        ):
-            raise ValueError(f"Crowd-Cast master paths mismatch for {segment_id}")
-        if file_sha256_short(shard, n=64) != row.get("shard_sha256"):
-            raise ValueError(f"Crowd-Cast master shard digest mismatch: {shard}")
-        if file_sha256_short(frame_manifest, n=64) != row.get("frame_manifest_sha256"):
-            raise ValueError(
-                f"Crowd-Cast frame manifest digest mismatch: {frame_manifest}"
-            )
-        reader = ArrayRecordReader(str(shard))
-        if not reader.ok():
-            raise ValueError(f"invalid Crowd-Cast master ArrayRecord: {shard}")
-        try:
-            count = reader.num_records()
-        finally:
-            reader.close()
-        if count <= 0 or count != row.get("num_records"):
-            raise ValueError(f"Crowd-Cast master record count mismatch: {shard}")
-    return manifest
+    return resolve_master_artifact(root)[0]
 
 
 def check_artifact_id(artifact_id: str, *, what: str) -> Path:

@@ -64,6 +64,5 @@ def test_stage_imports_under_this_interpreter(stage: Path, tmp_path: Path):
         check=False,
     )
     assert proc.returncode == 0, (
-        f"{stage.name} names a module that does not resolve under {sys.executable}:"
-        f"\n{proc.stderr}"
+        f"{stage.name} names a module that does not resolve under {sys.executable}:\n{proc.stderr}"
     )

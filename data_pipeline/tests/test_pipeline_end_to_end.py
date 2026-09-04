@@ -20,8 +20,12 @@ from PIL import Image
 from pipeline.annotation import stage_annotate
 from pipeline.annotation.lib.labeler import LabelResult
 from pipeline.lib import config
-from pipeline.lib.image_store import read_jpeg_bytes
-from pipeline.lib.manifest import make_artifact_id, resolve_chat_artifact
+from pipeline.lib.image_store import make_arrayrecord_image_uri, read_jpeg_bytes
+from pipeline.lib.manifest import (
+    file_sha256_short,
+    make_artifact_id,
+    resolve_chat_artifact,
+)
 from pipeline.lib.views import FilterArtifact
 from pipeline.stage_01_master_frames import build_segment_master
 
@@ -45,6 +49,32 @@ def _run_stage(script: str, *args: object) -> None:
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def test_stage_00_rejects_an_orphan_keylog(tmp_path: Path):
+    source = clip.build_uploads_tree(tmp_path / "source")
+    orphan = source["keylog_path"].with_name("input_orphan_seg0000.msgpack")
+    orphan.write_bytes(b"orphan")
+    output = tmp_path / "stage_00" / "clips_manifest.jsonl"
+    process = subprocess.run(
+        [
+            sys.executable,
+            str(STAGES / "stage_00_clip_manifest.py"),
+            "--dataset-root",
+            str(tmp_path / "source"),
+            "--out",
+            str(output),
+            "--workers",
+            "1",
+        ],
+        env=dict(os.environ, PYTHONPATH=str(REPO_ROOT)),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert process.returncode != 0
+    assert "orphan=" in process.stderr
+    assert not (output.parent / "manifest.json").exists()
 
 
 class Chain:
@@ -315,6 +345,7 @@ def test_stage_04_refuses_an_unprojectable_goal(chain: Chain, tmp_path: Path):
     rows = _jsonl(goals_path)
     rows[0]["start_master_idx"] = 10_000
     rows[0]["end_master_idx"] = 10_001
+    rows.sort(key=lambda row: (row["start_master_idx"], row["end_master_idx"]))
     goals_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
     manifest_path = goals / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
@@ -351,6 +382,13 @@ def test_stage_01_cache_validates_closed_payload(chain: Chain, tmp_path: Path):
     segment_dir.mkdir(parents=True)
     for name in ("images.array_record", "frame_manifest.jsonl"):
         shutil.copy2(source_segment / name, segment_dir / name)
+    copied_shard = segment_dir / "images.array_record"
+    copied_manifest = segment_dir / "frame_manifest.jsonl"
+    copied_rows = _jsonl(copied_manifest)
+    for index, row in enumerate(copied_rows):
+        row["shard_path"] = str(copied_shard)
+        row["image"] = make_arrayrecord_image_uri(copied_shard, index)
+    copied_manifest.write_text("".join(json.dumps(row) + "\n" for row in copied_rows))
     (index_row,) = _jsonl(chain.master / "segment_index.jsonl")
     inputs = {
         "jpeg_quality": index_row["jpeg_quality"],
@@ -367,6 +405,7 @@ def test_stage_01_cache_validates_closed_payload(chain: Chain, tmp_path: Path):
             "total_jpeg_bytes",
         )
     }
+    outputs["frame_manifest_sha256"] = file_sha256_short(copied_manifest, n=64)
     (segment_dir / "segment_manifest.json").write_text(
         json.dumps({"schema_version": 1, "inputs": inputs, "outputs": outputs})
     )

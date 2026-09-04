@@ -144,15 +144,16 @@ class SchemaTest(unittest.TestCase):
             with self.assertRaises((TypeError, ValueError), msg=row):
                 validate_goal_row(row)
 
-    def test_goals_by_segment_sorts(self) -> None:
+    def test_goals_by_segment_requires_canonical_order(self) -> None:
         rows = [
             _goal(60, 90, goal_id="g2"),
             _goal(0, 30, goal_id="g1"),
             _goal(0, 15, goal_id="g0", segment_id="s1"),
         ]
-        grouped = goals_by_segment(rows)
+        with self.assertRaisesRegex(ValueError, "canonically ordered"):
+            goals_by_segment(rows)
+        grouped = goals_by_segment([rows[1], rows[0], rows[2]])
         self.assertEqual([g["goal_id"] for g in grouped["s0"]], ["g1", "g2"])
-        self.assertEqual([g["goal_id"] for g in grouped["s1"]], ["g0"])
 
     def test_assert_same_artifact(self) -> None:
         assert_same_artifact("x::1", "x::1", what="filter")

@@ -33,26 +33,32 @@ Status per segment (spec sec.5) -- gate trust on ``closed``:
 
 Source keylogs/mp4s are read-only inputs; this module never modifies them.
 """
+
 from __future__ import annotations
 
 import datetime
 import struct
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-import msgpack
+from pipeline.lib.common import load_keylog_entries
 
 IDLE_TIMEOUT = 120.0  # recorder idle_timeout_secs default
 CLOSURE_TOL = 2.0  # closure threshold (s)
 
 INPUT_TYPES = {
-    "KeyPress", "KeyRelease", "MousePress",
-    "MouseRelease", "MouseScroll", "MouseMove",
+    "KeyPress",
+    "KeyRelease",
+    "MousePress",
+    "MouseRelease",
+    "MouseScroll",
+    "MouseMove",
 }
 
 CLOSED_STATUSES = {"aligned", "exact", "benign_idle"}
 
-_EPOCH_1904 = datetime.datetime(1904, 1, 1)
+_EPOCH_1904 = datetime.datetime(1904, 1, 1, tzinfo=datetime.UTC)
 
 
 def _find_box(f, end, target):
@@ -110,23 +116,21 @@ def mp4_mvhd(path: str) -> tuple[datetime.datetime | None, float | None]:
 
 
 def load_keylog(path: str) -> list[Any]:
-    """Raw msgpack event list: [[ts_us, [type, args]], ...]. [] on missing/empty."""
-    try:
-        with open(path, "rb") as fh:
-            raw = fh.read()
-    except OSError:
-        return []
-    if not raw:
-        return []
-    events = msgpack.unpackb(raw, raw=False, strict_map_key=False)
-    return events if isinstance(events, list) else []
+    """Load the exact Crowd-Cast event-list schema."""
+    return load_keylog_entries(Path(path))
 
 
 def input_timestamps_s(events: list[Any]) -> list[float]:
     """Sorted input-event timestamps (s) -- the 6 idle-gating event types."""
-    ts = [e[0] / 1e6 for e in events
-          if isinstance(e, list) and len(e) >= 2
-          and isinstance(e[1], list) and e[1] and e[1][0] in INPUT_TYPES]
+    ts = [
+        e[0] / 1e6
+        for e in events
+        if isinstance(e, list)
+        and len(e) >= 2
+        and isinstance(e[1], list)
+        and e[1]
+        and e[1][0] in INPUT_TYPES
+    ]
     ts.sort()
     return ts
 
@@ -145,8 +149,9 @@ class Splice:
     leading: bool = False  # True for the (single) leading/overhanging idle
 
 
-def compute_splices(input_ts: list[float], idle_timeout: float = IDLE_TIMEOUT,
-                    prior_idle: float = 0.0) -> list[dict]:
+def compute_splices(
+    input_ts: list[float], idle_timeout: float = IDLE_TIMEOUT, prior_idle: float = 0.0
+) -> list[dict]:
     """Spec sec.3 on a single (segment-local or global) input stream.
 
     prior_idle credits idle already accrued before t=0 (cross-segment leading).
@@ -180,8 +185,9 @@ def keylog_to_video(kt: float, splices: list[dict]) -> float:
     return kt - cum
 
 
-def closure(splices: list[dict], keylog_span: float, video_dur: float,
-            tol: float = CLOSURE_TOL) -> dict:
+def closure(
+    splices: list[dict], keylog_span: float, video_dur: float, tol: float = CLOSURE_TOL
+) -> dict:
     """Spec sec.5 closure certificate."""
     total = sum(s["collapse"] for s in splices)
     overhang = max(0.0, keylog_span - video_dur)
@@ -193,9 +199,16 @@ def closure(splices: list[dict], keylog_span: float, video_dur: float,
     }
 
 
-def _classify(splices: list[dict], overhang: float, residual: float,
-              corr_end: float, video_dur: float, has_leading: bool,
-              refined: bool, tol: float) -> str:
+def _classify(
+    splices: list[dict],
+    overhang: float,
+    residual: float,
+    corr_end: float,
+    video_dur: float,
+    has_leading: bool,
+    refined: bool,
+    tol: float,
+) -> str:
     if not splices:
         return "aligned"
     if abs(residual) <= tol:
@@ -209,8 +222,14 @@ def _classify(splices: list[dict], overhang: float, residual: float,
     return "needs_review"
 
 
-def _refine_and_classify(local: list[dict], S: float, V: float | None,
-                         first_input: float, model: str, tol: float) -> dict:
+def _refine_and_classify(
+    local: list[dict],
+    S: float,
+    V: float | None,
+    first_input: float,
+    model: str,
+    tol: float,
+) -> dict:
     """Given a chosen candidate splice list (local kp/collapse), apply the
     overhang refinement to the leading idle and compute the spec-v2 status."""
     # leading/overhanging = pause that fires at/before this segment's first input
@@ -246,20 +265,35 @@ def _refine_and_classify(local: list[dict], S: float, V: float | None,
     total_collapse = sum(s["collapse"] for s in local)
     residual = total_collapse - overhang
     corr_end = keylog_to_video(S, local)
-    status = (_classify(local, overhang, residual, corr_end, V, has_leading,
-                        refined, tol) if V is not None else "no_video")
+    status = (
+        _classify(local, overhang, residual, corr_end, V, has_leading, refined, tol)
+        if V is not None
+        else "no_video"
+    )
     return {
-        "splices": [{"kp": s["kp"], "vp": s["vp"], "collapse": s["collapse"],
-                     "leading": s["leading"]} for s in local],
-        "n_pauses": len(local), "status": status,
-        "closed": status in CLOSED_STATUSES, "leading_method": leading_method,
-        "total_collapse_s": total_collapse, "overhang_s": overhang,
-        "residual_s": residual, "corr_end_s": corr_end,
+        "splices": [
+            {
+                "kp": s["kp"],
+                "vp": s["vp"],
+                "collapse": s["collapse"],
+                "leading": s["leading"],
+            }
+            for s in local
+        ],
+        "n_pauses": len(local),
+        "status": status,
+        "closed": status in CLOSED_STATUSES,
+        "leading_method": leading_method,
+        "total_collapse_s": total_collapse,
+        "overhang_s": overhang,
+        "residual_s": residual,
+        "corr_end_s": corr_end,
     }
 
 
-def realign_recording(segs: list[dict], idle_timeout: float = IDLE_TIMEOUT,
-                      tol: float = CLOSURE_TOL) -> dict[str, dict]:
+def realign_recording(
+    segs: list[dict], idle_timeout: float = IDLE_TIMEOUT, tol: float = CLOSURE_TOL
+) -> dict[str, dict]:
     """Realign every segment of ONE recording.
 
     Per segment, two candidate reconstructions are computed and the more
@@ -358,13 +392,15 @@ def realign_recording(segs: list[dict], idle_timeout: float = IDLE_TIMEOUT,
                 model, chosen = "global", glob
 
         res = _refine_and_classify(chosen, S, V, first_input, model, tol)
-        res.update({
-            "segment_id": seg["segment_id"],
-            "segment_idx": int(seg["segment_idx"]),
-            "model": model,
-            "keylog_span_s": S,
-            "video_dur_s": V,
-            "first_input_s": first_input,
-        })
+        res.update(
+            {
+                "segment_id": seg["segment_id"],
+                "segment_idx": int(seg["segment_idx"]),
+                "model": model,
+                "keylog_span_s": S,
+                "video_dur_s": V,
+                "first_input_s": first_input,
+            }
+        )
         out[seg["segment_id"]] = res
     return out

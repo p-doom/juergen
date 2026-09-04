@@ -19,6 +19,7 @@ converts them to master intervals at write time; view indices never persist.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +48,7 @@ def _fmt_period(unit: AnnotationUnit) -> str:
 def clean_goals(
     parsed: dict[str, Any], frame_lo: int, frame_hi: int, own_hi: int
 ) -> list[dict[str, Any]]:
-    """Validate goal fields and clamp model bounds to the owned frame window."""
+    """Validate goal fields against the owned frame window."""
     if not isinstance(parsed, dict) or not isinstance(parsed.get("goals"), list):
         raise TypeError("extract response must contain a goals list")
     if set(parsed) != {"goals"}:
@@ -82,8 +83,11 @@ def clean_goals(
             raise ValueError(f"goal {index} has invalid frame bounds")
         if end < start:
             raise ValueError(f"goal {index} end_frame precedes start_frame")
-        if start > own_hi:
-            continue
+        if not frame_lo <= start <= end <= frame_hi or end > own_hi:
+            raise ValueError(
+                f"goal {index} bounds [{start}, {end}] are outside "
+                f"the owned frame range [{frame_lo}, {own_hi}]"
+            )
         anchor = g.get("anchor")
         grounding = g.get("grounding")
         if not isinstance(anchor, str) or not anchor.strip():
@@ -95,10 +99,13 @@ def clean_goals(
                 "instruction": instr,
                 "anchor": anchor.strip(),
                 "grounding": grounding.strip(),
-                "start_frame": max(frame_lo, min(start, frame_hi)),
-                "end_frame": max(frame_lo, min(end, own_hi)),
+                "start_frame": start,
+                "end_frame": end,
             }
         )
+    for previous, current in pairwise(goals):
+        if current["start_frame"] <= previous["end_frame"]:
+            raise ValueError("goals must be strictly ordered and nonoverlapping")
     return goals
 
 
@@ -123,20 +130,9 @@ def snap_goal_starts(
         while p > first_vi and is_typing(kb[p - 1]) and not _is_submission(kb[p - 1]):
             p -= 1
         g["start_frame"] = p
-        if g.get("end_frame") is not None and g["end_frame"] < p:
-            g["end_frame"] = p
-    ordered = sorted(
-        (
-            g
-            for g in goals
-            if isinstance(g.get("start_frame"), int)
-            and isinstance(g.get("end_frame"), int)
-        ),
-        key=lambda g: g["start_frame"],
-    )
-    for a, b in zip(ordered, ordered[1:], strict=False):  # noqa: RUF007 - dicts, not pairs math
-        if a["end_frame"] >= b["start_frame"]:
-            a["end_frame"] = max(a["start_frame"], b["start_frame"] - 1)
+    for previous, current in pairwise(goals):
+        if current["start_frame"] <= previous["end_frame"]:
+            raise ValueError("snapped goals overlap")
     return goals
 
 

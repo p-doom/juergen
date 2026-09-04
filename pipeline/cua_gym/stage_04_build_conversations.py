@@ -18,10 +18,12 @@ if str(REPO_ROOT) not in sys.path:
 from cua_parity_contract import (
     JPEG_QUALITY,
     MAX_COMPLETED_TURNS,
-    OBSERVATION_CONTRACT as OBSERVATION_ID,
     OBSERVATION_SIZE,
     PREVIOUS_ACTIONS_MAX_CHARS,
     render_history,
+)
+from cua_parity_contract import (
+    OBSERVATION_CONTRACT as OBSERVATION_ID,
 )
 from grammars.ordered_events_v3_relative_1000_grid_v1.codec import (
     CODEC,

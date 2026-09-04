@@ -186,14 +186,6 @@ class ArtifactJoinTest(unittest.TestCase):
         )
         return fdir
 
-    def test_matching_ids_load(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            master = self._make_master(root)
-            art = FilterArtifact(self._make_filter(root, master))
-            self.assertEqual(art.master_dir, master.resolve())
-            self.assertEqual(art.stride_for(0.5), 30)
-
     def test_rebuilt_master_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

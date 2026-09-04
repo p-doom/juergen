@@ -19,9 +19,9 @@ from pipeline.annotation.lib.prompts import PromptPack
 from pipeline.annotation.lib.units import AnnotationUnit, build_units
 from pipeline.annotation.methods.describe_extract.annotator import Context, run_unit
 from pipeline.lib.action_format import WindowKeyboard, format_segment
-from pipeline.lib.common import ensure_dir, write_json, write_jsonl
+from pipeline.lib.common import ensure_dir, write_json, write_json_atomic, write_jsonl
 from pipeline.lib.events import load_events
-from pipeline.lib.goals import validate_goal_row, view_span_to_master
+from pipeline.lib.goals import goals_by_segment, validate_goal_row, view_span_to_master
 from pipeline.lib.manifest import file_sha256_short
 from pipeline.lib.views import FilterArtifact
 
@@ -30,7 +30,7 @@ PROMPTS_PATH = Path(__file__).parent / "methods" / METHOD / "prompts.yaml"
 CONTEXT_LIMIT = 262144
 CONTEXT_SAFETY_MARGIN = 28000
 WINDOW_SNAP_SLACK = 25
-WINDOW_TAIL_BUFFER = 5
+WINDOW_TAIL_BUFFER = 0
 EST_TOKENS_PER_FRAME = 1500
 
 
@@ -55,8 +55,8 @@ def _goal_rows(
     for index, goal in enumerate(result["goals"]):
         start, end = view_span_to_master(
             unit.view,
-            int(goal["start_frame"]),
-            int(goal["end_frame"]) + 1,
+            goal["start_frame"],
+            goal["end_frame"] + 1,
         )
         row = {
             "goal_id": f"{unit.unit_id}_g{index:02d}",
@@ -195,10 +195,11 @@ def main() -> None:
             goal["end_master_idx"],
         )
     )
+    goals_by_segment(goals)
     goals_path = output / "goals.jsonl"
     write_jsonl(goals_path, goals)
     prompt_snapshot = prompts.snapshot_to(output)
-    write_json(
+    write_json_atomic(
         output / "manifest.json",
         {
             "artifact_type": "crowdcast_describe_extract_goals",

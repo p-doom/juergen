@@ -19,7 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 import grammars
 from image_domain import image_domain
 from pipeline.lib.action_format import format_segment
-from pipeline.lib.common import ensure_dir, write_json, write_jsonl
+from pipeline.lib.common import ensure_dir, write_json_atomic, write_jsonl
 from pipeline.lib.events import Window, load_events
 from pipeline.lib.goals import (
     assert_same_artifact,
@@ -27,7 +27,11 @@ from pipeline.lib.goals import (
     load_goals,
     project_goals,
 )
-from pipeline.lib.manifest import file_sha256_short, make_artifact_id
+from pipeline.lib.manifest import (
+    file_sha256_short,
+    make_artifact_id,
+    resolve_chat_artifact,
+)
 from pipeline.lib.views import FilterArtifact, build_segment_view
 
 ACTION_FORMAT = "canonical"
@@ -75,12 +79,18 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
         "segment_idx": view.segment_idx,
         "alignment_status": view.alignment_status,
     }
+    segment_goals = task["goals_by_segment"].get(segment_id, [])
+    if any(goal["recording_id"] != view.recording_id for goal in segment_goals):
+        raise ValueError(f"Crowd-Cast goal recording mismatch: {segment_id}")
     if not view.frames:
+        if segment_goals:
+            raise ValueError(
+                f"Crowd-Cast goals cannot project onto empty view: {segment_id}"
+            )
         return {**base, "status": "empty_view", "rows": []}
 
     keylog = Path(view.keylog_path) if view.keylog_path else None
     events = load_events(keylog)[0] if keylog else []
-    segment_goals = task["goals_by_segment"].get(segment_id, [])
     if not segment_goals:
         return {**base, "status": "no_goals", "rows": []}
     projections, projection_stats = project_goals(
@@ -116,8 +126,8 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
                 "action_format": ACTION_FORMAT,
                 "goal_id": goal["goal_id"],
                 "instruction": instruction,
-                "start_master_idx": int(goal["start_master_idx"]),
-                "end_master_idx": int(goal["end_master_idx"]),
+                "start_master_idx": goal["start_master_idx"],
+                "end_master_idx": goal["end_master_idx"],
                 "snapped_start": projection.snapped_start,
                 "n_frames": len(turns),
                 "n_turns": len(turns),
@@ -237,10 +247,10 @@ def resolve_goals(
 
 def main() -> None:
     args = parse_args()
-    if args.num_workers <= 0:
-        raise SystemExit("--num_workers must be positive")
     output = ensure_dir(args.output_dir)
     (output / "manifest.json").unlink(missing_ok=True)
+    if args.num_workers <= 0:
+        raise SystemExit("--num_workers must be positive")
     art = FilterArtifact(args.filter_dir)
     stride = art.stride_for(args.fps)
     goals, goals_id = resolve_goals(art, args.goals_dir)
@@ -316,9 +326,15 @@ def main() -> None:
     if not records:
         raise ValueError("no Crowd-Cast conversations survived goal projection")
     records.sort(key=lambda record: record["conversation_id"])
+    expected_goal_ids = {
+        goal["goal_id"] for segment_goals in goals.values() for goal in segment_goals
+    }
+    produced_goal_ids = {record["goal_id"] for record in records}
+    if produced_goal_ids != expected_goal_ids or len(records) != len(expected_goal_ids):
+        raise ValueError("Crowd-Cast conversations do not cover every source goal")
 
     write_jsonl(output / "chat.jsonl", records)
-    write_json(
+    write_json_atomic(
         output / "manifest.json",
         {
             "artifact_type": "crowdcast_stage_04_conversations",
@@ -336,10 +352,15 @@ def main() -> None:
             "stride": stride,
             "n_conversations": len(records),
             "n_turns": sum(record["n_turns"] for record in records),
-            "status_counts": dict(statuses),
-            "projection_counts": dict(projection_totals),
+            "status_counts": dict(sorted(statuses.items())),
+            "projection_counts": dict(sorted(projection_totals.items())),
         },
     )
+    try:
+        resolve_chat_artifact(output)
+    except Exception:
+        (output / "manifest.json").unlink(missing_ok=True)
+        raise
 
 
 if __name__ == "__main__":

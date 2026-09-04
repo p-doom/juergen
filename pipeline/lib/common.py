@@ -74,6 +74,12 @@ def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
 
 
+def write_json_atomic(path: Path, value: Any) -> None:
+    temporary = path.with_name(f".{path.name}.tmp")
+    write_json(temporary, value)
+    temporary.replace(path)
+
+
 def resolve_key_name(payload: Any) -> str | None:
     if not isinstance(payload, list) or len(payload) < 2:
         return None
@@ -103,8 +109,24 @@ def resolve_button_name(payload: Any) -> str | None:
 
 def load_keylog_entries(keylog_path: Path) -> list[Any]:
     if not keylog_path.is_file() or keylog_path.stat().st_size == 0:
-        return []
+        raise ValueError(f"keylog is missing or empty: {keylog_path}")
     entries = msgpack.unpackb(keylog_path.read_bytes(), raw=False, strict_map_key=False)
-    if not isinstance(entries, list):
-        raise TypeError(f"keylog must contain a list: {keylog_path}")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError(f"keylog must contain a nonempty event list: {keylog_path}")
+    previous_timestamp = -1
+    for index, entry in enumerate(entries):
+        if (
+            not isinstance(entry, list)
+            or len(entry) != 2
+            or isinstance(entry[0], bool)
+            or not isinstance(entry[0], int)
+            or entry[0] < 0
+            or entry[0] < previous_timestamp
+            or not isinstance(entry[1], list)
+            or len(entry[1]) not in (1, 2)
+            or not isinstance(entry[1][0], str)
+            or not entry[1][0]
+        ):
+            raise ValueError(f"invalid keylog event at {keylog_path}:{index}")
+        previous_timestamp = entry[0]
     return entries

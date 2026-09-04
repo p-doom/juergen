@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -81,12 +82,25 @@ def load_goals(goals_path: Path) -> list[dict[str, Any]]:
 
 def goals_by_segment(rows: Iterable[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     out: dict[str, list[dict[str, Any]]] = {}
+    goal_ids: set[str] = set()
     for row in rows:
+        validate_goal_row(row)
+        goal_id = row["goal_id"]
+        if not isinstance(goal_id, str) or not goal_id or goal_id in goal_ids:
+            raise ValueError(f"duplicate or invalid goal_id: {goal_id!r}")
+        goal_ids.add(goal_id)
         out.setdefault(str(row["segment_id"]), []).append(row)
-    for seg_rows in out.values():
-        seg_rows.sort(
-            key=lambda r: (int(r["start_master_idx"]), int(r["end_master_idx"]))
-        )
+    for segment_id, seg_rows in out.items():
+        if any(row["segment_id"] != segment_id for row in seg_rows):
+            raise ValueError(f"goal segment identity mismatch: {segment_id}")
+        ordering = [
+            (row["start_master_idx"], row["end_master_idx"]) for row in seg_rows
+        ]
+        if ordering != sorted(ordering):
+            raise ValueError(f"goals are not canonically ordered: {segment_id}")
+        for previous, current in pairwise(seg_rows):
+            if current["start_master_idx"] < previous["end_master_idx"]:
+                raise ValueError(f"goals overlap in segment {segment_id}")
     return out
 
 
@@ -140,7 +154,7 @@ def project_goals(
                 f"goal {goal.get('goal_id')!r} belongs to segment {goal['segment_id']!r}, "
                 f"not {view.segment_id!r}"
             )
-        start, end = int(goal["start_master_idx"]), int(goal["end_master_idx"])
+        start, end = goal["start_master_idx"], goal["end_master_idx"]
         members = [f for f in frames if start <= f.master_idx < end]
         if not members:
             stats.n_empty_projection += 1

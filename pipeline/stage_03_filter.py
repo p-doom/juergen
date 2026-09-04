@@ -16,9 +16,16 @@ if str(REPO_ROOT) not in sys.path:
 
 from pipeline.lib import config
 from pipeline.lib.action_format import format_segment
-from pipeline.lib.common import ensure_dir, read_jsonl, write_json, write_jsonl
+from pipeline.lib.common import (
+    ensure_dir,
+    read_jsonl,
+    write_json,
+    write_json_atomic,
+    write_jsonl,
+)
 from pipeline.lib.events import Window, load_events
 from pipeline.lib.manifest import file_sha256_short, make_artifact_id
+from pipeline.lib.master_frames import resolve_master_artifact
 from pipeline.lib.realign import CLOSED_STATUSES
 
 REASON_KEPT = 0
@@ -230,25 +237,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if args.num_workers <= 0:
-        raise SystemExit("--num_workers must be positive")
     output = ensure_dir(args.output_dir)
     (output / "manifest.json").unlink(missing_ok=True)
-    master_manifest_path = args.frames_master_dir / "manifest.json"
-    master = json.loads(master_manifest_path.read_text(encoding="utf-8"))
-    required_master = {
-        "artifact_type": "juergen_annotation_frames_master",
-        "schema_version": 1,
-        "jpeg_quality": 92,
-    }
-    if {key: master.get(key) for key in required_master} != required_master:
-        raise ValueError(f"Crowd-Cast master contract mismatch: {master_manifest_path}")
-    master_index_path = args.frames_master_dir / "segment_index.jsonl"
-    if file_sha256_short(master_index_path, n=64) != master.get("segment_index_sha256"):
-        raise ValueError(
-            f"Crowd-Cast master index digest mismatch: {master_index_path}"
-        )
-    index_rows = read_jsonl(master_index_path)
+    if args.num_workers <= 0:
+        raise SystemExit("--num_workers must be positive")
+    master, index_rows = resolve_master_artifact(args.frames_master_dir)
 
     clips_artifact_manifest = args.clips_manifest.parent / "manifest.json"
     clips_artifact = json.loads(clips_artifact_manifest.read_text(encoding="utf-8"))
@@ -285,18 +278,6 @@ def main() -> None:
         raise ValueError("Crowd-Cast clips contain duplicate segments")
     if set(master_by_segment) != set(manifest_by_segment):
         raise ValueError("Crowd-Cast master and clips segment sets differ")
-    if any(row.get("status") != "ok" for row in index_rows):
-        raise ValueError("Crowd-Cast master contains incomplete segments")
-    for row in index_rows:
-        shard = Path(row["shard_path"])
-        frame_manifest = _master_frame_manifest(row)
-        if file_sha256_short(shard, n=64) != row.get("shard_sha256"):
-            raise ValueError(f"Crowd-Cast master shard digest mismatch: {shard}")
-        if file_sha256_short(frame_manifest, n=64) != row.get("frame_manifest_sha256"):
-            raise ValueError(
-                f"Crowd-Cast frame manifest digest mismatch: {frame_manifest}"
-            )
-
     filter_dir = ensure_dir(output / "filter")
     tasks = [
         {
@@ -332,7 +313,7 @@ def main() -> None:
         **FILTER_PARAMS,
     }
     write_json(output / "filter_summary.json", summary)
-    write_json(
+    write_json_atomic(
         output / "manifest.json",
         {
             "artifact_type": "realigned_filter_mask",

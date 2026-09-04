@@ -22,6 +22,7 @@ from cua_parity_contract import (
     OBSERVATION_CONTRACT,
     OBSERVATION_SIZE,
 )
+from image_domain import encode_jpeg_q92, validate_jpeg_q92
 from pipeline.lib.image_store import make_arrayrecord_image_uri
 
 SCREEN = OBSERVATION_SIZE
@@ -59,15 +60,7 @@ def _transcode(job: tuple[str, bytes]) -> tuple[str, bytes]:
         raise ValueError(
             f"{member} must be {SCREEN[0]}x{SCREEN[1]}, got {rgb.size[0]}x{rgb.size[1]}"
         )
-    encoded = io.BytesIO()
-    rgb.save(
-        encoded,
-        format="JPEG",
-        quality=JPEG_QUALITY,
-        subsampling=2,
-        optimize=False,
-    )
-    return member, encoded.getvalue()
+    return member, encode_jpeg_q92(rgb)
 
 
 def _members(path: Path):
@@ -91,7 +84,6 @@ def _validate_shard(
     expected: dict[str, object],
 ) -> None:
     from array_record.python.array_record_module import ArrayRecordReader
-    from PIL import Image
 
     index_path = physical / INDEX_NAME
     shard_path = physical / SHARD_NAME
@@ -128,13 +120,8 @@ def _validate_shard(
                 raise ValueError(
                     f"JPEG digest mismatch at {shard_path} record {record_index}"
                 )
-            with Image.open(io.BytesIO(jpeg)) as image:
-                image.load()
-                if (
-                    image.format != "JPEG"
-                    or image.mode != "RGB"
-                    or image.size != SCREEN
-                ):
+            with validate_jpeg_q92(jpeg) as image:
+                if image.size != SCREEN:
                     raise ValueError(
                         f"invalid JPEG at {shard_path} record {record_index}"
                     )

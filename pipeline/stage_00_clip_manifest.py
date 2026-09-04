@@ -88,18 +88,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path = args.out.parent / "manifest.json"
+    manifest_path.unlink(missing_ok=True)
     if args.workers <= 0:
         raise SystemExit("--workers must be positive")
     if args.out.name != "clips_manifest.jsonl":
         raise SystemExit("--out must end in clips_manifest.jsonl")
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path = args.out.parent / "manifest.json"
-    manifest_path.unlink(missing_ok=True)
     root = args.dataset_root.resolve()
     videos = sorted(root.glob("uploads/*/*/recordings/*.mp4"))
     print(f"found {len(videos)} mp4 under {root}/uploads", file=sys.stderr)
     if not videos:
         raise SystemExit("no videos found")
+    expected_keylogs: set[Path] = set()
+    for video in videos:
+        match = _NAME_RE.fullmatch(video.name)
+        if match is None:
+            raise ValueError(f"invalid Crowd-Cast video name: {video.name}")
+        expected_keylogs.add(
+            video.parent.parent
+            / "keylogs"
+            / f"input_{match.group('rid')}_seg{match.group('idx')}.msgpack"
+        )
+    observed_keylogs = set(root.glob("uploads/*/*/keylogs/*.msgpack"))
+    if observed_keylogs != expected_keylogs:
+        raise ValueError(
+            "Crowd-Cast keylog inventory does not match the video inventory: "
+            f"missing={sorted(map(str, expected_keylogs - observed_keylogs))}, "
+            f"orphan={sorted(map(str, observed_keylogs - expected_keylogs))}"
+        )
 
     rows: list[dict[str, Any]] = []
     done = 0

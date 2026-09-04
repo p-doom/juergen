@@ -35,6 +35,7 @@ from pipeline.lib.common import read_jsonl
 from pipeline.lib.events import DeadZone, Window
 from pipeline.lib.image_store import make_arrayrecord_image_uri
 from pipeline.lib.manifest import check_artifact_id, file_sha256_short, make_artifact_id
+from pipeline.lib.master_frames import resolve_master_artifact
 
 _FPS_EPS = 1e-9
 
@@ -188,6 +189,8 @@ class FilterArtifact:
         self.master_fps = float(self.manifest["master_fps"])
         self.master_store_id = str(self.manifest["master_store_id"])
         self.master_dir = check_artifact_id(self.master_store_id, what="master store")
+        self._master_manifest, master_rows = resolve_master_artifact(self.master_dir)
+        self._master_index = {str(item["segment_id"]): item for item in master_rows}
         self.source_clips_dir = check_artifact_id(
             str(self.manifest["source_clips_id"]), what="realigned clips"
         )
@@ -218,6 +221,7 @@ class FilterArtifact:
         return self.dir / "filter" / f"{segment_id}.json"
 
     def load_segment(self, segment_id: str) -> dict[str, Any]:
+        master_row = self._master_index[segment_id]
         row = self._index[segment_id]
         path = self.segment_path(segment_id)
         if Path(row["filter_path"]).resolve() != path.resolve():
@@ -225,6 +229,18 @@ class FilterArtifact:
         if file_sha256_short(path, n=64) != row.get("filter_sha256"):
             raise ValueError(f"filter digest mismatch: {path}")
         segment = json.loads(path.read_text())
+        if (
+            segment["segment_id"] != segment_id
+            or segment["recording_id"] != master_row["recording_id"]
+            or segment["segment_idx"] != master_row["segment_idx"]
+            or segment["master_fps"] != master_row["master_fps"]
+            or segment["n_master_records"] != master_row["num_records"]
+            or Path(segment["shard_path"]).resolve()
+            != Path(master_row["shard_path"]).resolve()
+            or segment["shard_sha256"] != master_row["shard_sha256"]
+            or segment["frame_manifest_sha256"] != master_row["frame_manifest_sha256"]
+        ):
+            raise ValueError(f"filter/master contract mismatch for {segment_id}")
         keylog = Path(segment["keylog_path"])
         if file_sha256_short(keylog, n=64) != segment.get("keylog_sha256"):
             raise ValueError(f"filter keylog digest mismatch: {keylog}")

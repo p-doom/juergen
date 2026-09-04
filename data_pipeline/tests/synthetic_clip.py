@@ -62,6 +62,7 @@ from PIL import Image
 
 from pipeline.lib import config
 from pipeline.lib.manifest import file_sha256_short
+from pipeline.lib.source_clips import resolve_source_clips
 from pipeline.stage_01_master_frames import (
     aggregate_summary,
     pack_master_arrayrecord,
@@ -241,6 +242,29 @@ def build_master_store(
         "frame_manifest_sha256": packed["frame_manifest_sha256"],
         "total_jpeg_bytes": packed["total_jpeg_bytes"],
     }
+    (segment_frame_dir / "segment_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "inputs": {
+                    "jpeg_quality": config.DEFAULT_JPEG_QUALITY,
+                    "master_fps": MASTER_FPS,
+                    "target_height": FRAME_H,
+                    "video_sha256": clip_row["video_sha256"],
+                },
+                "outputs": {
+                    key: packed[key]
+                    for key in (
+                        "frame_manifest_sha256",
+                        "num_records",
+                        "shard_sha256",
+                        "total_jpeg_bytes",
+                    )
+                },
+            }
+        )
+        + "\n"
+    )
     write_index_jsonl(out_dir / "segment_index.jsonl", [index_row])
     write_summary_and_manifest(
         out_dir,
@@ -250,7 +274,7 @@ def build_master_store(
             target_height=FRAME_H,
             jpeg_quality=config.DEFAULT_JPEG_QUALITY,
             ffmpeg_bin=None,
-            source_clips_manifest=str(source_clips_manifest),
+            source=resolve_source_clips(source_clips_manifest)[1],
         ),
     )
     return out_dir

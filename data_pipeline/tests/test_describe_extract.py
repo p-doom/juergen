@@ -22,16 +22,9 @@ def _goal() -> dict:
     }
 
 
-def test_describe_extract_goal_contract_is_strict_and_clamped():
-    assert clean_goals({"goals": [_goal()]}, 3, 6, 5) == [
-        {
-            "instruction": "send the report",
-            "anchor": "Send",
-            "grounding": "The user submits the report.",
-            "start_frame": 3,
-            "end_frame": 5,
-        }
-    ]
+def test_describe_extract_goal_contract_rejects_out_of_window_bounds():
+    with pytest.raises(ValueError, match="outside the owned frame range"):
+        clean_goals({"goals": [_goal()]}, 3, 6, 5)
 
 
 @pytest.mark.parametrize(
@@ -49,6 +42,13 @@ def test_describe_extract_rejects_malformed_goal_fields(change, message):
     goal = _goal() | change
     with pytest.raises(ValueError, match=message):
         clean_goals({"goals": [goal]}, 0, 10, 10)
+
+
+def test_describe_extract_rejects_overlapping_goals():
+    first = _goal() | {"start_frame": 1, "end_frame": 3}
+    second = _goal() | {"start_frame": 3, "end_frame": 5}
+    with pytest.raises(ValueError, match="nonoverlapping"):
+        clean_goals({"goals": [first, second]}, 0, 10, 10)
 
 
 def test_prompt_render_requires_every_field(tmp_path: Path):

@@ -75,8 +75,6 @@ extract: |-
   - INCLUDE THE FOCUSING CLICK — BUT ONLY THE IMMEDIATELY-PRECEDING ONE. If, in the same frame as the first keystroke or the ONE frame just before it, the user clicks into / focuses the input box, terminal, chat field, or address bar they then type into, start_frame is that click — it is the first act toward the goal. Do NOT reach further back than that single focusing click: not across earlier scrolling, reading, unrelated navigation, or the tail of a previous goal. One focusing click + the typing it leads into = the goal's opening.
   - end_frame = the last frame where the goal's work is visible (its final action or visible end-state). Keep the END tight: exclude trailing unrelated frames. Goals within a clip must NOT overlap or nest: if the user begins the next distinct goal at frame K, this goal's end_frame is at most K (prefer K-1) — never let a long "ask / wait" goal envelop concrete actions that are themselves separate goals. If you cannot localize a goal to a real span (it would collapse start_frame == end_frame onto a single frame while other distinct actions surround it), re-examine: it is usually either part of a neighboring goal or mis-bounded.
   - READ THE FINAL FRAMES — do not under-set the end. The last frames are easy to under-attend, leaving end_frame short of where the work actually finishes. When a goal's action runs all the way to the last frame shown, set end_frame to that final frame; examine the closing frames as carefully as the opening ones and extend end_frame to the true end-state.
-  - If a goal's frames are interleaved with another's, use the first and last frames that belong to THIS goal.
-
   OBSERVATION ACCOUNT:
   ${description}
 
