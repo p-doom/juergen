@@ -25,6 +25,9 @@ def _goal(start: int, end: int, *, goal_id: str = "g0", segment_id: str = "s0", 
         "start_master_idx": start,
         "end_master_idx": end,
         "instruction": "do the thing",
+        "instruction_variants": ["do it", "please do the thing"],
+        "anchor": "do",
+        "grounding": "The user initiated the action.",
         "method": "describe_extract",
         "model": "test-model",
         "prompt_pack_sha": "deadbeef",
@@ -72,13 +75,6 @@ class ProjectGoalsTest(unittest.TestCase):
         self.assertEqual([f.master_idx for f in p.frames], [30, 45, 75, 90, 105])
         self.assertFalse(p.snapped_start)
 
-    def test_snap_start_inside_excludes_prior_frame(self) -> None:
-        view = _view([[0, 60], [75, 150]], [{"start": 60, "end": 75, "reason": "black"}])
-        projections, _ = project_goals([_goal(60, 105)], view, snap_start="inside")
-        [p] = projections
-        self.assertEqual([f.master_idx for f in p.frames], [75, 90])
-        self.assertFalse(p.snapped_start)
-
     def test_snap_start_noop_when_frame_at_goal_start(self) -> None:
         view = _view([[0, 150]])
         projections, stats = project_goals([_goal(45, 90)], view)
@@ -95,20 +91,10 @@ class ProjectGoalsTest(unittest.TestCase):
         self.assertEqual(stats.n_empty_projection, 1)
         self.assertEqual(stats.rejected, [{"goal_id": "g0", "reason": "empty_projection"}])
 
-    def test_too_few_frames_counted(self) -> None:
-        view = _view([[0, 150]])
-        projections, stats = project_goals([_goal(45, 60)], view, min_frames=3, snap_start="inside")
-        self.assertEqual(projections, [])
-        self.assertEqual(stats.n_too_few_frames, 1)
-
     def test_wrong_segment_refused(self) -> None:
         view = _view([[0, 150]])
         with self.assertRaises(ValueError):
             project_goals([_goal(0, 30, segment_id="OTHER")], view)
-
-    def test_bad_snap_mode_refused(self) -> None:
-        with self.assertRaises(ValueError):
-            project_goals([], _view([[0, 150]]), snap_start="nearest")
 
 
 class ViewSpanToMasterTest(unittest.TestCase):
@@ -142,7 +128,7 @@ class ViewSpanToMasterTest(unittest.TestCase):
 
 class SchemaTest(unittest.TestCase):
     def test_valid_row_passes(self) -> None:
-        validate_goal_row(_goal(0, 30, instruction_variants=["a", "b"]))
+        validate_goal_row(_goal(0, 30))
 
     def test_violations_raise(self) -> None:
         bad_rows = [
@@ -152,9 +138,12 @@ class SchemaTest(unittest.TestCase):
             _goal(0, 30) | {"start_master_idx": 0.5},  # float coordinate
             _goal(0, 30) | {"instruction": "  "},  # blank instruction
             _goal(0, 30) | {"instruction_variants": "not-a-list"},
+            _goal(0, 30) | {"instruction_variants": ["do the thing", "other"]},
+            _goal(0, 30) | {"method": "other_method"},
+            _goal(0, 30) | {"plan": "unsupported"},
         ]
         for row in bad_rows:
-            with self.assertRaises(ValueError, msg=row):
+            with self.assertRaises((TypeError, ValueError), msg=row):
                 validate_goal_row(row)
 
     def test_goals_by_segment_sorts(self) -> None:

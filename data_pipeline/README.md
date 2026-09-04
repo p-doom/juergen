@@ -1,83 +1,26 @@
-# crowdcast-data-pipeline
+# Juergen data pipelines
 
-pmanager/labctl launch configs and tests for the crowd-cast SFT data pipeline.
+This project owns exactly two SFT streams:
 
-The stages themselves live at the repo root, in [`pipeline/`](../pipeline).
-This directory holds only the two chain configs that schedule them and the test
-suite that covers them; it is a separate uv project because those tests need
-`opencv-python-headless`, which the training venv does not carry.
+- `configs/chain_crowdcast.py`: canonical Crowd-Cast `describe_extract` goals
+  and `deltatype_v2` actions.
+- `configs/chain_cua_gym_parity.py`: CUA-Gym action-format parity with
+  `ordered_events_v3_relative_1000_grid_v1` actions.
 
-Consumed by [`pmanager`][pmanager]/[`labctl`][labctl] recipes that inject params
-as `--flag=value` args and poll `<output_dir>/manifest.json` for stage
-completion.
+Both chains finish through the shared Stage05 message-length and Stage06
+training-record builders in an explicit Omegalax checkout. Set
+`JUERGEN_REPO`, `LABCTL_DATASETS_ROOT`, and `OMEGALAX_REPO` to existing
+directories before loading either config.
 
-[pmanager]: https://github.com/anthropics/pmanager
-[labctl]: https://github.com/anthropics/labctl
-
-## Layout
-
-### Chains (`configs/`)
-
-| Config | Stages |
-| --- | --- |
-| `chain_annotate.py` | `pipeline/stage_03_filter.py` → `pipeline/annotation/stage_annotate.py` (goal annotation at K fps) |
-| `chain_train.py` | `pipeline/stage_03_filter.py` → `pipeline/stage_04_build_conversations.py` → `pipeline/stage_05_measure_lengths.py` → `pipeline/stage_06_training_records.py` |
-
-Each stage is nested as its parent's `on_complete` child, so launching the head
-runs the whole chain. `chain_train` imports `stage_03_filter` from
-`chain_annotate`, which makes that one function the single place a dataset
-family is named (`MASTER_DIR` / `CLIPS_MANIFEST`).
-
-Both configs derive `PROJECT_REPO` from their own location (override with
-`JUERGEN_REPO`) and assert a root `pipeline/` directory exists, so a checkout
-without one fails at config-build time rather than after the job is scheduled.
-
-### Tests (`tests/`)
-
-Cover `pipeline.*` — the action formatter, filter, views, dead zones, goal
-projection, annotation-method registry, and the stage-04 conversation builder.
-
-> Dataset browsing (contributor index, day-grouped segments, timeline heatmap,
-> frame-by-frame viewer) lives in the labctl UI's artifact panel — open any
-> `dataset` artifact and use the Browse section.
-
-## Setup
+The Crowd-Cast chain begins at Stage03 and requires two immutable upstream
+artifacts: `CROWDCAST_MASTER_DIR` must be a 720p/q92 Stage01 master image store,
+and `CROWDCAST_CLIPS_MANIFEST` must be the canonical file from a Stage02
+realigned artifact. The parity chain begins at its raw screenshot tar source.
 
 ```bash
-uv sync  # creates .venv with msgpack, Pillow, opencv, array-record, ...
+pmanager launch data_pipeline/configs/chain_crowdcast.py
+pmanager launch data_pipeline/configs/chain_cua_gym_parity.py
+uv run --project data_pipeline --locked pytest -q data_pipeline/tests
 ```
 
-`pipeline/stage_05_measure_lengths.py` and `stage_06_training_records.py`
-subprocess-wrap omegalax scripts, which run in omegalax's own venv via
-`uv run --project <omegalax_repo>`.
-
-## Running
-
-```bash
-pmanager launch <checkout>/data_pipeline/configs/chain_annotate.py
-pmanager launch <checkout>/data_pipeline/configs/chain_train.py
-```
-
-Both are STUBs: the dataset paths at the top of each file name one specific
-generation and are asserted to exist at `get_config()`. Point them at your own
-family before launching.
-
-## Output contract
-
-Every stage entrypoint writes `<output_dir>/manifest.json` before exiting (per
-`pipeline_task()` in `pmanager.configs.schema`). pmanager polls for this file to
-mark the dataset complete and register it. The schema captures the stage name,
-every flag the entrypoint received, input fingerprints (paths + key file
-hashes), and output statistics.
-
-## Development
-
-```bash
-uvx ruff check .       # lint
-uvx ruff format .      # format
-uv run pytest tests    # 89 tests
-```
-
-`pyproject.toml` carries the strict rule set (pycodestyle, pyflakes, isort,
-bugbear, pyupgrade, simplify, ruff, pylint, tidy-imports, use-pathlib, return,
-comprehensions, pep8-naming).
+Each stage publishes `manifest.json` only after its outputs are complete.

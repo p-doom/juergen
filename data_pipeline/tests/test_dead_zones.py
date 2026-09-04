@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import unittest
 
-from pipeline.lib.action_format import get_formatter
+from pipeline.lib.action_format import format_segment
 from pipeline.lib.events import (
     DeadZone,
     RawEvent,
@@ -40,9 +40,7 @@ def _events(*specs: tuple) -> list[RawEvent]:
 
 
 def _format(events, windows=WINDOWS_A, zones=ZONES_A):
-    result = get_formatter("canonical").format_segment(
-        events, windows, zones, master_fps=M
-    )
+    result = format_segment(events, windows, zones, master_fps=M)
     return result.labels, result.counters
 
 
@@ -71,9 +69,7 @@ def _assert_balanced(test: unittest.TestCase, labels: list[str]) -> None:
 
 class StraddleClampTest(unittest.TestCase):
     def test_release_in_zone_clamps_to_zone_start(self) -> None:
-        labels, counters = _format(
-            _events((6.0, "press", "KeyA"), (12.0, "release", "KeyA"))
-        )
+        labels, counters = _format(_events((6.0, "press", "KeyA"), (12.0, "release", "KeyA")))
         self.assertEqual(labels, ["NO_OP", "0 0 0 ; +KeyA -KeyA", "NO_OP"])
         self.assertEqual(counters.n_releases_clamped, 1)
         self.assertEqual(counters.n_presses_clamped, 0)
@@ -105,16 +101,12 @@ class StraddleClampTest(unittest.TestCase):
                 (12.0, "release", "AltLeft"),
             )
         )
-        self.assertEqual(
-            labels, ["NO_OP", "0 0 0 ; +AltLeft +Tab -Tab -AltLeft", "NO_OP"]
-        )
+        self.assertEqual(labels, ["NO_OP", "0 0 0 ; +AltLeft +Tab -Tab -AltLeft", "NO_OP"])
         self.assertEqual(counters.n_releases_clamped, 2)
         _assert_balanced(self, labels)
 
     def test_pair_fully_inside_zone_is_dropped(self) -> None:
-        labels, counters = _format(
-            _events((10.5, "press", "KeyD"), (11.5, "release", "KeyD"))
-        )
+        labels, counters = _format(_events((10.5, "press", "KeyD"), (11.5, "release", "KeyD")))
         self.assertEqual(labels, ["NO_OP", "NO_OP", "NO_OP"])
         self.assertEqual(counters.n_pairs_dropped_dead_zone, 1)
         self.assertEqual(counters.n_presses_clamped, 0)
@@ -216,9 +208,7 @@ class StateLayerTest(unittest.TestCase):
             (12.5, "release", "KeyA"),  # straddle: clamped
             (16.0, "scroll", -3.0),
         )
-        labeled, counters = apply_label_policy(
-            events, WINDOWS_A, ZONES_A, master_fps=M
-        )
+        labeled, counters = apply_label_policy(events, WINDOWS_A, ZONES_A, master_fps=M)
         # State layer: every input event comes back, in order, annotated.
         self.assertEqual(len(labeled), len(events))
         for le, e in zip(labeled, events, strict=True):
@@ -239,9 +229,7 @@ class StateLayerTest(unittest.TestCase):
         # An idle-thinned gap between selected frames stays inside the previous
         # frame's window: events there are owned, never discarded.
         windows = [Window(0, 0, 40), Window(40, 40, 50)]  # frames 1..39 thinned
-        labels, counters = _format(
-            _events((25.0, "move", 7.0, 0.0)), windows=windows, zones=[]
-        )
+        labels, counters = _format(_events((25.0, "move", 7.0, 0.0)), windows=windows, zones=[])
         self.assertEqual(labels, ["7 0 0", "NO_OP"])
         self.assertEqual(counters.n_discarded_black, 0)
         self.assertEqual(counters.n_discarded_no_coverage, 0)

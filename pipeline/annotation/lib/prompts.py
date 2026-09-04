@@ -7,9 +7,8 @@ pack's SHA (over the raw yaml bytes) is stamped on every goal row
 the yaml into the output dir — so an artifact is always traceable to the exact
 prompts that produced it.
 
-``${name}`` placeholders are filled with string.Template.safe_substitute (the
-literal ``{ }`` of JSON examples pass through untouched; a missing field stays
-``${name}`` rather than raising). Callers pre-format numbers/repr.
+``${name}`` placeholders are filled with ``string.Template.substitute`` so a
+missing render field fails before a labeler call.
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ class PromptPack:
         self.sha = hashlib.sha256(raw).hexdigest()[:16]
         data = yaml.safe_load(raw)
         if not isinstance(data, dict):
-            raise ValueError(f"{self.path} must be a mapping of prompt-name -> text")
+            raise TypeError(f"{self.path} must be a mapping of prompt-name -> text")
         self._prompts: dict[str, str] = data
 
     def get(self, key: str) -> str:
@@ -38,7 +37,7 @@ class PromptPack:
 
     def render(self, key: str, **fields: Any) -> str:
         """Prompt ``key`` with ${...} placeholders substituted."""
-        return Template(self._prompts[key]).safe_substitute(**fields)
+        return Template(self._prompts[key]).substitute(**fields)
 
     def snapshot_to(self, dest_dir: Path) -> Path:
         """Copy the yaml into the artifact (audit trail)."""

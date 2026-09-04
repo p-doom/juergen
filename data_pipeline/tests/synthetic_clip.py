@@ -36,7 +36,7 @@ carries one instance of every disposition the dead-zone label policy can reach:
   * a mouse move inside the black span, and one past the end of video
     coverage, both of which are discarded from labels;
   * a balanced ``ShiftLeft``-enclosed typing run in W6 (``Hi``), which
-    ``ordered_events_v3`` collapses into one ``type()``.
+    the canonical formatter emits as key transitions.
 
 The master frame store is packed from the SAME arrays the mp4 is written from,
 through stage 01's own ``pack_master_arrayrecord``, rather than by decoding the
@@ -88,43 +88,51 @@ BLACK_SPAN = (16, 20)
 #: The windows a 1 fps view has over the ACTIVE half, given the masked slot at 16.
 #: Every later window is NO_OP.
 EVENT_WINDOWS = [
-    (0, 4), (4, 8), (8, 12), (12, 20), (20, 24), (24, 28), (28, 32), (32, 36), (36, 40)
+    (0, 4),
+    (4, 8),
+    (8, 12),
+    (12, 20),
+    (20, 24),
+    (24, 28),
+    (28, 32),
+    (32, 36),
+    (36, 40),
 ]
 
 #: (seconds on the recorder clock, event type, payload). Times are chosen so
 #: ``int(t * MASTER_FPS)`` is the intended tick with no float ambiguity.
 EVENTS: list[tuple[float, str, Any]] = [
-    (0.10, "MouseMove", [5.0, 0.0]),            # tick 0  -> W0
-    (0.50, "MouseMove", [4.0, 3.0]),            # tick 2  -> W0
-    (1.10, "MousePress", ["Left"]),             # tick 4  -> W1
-    (1.40, "MouseRelease", ["Left"]),           # tick 5  -> W1
-    (2.10, "KeyPress", [0, "KeyA"]),            # tick 8  -> W2
-    (2.50, "KeyPress", [0, "KeyA"]),            # tick 10 -> autorepeat, deduped
-    (2.90, "MouseMove", [2.0, -1.0]),           # tick 11 -> W2
-    (3.20, "KeyRelease", [0, "KeyA"]),          # tick 12 -> W3 (spans W2/W3)
-    (3.60, "KeyPress", [0, "KeyR"]),            # tick 14 -> W3
-    (4.20, "MouseMove", [7.0, 7.0]),            # tick 16 -> black, discarded
-    (4.30, "KeyPress", [0, "KeyM"]),            # tick 17 -> black
-    (4.40, "KeyRelease", [0, "KeyR"]),          # tick 17 -> black, clamped back
-    (4.50, "KeyPress", [0, "KeyB"]),            # tick 18 -> black, clamped forward
-    (4.60, "KeyPress", [0, "KeyQ"]),            # tick 18 -> black, never released
-    (4.70, "KeyRelease", [0, "KeyM"]),          # tick 18 -> black, pair dropped
-    (5.30, "KeyRelease", [0, "KeyB"]),          # tick 21 -> W4
-    (5.60, "MouseMove", [-3.0, 2.0]),           # tick 22 -> W4
-    (6.10, "KeyRelease", [0, "KeyZ"]),          # tick 24 -> dangling release
-    (6.50, "MouseScroll", [0.0, -3.0]),         # tick 26 -> W5
-    (7.10, "KeyPress", [0, "ShiftLeft"]),       # tick 28 -> W6, typing run
-    (7.15, "KeyPress", [0, "KeyH"]),            # tick 28
-    (7.20, "KeyRelease", [0, "KeyH"]),          # tick 28
-    (7.25, "KeyRelease", [0, "ShiftLeft"]),     # tick 29
-    (7.30, "KeyPress", [0, "KeyI"]),            # tick 29
-    (7.35, "KeyRelease", [0, "KeyI"]),          # tick 29
-    (8.10, "MouseMove", [1.0, 1.0]),            # tick 32 -> W7
-    (9.10, "KeyPress", [0, "KeyC"]),            # tick 36 -> W8, held at end
-    (20.50, "MouseMove", [9.0, 9.0]),           # tick 82 -> past coverage
+    (0.10, "MouseMove", [5.0, 0.0]),  # tick 0  -> W0
+    (0.50, "MouseMove", [4.0, 3.0]),  # tick 2  -> W0
+    (1.10, "MousePress", ["Left"]),  # tick 4  -> W1
+    (1.40, "MouseRelease", ["Left"]),  # tick 5  -> W1
+    (2.10, "KeyPress", [0, "KeyA"]),  # tick 8  -> W2
+    (2.50, "KeyPress", [0, "KeyA"]),  # tick 10 -> autorepeat, deduped
+    (2.90, "MouseMove", [2.0, -1.0]),  # tick 11 -> W2
+    (3.20, "KeyRelease", [0, "KeyA"]),  # tick 12 -> W3 (spans W2/W3)
+    (3.60, "KeyPress", [0, "KeyR"]),  # tick 14 -> W3
+    (4.20, "MouseMove", [7.0, 7.0]),  # tick 16 -> black, discarded
+    (4.30, "KeyPress", [0, "KeyM"]),  # tick 17 -> black
+    (4.40, "KeyRelease", [0, "KeyR"]),  # tick 17 -> black, clamped back
+    (4.50, "KeyPress", [0, "KeyB"]),  # tick 18 -> black, clamped forward
+    (4.60, "KeyPress", [0, "KeyQ"]),  # tick 18 -> black, never released
+    (4.70, "KeyRelease", [0, "KeyM"]),  # tick 18 -> black, pair dropped
+    (5.30, "KeyRelease", [0, "KeyB"]),  # tick 21 -> W4
+    (5.60, "MouseMove", [-3.0, 2.0]),  # tick 22 -> W4
+    (6.10, "KeyRelease", [0, "KeyZ"]),  # tick 24 -> dangling release
+    (6.50, "MouseScroll", [0.0, -3.0]),  # tick 26 -> W5
+    (7.10, "KeyPress", [0, "ShiftLeft"]),  # tick 28 -> W6, typing run
+    (7.15, "KeyPress", [0, "KeyH"]),  # tick 28
+    (7.20, "KeyRelease", [0, "KeyH"]),  # tick 28
+    (7.25, "KeyRelease", [0, "ShiftLeft"]),  # tick 29
+    (7.30, "KeyPress", [0, "KeyI"]),  # tick 29
+    (7.35, "KeyRelease", [0, "KeyI"]),  # tick 29
+    (8.10, "MouseMove", [1.0, 1.0]),  # tick 32 -> W7
+    (9.10, "KeyPress", [0, "KeyC"]),  # tick 36 -> W8, held at end
+    (20.50, "MouseMove", [9.0, 9.0]),  # tick 82 -> past coverage
 ]
 
-#: What ``ordered_events_v3`` renders the W6 typing run as.
+#: Text typed during W6.
 TYPED_TEXT = "Hi"
 
 
@@ -185,9 +193,7 @@ def build_uploads_tree(root: Path) -> dict[str, Any]:
     }
 
 
-def build_master_store(
-    out_dir: Path, clip_row: dict[str, Any], source: list[np.ndarray]
-) -> Path:
+def build_master_store(out_dir: Path, clip_row: dict[str, Any], source: list[np.ndarray]) -> Path:
     """Pack a stage-01 frames-master artifact from the clip's source frames.
 
     Stage 01's own packer, index writer and summary writer; only the ffmpeg
@@ -241,8 +247,9 @@ def build_master_store(
     return out_dir
 
 
-def write_goals(goals_dir: Path, rows: list[dict[str, Any]], *, master_store_id: str,
-                filter_id: str) -> Path:
+def write_goals(
+    goals_dir: Path, rows: list[dict[str, Any]], *, master_store_id: str, filter_id: str
+) -> Path:
     """A minimal stage-03b goals artifact: goals.jsonl + the join manifest."""
     goals_dir.mkdir(parents=True, exist_ok=True)
     with (goals_dir / "goals.jsonl").open("w") as f:
@@ -251,8 +258,11 @@ def write_goals(goals_dir: Path, rows: list[dict[str, Any]], *, master_store_id:
     (goals_dir / "manifest.json").write_text(
         json.dumps(
             {
-                "artifact_type": "juergen_annotation_goals",
+                "artifact_type": "crowdcast_describe_extract_goals",
                 "schema_version": 1,
+                "goals": "goals.jsonl",
+                "method": "describe_extract",
+                "input_kind": "frames",
                 "master_store_id": master_store_id,
                 "filter_id": filter_id,
             },
@@ -272,8 +282,11 @@ def goal_row(goal_id: str, start: int, end: int, instruction: str, **extra: Any)
         "start_master_idx": start,
         "end_master_idx": end,
         "instruction": instruction,
-        "method": "synthetic",
-        "model": "none",
+        "instruction_variants": [f"please {instruction}", f"could you {instruction}"],
+        "anchor": instruction,
+        "grounding": "Synthetic user action.",
+        "method": "describe_extract",
+        "model": "test-model",
         "prompt_pack_sha": "0" * 16,
         **extra,
     }

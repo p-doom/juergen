@@ -55,53 +55,6 @@ class StrideTest(unittest.TestCase):
             resolve_stride(15.0, 0.0)
 
 
-class NearestModeTest(unittest.TestCase):
-    def test_nearest_allows_non_divisors(self) -> None:
-        self.assertAlmostEqual(resolve_stride(15.0, 4.0, "nearest"), 3.75)
-        self.assertAlmostEqual(resolve_stride(15.0, 2.0, "nearest"), 7.5)
-        with self.assertRaises(ValueError):  # still refuses upsampling
-            resolve_stride(15.0, 20.0, "nearest")
-        with self.assertRaises(ValueError):
-            resolve_stride(15.0, 4.0, "middle")
-
-    def test_nearest_picks_alfreds_ticks(self) -> None:
-        # 4 fps on a 15 fps master: ideal ticks 0,3.75,7.5,11.25,15,... ->
-        # nearest 0,4,8,11,15,... — exactly the old sampler's picks, uneven
-        # spacing (4,4,3,4) but exactly 4 frames per second.
-        view = build_segment_view(_seg(kept_ranges=[[0, 150]]), fps=4.0, fps_mode="nearest")
-        self.assertEqual([f.master_idx for f in view.frames][:8], [0, 4, 8, 11, 15, 19, 23, 26])
-        self.assertEqual(view.n_slots, 40)  # 10 s x 4 fps, none masked
-        self.assertEqual(view.fps_mode, "nearest")
-
-    def test_nearest_windows_start_at_actual_ticks(self) -> None:
-        # Causality: each label window starts AT the selected tick (no smear),
-        # tiling contiguously to the next selected tick.
-        view = build_segment_view(_seg(kept_ranges=[[0, 150]]), fps=4.0, fps_mode="nearest")
-        for f, g in zip(view.frames, view.frames[1:], strict=False):
-            self.assertEqual(f.win_start, f.master_idx)
-            self.assertEqual(f.win_end, g.master_idx)
-        self.assertEqual(view.frames[-1].win_end, 150)
-
-    def test_nearest_masked_slot_still_skipped(self) -> None:
-        # Slot 3's nearest tick (11) is masked -> no frame, no substitution.
-        view = build_segment_view(
-            _seg(kept_ranges=[[0, 11], [12, 150]],
-                 dropped=[{"start": 11, "end": 12, "reason": "black"}]),
-            fps=4.0, fps_mode="nearest",
-        )
-        ticks = [f.master_idx for f in view.frames]
-        self.assertNotIn(11, ticks)
-        self.assertNotIn(12, ticks)  # the neighbor is NOT substituted
-        self.assertEqual(view.n_masked_slots, 1)
-
-    def test_exact_mode_unchanged_by_new_loop(self) -> None:
-        view = build_segment_view(_seg(kept_ranges=[[0, 150]]), fps=1.0)
-        self.assertEqual([f.master_idx for f in view.frames],
-                         [0, 15, 30, 45, 60, 75, 90, 105, 120, 135])
-        self.assertEqual(view.n_slots, 10)
-        self.assertEqual(view.stride, 15)
-
-
 class SelectorTest(unittest.TestCase):
     def test_masked_slot_is_skipped_never_substituted(self) -> None:
         # Black span [60,75) masks slot 4 (tick 60): the view has NO frame for

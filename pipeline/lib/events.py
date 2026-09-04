@@ -70,7 +70,7 @@ class RawEvent:
 
     ``kind`` is one of ``move`` / ``scroll`` / ``press`` / ``release``;
     press/release carry the resolved key/button ``name`` (Key* and Mouse*
-    events share one namespace, exactly as ``common.aggregate_actions``).
+    events share one namespace).
     Scroll events carry both raw axes in ``dx``/``dy`` plus the legacy
     collapsed scalar in ``scroll`` (y, falling back to x — what the canonical
     format consumes)."""
@@ -207,19 +207,30 @@ def load_events(keylog_path: Path) -> tuple[list[RawEvent], EventStats]:
             if not (isinstance(payload, list) and len(payload) >= 2):
                 stats.n_dropped_bad_payload += 1
                 continue
-            events.append(RawEvent(seq, t_s, "move", dx=float(payload[0]), dy=float(payload[1])))
+            events.append(
+                RawEvent(seq, t_s, "move", dx=float(payload[0]), dy=float(payload[1]))
+            )
         elif event_type == "MouseScroll":
             if not (isinstance(payload, list) and len(payload) >= 2):
                 stats.n_dropped_bad_payload += 1
                 continue
             value = payload[1] if payload[1] != 0 else payload[0]
-            events.append(RawEvent(
-                seq, t_s, "scroll",
-                dx=float(payload[0]), dy=float(payload[1]), scroll=float(value),
-            ))
+            events.append(
+                RawEvent(
+                    seq,
+                    t_s,
+                    "scroll",
+                    dx=float(payload[0]),
+                    dy=float(payload[1]),
+                    scroll=float(value),
+                )
+            )
         elif event_type in ("KeyPress", "MousePress", "KeyRelease", "MouseRelease"):
-            name = (resolve_key_name(payload) if event_type.startswith("Key")
-                    else resolve_button_name(payload))
+            name = (
+                resolve_key_name(payload)
+                if event_type.startswith("Key")
+                else resolve_button_name(payload)
+            )
             if name is None:
                 stats.n_dropped_unresolved_name += 1
                 continue
@@ -314,7 +325,7 @@ def apply_label_policy(
     Returns one LabeledEvent per input event (same order) + counters. Pair
     matching runs a segment-global held-set over the full stream first (a press
     of an already-held name is redundant, a release of an un-held name is
-    dangling — identical dedup to ``common.aggregate_actions``), then each
+    dangling), then each
     canonical pair is completed/clamped/dropped by where its endpoints fall."""
     counters = PolicyCounters()
     if not windows:
@@ -379,7 +390,9 @@ def apply_label_policy(
             # dead region (label_t at that tick's start; seq breaks the tie so
             # the clamped press sorts before the tick's native events).
             vt = loc.first_visible_at_or_after(p_zone.end)
-            r_tick = _tick(release.event.t_s, master_fps) if release is not None else None
+            r_tick = (
+                _tick(release.event.t_s, master_fps) if release is not None else None
+            )
             if release is None:
                 # Never released: a clamped press would emit a lone +KEY with
                 # no matching release, so discard it.

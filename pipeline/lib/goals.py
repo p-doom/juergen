@@ -27,9 +27,6 @@ from typing import Any
 from pipeline.lib.common import read_jsonl
 from pipeline.lib.views import SegmentView, ViewFrame
 
-SNAP_START_MODES = ("before", "inside")
-
-# Required keys of a goals.jsonl row (the uniform contract across methods).
 REQUIRED_GOAL_KEYS = (
     "goal_id",
     "segment_id",
@@ -37,21 +34,26 @@ REQUIRED_GOAL_KEYS = (
     "start_master_idx",
     "end_master_idx",
     "instruction",
+    "instruction_variants",
+    "anchor",
+    "grounding",
     "method",
     "model",
     "prompt_pack_sha",
 )
-# Optional: instruction_variants, anchor, grounding, plan, plan_flags.
 
 
 def validate_goal_row(row: dict[str, Any]) -> None:
-    """Raise ValueError if ``row`` violates the goals contract."""
+    """Validate one describe/extract goal."""
     missing = [k for k in REQUIRED_GOAL_KEYS if k not in row]
     if missing:
         raise ValueError(f"goal row missing keys {missing}: {row.get('goal_id')!r}")
+    extra = set(row) - set(REQUIRED_GOAL_KEYS)
+    if extra:
+        raise ValueError(f"goal row has unsupported keys {sorted(extra)}")
     start, end = row["start_master_idx"], row["end_master_idx"]
     if not (isinstance(start, int) and isinstance(end, int)):
-        raise ValueError(
+        raise TypeError(
             f"goal {row['goal_id']!r}: master indices must be integers "
             f"(got {start!r}, {end!r}) — view-local or float coordinates are a bug"
         )
@@ -59,11 +61,29 @@ def validate_goal_row(row: dict[str, Any]) -> None:
         raise ValueError(f"goal {row['goal_id']!r}: bad interval [{start}, {end})")
     if not (isinstance(row["instruction"], str) and row["instruction"].strip()):
         raise ValueError(f"goal {row['goal_id']!r}: empty instruction")
-    variants = row.get("instruction_variants")
-    if variants is not None and not (
-        isinstance(variants, list) and all(isinstance(v, str) for v in variants)
+    if row["method"] != "describe_extract":
+        raise ValueError(
+            f"goal {row['goal_id']!r}: unsupported method {row['method']!r}"
+        )
+    variants = row["instruction_variants"]
+    if not (
+        isinstance(variants, list)
+        and len(variants) == 2
+        and all(isinstance(variant, str) and variant.strip() for variant in variants)
     ):
-        raise ValueError(f"goal {row['goal_id']!r}: instruction_variants must be a list of strings")
+        raise ValueError(
+            f"goal {row['goal_id']!r}: instruction_variants must contain two non-empty strings"
+        )
+    if (
+        len({row["instruction"].strip(), *(variant.strip() for variant in variants)})
+        != 3
+    ):
+        raise ValueError(
+            f"goal {row['goal_id']!r}: instruction phrasings must be distinct"
+        )
+    for key in ("anchor", "grounding", "model", "prompt_pack_sha"):
+        if not isinstance(row[key], str) or not row[key].strip():
+            raise ValueError(f"goal {row['goal_id']!r}: {key} must be non-empty text")
 
 
 def load_goals(goals_path: Path) -> list[dict[str, Any]]:
@@ -79,11 +99,15 @@ def goals_by_segment(rows: Iterable[dict[str, Any]]) -> dict[str, list[dict[str,
     for row in rows:
         out.setdefault(str(row["segment_id"]), []).append(row)
     for seg_rows in out.values():
-        seg_rows.sort(key=lambda r: (int(r["start_master_idx"]), int(r["end_master_idx"])))
+        seg_rows.sort(
+            key=lambda r: (int(r["start_master_idx"]), int(r["end_master_idx"]))
+        )
     return out
 
 
-def view_span_to_master(view: SegmentView, start_view_idx: int, end_view_idx: int) -> tuple[int, int]:
+def view_span_to_master(
+    view: SegmentView, start_view_idx: int, end_view_idx: int
+) -> tuple[int, int]:
     """Convert a half-open view-local frame span ``[start, end)`` to a master
     interval, using the frames' actual window boundaries: from the first
     frame's tick to the last frame's window end. This is the only path by which
@@ -108,7 +132,6 @@ class ProjectionStats:
     n_goals: int = 0
     n_projected: int = 0
     n_empty_projection: int = 0
-    n_too_few_frames: int = 0
     n_snapped: int = 0
     rejected: list[dict[str, Any]] = field(default_factory=list)
 
@@ -119,18 +142,8 @@ class ProjectionStats:
 def project_goals(
     goals: Iterable[dict[str, Any]],
     view: SegmentView,
-    *,
-    snap_start: str = "before",
-    min_frames: int = 1,
 ) -> tuple[list[GoalProjection], ProjectionStats]:
-    """Project goals (master intervals) onto a view's actual selected frames.
-
-    Rejections (never silent, all counted):
-      * ``empty_projection`` — no selected frame inside the goal interval;
-      * ``too_few_frames``   — fewer than ``min_frames`` after snapping.
-    """
-    if snap_start not in SNAP_START_MODES:
-        raise ValueError(f"snap_start must be one of {SNAP_START_MODES}, got {snap_start!r}")
+    """Project goal intervals and include their preceding observation."""
     stats = ProjectionStats()
     projections: list[GoalProjection] = []
     frames = view.frames  # sorted by master_idx by construction
@@ -149,7 +162,7 @@ def project_goals(
             stats._reject(goal, "empty_projection")
             continue
         snapped = False
-        if snap_start == "before" and members[0].master_idx > start:
+        if members[0].master_idx > start:
             # The frame the goal's first action was taken from: the last
             # selected frame before the goal start (its window covers it).
             prior = [f for f in frames if f.master_idx < start]
@@ -157,12 +170,10 @@ def project_goals(
                 members = [prior[-1], *members]
                 snapped = True
                 stats.n_snapped += 1
-        if len(members) < min_frames:
-            stats.n_too_few_frames += 1
-            stats._reject(goal, "too_few_frames")
-            continue
         stats.n_projected += 1
-        projections.append(GoalProjection(goal=goal, frames=members, snapped_start=snapped))
+        projections.append(
+            GoalProjection(goal=goal, frames=members, snapped_start=snapped)
+        )
 
     return projections, stats
 
