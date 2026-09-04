@@ -5,8 +5,9 @@ conformance-vector file under `vectors/`. The directory name is the grammar id;
 there is no entry-point or alias registry.
 
 - `deltatype_v2` is the canonical Crowd-Cast training grammar.
-- `ordered_events_v3` is the normalized relative grammar used by the CUA-Gym
-  action-format parity stream.
+- `ordered_events_v3_relative_1000_grid_v1` is the normalized relative grammar
+  used by the CUA-Gym action-format parity stream. The former pixel-relative
+  `ordered_events_v3` identity is unsupported.
 
 Both codecs parse, format, compile to `desktop.ir.Operation`, lift operations
 back into training labels, and derive their system prompt from the same object.

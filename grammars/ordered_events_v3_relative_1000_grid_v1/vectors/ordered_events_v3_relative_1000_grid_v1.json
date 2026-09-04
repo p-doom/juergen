@@ -1,6 +1,6 @@
 {
-  "grammar": "ordered_events_v3",
-  "prompt_sha256": "48f9c95dfc22ca462425d6ab67c826d03c73be060a3f3635df0fd66438bb2dc4",
+  "grammar": "ordered_events_v3_relative_1000_grid_v1",
+  "prompt_sha256": "fabe870c3b7f7f5debf34900f73484d347624b4e292b95fd987586b3839e25d9",
   "geometry": {
     "desktop_width": 1920,
     "desktop_height": 1080
@@ -37,7 +37,7 @@
         [
           "move_to",
           [
-            972,
+            983,
             536
           ]
         ],
@@ -86,7 +86,7 @@
         [
           "move_to",
           [
-            972,
+            983,
             536
           ]
         ],
@@ -99,7 +99,7 @@
         [
           "move_to",
           [
-            975,
+            989,
             536
           ]
         ],
@@ -144,7 +144,7 @@
         [
           "move_to",
           [
-            990,
+            1018,
             540
           ]
         ],
@@ -402,7 +402,7 @@
           "move_to",
           [
             960,
-            520
+            518
           ]
         ],
         [
@@ -441,7 +441,7 @@
         [
           "move_to",
           [
-            964,
+            968,
             545
           ]
         ],
@@ -500,6 +500,21 @@
         "no_op": false
       },
       "operations": []
+    },
+    {
+      "name": "cua_gym_coordinate_regression",
+      "cursor": [1728, 972],
+      "text": "move(-511,-592)",
+      "canonical": "move(-511,-592)",
+      "action": {
+        "primitives": [
+          {"kind": "move", "dx": -511, "dy": -592}
+        ],
+        "no_op": false
+      },
+      "operations": [
+        ["move_to", [747, 333]]
+      ]
     },
     {
       "name": "no_op",
@@ -636,7 +651,7 @@
         "primitives": [
           {
             "kind": "move",
-            "dx": 12,
+            "dx": 6,
             "dy": -4
           },
           {
@@ -645,7 +660,7 @@
           },
           {
             "kind": "move",
-            "dx": 3,
+            "dx": 2,
             "dy": 0
           },
           {
@@ -655,7 +670,7 @@
         ],
         "no_op": false
       },
-      "canonical": "move(12,-4); down(LMB); move(3,0); up(LMB)",
+      "canonical": "move(6,-4); down(LMB); move(2,0); up(LMB)",
       "recompiled": [
         [
           "move_to",
@@ -673,7 +688,7 @@
         [
           "move_to",
           [
-            975,
+            976,
             536
           ]
         ],
@@ -718,7 +733,7 @@
           },
           {
             "kind": "move",
-            "dx": 30,
+            "dx": 16,
             "dy": 0
           },
           {
@@ -728,7 +743,7 @@
         ],
         "no_op": false
       },
-      "canonical": "down(LMB); move(30,0); up(LMB)",
+      "canonical": "down(LMB); move(16,0); up(LMB)",
       "recompiled": [
         [
           "mouse_down",
@@ -739,7 +754,7 @@
         [
           "move_to",
           [
-            990,
+            991,
             540
           ]
         ],
@@ -873,8 +888,8 @@
         "primitives": [
           {
             "kind": "move",
-            "dx": 140,
-            "dy": 100
+            "dx": 73,
+            "dy": 93
           },
           {
             "kind": "down",
@@ -882,8 +897,8 @@
           },
           {
             "kind": "move",
-            "dx": 140,
-            "dy": 60
+            "dx": 73,
+            "dy": 55
           },
           {
             "kind": "up",
@@ -892,7 +907,7 @@
         ],
         "no_op": false
       },
-      "canonical": "move(140,100); down(LMB); move(140,60); up(LMB)",
+      "canonical": "move(73,93); down(LMB); move(73,55); up(LMB)",
       "recompiled": [
         [
           "move_to",
@@ -911,7 +926,7 @@
           "move_to",
           [
             1240,
-            700
+            699
           ]
         ],
         [

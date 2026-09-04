@@ -53,7 +53,10 @@ from desktop.ir import Operation, scroll_deltas
 
 def screen_size(geometry: DisplayGeometry) -> tuple[int, int]:
     """Display size in physical screen pixels."""
-    return int(geometry.desktop_width), int(geometry.desktop_height)
+    size = int(geometry.desktop_width), int(geometry.desktop_height)
+    if size[0] <= 0 or size[1] <= 0:
+        raise ValueError(f"display geometry must be positive, got {size[0]}x{size[1]}")
+    return size
 
 
 def clamp(point: tuple[int, int], geometry: DisplayGeometry) -> tuple[int, int]:

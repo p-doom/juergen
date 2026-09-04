@@ -235,11 +235,12 @@ def test_every_canonical_operation_kind_is_groupable():
 
 
 def test_peer_directories_are_the_sole_registry():
-    assert NAMES == ("deltatype_v2", "ordered_events_v3")
+    assert NAMES == ("deltatype_v2", "ordered_events_v3_relative_1000_grid_v1")
     for name in NAMES:
         assert _codec(name) is importlib.import_module(f"grammars.{name}.codec").CODEC
-    with pytest.raises(KeyError, match="compact_raw"):
-        grammars.load("compact_raw")
+    for retired in ("compact_raw", "ordered_events_v3"):
+        with pytest.raises(KeyError, match=retired):
+            grammars.load(retired)
 
 
 def test_no_handler_table_exists():

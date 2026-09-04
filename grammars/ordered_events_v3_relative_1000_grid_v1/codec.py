@@ -1,32 +1,4 @@
-"""The ordered mini-program grammar, v3.
-
-v2 (``pipeline/lib/action_format.py::OrderedFormatter``) preserved the relative
-order of movement, scrolling and key/button transitions inside one turn:
-``move(4,-1); down(LMB); move(2,0); up(LMB)``. It had a formatter and no parser
-at all, so eval and RL could not read what training wrote, and its prompt was a
-hand-written file (``pipeline/system_prompts/cua_v2_thinking.txt``) that nothing
-compared to a parser.
-
-v3 adds two things:
-
-* ``type("text")``, so a typing burst is one primitive instead of a shift-keyed
-  ``down(KeyH); up(KeyH)`` spelling of every character,
-* a parser, so the same object writes training targets and reads completions.
-
-Both emitters now render through this codec and take this prompt, so v2 is the
-subset of this grammar that never types.
-
-Escaping inside ``type()`` is minimal: only ``\\\\`` and ``\\"``. Return is an
-event — ``down(Return); up(Return)`` — never a character inside ``type()``. The
-executor cannot type a newline inside a burst, and a double-escaped ``\\\\n``
-types two literal characters instead of pressing Return, a labelling defect that
-reached real training data. Every other backslash escape is rejected at parse
-time.
-
-The segment -> primitives extraction (motor-grid accumulation, label policy,
-dead zones) stays in the data pipeline. This codec owns the surface syntax and
-its lowering.
-"""
+"""Ordered desktop events with relative per-axis thousandth coordinates."""
 
 from __future__ import annotations
 
@@ -50,10 +22,23 @@ _PAIR_RE = re.compile(r"\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)")
 _ARG_RE = re.compile(r"\(\s*([^\s(),;]+)\s*\)")
 
 NO_OP = "NO_OP"
+GRID = 1000
 
 
 class OrderedEventsV3Error(ValueError):
     """Malformed ordered-events-v3 action text."""
+
+
+def pixels_from_grid(value: int, dimension: int) -> int:
+    if dimension <= 0:
+        raise OrderedEventsV3Error(f"display dimension must be positive, got {dimension}")
+    return round(value / GRID * dimension)
+
+
+def grid_from_pixels(value: int, dimension: int) -> int:
+    if dimension <= 0:
+        raise OrderedEventsV3Error(f"display dimension must be positive, got {dimension}")
+    return round(value / dimension * GRID)
 
 
 def escape(text: str) -> str:
@@ -107,6 +92,13 @@ class Primitive:
                 f"{self.name!r} is not a name {self.kind}() can spell "
                 f"(must match {NAME_RE.pattern})"
             )
+        if self.kind == "type":
+            if not self.text:
+                raise OrderedEventsV3Error("type() payload cannot be empty")
+            if any(char in self.text for char in "\n\r\t"):
+                raise OrderedEventsV3Error(
+                    "type() payload cannot contain a control character; use key transitions"
+                )
 
     def render(self) -> str:
         if self.kind in ("move", "scroll"):
@@ -181,7 +173,7 @@ class OrderedEventsV3Codec:
     `down(...)` STAYS HELD until its `up(...)`, which may be a later turn.
     """
 
-    name = "ordered_events_v3"
+    name = "ordered_events_v3_relative_1000_grid_v1"
 
     #: Empty by design: a `<think>` block legally precedes the action line, so
     #: no newline or token sequence ends the turn early.
@@ -189,8 +181,8 @@ class OrderedEventsV3Codec:
 
     @_support.production("move(dx,dy)")
     def _move(self) -> None:
-        """Move the cursor by (dx, dy) screen pixels RELATIVE to where it is:
-        dx > 0 RIGHT, dx < 0 LEFT; dy > 0 DOWN, dy < 0 UP.
+        """Move by (dx, dy) thousandths of each screen axis RELATIVE to the
+        cursor: dx > 0 RIGHT, dx < 0 LEFT; dy > 0 DOWN, dy < 0 UP.
         """
 
     @_support.production("scroll(dx,dy)")
@@ -280,14 +272,21 @@ class OrderedEventsV3Codec:
         geometry: DisplayGeometry,
         cursor: tuple[int, int],
     ) -> tuple[Operation, ...]:
-        """Fold the relative moves onto ``cursor``, emitting absolute pixels."""
+        """Scale each relative move exactly once, then fold it onto ``cursor``."""
         if action.no_op:
             return ()
+        width, height = _support.screen_size(geometry)
         operations: list[Operation] = []
         here = _support.clamp(cursor, geometry)
         for item in action.primitives:
             if item.kind == "move":
-                target = _support.clamp((here[0] + item.dx, here[1] + item.dy), geometry)
+                target = _support.clamp(
+                    (
+                        here[0] + pixels_from_grid(item.dx, width),
+                        here[1] + pixels_from_grid(item.dy, height),
+                    ),
+                    geometry,
+                )
                 if target != here:
                     operations.append(_support.move_to(target))
                 here = target
@@ -323,16 +322,21 @@ class OrderedEventsV3Codec:
         geometry: DisplayGeometry,
         cursor: tuple[int, int],
     ) -> _support.IntendedCursor | None:
-        """Every interleaved ``move`` primitive, in order, as pixel deltas.
+        """Every interleaved normalized ``move`` primitive, in order.
 
         ``None`` for the idle action, and for a turn of keys and clicks alone:
         this is the one grammar where an action can carry no move at all.
         """
         if action.no_op:
             return None
+        width, height = _support.screen_size(geometry)
         return _support.fold_requests(
             tuple(
-                ("rel", item.dx, item.dy)
+                (
+                    "rel",
+                    pixels_from_grid(item.dx, width),
+                    pixels_from_grid(item.dy, height),
+                )
                 for item in action.primitives
                 if item.kind == "move"
             ),
@@ -351,9 +355,8 @@ class OrderedEventsV3Codec:
     ) -> OrderedEventsV3Action:
         """Absolute Operations -> an action. The inverse of ``compile_action``.
 
-        This is the most faithful lift of the seven, because the grammar can
-        interleave: several moves per turn, each folded back into its own
-        relative `move(dx,dy)`. A ``glide_to`` becomes a plain `move`, which
+        The grammar can interleave several moves per turn, each folded back into
+        its own normalized relative `move(dx,dy)`. A ``glide_to`` becomes a plain `move`, which
         PRESERVES the drag — the button is held across it — and drops only the
         stroke's duration, since the grammar has no timing primitive.
         """
@@ -361,13 +364,19 @@ class OrderedEventsV3Codec:
         groups = _support.group_operations(
             operations, geometry=geometry, cursor=cursor, error=OrderedEventsV3Error
         )
+        width, height = _support.screen_size(geometry)
         primitives: list[Primitive] = []
         here = _support.clamp(cursor, geometry)
         for group in groups:
             kind = group.kind
             if kind in ("move", "stroke"):
                 assert group.target is not None
-                delta = (group.target[0] - here[0], group.target[1] - here[1])
+                delta = (
+                    grid_from_pixels(group.target[0], width)
+                    - grid_from_pixels(here[0], width),
+                    grid_from_pixels(group.target[1], height)
+                    - grid_from_pixels(here[1], height),
+                )
                 if delta != (0, 0):
                     primitives.append(Primitive("move", dx=delta[0], dy=delta[1]))
                 here = group.target
