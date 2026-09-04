@@ -12,8 +12,12 @@ The Desktop dependency is pinned to
 restore the `cua_micro_xcursor_v1` checkpoint; its setup repairs and verifies the
 guest Xcursor assignment before the checkpoint is created.
 
+The locked SGLang runtime requires FFmpeg 6 shared libraries on the host.
+
 ```bash
 uv sync --locked
+uv run --locked python -c \
+  'import torchcodec; assert torchcodec.ffmpeg_major_version == 6'
 uv run --locked python cua_micro_eval.py \
   --model-path /path/to/checkpoint \
   --desktop-image /path/to/osworld.qcow2 \

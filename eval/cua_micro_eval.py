@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import base64
+import hashlib
 import io
 import json
 import logging
@@ -22,15 +23,19 @@ from typing import Any, Protocol
 
 import requests
 from cua_parity_contract import (
+    JPEG_QUALITY,
+    JPEG_SUBSAMPLING,
     MAX_COMPLETED_TURNS,
     OBSERVATION_CONTRACT,
     OBSERVATION_SIZE,
     PREVIOUS_ACTIONS_MAX_CHARS,
     render_history,
 )
+from desktop.execute import BUTTON_MASKS, ExecutionError, KeymapError, build_action_request
 from desktop.geometry import DisplayGeometry
 from desktop.ir import Operation
 from desktop.vm import (
+    DesktopClient,
     DesktopPoolConfig,
     DesktopSession,
     acquire_port_range,
@@ -43,9 +48,8 @@ from grammars.ordered_events_v3_relative_1000_grid_v1.codec import (
     OrderedEventsV3Error,
     Primitive,
 )
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, JpegImagePlugin
 
-_LOGGER = logging.getLogger(__name__)
 _SAMPLING = {
     "max_tokens": 512,
     "temperature": 0.7,
@@ -122,6 +126,23 @@ _ATTEMPTS = 4
 _SEED_BASE = 41000
 _VM_SLOTS = 4
 _XCURSOR_CHECKPOINT = "cua_micro_xcursor_v1"
+_SUITE_SHA256 = "25e8df37ab106c087170a92f4ba8c016fe011d9cea1f75d9b63b5984312738a5"
+
+
+def _reference_jpeg_quantization() -> dict[int, list[int]]:
+    encoded = io.BytesIO()
+    Image.new("RGB", (1, 1)).save(
+        encoded,
+        format="JPEG",
+        quality=JPEG_QUALITY,
+        subsampling=JPEG_SUBSAMPLING,
+        optimize=False,
+    )
+    with Image.open(io.BytesIO(encoded.getvalue())) as image:
+        return {table: list(values) for table, values in image.quantization.items()}
+
+
+_JPEG_QUANTIZATION = _reference_jpeg_quantization()
 
 
 class EvalSession(Protocol):
@@ -142,8 +163,6 @@ class EvalSession(Protocol):
         stability_timeout_s: float = 0.0,
         poll_s: float = 0.1,
     ) -> bytes: ...
-
-    def reset_to_checkpoint(self, name: str, *, setup: Any = None) -> Any: ...
 
 
 def _run_guest(client: EvalSession, argv: list[str], *, timeout_s: float | None = None) -> str:
@@ -179,7 +198,11 @@ class Task:
 
 
 def load_suite(path: Path) -> tuple[dict[str, Any], list[Task]]:
-    raw = json.loads(path.read_text())
+    payload = path.read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    if digest != _SUITE_SHA256:
+        raise ValueError(f"CUA micro-eval suite digest mismatch: {digest}")
+    raw = json.loads(payload)
     if set(raw) != {"schema_version", "suite", "coordinate_grid", "description", "tasks"}:
         raise ValueError("suite fields do not match the CUA micro-eval contract")
     if raw.get("schema_version") != 1:
@@ -410,6 +433,20 @@ def _guest_json(client: EvalSession, path: str) -> dict[str, Any]:
 
 def _upload_bytes(client: EvalSession, path: str, payload: bytes) -> None:
     client.write_guest_file(path, payload)
+
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _active_title(client: EvalSession) -> str:
@@ -891,8 +928,6 @@ def verifier_passed(client: EvalSession, verifier: dict[str, Any]) -> tuple[bool
 
 def _parse_response(response: str) -> OrderedEventsV3Action:
     control = split_control(response)
-    if control.status is None and "TERMINATE" in response:
-        raise OrderedEventsV3Error("TERMINATE control must be the exact final line")
     if control.body.strip():
         action = CODEC.parse(control.body)
     elif control.status is not None:
@@ -942,7 +977,13 @@ def _draw_overlay(
 def _jpeg_image(value: bytes) -> Image.Image:
     with Image.open(io.BytesIO(value)) as image:
         image.load()
-        if image.format != "JPEG" or image.mode != "RGB" or image.size != OBSERVATION_SIZE:
+        if (
+            image.format != "JPEG"
+            or image.mode != "RGB"
+            or image.size != OBSERVATION_SIZE
+            or JpegImagePlugin.get_sampling(image) != JPEG_SUBSAMPLING
+            or image.quantization != _JPEG_QUANTIZATION
+        ):
             raise RuntimeError(f"desktop observation violated {OBSERVATION_CONTRACT}")
         return image.copy()
 
@@ -956,6 +997,7 @@ def run_attempt(
     api_key: str,
     model: str,
     seed: int,
+    reset_receipt_sha256: str,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=False)
     prepare_task(client, task)
@@ -980,6 +1022,7 @@ def run_attempt(
         actual_start = client.cursor_position()
         verifier_before = read_verifier_state(client, task.verifier)
         before = client.screenshot_settled(min_delay_s=0.2, stability_timeout_s=1.0)
+        before_image = _jpeg_image(before)
         before_path = steps_dir / f"step_{turn_index:03d}.jpg"
         before_path.write_bytes(before)
         history.append(
@@ -1009,16 +1052,33 @@ def run_attempt(
             except (TypeError, ValueError) as exc:
                 parse_error = str(exc)
         if parsed is not None:
-            operations = CODEC.compile_action(
-                parsed,
-                DisplayGeometry(desktop_width=screen[0], desktop_height=screen[1]),
-                actual_start,
-            )
-            receipt = _execute(client, operations)
             terminated = parsed.terminate
-            if receipt is not None:
-                held_keys = tuple(receipt.held_keys)
-                pointer_button_mask = int(receipt.pointer_button_mask)
+            try:
+                operations = CODEC.compile_action(
+                    parsed,
+                    DisplayGeometry(desktop_width=screen[0], desktop_height=screen[1]),
+                    actual_start,
+                )
+            except (ValueError, OverflowError) as exc:
+                parse_error = str(exc)
+            if parse_error is None and operations:
+                try:
+                    build_action_request(
+                        operations,
+                        initial_buttons={
+                            button
+                            for button, mask in BUTTON_MASKS.items()
+                            if pointer_button_mask & mask
+                        },
+                        initial_keys=set(held_keys),
+                    )
+                except (ExecutionError, KeymapError) as exc:
+                    parse_error = str(exc)
+            if parse_error is None:
+                receipt = _execute(client, operations)
+                if receipt is not None:
+                    held_keys = tuple(receipt.held_keys)
+                    pointer_button_mask = int(receipt.pointer_button_mask)
 
         after = client.screenshot_settled(
             min_delay_s=0.5,
@@ -1031,12 +1091,20 @@ def run_attempt(
         click_point = _click_point(operations, actual_start)
         click_in_bbox = click_point is not None and in_bbox(click_point, bbox)
         location_ok = click_in_bbox if task.expected.get("kind") == "click" else True
-        success = bool(expected_ok and verifier_ok and location_ok)
+        input_state_ok = not held_keys and pointer_button_mask == 0
+        success = bool(
+            parse_error is None
+            and expected_ok
+            and verifier_ok
+            and location_ok
+            and input_state_ok
+            and terminated != "failure"
+        )
 
         after_path = steps_dir / f"step_{turn_index:03d}_after.jpg"
         after_path.write_bytes(after)
         _draw_overlay(
-            _jpeg_image(before),
+            before_image,
             bbox,
             actual_start,
             end,
@@ -1073,6 +1141,7 @@ def run_attempt(
             "verifier_before": verifier_before,
             "verifier_after": verifier_after,
             "verifier_pass": verifier_ok,
+            "input_state_ok": input_state_ok,
             "success": success,
         }
         turn_results.append(result)
@@ -1085,8 +1154,6 @@ def run_attempt(
 
     if not turn_results:
         raise RuntimeError(f"task {task.task_id} produced no turns")
-    if terminated is not None and (held_keys or pointer_button_mask):
-        raise RuntimeError("model terminated with held desktop inputs")
     success = any(bool(row["success"]) for row in turn_results)
     progress = 1.0 if success else 0.0
     attempt = {
@@ -1095,6 +1162,7 @@ def run_attempt(
         "category": task.category,
         "instruction": task.instruction,
         "seed": seed,
+        "reset_receipt_sha256": reset_receipt_sha256,
         "grammar": CODEC.name,
         "system_prompt_sha256": CODEC.digest,
         "turns_total": task.max_turns,
@@ -1123,20 +1191,14 @@ def run_attempt(
             "content": [{"type": "text", "text": history[-1]["assistant"]}],
         }
     )
-    (output_dir / "conversation.json").write_text(
-        json.dumps(
-            {
-                "instruction": task.instruction,
-                "messages": conversation,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
+    _write_json_atomic(
+        output_dir / "conversation.json",
+        {
+            "instruction": task.instruction,
+            "messages": conversation,
+        },
     )
-    (output_dir / "result.json").write_text(
-        json.dumps(attempt, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    _write_json_atomic(output_dir / "result.json", attempt)
     return attempt
 
 
@@ -1201,33 +1263,26 @@ path = Path('/home/user/server/pyxcursor.py')
 old = 'self.display = self.xlib.XOpenDisplay(display)'
 new = 'Xcursor.display = self.xlib.XOpenDisplay(display)'
 source = path.read_text(encoding='utf-8')
-if source.count(new) == 1 and old not in source:
-    print('already-patched')
-elif source.count(old) == 1 and new not in source:
-    path.write_text(source.replace(old, new), encoding='utf-8')
-    print('patched')
-else:
+if source.count(old) != 1 or new in source:
     raise RuntimeError('unexpected pyxcursor XOpenDisplay contract')
+path.write_text(source.replace(old, new), encoding='utf-8')
 """.strip()
 
 
 def _require_xcursor_repair(client: DesktopSession) -> None:
-    status = _run_guest(client, ["python3", "-c", _XCURSOR_REPAIR]).strip()
-    if status == "patched":
-        _run_guest_shell(
-            client,
-            "pid=$(systemctl show -p MainPID --value osworld.service); "
-            'test "$pid" -gt 1; '
-            'setsid bash -c "sleep 1; kill -9 $pid" >/dev/null 2>&1 &',
-        )
-        time.sleep(9)
-        from desktop.vm import DesktopClient
-
-        probe = DesktopClient(client.base_url)
-        probe.wait_ready(timeout_s=120)
-        probe.verify_actions_contract()
-    elif status != "already-patched":
-        raise RuntimeError(f"Xcursor repair returned {status!r}")
+    output = _run_guest(client, ["python3", "-c", _XCURSOR_REPAIR])
+    if output:
+        raise RuntimeError(f"Xcursor repair produced unexpected output: {output!r}")
+    _run_guest_shell(
+        client,
+        "pid=$(systemctl show -p MainPID --value osworld.service); "
+        'test "$pid" -gt 1; '
+        'setsid bash -c "sleep 1; kill -9 $pid" >/dev/null 2>&1 &',
+    )
+    time.sleep(9)
+    probe = DesktopClient(client.base_url)
+    probe.wait_ready(timeout_s=120)
+    probe.verify_actions_contract()
     _verify_xcursor_repair(client)
 
 
@@ -1244,6 +1299,63 @@ def _verify_xcursor_repair(client: EvalSession) -> None:
     )
     if verification:
         raise RuntimeError("Xcursor verification produced unexpected output")
+
+
+def _reset_xcursor_checkpoint(client: DesktopSession) -> Any:
+    if client.checkpoint_name != _XCURSOR_CHECKPOINT:
+        if client.runtime.has_checkpoint(_XCURSOR_CHECKPOINT):
+            raise RuntimeError("unexpected pre-existing Xcursor checkpoint")
+        client.reset_to_checkpoint(
+            _XCURSOR_CHECKPOINT,
+            setup=_require_xcursor_repair,
+        )
+        client.checkpoint_name = _XCURSOR_CHECKPOINT
+    _, receipt = client.reset_with_receipt()
+    if receipt.checkpoint_name != _XCURSOR_CHECKPOINT:
+        raise RuntimeError(f"reset used the wrong checkpoint: {receipt.checkpoint_name!r}")
+    client.consume_receipt(receipt)
+    _verify_xcursor_repair(client)
+    return receipt
+
+
+def _run_slots(sessions: Sequence[Any], items: Sequence[Any], worker: Any) -> None:
+    stop = threading.Event()
+
+    def run_slot(slot: int) -> None:
+        for item in items[slot :: len(sessions)]:
+            if stop.is_set():
+                return
+            try:
+                worker(item, sessions[slot])
+            except BaseException:
+                stop.set()
+                raise
+
+    with ThreadPoolExecutor(max_workers=len(sessions)) as executor:
+        futures = [executor.submit(run_slot, slot) for slot in range(len(sessions))]
+        for future in futures:
+            future.result()
+
+
+def _close_desktop_pool(pool: Any, *, timeout_s: float = 1200) -> dict[str, Any]:
+    pool.close()
+    deadline = time.time() + timeout_s
+    while True:
+        state = pool.snapshot()
+        active = {name: state.get(name) for name in ("ready", "starting", "leased", "retiring")}
+        if active == {"ready": 0, "starting": 0, "leased": 0, "retiring": 0}:
+            if (
+                state.get("closed") is not True
+                or state.get("sessions")
+                or state.get("starting_sessions")
+            ):
+                raise RuntimeError(f"desktop pool close contract failed: {state!r}")
+            if state.get("total_failed") != 0:
+                raise RuntimeError(f"desktop pool recorded failures: {state!r}")
+            return state
+        if time.time() >= deadline:
+            raise TimeoutError(f"desktop pool resources did not close: {state!r}")
+        time.sleep(0.25)
 
 
 def _wait_for_sglang(proc: subprocess.Popen[Any], port: int, api_key: str) -> None:
@@ -1302,6 +1414,19 @@ def _init_wandb(output_dir: Path, config: dict[str, Any]) -> Any:
     )
 
 
+def _preflight_runtime() -> None:
+    try:
+        import torchcodec
+
+        ffmpeg_major_version = torchcodec.ffmpeg_major_version
+    except Exception as exc:
+        raise RuntimeError("the locked SGLang runtime requires FFmpeg 6 shared libraries") from exc
+    if ffmpeg_major_version != 6:
+        raise RuntimeError(
+            f"the locked SGLang runtime requires FFmpeg 6, got {ffmpeg_major_version!r}"
+        )
+
+
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", type=Path, required=True)
@@ -1319,6 +1444,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
+    _preflight_runtime()
     model = str(args.model_path.resolve())
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True)
@@ -1383,7 +1509,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             config=DesktopPoolConfig(
                 min_ready_sessions=_VM_SLOTS,
                 max_sessions=_VM_SLOTS,
-                max_rollouts_per_session=len(plan) // _VM_SLOTS,
+                max_rollouts_per_session=len(plan) + 1,
                 checkout_timeout_s=1200,
                 lease_timeout_s=10_800,
                 startup_timeout_s=1200,
@@ -1391,7 +1517,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         _wait_for_sglang(proc, port, api_key)
         _assert_serving_model(port, api_key, model)
-        pool.start()
         wandb_run = _init_wandb(
             output_dir,
             {
@@ -1402,27 +1527,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "seeds": [_SEED_BASE + index for index in range(_ATTEMPTS)],
             },
         )
+        pool.start()
+        checked_sessions = [pool.checkout(timeout_s=1200) for _ in range(_VM_SLOTS)]
+        pool_state = pool.snapshot()
+        active = {
+            name: pool_state.get(name) for name in ("ready", "starting", "leased", "retiring")
+        }
+        if (
+            active != {"ready": 0, "starting": 0, "leased": _VM_SLOTS, "retiring": 0}
+            or len(pool_state.get("sessions", ())) != _VM_SLOTS
+            or pool_state.get("total_failed") != 0
+        ):
+            raise RuntimeError(
+                f"desktop pool failed to prewarm exactly four sessions: {pool_state!r}"
+            )
 
-        def run_one(item: tuple[int, Task, int, int]) -> None:
+        def run_one(item: tuple[int, Task, int, int], checked: Any) -> None:
             task_index, task, attempt_index, seed = item
             ordinal = task_index * _ATTEMPTS + attempt_index
             threading.current_thread().name = f"vm{ordinal % _VM_SLOTS}"
-            with pool.checkout(timeout_s=1200) as checked:
-                client = checked.tracked_env()
-                client.reset_to_checkpoint(
-                    _XCURSOR_CHECKPOINT,
-                    setup=_require_xcursor_repair,
-                )
-                _verify_xcursor_repair(client)
-                result = run_attempt(
-                    client=client,
-                    task=task,
-                    output_dir=output_dir / f"task_{ordinal:03d}_{task.task_id.replace('.', '_')}",
-                    sglang_url=f"http://127.0.0.1:{port}/v1",
-                    api_key=api_key,
-                    model=model,
-                    seed=seed,
-                )
+            reset_receipt = _reset_xcursor_checkpoint(checked.env)
+            client = checked.tracked_env()
+            result = run_attempt(
+                client=client,
+                task=task,
+                output_dir=output_dir / f"task_{ordinal:03d}_{task.task_id.replace('.', '_')}",
+                sglang_url=f"http://127.0.0.1:{port}/v1",
+                api_key=api_key,
+                model=model,
+                seed=seed,
+                reset_receipt_sha256=reset_receipt.receipt_sha256,
+            )
             with state_lock:
                 attempts.append(result)
                 partial = {
@@ -1432,15 +1567,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "n_samples": len(attempts),
                     "completed": False,
                 }
-                (output_dir / "result.json").write_text(
-                    json.dumps(partial, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
+                _write_json_atomic(output_dir / "result.json", partial)
 
-        with ThreadPoolExecutor(max_workers=_VM_SLOTS) as executor:
-            futures = [executor.submit(run_one, item) for item in plan]
-            for future in futures:
-                future.result()
+        _run_slots(checked_sessions, plan, run_one)
         aggregate = aggregate_results(tasks, attempts)
         final_result = {
             "schema_version": 1,
@@ -1468,14 +1597,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         if pool is not None:
             try:
-                pool.close()
-                pool_state = pool.snapshot()
-                (output_dir / "desktop_pool.json").write_text(
-                    json.dumps(pool_state, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
-                if pool_state.get("total_failed") != 0:
-                    raise RuntimeError(f"desktop pool recorded failures: {pool_state!r}")
+                pool_state = _close_desktop_pool(pool)
+                _write_json_atomic(output_dir / "desktop_pool.json", pool_state)
             except BaseException as exc:
                 cleanup_errors.append(exc)
         if proc is not None:
@@ -1507,9 +1630,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise BaseExceptionGroup("evaluation cleanup failed", cleanup_errors)
     if final_result is None:
         raise RuntimeError("evaluation finished without a result")
-    serialized = json.dumps(final_result, indent=2, sort_keys=True) + "\n"
-    (output_dir / "result.json").write_text(serialized, encoding="utf-8")
-    (output_dir / "completed.json").write_text(serialized, encoding="utf-8")
+    _write_json_atomic(output_dir / "result.json", final_result)
+    _write_json_atomic(output_dir / "completed.json", final_result)
     return 0
 
 
