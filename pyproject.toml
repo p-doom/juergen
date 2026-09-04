@@ -9,7 +9,7 @@ dependencies = [
     # DisplayGeometry.
     "desktop",
     "av>=16.1.0",
-    # `verifiers.v1` is the framework agent/, evals/ and rl/ are written against:
+    # `verifiers.v1` is the framework agent/ and evals/ are written against:
     # fifteen modules do `import verifiers.v1 as vf`, every Taskset/Harness/Task/
     # Config base comes from it, and `evals/signoflife` is a verifiers plugin
     # package (its `__all__` contract is verifiers').
@@ -98,7 +98,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-# The five flat plugin ids. verifiers 0.2.1 cannot resolve a dotted one (see
+# The flat plugin ids. verifiers 0.2.1 cannot resolve a dotted one (see
 # signoflife.py), so each is a module at the repo root -- and a root module is
 # not a package, so `packages.find` never sees it. Left out of the wheel they
 # resolve only from a cwd that happens to be the checkout, and every
@@ -109,18 +109,15 @@ py-modules = [
     # can import nothing under `agent/`.
     "image_domain",
     "osworld_bench",
-    "rl_grounding",
-    "rl_movebox",
-    "rl_target_box",
     "signoflife",
 ]
 
 [tool.setuptools.packages.find]
-# The import closure of those five: they re-export from evals/ and rl/, evals/
-# imports agent/, and agent/ imports grammars/. Shipping only grammars/ made
-# every one of them uninstallable. pipeline/ is deliberately absent: labctl
-# invokes its stages as file paths in a checkout, nothing imports it.
-include = ["agent", "agent.*", "evals", "evals.*", "grammars", "grammars.*", "rl", "rl.*"]
+# Their import closure: they re-export from evals/, evals/ imports agent/, and
+# agent/ imports grammars/. Shipping only grammars/ made every one of them
+# uninstallable. pipeline/ is deliberately absent: labctl invokes its stages as
+# file paths in a checkout, nothing imports it.
+include = ["agent", "agent.*", "evals", "evals.*", "grammars", "grammars.*"]
 
 [tool.setuptools.package-data]
 "*" = ["vectors/*.json"]

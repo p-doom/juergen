@@ -1,4 +1,4 @@
-"""Indicator generalisation, the digit lattice, and `_never_moved`.
+"""Indicator generalisation and the digit lattice.
 
 The indicators read all three parsed-action containers — `elements` (bare-token),
 `primitives` (`ordered_events_v3`), `calls` (tool-call) — and a shape that is none
@@ -491,21 +491,6 @@ def test_the_mouse_metric_reads_no_op_parse_error_and_in_bbox_rates() -> None:
     assert trace.metrics["parse_error_rate"] == 0.25
     assert trace.metrics["in_bbox_rate"] == 0.5
     assert trace.metrics["terminate_rate"] == 1.0
-
-
-def test_never_moved_lives_in_the_grounding_taskset_not_in_evals() -> None:
-    """`_never_moved` lives in `rl.grounding.taskset`, not in `evals/indicators.py`.
-
-    The `distance = -1.0` sentinel it replaces lived on the result, so the natural
-    place to look for it is alongside the other indicators. It is exercised in
-    `tests/test_rl_tasksets.py`.
-    """
-    import evals.harness as harness_module
-    import evals.indicators as ind
-    from rl.grounding.taskset import _never_moved
-
-    assert callable(_never_moved)
-    assert not hasattr(ind, "_never_moved") and not hasattr(harness_module, "_never_moved")
 
 
 def test_the_two_sentinels_the_result_still_carries_are_distinct_fields() -> None:

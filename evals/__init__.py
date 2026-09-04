@@ -18,7 +18,7 @@ brings its own Chrome and the session never learns Chrome exists.
 
 This package is a library, not a verifiers plugin id: its `__all__` names two
 `Taskset` subclasses, and `loaders._plugin_class` requires exactly one. The plugin
-packages are `evals.signoflife`, `rl.movebox`, `rl.grounding` and `rl.target_box`.
+package is `evals.signoflife`.
 """
 
 import evals.fixtures.preparers  # noqa: F401  registers the fixture-backed preparers

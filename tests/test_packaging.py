@@ -1,10 +1,10 @@
 """What a dispatched run gets: the built distribution, not the checkout.
 
-`test_rl_plugin_ids.py` resolves the same ids in-process, where the repo root is
-already `sys.path[0]` — so it passes whether or not the modules are packaged at
-all. It did: `py-modules = []` shipped none of the five flat ids, and
-`top_level.txt` read `grammars` alone. Nothing noticed, because every caller so
-far has run with the checkout as its working directory.
+Resolving an id in-process proves nothing: the repo root is already
+`sys.path[0]` there, so it passes whether or not the module is packaged at all.
+It did: `py-modules = []` shipped none of the flat ids, and `top_level.txt` read
+`grammars` alone. Nothing noticed, because every caller so far has run with the
+checkout as its working directory.
 
 So this file builds the wheels and imports out of them with the checkout nowhere
 on `sys.path`, which is the only arrangement that can tell the two apart.
@@ -32,9 +32,6 @@ _DESKTOP = _REPO.parent / "desktop"
 
 FLAT_PLUGIN_IDS = (
     "osworld_bench",
-    "rl_grounding",
-    "rl_movebox",
-    "rl_target_box",
     "signoflife",
 )
 

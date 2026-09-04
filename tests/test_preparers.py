@@ -4,8 +4,8 @@ The seam's contract: `prepare` may drive the guest, `probe` must not. A `probe`
 that dispatched input would break the read-only property the oracle depends on.
 
 Eleven preparers are registered: `none`, `terminal`, `osworld`, the eight
-sign-of-life kinds (four scored, four candidate), plus the fixture and RL ones
-that register on import.
+sign-of-life kinds (four scored, four candidate), plus the fixture ones that
+register on import.
 """
 
 from __future__ import annotations
@@ -17,9 +17,6 @@ import pytest
 
 import evals.fixtures.preparers  # noqa: F401  registers web_fixture / app_fixture
 import evals.signoflife.guest  # noqa: F401  registers the four sign-of-life kinds
-import rl.grounding.harness  # noqa: F401
-import rl.movebox.harness  # noqa: F401
-import rl.target_box.harness  # noqa: F401
 from evals.signoflife.suite import ALLOWED_KINDS
 from evals.tasks import PREPARERS, Preparer, preparer_for, register_preparer
 from juergen_doubles import FakeSession, make_task_data
@@ -47,9 +44,8 @@ def test_a_freeroll_desktop_setup_with_no_preparer_fails_at_enumeration() -> Non
         list(FreerollTaskset(FreerollTasksetConfig(desktop_setup="grounding")).load())
 
 
-def test_the_fixture_and_rl_preparers_register_on_import() -> None:
+def test_the_fixture_preparers_register_on_import() -> None:
     assert {"web_fixture", "app_fixture"} <= set(PREPARERS)
-    assert {"movebox", "grounding_canvas", "target_box"} <= set(PREPARERS)
 
 
 def test_every_registered_preparer_satisfies_the_protocol() -> None:
@@ -160,24 +156,6 @@ def _expected_for(kind: str) -> dict:
         },
         "tk_no_submit_entry": {"text": "Ada", "draft_label": "Save draft"},
     }[kind]
-
-
-@pytest.mark.parametrize("kind", ["movebox", "grounding_canvas", "target_box"])
-def test_the_rl_probes_dispatch_no_input_events(kind: str) -> None:
-    from rl.desktop import VirtualDesktop
-
-    task = make_task_data(kind=kind, bbox=(10, 10, 50, 50), setup={"screen": [200, 200]})
-    if kind == "target_box":
-        session = _WitnessSession(screen=(1920, 1080))
-        task = make_task_data(
-            kind=kind,
-            setup={"screen": [1920, 1080], "instance_key": "k", "box": {}},
-        )
-    else:
-        session = VirtualDesktop(screen=(200, 200))
-    preparer_for(kind).probe(session, task)
-    if isinstance(session, _WitnessSession):
-        assert session.input_events == []
 
 
 def test_the_none_preparer_boots_screenshots_and_goes() -> None:

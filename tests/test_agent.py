@@ -9,8 +9,8 @@ termination is.
 
 `ctx.sampling` is authoritative at the wire (`ChatDialect.apply_overrides` is
 `{**body, "model": ..., **sampling.model_dump(exclude_none=True)}`), so
-`program_sampling` must send only what the eval left unset. The three historical
-temperatures are 1.0 train, 0.0 parity and 0.7 movebox.
+`program_sampling` must send only what the eval left unset. The historical
+temperatures are 1.0 train and 0.0 parity.
 """
 
 from __future__ import annotations

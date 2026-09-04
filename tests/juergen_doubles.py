@@ -1,4 +1,4 @@
-"""Shared doubles for the agent/ evals/ rl/ suite.
+"""Shared doubles for the agent/ evals/ suite.
 
 A `FakeSession` records the argv it was handed and replays canned stdout, because
 every guest interaction in this module is "run one command, read one marker line".

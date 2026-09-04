@@ -78,8 +78,7 @@ class Receipt(Protocol):
     """The guest's own account of one dispatched action.
 
     `desktop.execute.guest_program.AtomicExecutionResult` is the real one, reached
-    through `evals/vm.py`'s adapter; the in-process canvas (`rl/desktop.py`)
-    implements the same four members. Written down rather than left implied because
+    through `evals/vm.py`'s adapter. Written down rather than left implied because
     the return value used to be assigned and dropped, so any shape satisfied it —
     and a session that reports nothing publishes a turn in which a failed action
     looks exactly like a successful one.
@@ -1245,11 +1244,11 @@ class DesktopHarness(vf.Harness[DesktopHarnessConfig]):
     ) -> bytes:
         """Settled screenshot, optionally post-processed by the family.
 
-        `Preparer.observe` is how `target_box` draws its synthetic box onto every
-        real screenshot. It is a harness-side hook rather than a session method
-        because the annotation is a task property (which box) and the pool has no
-        task; threading it through the session would mean mutating a shared,
-        concurrently-checked-out object.
+        `Preparer.observe` is the optional hook a family uses to annotate every
+        real screenshot. It is harness-side rather than a session method because
+        the annotation is a task property and the pool has no task; threading it
+        through the session would mean mutating a shared, concurrently-checked-out
+        object. No preparer on this branch implements it.
         """
         frame = await _to_thread(
             _screenshot, session, self.config.settle, task.kind

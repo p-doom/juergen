@@ -294,9 +294,9 @@ def distance_to_box(pos: tuple[int, int], bbox: tuple[int, int, int, int]) -> fl
     return math.hypot(dx, dy)
 
 
-# Reached only through `rl.grounding.dataset.cursor_start`, which delegates here so the
-# container-free plugin cannot drift from this rule. There is no direct caller left in
-# `evals/`, so a dead-code sweep will read this as unused: it is not.
+# Exported for the grounding taskset, which delegates here so the container-free
+# plugin cannot drift from this rule. That plugin is not on this branch, so nothing
+# in the tree calls this: a dead-code sweep reads it as unused, and it is not.
 def cursor_start(
     bbox: tuple[int, int, int, int],
     screen_w: int,
@@ -319,17 +319,15 @@ def cursor_start(
 
     Every regime — `far` included — goes through that containment ladder, and a bbox
     that admits no on-screen point outside itself raises rather than returning a
-    start inside the target. The caller is `rl.grounding.taskset.GroundingTaskset.
-    load`, so the raise fails enumeration instead of scoring a degenerate
-    reach-at-step-0: `in_bbox` true at step 0, `reach_frame` 1, reward 1.0 before the
-    model has acted. Same ladder-then-raise shape as `rl.target_box.geometry.
-    sample_cursor_start`.
+    start inside the target. The caller enumerates tasks with it, so the raise fails
+    enumeration instead of scoring a degenerate reach-at-step-0: `in_bbox` true at
+    step 0, `reach_frame` 1, reward 1.0 before the model has acted.
 
     ⚠️ A bare mirror degenerates for window-sized targets, which is why `far` goes
     through the ladder too. Without a containment check, a target whose centre sits
-    near the screen centre gets a start inside itself, and grounding runs with
-    `require_unsolved_start=False` (`rl/grounding/harness.py:77`), so such an
-    episode scores rather than raising. Incidence at 1920x1080 — 20-60 px elements
+    near the screen centre gets a start inside itself, and grounding does not refuse
+    a solved start, so such an episode scores rather than raising. Incidence at
+    1920x1080 — 20-60 px elements
     0.02%, 60-200 px widgets 0.11%, 200-600 px panels 2.10%, 600-1400 px windows
     42.90% (analytic defect; Monte-Carlo rates over synthetic target distributions).
     Re-check whenever the target set grows toward window-sized targets.

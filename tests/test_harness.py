@@ -329,8 +329,8 @@ def test_the_guest_receipt_is_published_beside_the_round_trip_cursor(
     `cursor_before`/`cursor_after` are two separate host round-trips instead, taken
     before the turn and after the settle, so a click the guest reports as FAILED
     still gets a plausible-looking cursor pair. Both are published: they are
-    measured differently, `datasets/convert.py` and `rl/grounding/taskset.py` both
-    read the round-trip pair, and a disagreement is a finding rather than an error.
+    measured differently, `datasets/convert.py` reads the round-trip pair, and a
+    disagreement is a finding rather than an error.
     """
     session = FakeSession(cursor=(140, 90))
     _, result, _ = _run(
