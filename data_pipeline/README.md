@@ -7,21 +7,19 @@ This project owns the stage code for exactly two SFT streams:
   `ordered_events_v3_relative_1000_grid_v1` actions.
 
 Both chains finish through the shared Stage05 message-length and Stage06
-training-record builders in an explicit Omegalax checkout. Set
-`JUERGEN_REPO`, `LABCTL_DATASETS_ROOT`, and `OMEGALAX_REPO` to existing
-directories before loading either config. `SFT_PROCESSOR_SNAPSHOT` must name a
-weight-free local Hugging Face `snapshots/<40-hex-revision>` directory containing
-the complete tokenizer and image-processor files. The chain records every file
-digest and runs the attested Omegalax project locked and offline.
+training-record builders. Their Labctl recipes bind the Juergen and Omegalax
+checkouts and the pinned Qwen processor snapshot. Stage05 and Stage06 attest
+the exact processor files they consume and run the attested Omegalax project
+locked and offline.
 
-The Crowd-Cast chain begins at Stage03 and requires two immutable upstream
-artifacts: `CROWDCAST_MASTER_DIR` must be a 720p/q92 Stage01 master image store,
-and `CROWDCAST_CLIPS_MANIFEST` must be the canonical file from a Stage02
-realigned artifact. The parity chain begins at its raw screenshot tar source.
-`CUA_GYM_TRAJECTORIES` must be the recorded native `computer_use` JSONL. Its
-Stage03 curator groups recorded multi-call turns, verifies executed metadata,
-records non-action and nonrepresentable dispositions, and emits the sole schema
-accepted by Stage04.
+The Crowd-Cast Labctl pipeline owns the complete Stage00--06 chain: raw-source
+inventory, 720p/q92 master frames, strict realignment, filtering, goal
+annotation, conversations, message lengths, and training records. Every raw
+video and keylog is sealed as accepted or explicitly excluded. The parity
+pipeline begins from the recorded CUA-Gym screenshots and native
+`computer_use` trajectory JSONL. Its curator groups recorded multi-call turns,
+verifies executed metadata, records non-action and nonrepresentable
+dispositions, and emits the sole schema accepted by its conversation builder.
 
 Labctl owns deployment. Its two TOML pipelines live in the Slurm repository at
 `dev/franz/berlin/crowd-cast-bc/labctl/pipelines/crowdcast_canonical_v1.toml`
