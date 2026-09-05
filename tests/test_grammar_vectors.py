@@ -12,8 +12,7 @@ from desktop import ir
 from desktop.geometry import DisplayGeometry
 
 import grammars
-
-from . import _support
+from grammars import _support
 
 NAMES = tuple(grammars.available())
 _MOVE_KINDS = ("move_to", "glide_to")
@@ -238,7 +237,7 @@ def test_intended_cursor_matches_compile(name):
             )
 
 
-CANONICAL_PROBES = {
+CANONICAL_OPERATIONS = {
     "move_to": ir.move_to(700, 400),
     "glide_to": ir.glide_to(700, 400, 0.5),
     "drag": ir.drag(700, 400, 800, 450),
@@ -255,9 +254,9 @@ CANONICAL_PROBES = {
 
 
 def test_every_canonical_operation_kind_is_groupable():
-    assert set(CANONICAL_PROBES) == set(ir.CANONICAL_KINDS) - {"raise_for_test"}
+    assert set(CANONICAL_OPERATIONS) == set(ir.CANONICAL_KINDS) - {"raise_for_test"}
     geometry = DisplayGeometry(desktop_width=1920, desktop_height=1080)
-    for operation in CANONICAL_PROBES.values():
+    for operation in CANONICAL_OPERATIONS.values():
         assert _support.group_operations(
             (operation,), geometry=geometry, cursor=(960, 540)
         )

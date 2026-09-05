@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import datetime
 import struct
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -139,14 +138,6 @@ def keylog_span_s(events: list[Any]) -> float:
     """Last event timestamp (s) -- the keylog span."""
     ts = [e[0] for e in events if isinstance(e, list) and e]
     return (max(ts) / 1e6) if ts else 0.0
-
-
-@dataclass
-class Splice:
-    kp: float  # keylog-time pause point (local s)
-    vp: float  # video-time pause point (local s)
-    collapse: float  # collapsed seconds
-    leading: bool = False  # True for the (single) leading/overhanging idle
 
 
 def compute_splices(

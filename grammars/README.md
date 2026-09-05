@@ -17,5 +17,5 @@ line handled by `grammars._support.split_control`.
 Run the full conformance gate with:
 
 ```bash
-uv run pytest -q grammars
+uv run --locked --extra dev pytest -q tests/test_grammar_vectors.py
 ```

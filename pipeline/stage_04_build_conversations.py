@@ -17,7 +17,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import grammars
-from image_domain import image_domain
+from image_domain import jpeg_q92_height_domain
 from pipeline.lib.action_format import format_segment
 from pipeline.lib.common import ensure_dir, write_json_atomic, write_jsonl
 from pipeline.lib.events import Window, load_events
@@ -266,12 +266,7 @@ def main() -> None:
         raise ValueError(
             f"Crowd-Cast master has invalid target_height {target_height!r}"
         )
-    frames_domain = image_domain(
-        media="jpeg",
-        quality=JPEG_QUALITY,
-        geometry="height",
-        extent=target_height,
-    )
+    frames_domain = jpeg_q92_height_domain(target_height)
 
     system_prompt = grammars.describe(GRAMMAR)
     prompt_digest = hashlib.sha256(system_prompt.encode()).hexdigest()

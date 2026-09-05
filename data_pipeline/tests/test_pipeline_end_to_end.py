@@ -14,12 +14,11 @@ import grammars
 import pytest
 import synthetic_clip as clip
 from grammars.deltatype_v2 import CODEC
-from image_domain import image_domain
+from image_domain import jpeg_q92_height_domain
 from PIL import Image
 
 from pipeline.annotation import stage_annotate
 from pipeline.annotation.lib.labeler import LabelResult
-from pipeline.lib import config
 from pipeline.lib.image_store import make_arrayrecord_image_uri, read_jpeg_bytes
 from pipeline.lib.manifest import (
     file_sha256_short,
@@ -239,12 +238,7 @@ def test_stage_04_attests_prompt_inputs_and_q92_images(chain: Chain):
     assert manifest["grammar"] == "deltatype_v2"
     prompt = grammars.describe("deltatype_v2")
     assert manifest["system_prompt_sha256"] == hashlib.sha256(prompt.encode()).hexdigest()
-    assert manifest["image_domain"] == image_domain(
-        media="jpeg",
-        quality=config.DEFAULT_JPEG_QUALITY,
-        geometry="height",
-        extent=clip.FRAME_H,
-    )
+    assert manifest["image_domain"] == jpeg_q92_height_domain(clip.FRAME_H)
     assert resolve_chat_artifact(chain.conversations) == chain.conversations / "chat.jsonl"
     for image in _images(_jsonl(chain.conversations / "chat.jsonl")[0]):
         with Image.open(io.BytesIO(read_jpeg_bytes(image))) as frame:

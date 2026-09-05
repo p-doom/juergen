@@ -14,7 +14,7 @@ from PIL import Image
 from image_domain import validate_jpeg_q92
 from pipeline.lib import config
 from pipeline.lib.image_store import parse_arrayrecord_image_uri
-from pipeline.lib.manifest import file_sha256_short, make_artifact_id
+from pipeline.lib.manifest import file_sha256_short
 from pipeline.lib.source_clips import resolve_source_clips
 
 _INDEX_FIELDS = {
@@ -330,8 +330,3 @@ def resolve_master_artifact(root: Path) -> tuple[dict[str, Any], list[dict[str, 
     ):
         raise ValueError(f"master receipt mismatch: {root}")
     return manifest, rows
-
-
-def master_artifact_id(root: Path) -> str:
-    resolve_master_artifact(root)
-    return make_artifact_id(root)

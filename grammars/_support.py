@@ -1,15 +1,8 @@
-"""Primitives shared by the grammar codecs.
-
-Adding a grammar never edits this file. A new codec either reuses these helpers
-or ignores them. There is no table, registry, or enum here that a new grammar
-has to be added to — the only registration is the ``juergen.grammars`` entry
-point in ``pyproject.toml``.
+"""Primitives shared by the two retained grammar codecs.
 
 Nothing here knows a coordinate convention. Every helper that touches a
-coordinate is handed an already-resolved absolute screen pixel. Each codec owns
-its own convention (raw relative delta, normalized relative delta, absolute,
-diff-of-absolute, …) and resolves it in ``compile`` before anything shared sees
-it. There is no coordinate-space enum.
+coordinate is handed an already-resolved absolute screen pixel. Each codec
+resolves its own convention in ``compile`` before anything shared sees it.
 
 The Operation vocabulary the codecs emit (all coordinates are absolute screen
 pixels, already clamped to the display):
@@ -37,7 +30,7 @@ import itertools
 import json
 import re
 import textwrap
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -73,7 +66,7 @@ class IntendedCursor:
     pixels. ``clamped`` is true when any request in the turn resolved off the
     display.
 
-    Both fields exist because six of the seven grammars emit no ``move_to`` at all
+    Both fields exist because both codecs emit no ``move_to`` at all
     when a resolved move does not change the position, so an off-display delta and
     a delta of zero produce the same empty operation stream and the same ``no_op``
     control. In a closed-loop rollout the cursor pins to an edge and every further
@@ -91,10 +84,8 @@ class IntendedCursor:
 
 
 #: One cursor request in absolute pixel space: ``("rel", dx, dy)`` folds onto the
-#: current position, ``("abs", x, y)`` names it. The codec converts its own
-#: convention first — ``move_rel`` denormalizes thousandths against the display,
-#: the raw-delta grammars pass their delta through — so nothing here knows which
-#: convention it was, exactly as with every other helper in this module.
+#: current position, ``("abs", x, y)`` names it. Each codec converts its own
+#: convention first, so nothing here needs to know which convention it was.
 CursorRequest = tuple[str, int, int]
 
 
@@ -114,7 +105,7 @@ def fold_requests(
     because that is where the pointer actually is; that makes this fold identical
     to ``compile_action``'s, so the clamped result agrees with the dispatched
     stream by construction rather than by two functions staying in step.
-    ``test_vectors`` asserts that agreement for every vector of every grammar.
+    The grammar conformance tests assert that agreement for every vector.
     """
     here = clamp(cursor, geometry)
     target: tuple[int, int] | None = None
@@ -223,7 +214,7 @@ def render_spec(codec: Any) -> str:
     Epilogue = the ``notes`` docstring. All three are mandatory; a missing one
     raises rather than being omitted from the prompt. ``CONTROL_SPEC`` closes it:
     the episode-control channel is not a production of any grammar, so it is
-    appended here rather than declared seven times.
+    appended here rather than duplicated in both codecs.
     """
     body: list[str] = []
     for item in productions(codec):
@@ -236,70 +227,6 @@ def render_spec(codec: Any) -> str:
         CONTROL_SPEC,
     ]
     return "\n\n".join(blocks) + "\n"
-
-
-def render_tool_prompt(codec: Any, *, properties: dict[str, Any]) -> str:
-    """Render a ``computer_use`` tool prompt from the codec's own docstrings.
-
-    Used by the tool-call grammars, whose prompt is a function signature rather
-    than a grammar listing. The ``<tools>`` envelope is preserved verbatim (an
-    off-the-shelf model recognises it), but every word inside it comes from a
-    docstring: the class docstring is the preamble, ``tool_description`` is the
-    function description, each ``@production`` is one action's description and
-    one entry of the action enum, and ``notes`` is the epilogue. Termination is
-    NOT one of the actions in the schema — it is ``CONTROL_SPEC``, appended after
-    the epilogue exactly as in ``render_spec``.
-    """
-    actions = productions(codec)
-    described = inspect.cleandoc(codec.tool_description.__doc__)
-    schema = {
-        "type": "function",
-        "function": {
-            "name": "computer_use",
-            "description": described,
-            "parameters": {
-                "properties": {
-                    "action": {
-                        "description": "The action to perform. The available "
-                        "actions are:\n"
-                        + "\n".join(
-                            f"* `{item.syntax}`: {item.doc}" for item in actions
-                        ),
-                        "enum": [item.syntax for item in actions],
-                        "type": "string",
-                    },
-                    **properties,
-                },
-                "required": ["action"],
-                "type": "object",
-            },
-        },
-    }
-    epilogue = inspect.cleandoc(codec.notes.__doc__)
-    return (
-        "\n".join(
-            [
-                inspect.cleandoc(type(codec).__doc__),
-                "",
-                "# Tools",
-                "",
-                "You may call one or more functions to assist with the user query.",
-                "",
-                (
-                    "You are provided with function signatures within "
-                    "<tools></tools> XML tags:"
-                ),
-                "<tools>",
-                json.dumps(schema, ensure_ascii=False),
-                "</tools>",
-                "",
-                epilogue,
-                "",
-                CONTROL_SPEC,
-            ]
-        )
-        + "\n"
-    )
 
 
 def spec_digest(text: str) -> str:
@@ -337,22 +264,15 @@ class NoAction(ValueError):
     """The text holds no action of this grammar, as opposed to a broken one.
 
     A codec raises this where it found nothing of its own to read, and its own
-    error where it recognised an attempt and rejected it. ``Agent.decide`` reads
-    the difference and nothing else does: prose plus a control line is a
-    well-formed terminate-only turn, a malformed action line plus a control line
-    is still a scored parse error. Every site that raises it is a case ``parse``
-    already failed on, so widening what raises it can only hide a real parse
-    failure.
+    error where it recognised an attempt and rejected it. Widening what raises
+    this exception would hide real parse failures.
     """
 
 
 def final_line(text: str) -> str:
     """The last non-empty line. Reasoning before the action line is legal.
 
-    Every bare-line grammar picks its action this way, including under
-    ``THINKING_PREAMBLE``, whose ``Action:`` marker introduces the one-line
-    DESCRIPTION and not the action. A variant that preferred the marker's body
-    lived here for ``diffabs`` alone and read the description in its place.
+    Both retained codecs pick their action this way.
     """
     if not isinstance(text, str):
         raise TypeError(f"expected str, got {type(text)!r}")
@@ -556,12 +476,9 @@ def lower_transitions(
 
 # lifting: Operations -> an action, the training-label direction
 #
-# ``compile_action`` read backwards. The lift lives on the codec so a converter
-# holding absolute Operations — a recorded trajectory, a scripted oracle, a
-# teacher rollout — need not know what a coordinate means; everything reusable
-# lives here. Its ``terminate`` argument is carried straight to the Action's
-# ``terminate`` field and rendered by ``with_control``, so the lift resolves a
-# coordinate convention and nothing else.
+# The lift lives on the codec so a converter holding absolute Operations need
+# not know what a coordinate means. Its ``terminate`` argument is carried
+# straight to the Action's ``terminate`` field and rendered by ``with_control``.
 #
 # Where a grammar cannot express what the Operations say, the lift raises. A
 # ``glide_to`` inside a held button is a drag, and the converters this replaces
@@ -602,9 +519,8 @@ def group_operations(
     Grammars that want individual transitions expand the groups again; for the
     transition spellings the collapse and the expansion are exact inverses.
 
-    Every canonical Operation kind is accepted here. A kind that falls through to
-    "unknown Operation kind" makes a whole recorded trajectory unliftable in every
-    grammar at once, so these are handled explicitly:
+    Every canonical Operation kind is accepted here. These are handled
+    explicitly:
 
     * ``click(button)`` — desktop's executor synthesises this itself
       (``guest_program.lower_guest_operations``), so it appears in any stream
@@ -613,10 +529,7 @@ def group_operations(
       ``mouse_down``/``mouse_up``, so ``click, click`` is a double click.
     * ``drag(x0, y0, x1, y1)`` — decomposed into ``move``, ``button_down(left)``,
       ``stroke``, ``button_up(left)``. That is the same group shape a codec
-      already recognises as a drag, so ``deltatype_v2`` reaches its ``MOVE``
-      form, ``ordered_events_v3`` and ``move_rel`` interleave, and
-      ``native_absolute`` reaches ``left_click_drag``, while the three grammars
-      with no stroke primitive raise. A zero-extent drag keeps its press and
+      already recognises as a drag. A zero-extent drag keeps its press and
       release, which is why ``ir.drag`` exists as its own kind.
     * ``ascii_type(text)`` — becomes the same ``type`` group as
       ``coalesced_type``. This is the one flattening in this function: no grammar
@@ -752,7 +665,7 @@ def bare_token_plan(
 ) -> BareTokenPlan:
     """Groups -> ``[one move][one scroll][ordered transitions]``.
 
-    That fixed shape is what every bare-token grammar can say, so anything the
+    That fixed shape is what Deltatype can say, so anything the
     stream asks for outside it — a second move, a scroll after a transition, a
     stroke in a grammar with no stroke primitive — raises rather than being
     reordered or dropped.
@@ -855,25 +768,6 @@ def _button_element(
     raise error(f"unsupported mouse button: {button!r}")
 
 
-def click_action_name(button: str, repeats: int) -> str | None:
-    """The computer_use action for N adjacent press/release pairs, or None.
-
-    None means the schema has no single action for it (a middle-button
-    double-click, say) and the caller must emit the transitions individually.
-    """
-    if repeats == 1:
-        return {
-            "left": "left_click",
-            "right": "right_click",
-            "middle": "middle_click",
-        }.get(button)
-    if button == "left" and repeats == 2:
-        return "double_click"
-    if button == "left" and repeats == 3:
-        return "triple_click"
-    return None
-
-
 def terminate_status(
     value: object, *, error: type[Exception] = ValueError
 ) -> str | None:
@@ -891,105 +785,21 @@ def terminate_status(
     raise error(f"terminate must be None, 'success' or 'failure', got {value!r}")
 
 
-_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
-_FENCE_OPEN_RE = re.compile(r"^```(?:json)?\s*", re.IGNORECASE)
-_FENCE_CLOSE_RE = re.compile(r"\s*```$")
-
-
-def _arguments_of(payload: Any) -> dict[str, Any] | None:
-    """One ``computer_use`` call payload -> its arguments dict, or ``None``."""
-    if not isinstance(payload, dict):
-        return None
-    if payload.get("name") not in (None, "computer_use"):
-        return None
-    arguments = payload.get("arguments")
-    if isinstance(arguments, str):
-        try:
-            arguments = json.loads(arguments)
-        except json.JSONDecodeError:
-            return None
-    if isinstance(arguments, dict) and isinstance(arguments.get("action"), str):
-        return arguments
-    return None
-
-
-def iter_tool_calls(text: str) -> Iterator[dict[str, Any]]:
-    """Yield every ``computer_use`` arguments dict, in emission order.
-
-    Tagged ``<tool_call>`` blocks win. If the completion has none, a bare JSON
-    object (optionally inside a ``` fence) or a JSON array of objects is
-    accepted, which is how the RL rollout path sees vLLM-parsed output.
-    """
-    if not isinstance(text, str):
-        raise TypeError(f"expected str, got {type(text)!r}")
-    payloads: list[Any] = []
-    tagged = False
-    for match in _TOOL_CALL_RE.finditer(text):
-        tagged = True
-        try:
-            payloads.append(json.loads(match.group(1)))
-        except json.JSONDecodeError:
-            continue
-    if not tagged:
-        stripped = _FENCE_CLOSE_RE.sub("", _FENCE_OPEN_RE.sub("", text.strip()))
-        try:
-            loaded = json.loads(stripped)
-        except json.JSONDecodeError:
-            loaded = None
-        if isinstance(loaded, dict):
-            payloads.append(loaded)
-        elif isinstance(loaded, list):
-            payloads.extend(item for item in loaded if isinstance(item, dict))
-    for payload in payloads:
-        arguments = _arguments_of(payload)
-        if arguments is not None:
-            yield arguments
-
-
-def has_tool_call(text: str) -> bool:
-    """Whether ``text`` holds anything shaped like a tool call.
-
-    ``iter_tool_calls`` yields only the calls it could read, so on its own it
-    cannot tell a turn that emitted no call from one whose call was unreadable —
-    a ``<tool_call>`` block of broken JSON yields nothing either. The two
-    tool-call grammars need that difference to pick between ``NoAction`` and
-    their own error.
-    """
-    if not isinstance(text, str):
-        raise TypeError(f"expected str, got {type(text)!r}")
-    if _TOOL_CALL_RE.search(text):
-        return True
-    stripped = _FENCE_CLOSE_RE.sub("", _FENCE_OPEN_RE.sub("", text.strip()))
-    return stripped.startswith(("{", "["))
-
-
-def render_tool_calls(calls: Sequence[dict[str, Any]]) -> str:
-    """Canonical emission: one ``<tool_call>`` block per call."""
-    return "\n".join(
-        "<tool_call>\n"
-        + json.dumps({"name": "computer_use", "arguments": call}, ensure_ascii=False)
-        + "\n</tool_call>"
-        for call in calls
-    )
-
-
 # The episode-control channel.
 #
 # Ending an episode dispatches nothing: it is a message to the episode driver, not
 # something the computer does. A grammar's ``compile`` emits ``Operation``s, so a
 # control token inside one lowers to zero operations — a category error, and every
-# grammar reinvented it (a whole action line, a call in an ordered list, a
-# TERMINATE with no FAIL, or nothing at all). One spelling lives here instead,
-# rendered into every prompt by the two renderers above and read back once by the
-# driver before any codec sees the text.
+# codec would otherwise have to reinvent it. One spelling lives here instead,
+# rendered into both prompts and read back once before either codec sees the
+# text.
 
 CONTROL_TOKEN = "TERMINATE"
 
 _CONTROL_LINE_RE = re.compile(rf"(?:^|\n){CONTROL_TOKEN}: (success|failure)\n?\Z")
 
 #: Appended to every grammar's prompt. It names no coordinate, no key and no
-#: action, which is what makes it grammar-independent rather than a shared token
-#: seven grammars happen to agree on.
+#: action, which is what makes it grammar-independent.
 CONTROL_SPEC = f"""Ending the episode
   {CONTROL_TOKEN}: success
       The goal has been achieved. Stop.
@@ -1024,9 +834,7 @@ def with_control(
 ) -> str:
     """An action's text plus its control line, which always comes last.
 
-    An empty ``body`` yields the control line alone: the two tool-call grammars
-    render no text for an empty call list, so a bare termination is the control
-    line and nothing else. The five with an idle action render that action first.
+    An empty ``body`` yields the control line alone.
     """
     if status is None:
         return body
@@ -1049,122 +857,3 @@ def split_control(text: str) -> Control:
             "'TERMINATE: success' or 'TERMINATE: failure'"
         )
     return Control(match[1], text[: match.start()])
-
-
-# pyautogui-style key words -> rdev names, so ``key_down``/``key_up`` args are
-# one vocabulary across every grammar. Retained from the sign-of-life executor,
-# including its fallback: an unrecognised name passes through unchanged.
-_KEY_ALIASES = {
-    "CTRL": "ControlLeft",
-    "CONTROL": "ControlLeft",
-    "SHIFT": "ShiftLeft",
-    "ALT": "AltLeft",
-    "OPTION": "AltLeft",
-    "META": "MetaLeft",
-    "SUPER": "MetaLeft",
-    "WIN": "MetaLeft",
-    "CMD": "MetaLeft",
-    "ENTER": "Return",
-    "RETURN": "Return",
-    "ESC": "Escape",
-    "ESCAPE": "Escape",
-    "BACKSPACE": "Backspace",
-    "TAB": "Tab",
-    "SPACE": "Space",
-    "DELETE": "Delete",
-    "DEL": "Delete",
-    "INSERT": "Insert",
-    "HOME": "Home",
-    "END": "End",
-    "PAGEUP": "PageUp",
-    "PAGEDOWN": "PageDown",
-    "UP": "ArrowUp",
-    "DOWN": "ArrowDown",
-    "LEFT": "ArrowLeft",
-    "RIGHT": "ArrowRight",
-}
-
-
-def normalize_key(value: object, *, error: type[Exception] = ValueError) -> str:
-    """A tool-call key word -> its rdev name.
-
-    Only the tool-call grammars call this. The bare-token grammars already
-    speak rdev, and normalising them would silently rewrite e.g. ``Alt`` into
-    ``AltLeft``.
-    """
-    if not isinstance(value, str) or not value.strip():
-        raise error("key must be a non-empty string")
-    raw = value.strip()
-    alias = _KEY_ALIASES.get(raw.upper())
-    if alias is not None:
-        return alias
-    if len(raw) == 1 and raw.isalpha():
-        return f"Key{raw.upper()}"
-    return raw
-
-
-# No handler tables live here, and none should be added. There is no dispatch
-# engine in desktop for a grammar to contribute a ``dict[str, Handler]`` to. A
-# shared ``match`` over grammar-specific action names would be wrong, because
-# that set is open per grammar; a codec's job ends at ``compile``, and the
-# Operation vocabulary on the far side is closed: a pointer moves, a button
-# transitions, a wheel turns, text arrives. Lowering it is a fixed
-# ``if kind ==`` chain in ``desktop.execute.guest_program`` over something no
-# grammar extends.
-
-
-#: The preamble of both bare-line paired-eval arms, ``compact_raw`` and
-#: ``compact_absolute``, held in one string and assigned to both codec
-#: classes' ``__doc__``. A constant rather than two docstrings because the arms
-#: had drifted: the same sentence wrapped at a different column in each, so the
-#: two prompts tokenised differently.
-MATCHED_ARM_PREAMBLE = """You operate a real desktop VM with a mouse and keyboard.
-
-First write one short sentence describing the action, without numbers. Then
-output exactly one bare action line. Only the final non-empty line is read as
-the action; do not use JSON or tool calls.
-
-Complete exactly the next semantic step shown in the user context.
-"""
-
-#: The productions the two arms share verbatim, likewise held once. Only the
-#: mouse-triple productions differ between the arms.
-MATCHED_ARM_PRESS = """Press NAME. Mouse buttons are LMB, RMB, MMB. Keyboard keys use rdev
-names: Return, Tab, Backspace, Escape, ControlLeft, ShiftLeft, KeyA, ...
-"""
-
-MATCHED_ARM_RELEASE = (
-    """Release NAME. A chord presses in order and releases in reverse."""
-)
-
-MATCHED_ARM_TYPE = """Type TEXT as one coalesced burst. TEXT is a JSON string. It must NOT
-contain a newline — press Return as an event (`+Return -Return`).
-"""
-
-MATCHED_ARM_NOTES = """Emit exactly one action line per turn."""
-
-#: Which member of a paired arm takes which shared string. Applied by
-#: ``apply_matched_arm_prose`` after each arm's class body.
-_MATCHED_ARM_PROSE = {
-    "_press": MATCHED_ARM_PRESS,
-    "_release": MATCHED_ARM_RELEASE,
-    "_type": MATCHED_ARM_TYPE,
-    "notes": MATCHED_ARM_NOTES,
-}
-
-
-def apply_matched_arm_prose(codec_class: type) -> type:
-    """Install the shared paired-arm prose onto one arm's class.
-
-    Called by ``compact_raw`` and ``compact_absolute`` and by nothing
-    else, so the shared half of the two prompts has exactly one source.
-    """
-    codec_class.__doc__ = MATCHED_ARM_PREAMBLE
-    for member, doc in _MATCHED_ARM_PROSE.items():
-        function = getattr(codec_class, member, None)
-        if function is None:
-            raise AttributeError(
-                f"{codec_class.__name__} is a matched arm but has no {member!r}"
-            )
-        function.__doc__ = doc
-    return codec_class

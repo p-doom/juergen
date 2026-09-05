@@ -6,8 +6,6 @@ import io
 
 from PIL import Image, JpegImagePlugin
 
-IMAGE_GEOMETRIES = ("max_pixels", "height")
-
 
 def encode_jpeg_q92(image: Image.Image) -> bytes:
     output = io.BytesIO()
@@ -40,15 +38,8 @@ def validate_jpeg_q92(payload: bytes) -> Image.Image:
     return image
 
 
-def image_domain(*, media: str, quality: int, geometry: str, extent: int) -> str:
-    """`<encoding>_<geometry>_<extent>`, e.g. `jpeg_q80_height_720`.
-
-    `quality` is absent from the PNG form: PNG is lossless, so carrying it would
-    refuse a lossless arm against a lossless dataset.
-    """
-    if geometry not in IMAGE_GEOMETRIES:
-        raise ValueError(
-            f"image geometry must be one of {IMAGE_GEOMETRIES}, got {geometry!r}"
-        )
-    encoding = "png" if media == "png" else f"jpeg_q{quality}"
-    return f"{encoding}_{geometry}_{extent}"
+def jpeg_q92_height_domain(height: int) -> str:
+    """The image-domain identifier for a canonical height-bounded JPEG store."""
+    if not isinstance(height, int) or isinstance(height, bool) or height <= 0:
+        raise ValueError(f"height must be a positive integer, got {height!r}")
+    return f"jpeg_q92_height_{height}"

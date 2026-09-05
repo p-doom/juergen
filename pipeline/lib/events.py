@@ -71,9 +71,8 @@ class RawEvent:
     ``kind`` is one of ``move`` / ``scroll`` / ``press`` / ``release``;
     press/release carry the resolved key/button ``name`` (Key* and Mouse*
     events share one namespace).
-    Scroll events carry both raw axes in ``dx``/``dy`` plus the legacy
-    collapsed scalar in ``scroll`` (y, falling back to x — what the canonical
-    format consumes)."""
+    Scroll events carry both raw axes in ``dx``/``dy`` plus the scalar consumed
+    by Deltatype in ``scroll`` (vertical when present, horizontal otherwise)."""
 
     seq: int
     t_s: float
