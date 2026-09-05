@@ -1,35 +1,13 @@
-"""The Phase-B compact deltatype-v2 grammar.
-
-``report()`` below returns the prompt and action digests as data, with a
-``matches_producer`` boolean. It cannot raise: a digest mismatch is recorded,
-not enforced.
-"""
+"""The Crowd-Cast deltatype-v2 grammar."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
 
 from desktop.geometry import DisplayGeometry
 from desktop.ir import Operation
 
 from .. import _support
-
-#: Provenance of the sealed Phase-B producer prompt. ``describe()`` renders a
-#: superset of it (the sealed text omits ``type()``, which the producer's parser
-#: has always accepted), so ``matches_producer`` is expected to be False.
-PRODUCER = {
-    "prompt_sha256": (
-        "57f7d0b230974068618b48151b73215d5517d5445a99dbf5abdc05557e3482e6"
-    ),
-    "action_v2_sha256": (
-        "1ded3d5a7e51da71cf3082049fbdd404971ebf72a95d93f333ebb3ee3075ccb7"
-    ),
-    "dataset_manifest_sha256": (
-        "77085ee3c2ea7d780e96ade76efbffc0746139c0c619a5d9cbcec8562a1a25d5"
-    ),
-}
 
 DRAG_SECONDS = 0.5
 
@@ -49,36 +27,25 @@ class DeltatypeV2Action:
     no_op: bool = False
     #: The episode-control status this turn declares, from ``_support.CONTROL_SPEC``.
     #: Never set by ``parse`` — the driver strips the control line before the codec
-    #: sees the text — only by the lift, and rendered by ``with_control``.
+    #: sees the text — and rendered by ``with_control``.
     terminate: str | None = None
-    #: sha256 of the prompt the parse ran under. Reported, never enforced, and
-    #: excluded from equality so a round-trip still compares equal.
+    #: sha256 of the prompt the parse ran under, excluded from action equality.
     prompt_digest: str = field(default="", compare=False)
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "dx": self.dx,
-            "dy": self.dy,
-            "scroll": self.scroll,
-            "elements": [element.to_dict() for element in self.elements],
-            "no_op": self.no_op,
-            "terminate": self.terminate,
-        }
-
-
-def action_from_dict(value: dict[str, Any]) -> DeltatypeV2Action:
-    return DeltatypeV2Action(
-        dx=int(value.get("dx", 0)),
-        dy=int(value.get("dy", 0)),
-        scroll=int(value.get("scroll", 0)),
-        elements=tuple(
-            _support.element_from_dict(item) for item in value.get("elements", ())
-        ),
-        no_op=bool(value.get("no_op", False)),
-        terminate=_support.terminate_status(
-            value.get("terminate"), error=DeltatypeV2Error
-        ),
-    )
+    def __post_init__(self) -> None:
+        if any(type(value) is not int for value in (self.dx, self.dy, self.scroll)):
+            raise DeltatypeV2Error("dx, dy and scroll must be integers")
+        if not isinstance(self.elements, tuple) or any(
+            not isinstance(element, _support.Element) for element in self.elements
+        ):
+            raise DeltatypeV2Error("elements must be a tuple of Element values")
+        if type(self.no_op) is not bool:
+            raise DeltatypeV2Error("no_op must be a boolean")
+        _support.terminate_status(self.terminate, error=DeltatypeV2Error)
+        if not isinstance(self.prompt_digest, str):
+            raise DeltatypeV2Error("prompt_digest must be text")
+        if self.no_op and (self.dx or self.dy or self.scroll or self.elements):
+            raise DeltatypeV2Error("NO_OP cannot carry mouse values or elements")
 
 
 class DeltatypeV2Codec:
@@ -147,10 +114,6 @@ class DeltatypeV2Codec:
     def digest(self) -> str:
         return _support.spec_digest(self.describe())
 
-    def report(self) -> dict[str, Any]:
-        """Prompt provenance as data. Never raises."""
-        return _support.drift_report(self, producer=PRODUCER)
-
     def parse(self, text: str) -> DeltatypeV2Action:
         line = _support.final_line(text)
         digest = self.digest
@@ -210,81 +173,6 @@ class DeltatypeV2Codec:
                 _support.lower_transitions((element,), error=DeltatypeV2Error)
             )
         return tuple(operations)
-
-    def intended_cursor(
-        self,
-        action: DeltatypeV2Action,
-        geometry: DisplayGeometry,
-        cursor: tuple[int, int],
-    ) -> _support.IntendedCursor | None:
-        """The head delta, then each ``MOVE`` element of the drag form.
-
-        Every one of them is a request in pixels, and a stroke moves the pointer
-        exactly as the head does, so the last one is where the turn asked to end
-        up. ``None`` only for the idle action, which names no position.
-        """
-        if action.no_op:
-            return None
-        return _support.fold_requests(
-            (
-                ("rel", action.dx, action.dy),
-                *(
-                    ("rel", element.delta[0], element.delta[1])
-                    for element in action.elements
-                    if element.kind == "move" and element.delta is not None
-                ),
-            ),
-            geometry=geometry,
-            cursor=cursor,
-            error=DeltatypeV2Error,
-        )
-
-    def action_from_operations(
-        self,
-        operations: Sequence[Operation],
-        *,
-        geometry: DisplayGeometry,
-        cursor: tuple[int, int],
-        terminate: object = None,
-    ) -> DeltatypeV2Action:
-        """Absolute Operations -> an action. The inverse of ``compile_action``.
-
-        ``terminate`` rides through to the control line, so a terminating turn
-        keeps whatever work it did. A ``glide_to`` inside a held left button
-        becomes the MOVE drag form; the stroke's own duration is dropped, because
-        the grammar fixes it at ``DRAG_SECONDS``.
-        """
-        status = _support.terminate_status(terminate, error=DeltatypeV2Error)
-        groups = _support.group_operations(
-            operations, geometry=geometry, cursor=cursor, error=DeltatypeV2Error
-        )
-        here = _support.clamp(cursor, geometry)
-        plan = _support.bare_token_plan(
-            groups,
-            cursor=here,
-            allow_type=True,
-            allow_stroke=True,
-            error=DeltatypeV2Error,
-        )
-        if plan.idle:
-            return DeltatypeV2Action(
-                no_op=True, terminate=status, prompt_digest=self.digest
-            )
-        dx, dy = (
-            (0, 0)
-            if plan.target is None
-            else (plan.target[0] - here[0], plan.target[1] - here[1])
-        )
-        return self._validate_drag(
-            DeltatypeV2Action(
-                dx,
-                dy,
-                plan.scroll,
-                plan.elements,
-                terminate=status,
-                prompt_digest=self.digest,
-            )
-        )
 
     def _validate_drag(self, action: DeltatypeV2Action) -> DeltatypeV2Action:
         moves = [element for element in action.elements if element.kind == "move"]

@@ -1,8 +1,7 @@
 """Primitives shared by the two retained grammar codecs.
 
-Nothing here knows a coordinate convention. Every helper that touches a
-coordinate is handed an already-resolved absolute screen pixel. Each codec
-resolves its own convention in ``compile`` before anything shared sees it.
+Coordinates reach this module as resolved screen pixels. Deltatype owns raw
+relative deltas; ordered-events owns normalized relative deltas.
 
 The Operation vocabulary the codecs emit (all coordinates are absolute screen
 pixels, already clamped to the display):
@@ -18,7 +17,6 @@ kind                 args                       meaning
 ``key_down``         ``(name: str)``            rdev key name
 ``key_up``           ``(name: str)``            rdev key name
 ``coalesced_type``   ``(text: str)``            one atomic burst of literal text
-``wait``             ``(seconds: float)``       idle
 ===================  =========================  ==================================
 """
 
@@ -35,7 +33,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from desktop.geometry import DisplayGeometry
-from desktop.ir import Operation, scroll_deltas
+from desktop.ir import Operation
 
 # The single point of contact with DisplayGeometry. Its field names are the
 # verbatim Harbor ones — ``desktop_width`` / ``desktop_height`` for the display
@@ -56,71 +54,6 @@ def clamp(point: tuple[int, int], geometry: DisplayGeometry) -> tuple[int, int]:
     width, height = screen_size(geometry)
     x, y = point
     return (max(0, min(width - 1, int(x))), max(0, min(height - 1, int(y))))
-
-
-@dataclass(frozen=True)
-class IntendedCursor:
-    """Where a turn asked the cursor to go, and whether the display refused.
-
-    ``x``/``y`` are the last request's target BEFORE ``clamp``, in absolute screen
-    pixels. ``clamped`` is true when any request in the turn resolved off the
-    display.
-
-    Both fields exist because both codecs emit no ``move_to`` at all
-    when a resolved move does not change the position, so an off-display delta and
-    a delta of zero produce the same empty operation stream and the same ``no_op``
-    control. In a closed-loop rollout the cursor pins to an edge and every further
-    move in that direction records as an idle turn. This is the only place that
-    difference survives, which is why ``clamped`` is published rather than derived
-    from ``x``/``y``: a mid-turn clamp is invisible in the final target.
-    """
-
-    x: int
-    y: int
-    clamped: bool
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"x": self.x, "y": self.y, "clamped": self.clamped}
-
-
-#: One cursor request in absolute pixel space: ``("rel", dx, dy)`` folds onto the
-#: current position, ``("abs", x, y)`` names it. Each codec converts its own
-#: convention first, so nothing here needs to know which convention it was.
-CursorRequest = tuple[str, int, int]
-
-
-def fold_requests(
-    requests: Sequence[CursorRequest],
-    *,
-    geometry: DisplayGeometry,
-    cursor: tuple[int, int],
-    error: type[Exception] = ValueError,
-) -> IntendedCursor | None:
-    """A turn's cursor requests -> its final pre-clamp target, or ``None``.
-
-    ``None`` means the turn named no cursor position at all — an idle action, or a
-    tool call with no coordinate — as opposed to naming the one it is already on.
-
-    Each request resolves against the CLAMPED position the previous one reached,
-    because that is where the pointer actually is; that makes this fold identical
-    to ``compile_action``'s, so the clamped result agrees with the dispatched
-    stream by construction rather than by two functions staying in step.
-    The grammar conformance tests assert that agreement for every vector.
-    """
-    here = clamp(cursor, geometry)
-    target: tuple[int, int] | None = None
-    clamped = False
-    for kind, first, second in requests:
-        if kind == "rel":
-            target = (here[0] + first, here[1] + second)
-        elif kind == "abs":
-            target = (first, second)
-        else:
-            raise error(f"unknown cursor request kind: {kind!r}")
-        landed = clamp(target, geometry)
-        clamped = clamped or landed != target
-        here = landed
-    return None if target is None else IntendedCursor(target[0], target[1], clamped)
 
 
 def move_to(point: tuple[int, int]) -> Operation:
@@ -154,13 +87,6 @@ def key_up(name: str) -> Operation:
 def coalesced_type(text: str) -> Operation:
     return Operation("coalesced_type", (str(text),))
 
-
-def wait(seconds: float) -> Operation:
-    return Operation("wait", (float(seconds),))
-
-
-# Prompt derivation follows BrowserGym's core/action pattern: the docstring is
-# the spec.
 
 _ORDER = itertools.count()
 
@@ -214,65 +140,53 @@ def render_spec(codec: Any) -> str:
     Epilogue = the ``notes`` docstring. All three are mandatory; a missing one
     raises rather than being omitted from the prompt. ``CONTROL_SPEC`` closes it:
     the episode-control channel is not a production of any grammar, so it is
-    appended here rather than duplicated in both codecs.
+    appended here rather than declared by both codecs.
     """
+    preamble = inspect.getdoc(type(codec))
+    if not preamble:
+        raise ValueError(f"{type(codec).__name__} must have a class docstring")
+    items = productions(codec)
+    if not items:
+        raise ValueError(f"{type(codec).__name__} must declare a production")
     body: list[str] = []
-    for item in productions(codec):
+    for item in items:
+        if not item.syntax.strip():
+            raise ValueError(f"{type(codec).__name__}.{item.member} has empty syntax")
+        if not item.doc:
+            raise ValueError(
+                f"{type(codec).__name__}.{item.member} must have a docstring"
+            )
         body.append("  " + item.syntax)
         body.append(textwrap.indent(item.doc, "      "))
+    notes = inspect.getdoc(codec.notes)
+    if not notes:
+        raise ValueError(f"{type(codec).__name__}.notes must have a docstring")
     blocks = [
-        inspect.cleandoc(type(codec).__doc__),
+        preamble,
         "\n".join(body),
-        inspect.cleandoc(codec.notes.__doc__),
+        notes,
         CONTROL_SPEC,
     ]
     return "\n\n".join(blocks) + "\n"
 
 
 def spec_digest(text: str) -> str:
-    """sha256 of a rendered spec.
-
-    Pinned per grammar in ``vectors/*.json`` (``prompt_sha256``) and asserted by
-    ``test_vectors.test_prompt_digest_matches_its_pin``: the prompt is training
-    and eval surface, so it may not move without a line in a diff. Never raised
-    at import — a blocking check inside the module made in-place editing of a
-    grammar expensive enough that forking a worktree was cheaper.
-    """
+    """sha256 of a rendered spec."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def drift_report(codec: Any, *, producer: dict[str, str]) -> dict[str, Any]:
-    """Describe how the live prompt relates to the recorded producer prompt.
-
-    Never raises: the digest is data, not a gate. A blocking digest check was
-    tried and made in-place editing of a grammar expensive enough that forking a
-    worktree was cheaper.
-    """
-    observed = spec_digest(codec.describe())
-    recorded = producer.get("prompt_sha256")
-    return {
-        "grammar": codec.name,
-        "prompt_sha256": observed,
-        "producer": dict(producer),
-        # None when the grammar recorded no producer digest to compare against,
-        # so "unknown" is never reported as "differs".
-        "matches_producer": None if recorded is None else observed == recorded,
-    }
 
 
 class NoAction(ValueError):
     """The text holds no action of this grammar, as opposed to a broken one.
 
-    A codec raises this where it found nothing of its own to read, and its own
-    error where it recognised an attempt and rejected it. Widening what raises
-    this exception would hide real parse failures.
+    Codecs raise this before recognizing an action and their own error after
+    recognizing a malformed one.
     """
 
 
 def final_line(text: str) -> str:
     """The last non-empty line. Reasoning before the action line is legal.
 
-    Both retained codecs pick their action this way.
+    Both retained grammars pick their action this way.
     """
     if not isinstance(text, str):
         raise TypeError(f"expected str, got {type(text)!r}")
@@ -315,13 +229,40 @@ class Element:
     delta: tuple[int, int] | None = None
 
     def __post_init__(self) -> None:
-        if self.kind == "event" and not (
-            isinstance(self.name, str) and EVENT_NAME_RE.fullmatch(self.name)
-        ):
-            raise ValueError(
-                f"{self.name!r} is not a name a bare-token action can spell "
-                f"(must match {EVENT_NAME_RE.pattern})"
-            )
+        if self.kind == "event":
+            if not (isinstance(self.name, str) and EVENT_NAME_RE.fullmatch(self.name)):
+                raise ValueError(
+                    f"{self.name!r} is not a name a bare-token action can spell "
+                    f"(must match {EVENT_NAME_RE.pattern})"
+                )
+            if (
+                type(self.pressed) is not bool
+                or self.text != ""
+                or self.delta is not None
+            ):
+                raise ValueError("event elements require only name and pressed")
+            return
+        if self.kind == "type":
+            if (
+                not isinstance(self.text, str)
+                or self.name != ""
+                or self.pressed is not None
+                or self.delta is not None
+            ):
+                raise ValueError("type elements require only text")
+            return
+        if self.kind == "move":
+            if (
+                not isinstance(self.delta, tuple)
+                or len(self.delta) != 2
+                or any(type(value) is not int for value in self.delta)
+                or self.name != ""
+                or self.pressed is not None
+                or self.text != ""
+            ):
+                raise ValueError("move elements require exactly two integer deltas")
+            return
+        raise ValueError(f"unknown element kind: {self.kind!r}")
 
     def render(self) -> str:
         if self.kind == "event":
@@ -332,28 +273,6 @@ class Element:
             assert self.delta is not None
             return f"MOVE({self.delta[0]},{self.delta[1]})"
         raise ValueError(f"unknown element kind: {self.kind!r}")
-
-    def to_dict(self) -> dict[str, Any]:
-        if self.kind == "event":
-            return {"kind": "event", "name": self.name, "pressed": self.pressed}
-        if self.kind == "type":
-            return {"kind": "type", "text": self.text}
-        if self.kind == "move":
-            assert self.delta is not None
-            return {"kind": "move", "delta": list(self.delta)}
-        raise ValueError(f"unknown element kind: {self.kind!r}")
-
-
-def element_from_dict(value: dict[str, Any]) -> Element:
-    kind = value["kind"]
-    if kind == "event":
-        return Element("event", name=value["name"], pressed=bool(value["pressed"]))
-    if kind == "type":
-        return Element("type", text=value["text"])
-    if kind == "move":
-        dx, dy = value["delta"]
-        return Element("move", delta=(int(dx), int(dy)))
-    raise ValueError(f"unknown element kind: {kind!r}")
 
 
 def parse_mouse_triple(
@@ -469,303 +388,9 @@ def lower_transitions(
                 operations.append(
                     key_down(element.name) if element.pressed else key_up(element.name)
                 )
-        elif element.kind != "move":
-            raise error(f"unknown element kind: {element.kind!r}")
-    return operations
-
-
-# lifting: Operations -> an action, the training-label direction
-#
-# The lift lives on the codec so a converter holding absolute Operations need
-# not know what a coordinate means. Its ``terminate`` argument is carried
-# straight to the Action's ``terminate`` field and rendered by ``with_control``.
-#
-# Where a grammar cannot express what the Operations say, the lift raises. A
-# ``glide_to`` inside a held button is a drag, and the converters this replaces
-# degraded it into a stationary ``+LMB -LMB``, discarding the stroke.
-
-
-@dataclass(frozen=True)
-class Group:
-    """One high-level step recovered from the Operation stream."""
-
-    kind: str
-    target: tuple[int, int] | None = None
-    seconds: float = 0.0
-    button: str = ""
-    repeats: int = 0
-    keys: tuple[str, ...] = ()
-    text: str = ""
-    dx: int = 0
-    dy: int = 0
-
-
-def _button_of(operation: Operation) -> str:
-    return str(next(iter(operation.args)))
-
-
-def group_operations(
-    operations: Sequence[Operation],
-    *,
-    geometry: DisplayGeometry,
-    cursor: tuple[int, int],
-    error: type[Exception] = ValueError,
-) -> tuple[Group, ...]:
-    """Absolute Operations -> high-level groups, in order.
-
-    Adjacent same-button click pairs collapse into one ``click`` with a repeat
-    count, a ``key_down`` run followed by exactly its reverse collapses into one
-    ``chord``, and a ``glide_to`` stays a ``stroke`` so a drag survives the trip.
-    Grammars that want individual transitions expand the groups again; for the
-    transition spellings the collapse and the expansion are exact inverses.
-
-    Every canonical Operation kind is accepted here. These are handled
-    explicitly:
-
-    * ``click(button)`` — desktop's executor synthesises this itself
-      (``guest_program.lower_guest_operations``), so it appears in any stream
-      that has been through that lowering. It is one press/release pair, and a
-      pair spelled this way coalesces with pairs spelled as
-      ``mouse_down``/``mouse_up``, so ``click, click`` is a double click.
-    * ``drag(x0, y0, x1, y1)`` — decomposed into ``move``, ``button_down(left)``,
-      ``stroke``, ``button_up(left)``. That is the same group shape a codec
-      already recognises as a drag. A zero-extent drag keeps its press and
-      release, which is why ``ir.drag`` exists as its own kind.
-    * ``ascii_type(text)`` — becomes the same ``type`` group as
-      ``coalesced_type``. This is the one flattening in this function: no grammar
-      here has two typing primitives, so per-keystroke ASCII and one clipboard
-      burst cannot be told apart downstream of the lift. The mechanism changes
-      (``pyautogui.write`` becomes a paste) and the recompiled stream therefore
-      differs from the input; the vectors pin that as a documented-lossy case.
-    """
-    ops = list(operations)
-    groups: list[Group] = []
-    index = 0
-
-    def click_pair(at: int) -> str | None:
-        """The button of a click pair starting at ``at``, in either spelling."""
-        if at < len(ops) and ops[at].kind == "click":
-            return _button_of(ops[at])
-        if (
-            at + 1 < len(ops)
-            and ops[at].kind == "mouse_down"
-            and ops[at + 1].kind == "mouse_up"
-            and _button_of(ops[at]) == _button_of(ops[at + 1])
-        ):
-            return _button_of(ops[at])
-        return None
-
-    def pair_width(at: int) -> int:
-        return 1 if ops[at].kind == "click" else 2
-
-    while index < len(ops):
-        operation = ops[index]
-        kind = operation.kind
-        args = tuple(operation.args)
-        if kind == "move_to":
-            groups.append(Group("move", target=clamp((args[0], args[1]), geometry)))
-            index += 1
-        elif kind == "glide_to":
-            seconds = float(args[2]) if len(args) > 2 else 0.0
-            groups.append(
-                Group(
-                    "stroke",
-                    target=clamp((args[0], args[1]), geometry),
-                    seconds=seconds,
-                )
-            )
-            index += 1
-        elif kind == "drag":
-            if len(args) < 4:
-                raise error(f"drag needs (x0, y0, x1, y1), got {args!r}")
-            start = clamp((args[0], args[1]), geometry)
-            end = clamp((args[2], args[3]), geometry)
-            groups.append(Group("move", target=start))
-            groups.append(Group("button_down", button="left"))
-            groups.append(Group("stroke", target=end, seconds=0.0))
-            groups.append(Group("button_up", button="left"))
-            index += 1
-        elif kind in ("mouse_down", "click"):
-            button = click_pair(index)
-            if button is None:
-                groups.append(Group("button_down", button=_button_of(operation)))
-                index += 1
-                continue
-            repeats = 0
-            scan = index
-            while click_pair(scan) == button:
-                repeats += 1
-                scan += pair_width(scan)
-            groups.append(Group("click", button=button, repeats=repeats))
-            index = scan
-        elif kind == "mouse_up":
-            groups.append(Group("button_up", button=_button_of(operation)))
-            index += 1
-        elif kind == "key_down":
-            downs: list[str] = []
-            scan = index
-            while scan < len(ops) and ops[scan].kind == "key_down":
-                downs.append(str(next(iter(ops[scan].args))))
-                scan += 1
-            ups: list[str] = []
-            after = scan
-            while after < len(ops) and ops[after].kind == "key_up":
-                ups.append(str(next(iter(ops[after].args))))
-                after += 1
-            if ups and ups == list(reversed(downs)):
-                groups.append(Group("chord", keys=tuple(downs)))
-                index = after
-            else:
-                groups.append(Group("key_down", keys=tuple(downs)))
-                index = scan
-        elif kind == "key_up":
-            ups = []
-            scan = index
-            while scan < len(ops) and ops[scan].kind == "key_up":
-                ups.append(str(next(iter(ops[scan].args))))
-                scan += 1
-            groups.append(Group("key_up", keys=tuple(ups)))
-            index = scan
-        elif kind in ("coalesced_type", "ascii_type"):
-            # The one flattening: see this function's docstring.
-            groups.append(Group("type", text=str(args[0])))
-            index += 1
-        elif kind == "scroll":
-            # Both arities, disambiguated by desktop's own scroll_deltas --
-            # the one function ir.py declares as the only place that decides.
-            dx, dy = scroll_deltas(args)
-            groups.append(Group("scroll", dx=int(dx), dy=int(dy)))
-            index += 1
-        elif kind == "wait":
-            groups.append(Group("wait", seconds=float(args[0])))
-            index += 1
         else:
-            raise error(f"cannot lift unknown Operation kind: {kind!r}")
-    return tuple(groups)
-
-
-@dataclass(frozen=True)
-class BareTokenPlan:
-    """The head and tail of a bare-token action recovered from Operations."""
-
-    target: tuple[int, int] | None
-    scroll: int
-    elements: tuple[Element, ...]
-    idle: bool
-
-
-def bare_token_plan(
-    groups: Sequence[Group],
-    *,
-    cursor: tuple[int, int],
-    allow_type: bool,
-    allow_stroke: bool,
-    allow_hscroll: bool = False,
-    error: type[Exception] = ValueError,
-) -> BareTokenPlan:
-    """Groups -> ``[one move][one scroll][ordered transitions]``.
-
-    That fixed shape is what Deltatype can say, so anything the
-    stream asks for outside it — a second move, a scroll after a transition, a
-    stroke in a grammar with no stroke primitive — raises rather than being
-    reordered or dropped.
-    """
-    target: tuple[int, int] | None = None
-    scroll = 0
-    elements: list[Element] = []
-    here = cursor
-    scrolled = False
-    for group in groups:
-        kind = group.kind
-        if kind == "move":
-            if elements or scrolled:
-                raise error(
-                    "a move after a scroll or a transition cannot be expressed: "
-                    "the mouse move is applied before the tail"
-                )
-            if target is not None:
-                raise error(
-                    "two separate moves in one action cannot be expressed; "
-                    "ordered_events_v3 can interleave moves"
-                )
-            target = group.target
-            here = group.target or here
-        elif kind == "scroll":
-            if group.dx and not allow_hscroll:
-                raise error("horizontal scroll cannot be expressed in this grammar")
-            if scrolled:
-                raise error("two scrolls in one action cannot be expressed")
-            if elements:
-                raise error(
-                    "a scroll after a transition cannot be expressed: the scroll "
-                    "is applied before the tail"
-                )
-            scroll = group.dy
-            scrolled = True
-        elif kind == "stroke":
-            if not allow_stroke:
-                raise error(
-                    "a drag stroke cannot be expressed in this grammar: it has no "
-                    "MOVE primitive, and degrading it to a stationary click would "
-                    "discard the stroke"
-                )
-            assert group.target is not None
-            elements.append(
-                Element(
-                    "move", delta=(group.target[0] - here[0], group.target[1] - here[1])
-                )
-            )
-            here = group.target
-        elif kind == "click":
-            for _ in range(group.repeats):
-                elements.append(_button_element(group.button, True, error=error))
-                elements.append(_button_element(group.button, False, error=error))
-        elif kind in ("button_down", "button_up"):
-            elements.append(
-                _button_element(group.button, kind == "button_down", error=error)
-            )
-        elif kind == "chord":
-            elements.extend(
-                Element("event", name=key, pressed=True) for key in group.keys
-            )
-            elements.extend(
-                Element("event", name=key, pressed=False)
-                for key in reversed(group.keys)
-            )
-        elif kind in ("key_down", "key_up"):
-            pressed = kind == "key_down"
-            elements.extend(
-                Element("event", name=key, pressed=pressed) for key in group.keys
-            )
-        elif kind == "type":
-            if not allow_type:
-                raise error(
-                    "a coalesced type() cannot be expressed in this grammar; it "
-                    "spells literal text as key transitions"
-                )
-            if "\n" in group.text or "\r" in group.text:
-                raise error("type() cannot embed a newline; press Return as an event")
-            elements.append(Element("type", text=group.text))
-        elif kind == "wait":
-            if len(groups) != 1:
-                raise error(
-                    "a timed wait alongside other operations cannot be expressed; "
-                    "this grammar only has an idle action"
-                )
-            return BareTokenPlan(None, 0, (), idle=True)
-        else:  # pragma: no cover - group_operations fixes the set
-            raise error(f"cannot lift group kind: {kind!r}")
-    idle = target is None and not scroll and not elements
-    return BareTokenPlan(target, scroll, tuple(elements), idle=idle)
-
-
-def _button_element(
-    button: str, pressed: bool, *, error: type[Exception] = ValueError
-) -> Element:
-    for token, name in BUTTONS.items():
-        if name == button:
-            return Element("event", name=token, pressed=pressed)
-    raise error(f"unsupported mouse button: {button!r}")
+            raise error(f"cannot lower element kind: {element.kind!r}")
+    return operations
 
 
 def terminate_status(
@@ -790,9 +415,8 @@ def terminate_status(
 # Ending an episode dispatches nothing: it is a message to the episode driver, not
 # something the computer does. A grammar's ``compile`` emits ``Operation``s, so a
 # control token inside one lowers to zero operations — a category error, and every
-# codec would otherwise have to reinvent it. One spelling lives here instead,
-# rendered into both prompts and read back once before either codec sees the
-# text.
+# grammar reinvented it. One spelling lives here, rendered into both prompts and
+# read back once before either codec sees the text.
 
 CONTROL_TOKEN = "TERMINATE"
 

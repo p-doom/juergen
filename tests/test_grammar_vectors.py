@@ -5,17 +5,16 @@ from __future__ import annotations
 import importlib
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from desktop import ir
 from desktop.geometry import DisplayGeometry
 
 import grammars
 from grammars import _support
 
 NAMES = tuple(grammars.available())
-_MOVE_KINDS = ("move_to", "glide_to")
 
 
 def _vectors(name: str) -> dict:
@@ -40,10 +39,6 @@ def _context(payload: dict, case: dict) -> tuple[DisplayGeometry, tuple[int, int
     )
 
 
-def _operations(rows: list) -> tuple[ir.Operation, ...]:
-    return tuple(ir.Operation(kind, tuple(args)) for kind, args in rows)
-
-
 def _rows(operations) -> list:
     return [[item.kind, list(item.args)] for item in operations]
 
@@ -63,7 +58,30 @@ def _codec(name: str):
 
 def _action_from_dict(name: str, value: dict):
     module = importlib.import_module(f"grammars.{name}.codec")
-    return module.action_from_dict(value)
+    if name == "ordered_events_v3_relative_1000_grid_v1":
+        return module.action_from_dict({**value, "terminate": None})
+    elements = []
+    for element in value["elements"]:
+        kind = element["kind"]
+        if kind == "event":
+            elements.append(
+                _support.Element(
+                    "event", name=element["name"], pressed=element["pressed"]
+                )
+            )
+        elif kind == "type":
+            elements.append(_support.Element("type", text=element["text"]))
+        elif kind == "move":
+            elements.append(_support.Element("move", delta=tuple(element["delta"])))
+        else:
+            raise AssertionError(f"unknown fixture element kind: {kind!r}")
+    return module.DeltatypeV2Action(
+        dx=value["dx"],
+        dy=value["dy"],
+        scroll=value["scroll"],
+        elements=tuple(elements),
+        no_op=value["no_op"],
+    )
 
 
 @pytest.mark.parametrize(("name", "payload", "case"), _cases("cases"))
@@ -82,12 +100,6 @@ def test_canonical_is_a_fixpoint(name, payload, case):
     reparsed = codec.parse(case["canonical"])
     assert codec.format(reparsed) == case["canonical"]
     assert reparsed == codec.parse(case["text"])
-
-
-@pytest.mark.parametrize(("name", "payload", "case"), _cases("cases"))
-def test_dict_round_trip(name, payload, case):
-    parsed = _codec(name).parse(case["text"])
-    assert _action_from_dict(name, parsed.to_dict()) == parsed
 
 
 @pytest.mark.parametrize(("name", "payload", "case"), _cases("format_only"))
@@ -111,43 +123,12 @@ def test_invalid_compile(name, payload, case):
         _codec(name).compile(case["text"], geometry, cursor)
 
 
-@pytest.mark.parametrize(("name", "payload", "case"), _cases("lift"))
-def test_lift(name, payload, case):
-    codec = _codec(name)
-    geometry, cursor = _context(payload, case)
-    lifted = codec.action_from_operations(
-        _operations(case["operations"]),
-        geometry=geometry,
-        cursor=cursor,
-        terminate=case.get("terminate"),
-    )
-    assert lifted == _action_from_dict(name, case["action"])
-    assert codec.format(lifted) == case["canonical"]
-    assert (
-        _rows(codec.compile(case["canonical"], geometry, cursor)) == case["recompiled"]
-    )
-
-
-@pytest.mark.parametrize(("name", "payload", "case"), _cases("lift_invalid"))
-def test_lift_invalid(name, payload, case):
-    geometry, cursor = _context(payload, case)
-    with pytest.raises(ValueError, match=re.escape(case["error"])):
-        _codec(name).action_from_operations(
-            _operations(case["operations"]),
-            geometry=geometry,
-            cursor=cursor,
-            terminate=case.get("terminate"),
-        )
-
-
 def test_every_vector_section_is_executed():
     executed = {
         "cases",
         "format_only",
         "invalid_parse",
         "invalid_compile",
-        "lift",
-        "lift_invalid",
     }
     for name in NAMES:
         for section, value in _vectors(name).items():
@@ -174,10 +155,13 @@ def test_control_channel_round_trip(name, status):
     payload = _vectors(name)
     geometry = _geometry(payload["geometry"])
     cursor = tuple(payload["default_cursor"])
-    action = codec.action_from_operations(
-        (ir.mouse_down("left"), ir.mouse_up("left")),
-        geometry=geometry,
-        cursor=cursor,
+    action = replace(
+        codec.parse(
+            {
+                "deltatype_v2": "0 0 0 ; +LMB -LMB",
+                "ordered_events_v3_relative_1000_grid_v1": "down(LMB); up(LMB)",
+            }[name]
+        ),
         terminate=status,
     )
     text = codec.format(action)
@@ -217,52 +201,75 @@ def test_control_line_is_exact_and_final():
             _support.split_control(text)
 
 
-@pytest.mark.parametrize("name", NAMES)
-def test_intended_cursor_matches_compile(name):
-    codec = _codec(name)
-    payload = _vectors(name)
-    for case in payload["cases"]:
-        geometry, cursor = _context(payload, case)
-        intent = codec.intended_cursor(codec.parse(case["text"]), geometry, cursor)
-        moves = [
-            operation
-            for operation in codec.compile(case["text"], geometry, cursor)
-            if operation.kind in _MOVE_KINDS
-        ]
-        if intent is None:
-            assert not moves
-        elif moves:
-            assert tuple(moves[-1].args[:2]) == _support.clamp(
-                (intent.x, intent.y), geometry
-            )
+@pytest.mark.parametrize(
+    ("kwargs", "error"),
+    [
+        ({"kind": "other"}, "unknown element kind"),
+        ({"kind": "event", "name": "KeyA", "pressed": 1}, "only name and pressed"),
+        ({"kind": "type", "text": "x", "name": None}, "require only text"),
+        ({"kind": "move", "delta": [1, 2]}, "two integer deltas"),
+    ],
+)
+def test_element_rejects_noncanonical_state(kwargs, error):
+    with pytest.raises(ValueError, match=error):
+        _support.Element(**kwargs)
 
 
-CANONICAL_OPERATIONS = {
-    "move_to": ir.move_to(700, 400),
-    "glide_to": ir.glide_to(700, 400, 0.5),
-    "drag": ir.drag(700, 400, 800, 450),
-    "click": ir.click("left"),
-    "mouse_down": ir.mouse_down("left"),
-    "mouse_up": ir.mouse_up("left"),
-    "key_down": ir.key_down("KeyA"),
-    "key_up": ir.key_up("KeyA"),
-    "scroll": ir.scroll(0, 3),
-    "coalesced_type": ir.coalesced_type("x"),
-    "ascii_type": ir.ascii_type("x"),
-    "wait": ir.wait(1.0),
-}
+def test_ordered_action_dict_requires_exact_schema():
+    module = importlib.import_module(
+        "grammars.ordered_events_v3_relative_1000_grid_v1.codec"
+    )
+    canonical = {
+        "primitives": [{"kind": "move", "dx": 1, "dy": -2}],
+        "no_op": False,
+        "terminate": None,
+    }
+    assert module.action_from_dict(canonical).to_dict() == canonical
+    invalid = [
+        (
+            {key: value for key, value in canonical.items() if key != "terminate"},
+            "exactly",
+        ),
+        ({**canonical, "extra": None}, "exactly"),
+        ({**canonical, "primitives": tuple(canonical["primitives"])}, "must be a list"),
+        ({**canonical, "no_op": 0}, "must be a boolean"),
+        ({**canonical, "primitives": []}, "exactly identify"),
+        (
+            {
+                **canonical,
+                "primitives": [{"kind": "move", "dx": True, "dy": -2}],
+            },
+            "two integer deltas",
+        ),
+        (
+            {
+                **canonical,
+                "primitives": [{"kind": "move", "dx": 1, "dy": -2, "name": "ignored"}],
+            },
+            "invalid move primitive fields",
+        ),
+    ]
+    for value, error in invalid:
+        with pytest.raises(ValueError, match=error):
+            module.action_from_dict(value)
 
 
-def test_every_canonical_operation_kind_is_groupable():
-    assert set(CANONICAL_OPERATIONS) == set(ir.CANONICAL_KINDS) - {"raise_for_test"}
-    geometry = DisplayGeometry(desktop_width=1920, desktop_height=1080)
-    for operation in CANONICAL_OPERATIONS.values():
-        assert _support.group_operations(
-            (operation,), geometry=geometry, cursor=(960, 540)
-        )
+def test_render_spec_requires_every_docstring():
+    class MissingProductionDoc:
+        """Preamble."""
+
+        @_support.production("ACTION")
+        def action(self):
+            pass
+
+        def notes(self):
+            """Notes."""
+
+    with pytest.raises(ValueError, match="action must have a docstring"):
+        _support.render_spec(MissingProductionDoc())
 
 
-def test_peer_directories_are_the_sole_registry():
+def test_registry_contains_exactly_the_two_training_grammars():
     assert NAMES == ("deltatype_v2", "ordered_events_v3_relative_1000_grid_v1")
     for name in NAMES:
         assert _codec(name) is importlib.import_module(f"grammars.{name}.codec").CODEC

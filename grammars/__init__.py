@@ -1,54 +1,40 @@
-"""Action grammars discovered from peer directories."""
+"""The two action grammars used by the training streams."""
 
 from __future__ import annotations
 
 from importlib import import_module
-from pathlib import Path
 from typing import Any
 
-_FROM_SUPPORT = (
-    "CONTROL_SPEC",
-    "CONTROL_TOKEN",
-    "Control",
-    "NoAction",
-    "split_control",
-)
+from ._support import split_control
 
-
-def __getattr__(name: str) -> Any:
-    if name in _FROM_SUPPORT:
-        return getattr(import_module(f"{__name__}._support"), name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+_MODULES = {
+    "deltatype_v2": "grammars.deltatype_v2.codec",
+    "ordered_events_v3_relative_1000_grid_v1": (
+        "grammars.ordered_events_v3_relative_1000_grid_v1.codec"
+    ),
+}
 
 
 def available() -> tuple[str, ...]:
-    root = Path(__file__).parent
-    return tuple(
-        child.name
-        for child in sorted(root.iterdir())
-        if child.is_dir()
-        and not child.name.startswith(("_", "."))
-        and (child / "codec.py").is_file()
-    )
+    return tuple(_MODULES)
 
 
 _CACHE: dict[str, Any] = {}
 
 
 def load(name: str) -> Any:
-    """Load one peer grammar's module-level ``CODEC``."""
+    """Load one registered grammar's module-level ``CODEC``."""
     if name in _CACHE:
         return _CACHE[name]
-    names = available()
-    if name not in names:
-        raise KeyError(f"unknown grammar {name!r} (available: {list(names)})")
-    codec = import_module(f"{__name__}.{name}.codec").CODEC
+    try:
+        module = _MODULES[name]
+    except KeyError as exc:
+        raise KeyError(
+            f"unknown grammar {name!r} (available: {list(_MODULES)})"
+        ) from exc
+    codec = import_module(module).CODEC
     _CACHE[name] = codec
     return codec
-
-
-def codecs() -> dict[str, Any]:
-    return {name: load(name) for name in available()}
 
 
 def describe(name: str) -> str:
@@ -56,12 +42,7 @@ def describe(name: str) -> str:
 
 
 __all__ = [
-    "CONTROL_SPEC",
-    "CONTROL_TOKEN",
-    "Control",
-    "NoAction",
     "available",
-    "codecs",
     "describe",
     "load",
     "split_control",

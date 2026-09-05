@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -110,20 +109,49 @@ class Primitive:
     text: str = ""
 
     def __post_init__(self) -> None:
-        if self.kind in ("down", "up") and not (
-            isinstance(self.name, str) and NAME_RE.fullmatch(self.name)
-        ):
-            raise OrderedEventsV3Error(
-                f"{self.name!r} is not a name {self.kind}() can spell "
-                f"(must match {NAME_RE.pattern})"
-            )
+        if self.kind in ("move", "scroll"):
+            if (
+                type(self.dx) is not int
+                or type(self.dy) is not int
+                or self.name != ""
+                or self.text != ""
+            ):
+                raise OrderedEventsV3Error(
+                    f"{self.kind} requires exactly two integer deltas"
+                )
+            return
+        if self.kind in ("down", "up"):
+            if not (isinstance(self.name, str) and NAME_RE.fullmatch(self.name)):
+                raise OrderedEventsV3Error(
+                    f"{self.name!r} is not a name {self.kind}() can spell "
+                    f"(must match {NAME_RE.pattern})"
+                )
+            if (
+                type(self.dx) is not int
+                or self.dx != 0
+                or type(self.dy) is not int
+                or self.dy != 0
+                or self.text != ""
+            ):
+                raise OrderedEventsV3Error(f"{self.kind} requires only a name")
+            return
         if self.kind == "type":
-            if not self.text:
+            if not isinstance(self.text, str) or not self.text:
                 raise OrderedEventsV3Error("type() payload cannot be empty")
+            if (
+                type(self.dx) is not int
+                or self.dx != 0
+                or type(self.dy) is not int
+                or self.dy != 0
+                or self.name != ""
+            ):
+                raise OrderedEventsV3Error("type requires only text")
             if any(char in self.text for char in "\n\r\t"):
                 raise OrderedEventsV3Error(
                     "type() payload cannot contain a control character; use key transitions"
                 )
+            return
+        raise OrderedEventsV3Error(f"unknown primitive kind: {self.kind!r}")
 
     def render(self) -> str:
         if self.kind in ("move", "scroll"):
@@ -143,13 +171,23 @@ class Primitive:
 
 
 def primitive_from_dict(value: dict[str, Any]) -> Primitive:
+    if not isinstance(value, dict):
+        raise OrderedEventsV3Error("primitive must be an object")
+    if "kind" not in value:
+        raise OrderedEventsV3Error("primitive is missing kind")
     kind = value["kind"]
     if kind in ("move", "scroll"):
-        return Primitive(kind, dx=int(value["dx"]), dy=int(value["dy"]))
+        if set(value) != {"kind", "dx", "dy"}:
+            raise OrderedEventsV3Error(f"invalid {kind} primitive fields")
+        return Primitive(kind, dx=value["dx"], dy=value["dy"])
     if kind in ("down", "up"):
-        return Primitive(kind, name=str(value["name"]))
+        if set(value) != {"kind", "name"}:
+            raise OrderedEventsV3Error(f"invalid {kind} primitive fields")
+        return Primitive(kind, name=value["name"])
     if kind == "type":
-        return Primitive("type", text=str(value["text"]))
+        if set(value) != {"kind", "text"}:
+            raise OrderedEventsV3Error("invalid type primitive fields")
+        return Primitive("type", text=value["text"])
     raise OrderedEventsV3Error(f"unknown primitive kind: {kind!r}")
 
 
@@ -160,9 +198,22 @@ class OrderedEventsV3Action:
     primitives: tuple[Primitive, ...] = ()
     no_op: bool = False
     #: The episode-control status this turn declares, from ``_support.CONTROL_SPEC``.
-    #: Set by the lift only; ``parse`` never sees a control line.
+    #: ``parse`` never sees a control line.
     terminate: str | None = None
     prompt_digest: str = field(default="", compare=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.primitives, tuple) or any(
+            not isinstance(primitive, Primitive) for primitive in self.primitives
+        ):
+            raise OrderedEventsV3Error("primitives must be a tuple of Primitive values")
+        if type(self.no_op) is not bool:
+            raise OrderedEventsV3Error("no_op must be a boolean")
+        if self.no_op != (not self.primitives):
+            raise OrderedEventsV3Error("no_op must exactly identify an empty program")
+        _support.terminate_status(self.terminate, error=OrderedEventsV3Error)
+        if not isinstance(self.prompt_digest, str):
+            raise OrderedEventsV3Error("prompt_digest must be text")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -173,13 +224,22 @@ class OrderedEventsV3Action:
 
 
 def action_from_dict(value: dict[str, Any]) -> OrderedEventsV3Action:
+    if not isinstance(value, dict) or set(value) != {
+        "primitives",
+        "no_op",
+        "terminate",
+    }:
+        raise OrderedEventsV3Error(
+            "action must contain exactly primitives, no_op and terminate"
+        )
+    primitives = value["primitives"]
+    if not isinstance(primitives, list):
+        raise OrderedEventsV3Error("primitives must be a list")
     return OrderedEventsV3Action(
-        primitives=tuple(
-            primitive_from_dict(item) for item in value.get("primitives", ())
-        ),
-        no_op=bool(value.get("no_op", False)),
+        primitives=tuple(primitive_from_dict(item) for item in primitives),
+        no_op=value["no_op"],
         terminate=_support.terminate_status(
-            value.get("terminate"), error=OrderedEventsV3Error
+            value["terminate"], error=OrderedEventsV3Error
         ),
     )
 
@@ -261,9 +321,6 @@ class OrderedEventsV3Codec:
     def digest(self) -> str:
         return _support.spec_digest(self.describe())
 
-    def report(self) -> dict[str, Any]:
-        return _support.drift_report(self, producer={})
-
     def parse(self, text: str) -> OrderedEventsV3Action:
         line = _support.final_line(text)
         digest = self.digest
@@ -274,7 +331,7 @@ class OrderedEventsV3Codec:
     def format(self, action: OrderedEventsV3Action) -> str:
         body = (
             NO_OP
-            if action.no_op or not action.primitives
+            if action.no_op
             else "; ".join(item.render() for item in action.primitives)
         )
         return _support.with_control(body, action.terminate, error=OrderedEventsV3Error)
@@ -336,124 +393,6 @@ class OrderedEventsV3Codec:
             else:
                 raise OrderedEventsV3Error(f"unknown primitive kind: {item.kind!r}")
         return tuple(operations)
-
-    def intended_cursor(
-        self,
-        action: OrderedEventsV3Action,
-        geometry: DisplayGeometry,
-        cursor: tuple[int, int],
-    ) -> _support.IntendedCursor | None:
-        """Every interleaved normalized ``move`` primitive, in order.
-
-        ``None`` for the idle action, and for a turn of keys and clicks alone:
-        this is the one grammar where an action can carry no move at all.
-        """
-        if action.no_op:
-            return None
-        width, height = _support.screen_size(geometry)
-        return _support.fold_requests(
-            tuple(
-                (
-                    "rel",
-                    pixels_from_grid(item.dx, width),
-                    pixels_from_grid(item.dy, height),
-                )
-                for item in action.primitives
-                if item.kind == "move"
-            ),
-            geometry=geometry,
-            cursor=cursor,
-            error=OrderedEventsV3Error,
-        )
-
-    def action_from_operations(
-        self,
-        operations: Sequence[Operation],
-        *,
-        geometry: DisplayGeometry,
-        cursor: tuple[int, int],
-        terminate: object = None,
-    ) -> OrderedEventsV3Action:
-        """Absolute Operations -> an action. The inverse of ``compile_action``.
-
-        The grammar can interleave several moves per turn, each folded back into
-        its own normalized relative `move(dx,dy)`. A ``glide_to`` becomes a plain `move`, which
-        PRESERVES the drag — the button is held across it — and drops only the
-        stroke's duration, since the grammar has no timing primitive.
-        """
-        status = _support.terminate_status(terminate, error=OrderedEventsV3Error)
-        groups = _support.group_operations(
-            operations, geometry=geometry, cursor=cursor, error=OrderedEventsV3Error
-        )
-        width, height = _support.screen_size(geometry)
-        primitives: list[Primitive] = []
-        here = _support.clamp(cursor, geometry)
-        for group in groups:
-            kind = group.kind
-            if kind in ("move", "stroke"):
-                assert group.target is not None
-                delta = (
-                    grid_delta(here[0], group.target[0], width),
-                    grid_delta(here[1], group.target[1], height),
-                )
-                if delta != (0, 0):
-                    primitives.append(Primitive("move", dx=delta[0], dy=delta[1]))
-                here = group.target
-            elif kind == "scroll":
-                if group.dx or group.dy:
-                    primitives.append(Primitive("scroll", dx=group.dx, dy=group.dy))
-            elif kind == "click":
-                token = self._button_token(group.button)
-                for _ in range(group.repeats):
-                    primitives.append(Primitive("down", name=token))
-                    primitives.append(Primitive("up", name=token))
-            elif kind in ("button_down", "button_up"):
-                primitives.append(
-                    Primitive(
-                        "down" if kind == "button_down" else "up",
-                        name=self._button_token(group.button),
-                    )
-                )
-            elif kind == "chord":
-                primitives.extend(Primitive("down", name=key) for key in group.keys)
-                primitives.extend(
-                    Primitive("up", name=key) for key in reversed(group.keys)
-                )
-            elif kind in ("key_down", "key_up"):
-                name = "down" if kind == "key_down" else "up"
-                primitives.extend(Primitive(name, name=key) for key in group.keys)
-            elif kind == "type":
-                if any(char in group.text for char in "\n\r\t"):
-                    raise OrderedEventsV3Error(
-                        'type() accepts only the escapes \\\\ and \\" , so a '
-                        "control character cannot be expressed; press Return as "
-                        "down(Return); up(Return)"
-                    )
-                primitives.append(Primitive("type", text=group.text))
-            elif kind == "wait":
-                if len(groups) != 1:
-                    raise OrderedEventsV3Error(
-                        "a timed wait alongside other operations cannot be "
-                        "expressed; this grammar only has NO_OP"
-                    )
-                return OrderedEventsV3Action(
-                    no_op=True, terminate=status, prompt_digest=self.digest
-                )
-            else:  # pragma: no cover - group_operations fixes the set
-                raise OrderedEventsV3Error(f"cannot lift group kind: {kind!r}")
-        if not primitives:
-            return OrderedEventsV3Action(
-                no_op=True, terminate=status, prompt_digest=self.digest
-            )
-        return OrderedEventsV3Action(
-            primitives=tuple(primitives), terminate=status, prompt_digest=self.digest
-        )
-
-    def _button_token(self, button: str) -> str:
-        for token, name in _support.BUTTONS.items():
-            if name == button:
-                return token
-        raise OrderedEventsV3Error(f"unsupported mouse button: {button!r}")
 
     def _scan(self, line: str) -> tuple[Primitive, ...]:
         primitives: list[Primitive] = []
