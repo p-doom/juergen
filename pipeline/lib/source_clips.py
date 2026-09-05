@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -135,9 +136,12 @@ def resolve_source_clips(path: Path) -> tuple[list[dict[str, Any]], dict[str, An
             if (
                 isinstance(value, bool)
                 or not isinstance(value, (int, float))
+                or not math.isfinite(value)
                 or value <= 0
             ):
                 raise ValueError(f"invalid Crowd-Cast source {field}: {row!r}")
+        if row["video_duration_s"] != row["video_frame_count"] / row["video_fps"]:
+            raise ValueError(f"inexact Crowd-Cast source video duration: {row!r}")
         identity = (recording, index)
         if identity in identities:
             raise ValueError(f"duplicate Crowd-Cast source segment: {identity}")

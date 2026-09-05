@@ -49,7 +49,7 @@ def realign_one_recording(task: dict) -> dict:
         }
         for segment in segs
     }
-    results = R.realign_recording(segs, task["idle_timeout"], task["closure_tol"])
+    results = R.realign_recording(segs)
     out_dir = Path(task["out_dir"])
 
     rows: list[dict] = []
@@ -105,8 +105,6 @@ def parse_args() -> argparse.Namespace:
         help="discover output clips_manifest.jsonl.",
     )
     p.add_argument("--output-dir", type=Path, required=True)
-    p.add_argument("--idle-timeout", type=float, default=R.IDLE_TIMEOUT)
-    p.add_argument("--closure-tol", type=float, default=R.CLOSURE_TOL)
     p.add_argument("--num-workers", type=int, default=0, help="0 = cpu_count().")
     return p.parse_args()
 
@@ -143,8 +141,6 @@ def main() -> None:
                 }
                 for row in sorted(kept, key=lambda item: item["segment_idx"])
             ],
-            "idle_timeout": args.idle_timeout,
-            "closure_tol": args.closure_tol,
             "out_dir": str(out_dir),
         }
         for rec_id, kept in by_rec.items()
@@ -201,8 +197,8 @@ def main() -> None:
     summary = {
         "n_segments": n,
         "n_recordings": len(by_rec),
-        "idle_timeout_s": args.idle_timeout,
-        "closure_tol_s": args.closure_tol,
+        "idle_timeout_s": R.IDLE_TIMEOUT,
+        "closure_tol_s": R.CLOSURE_TOL,
         "status_counts": dict(sorted(counts.items())),
         "n_closed": sum(counts[s] for s in R.CLOSED_STATUSES),
         "n_corrected": n - counts.get("aligned", 0),
