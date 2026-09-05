@@ -417,7 +417,7 @@ def _record_flags(
     return values
 
 
-def test_processor_snapshot_requires_the_exact_qwen_file_set(tmp_path: Path) -> None:
+def test_processor_snapshot_attests_the_consumed_qwen_files(tmp_path: Path) -> None:
     snapshot = tmp_path / "model" / "snapshots" / SNAPSHOT_REVISION
     snapshot.mkdir(parents=True)
     for name in SNAPSHOT_FILES:
@@ -426,11 +426,10 @@ def test_processor_snapshot_requires_the_exact_qwen_file_set(tmp_path: Path) -> 
     identity = attest_processor_snapshot(snapshot)
     assert set(identity["files"]) == SNAPSHOT_FILES
     assert identity["merge_size"] == 2
-    (snapshot / "model.SAFETENSORS").write_bytes(b"weights")
-    with pytest.raises(ValueError, match="files do not match"):
-        attest_processor_snapshot(snapshot)
-    (snapshot / "model.SAFETENSORS").unlink()
-    (snapshot / "model.SAFETENSORS").symlink_to(snapshot / "missing")
+    (snapshot / "model.safetensors").write_bytes(b"unused weights")
+    assert attest_processor_snapshot(snapshot) == identity
+    (snapshot / "tokenizer.json").unlink()
+    (snapshot / "tokenizer.json").symlink_to(snapshot / "missing")
     with pytest.raises(ValueError, match="files do not match"):
         attest_processor_snapshot(snapshot)
 

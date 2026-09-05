@@ -158,15 +158,14 @@ def attest_processor_snapshot(path: Path) -> dict[str, Any]:
         raise ValueError(
             "model snapshot must be an existing Hugging Face snapshots/<40-hex-revision> directory"
         )
-    entries = sorted(resolved.iterdir())
-    observed = {path.name for path in entries}
-    if observed != _SNAPSHOT_FILES or any(not path.is_file() for path in entries):
+    observed = {path.name for path in resolved.iterdir()}
+    missing = _SNAPSHOT_FILES - observed
+    paths = [resolved / name for name in sorted(_SNAPSHOT_FILES)]
+    if missing or any(not path.is_file() for path in paths):
         raise ValueError(
             "processor snapshot files do not match the Qwen3-VL contract: "
-            f"missing={sorted(_SNAPSHOT_FILES - observed)}, "
-            f"unexpected={sorted(observed - _SNAPSHOT_FILES)}"
+            f"missing={sorted(missing)}"
         )
-    paths = entries
     relative = {str(path.relative_to(resolved)): path for path in paths}
     preprocessor = json.loads(relative["preprocessor_config.json"].read_text())
     if not isinstance(preprocessor, dict) or preprocessor.get("merge_size") != 2:
