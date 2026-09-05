@@ -21,7 +21,9 @@ def _steps(count: int) -> list[dict[str, object]]:
 
 
 def test_renderer_uses_exact_prompt_and_four_completed_turns():
-    messages = render_history(instruction="Do the task", steps=_steps(7), target_index=6)
+    messages = render_history(
+        instruction="Do the task", steps=_steps(7), target_index=6
+    )
 
     assert messages[0] == {
         "role": "system",

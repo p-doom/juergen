@@ -31,13 +31,17 @@ class OrderedEventsV3Error(ValueError):
 
 def pixels_from_grid(value: int, dimension: int) -> int:
     if dimension <= 0:
-        raise OrderedEventsV3Error(f"display dimension must be positive, got {dimension}")
+        raise OrderedEventsV3Error(
+            f"display dimension must be positive, got {dimension}"
+        )
     return round(value / GRID * dimension)
 
 
 def grid_from_pixels(value: int, dimension: int) -> int:
     if dimension <= 0:
-        raise OrderedEventsV3Error(f"display dimension must be positive, got {dimension}")
+        raise OrderedEventsV3Error(
+            f"display dimension must be positive, got {dimension}"
+        )
     return round(value / dimension * GRID)
 
 
@@ -77,9 +81,9 @@ def unescape(body: str) -> str:
             if index + 1 >= len(body):
                 raise OrderedEventsV3Error("trailing backslash in type() payload")
             following = body[index + 1]
-            if following not in ('\\', '"'):
+            if following not in ("\\", '"'):
                 raise OrderedEventsV3Error(
-                    f"type() accepts only the escapes \\\\ and \\\" , got "
+                    f'type() accepts only the escapes \\\\ and \\" , got '
                     f"'\\{following}'. Press Return as down(Return); up(Return)."
                 )
             out.append(following)
@@ -265,9 +269,7 @@ class OrderedEventsV3Codec:
         digest = self.digest
         if line == NO_OP:
             return OrderedEventsV3Action(no_op=True, prompt_digest=digest)
-        return OrderedEventsV3Action(
-            primitives=self._scan(line), prompt_digest=digest
-        )
+        return OrderedEventsV3Action(primitives=self._scan(line), prompt_digest=digest)
 
     def format(self, action: OrderedEventsV3Action) -> str:
         body = (
@@ -275,9 +277,7 @@ class OrderedEventsV3Codec:
             if action.no_op or not action.primitives
             else "; ".join(item.render() for item in action.primitives)
         )
-        return _support.with_control(
-            body, action.terminate, error=OrderedEventsV3Error
-        )
+        return _support.with_control(body, action.terminate, error=OrderedEventsV3Error)
 
     def compile(
         self,
@@ -401,9 +401,7 @@ class OrderedEventsV3Codec:
                 here = group.target
             elif kind == "scroll":
                 if group.dx or group.dy:
-                    primitives.append(
-                        Primitive("scroll", dx=group.dx, dy=group.dy)
-                    )
+                    primitives.append(Primitive("scroll", dx=group.dx, dy=group.dy))
             elif kind == "click":
                 token = self._button_token(group.button)
                 for _ in range(group.repeats):
@@ -427,7 +425,7 @@ class OrderedEventsV3Codec:
             elif kind == "type":
                 if any(char in group.text for char in "\n\r\t"):
                     raise OrderedEventsV3Error(
-                        "type() accepts only the escapes \\\\ and \\\" , so a "
+                        'type() accepts only the escapes \\\\ and \\" , so a '
                         "control character cannot be expressed; press Return as "
                         "down(Return); up(Return)"
                     )
@@ -471,7 +469,7 @@ class OrderedEventsV3Codec:
                 # this grammar at all, which a terminating turn is allowed.
                 error = OrderedEventsV3Error if primitives else _support.NoAction
                 raise error(
-                    f"expected a primitive call, got {line[index:index + 24]!r}"
+                    f"expected a primitive call, got {line[index : index + 24]!r}"
                 )
             kind = call[1]
             open_paren = call.end() - 1
@@ -498,7 +496,7 @@ class OrderedEventsV3Codec:
                 break
             if line[index] != ";":
                 raise OrderedEventsV3Error(
-                    f"primitives are separated by '; ', got {line[index:index + 12]!r}"
+                    f"primitives are separated by '; ', got {line[index : index + 12]!r}"
                 )
             index += 1
         if not primitives:

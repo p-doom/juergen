@@ -287,9 +287,7 @@ class DeltatypeV2Codec:
         )
 
     def _validate_drag(self, action: DeltatypeV2Action) -> DeltatypeV2Action:
-        moves = [
-            element for element in action.elements if element.kind == "move"
-        ]
+        moves = [element for element in action.elements if element.kind == "move"]
         if not moves:
             return action
         expected = (

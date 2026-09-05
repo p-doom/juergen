@@ -76,6 +76,8 @@ def render_history(
         if index < target_index:
             assistant = step.get("assistant")
             if not isinstance(assistant, str) or not assistant:
-                raise TypeError("completed history steps require non-empty assistant text")
+                raise TypeError(
+                    "completed history steps require non-empty assistant text"
+                )
             messages.append({"role": "assistant", "content": [_text(assistant)]})
     return messages

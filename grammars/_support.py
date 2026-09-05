@@ -44,7 +44,6 @@ from typing import Any
 from desktop.geometry import DisplayGeometry
 from desktop.ir import Operation, scroll_deltas
 
-
 # The single point of contact with DisplayGeometry. Its field names are the
 # verbatim Harbor ones — ``desktop_width`` / ``desktop_height`` for the display
 # and ``window_*`` for the window inside it — so this function is where that
@@ -263,7 +262,9 @@ def render_tool_prompt(codec: Any, *, properties: dict[str, Any]) -> str:
                     "action": {
                         "description": "The action to perform. The available "
                         "actions are:\n"
-                        + "\n".join(f"* `{item.syntax}`: {item.doc}" for item in actions),
+                        + "\n".join(
+                            f"* `{item.syntax}`: {item.doc}" for item in actions
+                        ),
                         "enum": [item.syntax for item in actions],
                         "type": "string",
                     },
@@ -284,8 +285,10 @@ def render_tool_prompt(codec: Any, *, properties: dict[str, Any]) -> str:
                 "",
                 "You may call one or more functions to assist with the user query.",
                 "",
-                "You are provided with function signatures within "
-                "<tools></tools> XML tags:",
+                (
+                    "You are provided with function signatures within "
+                    "<tools></tools> XML tags:"
+                ),
                 "<tools>",
                 json.dumps(schema, ensure_ascii=False),
                 "</tools>",
@@ -474,7 +477,7 @@ def scan_elements(
             if match is None or (
                 match.end() < len(segment) and not segment[match.end()].isspace()
             ):
-                raise error(f"malformed MOVE element: {segment[index:index + 30]!r}")
+                raise error(f"malformed MOVE element: {segment[index : index + 30]!r}")
             elements.append(Element("move", delta=(int(match[1]), int(match[2]))))
             index = match.end()
             continue
@@ -524,9 +527,7 @@ def lower_typing(text: str, *, error: type[Exception] = ValueError) -> Operation
     event, never a character.
     """
     if "\n" in text or "\r" in text:
-        raise error(
-            "type() cannot embed a newline; press Return as an event instead"
-        )
+        raise error("type() cannot embed a newline; press Return as an event instead")
     return coalesced_type(text)
 
 
@@ -583,7 +584,7 @@ class Group:
 
 
 def _button_of(operation: Operation) -> str:
-    return str(tuple(operation.args)[0])
+    return str(next(iter(operation.args)))
 
 
 def group_operations(
@@ -691,12 +692,12 @@ def group_operations(
             downs: list[str] = []
             scan = index
             while scan < len(ops) and ops[scan].kind == "key_down":
-                downs.append(str(tuple(ops[scan].args)[0]))
+                downs.append(str(next(iter(ops[scan].args))))
                 scan += 1
             ups: list[str] = []
             after = scan
             while after < len(ops) and ops[after].kind == "key_up":
-                ups.append(str(tuple(ops[after].args)[0]))
+                ups.append(str(next(iter(ops[after].args))))
                 after += 1
             if ups and ups == list(reversed(downs)):
                 groups.append(Group("chord", keys=tuple(downs)))
@@ -708,7 +709,7 @@ def group_operations(
             ups = []
             scan = index
             while scan < len(ops) and ops[scan].kind == "key_up":
-                ups.append(str(tuple(ops[scan].args)[0]))
+                ups.append(str(next(iter(ops[scan].args))))
                 scan += 1
             groups.append(Group("key_up", keys=tuple(ups)))
             index = scan
@@ -811,7 +812,9 @@ def bare_token_plan(
                 _button_element(group.button, kind == "button_down", error=error)
             )
         elif kind == "chord":
-            elements.extend(Element("event", name=key, pressed=True) for key in group.keys)
+            elements.extend(
+                Element("event", name=key, pressed=True) for key in group.keys
+            )
             elements.extend(
                 Element("event", name=key, pressed=False)
                 for key in reversed(group.keys)
@@ -828,9 +831,7 @@ def bare_token_plan(
                     "spells literal text as key transitions"
                 )
             if "\n" in group.text or "\r" in group.text:
-                raise error(
-                    "type() cannot embed a newline; press Return as an event"
-                )
+                raise error("type() cannot embed a newline; press Return as an event")
             elements.append(Element("type", text=group.text))
         elif kind == "wait":
             if len(groups) != 1:
@@ -1039,7 +1040,10 @@ def split_control(text: str) -> Control:
         raise TypeError(f"expected str, got {type(text)!r}")
     if CONTROL_TOKEN not in text:
         return Control(None, text)
-    if text.count(CONTROL_TOKEN) != 1 or (match := _CONTROL_LINE_RE.search(text)) is None:
+    if (
+        text.count(CONTROL_TOKEN) != 1
+        or (match := _CONTROL_LINE_RE.search(text)) is None
+    ):
         raise ValueError(
             "TERMINATE must occur exactly once as the literal final line "
             "'TERMINATE: success' or 'TERMINATE: failure'"
@@ -1129,7 +1133,9 @@ MATCHED_ARM_PRESS = """Press NAME. Mouse buttons are LMB, RMB, MMB. Keyboard key
 names: Return, Tab, Backspace, Escape, ControlLeft, ShiftLeft, KeyA, ...
 """
 
-MATCHED_ARM_RELEASE = """Release NAME. A chord presses in order and releases in reverse."""
+MATCHED_ARM_RELEASE = (
+    """Release NAME. A chord presses in order and releases in reverse."""
+)
 
 MATCHED_ARM_TYPE = """Type TEXT as one coalesced burst. TEXT is a JSON string. It must NOT
 contain a newline — press Return as an event (`+Return -Return`).

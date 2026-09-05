@@ -93,7 +93,10 @@ def test_dict_round_trip(name, payload, case):
 
 @pytest.mark.parametrize(("name", "payload", "case"), _cases("format_only"))
 def test_format_only(name, payload, case):
-    assert _codec(name).format(_action_from_dict(name, case["action"])) == case["canonical"]
+    assert (
+        _codec(name).format(_action_from_dict(name, case["action"]))
+        == case["canonical"]
+    )
 
 
 @pytest.mark.parametrize(("name", "payload", "case"), _cases("invalid_parse"))
@@ -121,7 +124,9 @@ def test_lift(name, payload, case):
     )
     assert lifted == _action_from_dict(name, case["action"])
     assert codec.format(lifted) == case["canonical"]
-    assert _rows(codec.compile(case["canonical"], geometry, cursor)) == case["recompiled"]
+    assert (
+        _rows(codec.compile(case["canonical"], geometry, cursor)) == case["recompiled"]
+    )
 
 
 @pytest.mark.parametrize(("name", "payload", "case"), _cases("lift_invalid"))
@@ -137,7 +142,14 @@ def test_lift_invalid(name, payload, case):
 
 
 def test_every_vector_section_is_executed():
-    executed = {"cases", "format_only", "invalid_parse", "invalid_compile", "lift", "lift_invalid"}
+    executed = {
+        "cases",
+        "format_only",
+        "invalid_parse",
+        "invalid_compile",
+        "lift",
+        "lift_invalid",
+    }
     for name in NAMES:
         for section, value in _vectors(name).items():
             if isinstance(value, list) and section != "default_cursor":
@@ -221,7 +233,9 @@ def test_intended_cursor_matches_compile(name):
         if intent is None:
             assert not moves
         elif moves:
-            assert tuple(moves[-1].args[:2]) == _support.clamp((intent.x, intent.y), geometry)
+            assert tuple(moves[-1].args[:2]) == _support.clamp(
+                (intent.x, intent.y), geometry
+            )
 
 
 CANONICAL_PROBES = {
@@ -244,7 +258,9 @@ def test_every_canonical_operation_kind_is_groupable():
     assert set(CANONICAL_PROBES) == set(ir.CANONICAL_KINDS) - {"raise_for_test"}
     geometry = DisplayGeometry(desktop_width=1920, desktop_height=1080)
     for operation in CANONICAL_PROBES.values():
-        assert _support.group_operations((operation,), geometry=geometry, cursor=(960, 540))
+        assert _support.group_operations(
+            (operation,), geometry=geometry, cursor=(960, 540)
+        )
 
 
 def test_peer_directories_are_the_sole_registry():
