@@ -389,7 +389,9 @@ def action_matches_expected(
         return len(primitives) == 1 and primitives[0] == Primitive(
             "type", text=str(expected.get("text"))
         )
-    if kind == "scroll" and len(primitives) == 1:
+    if kind == "scroll":
+        if len(primitives) != 1:
+            return False
         primitive = primitives[0]
         sign = expected.get("sign")
         return (

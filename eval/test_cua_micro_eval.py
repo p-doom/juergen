@@ -184,6 +184,9 @@ def test_attempt_matrix_rejects_missing_or_duplicate_rows():
             True,
         ),
         ("scroll(0,-3)", {"kind": "scroll", "sign": "down"}, True),
+        ("move(2,-3)", {"kind": "scroll", "sign": "down"}, False),
+        ("scroll(0,-3); scroll(0,-3)", {"kind": "scroll", "sign": "down"}, False),
+        ("down(LMB); up(LMB)", {"kind": "scroll", "sign": "down"}, False),
         ('type("wrong")', {"kind": "type", "text": "exact"}, False),
         ("NO_OP", {"kind": "any"}, True),
     ],
@@ -347,6 +350,7 @@ def _run_one_turn(
     held_keys=(),
     pointer_button_mask=0,
     events=None,
+    expected=None,
 ):
     receipt = SimpleNamespace(
         ok=True,
@@ -403,7 +407,7 @@ def _run_one_turn(
         instruction="Do it",
         setup={"kind": "desktop"},
         target={"kind": "fixed_norm", "bbox": [0, 0, 1000, 1000], "label": "screen"},
-        expected={"kind": "any"},
+        expected={"kind": "any"} if expected is None else expected,
         verifier={"kind": "active_title_regex", "pattern": "after"},
         max_turns=1,
     )
@@ -424,6 +428,27 @@ def test_run_attests_observation_before_model_consumption(monkeypatch, tmp_path)
     result = _run_one_turn(monkeypatch, tmp_path, response="NO_OP", events=events)
     assert events[:2] == ["attest", "model"]
     assert result["reset_receipt_sha256"] == "reset-receipt"
+
+
+@pytest.mark.parametrize(
+    "response",
+    ["move(2,-3)", "scroll(0,-3); scroll(0,-3)", "down(LMB); up(LMB)"],
+)
+def test_wrong_scroll_actions_are_scored_as_failed_attempts(monkeypatch, tmp_path, response):
+    result = _run_one_turn(
+        monkeypatch,
+        tmp_path,
+        response=response,
+        expected={"kind": "scroll", "sign": "down"},
+    )
+
+    assert result["expected_action_ok"] is False
+    assert result["success"] is False
+
+
+def test_unknown_expected_action_kind_is_rejected():
+    with pytest.raises(ValueError, match="unknown expected action kind"):
+        micro.action_matches_expected(CODEC.parse("move(1,1)"), {"kind": "unknown"})
 
 
 def test_model_compile_and_held_state_failures_are_scored(monkeypatch, tmp_path):

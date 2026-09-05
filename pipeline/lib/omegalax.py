@@ -345,13 +345,24 @@ def message_length_map(cache: Path) -> dict[tuple[int, int], int]:
     return lengths
 
 
-def require_messages_fit(cache: Path, *, max_length: int) -> None:
-    oversized = [
-        key for key, length in message_length_map(cache).items() if length > max_length
-    ]
+def require_conversations_fit(cache: Path, chat: Path, *, max_length: int) -> None:
+    lengths = message_length_map(cache)
+    oversized = []
+    conversation_index = 0
+    with chat.open(encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                continue
+            messages = json.loads(line)["messages"]
+            length = sum(
+                lengths[(conversation_index, offset)] for offset in range(len(messages))
+            )
+            if length > max_length:
+                oversized.append((line_number, length))
+            conversation_index += 1
     if oversized:
         raise ValueError(
-            f"individual source messages exceed max_length={max_length}: {oversized[:5]}"
+            f"source conversations exceed max_length={max_length}: {oversized[:5]}"
         )
 
 
@@ -395,34 +406,25 @@ def _expected_records(
                 if key not in {"messages", "session_id"}
             }
             session_id = f"{source_chat.stem}-{line_number:09d}"
-            chunk: list[dict[str, Any]] = []
-            chunk_length = 0
-            for offset, message in enumerate(messages):
-                length = lengths[(conversation_index, offset)]
-                if length > max_length:
-                    raise ValueError(
-                        f"source message exceeds max_length at "
-                        f"{source_chat}:{line_number}:{offset}"
-                    )
-                if chunk and chunk_length + length > max_length:
-                    if any(_supervised(item) for item in chunk):
-                        yield {
-                            **metadata,
-                            "messages": chunk,
-                            "_omegalax_session_id": session_id,
-                            "_omegalax_measured_length": chunk_length,
-                        }
-                    chunk = []
-                    chunk_length = 0
-                chunk.append(message)
-                chunk_length += length
-            if chunk and any(_supervised(item) for item in chunk):
-                yield {
-                    **metadata,
-                    "messages": chunk,
-                    "_omegalax_session_id": session_id,
-                    "_omegalax_measured_length": chunk_length,
-                }
+            measured_length = sum(
+                lengths[(conversation_index, offset)] for offset in range(len(messages))
+            )
+            if measured_length > max_length:
+                raise ValueError(
+                    f"source conversation exceeds max_length at "
+                    f"{source_chat}:{line_number}"
+                )
+            if not any(_supervised(message) for message in messages):
+                raise ValueError(
+                    f"source conversation has no supervised target at "
+                    f"{source_chat}:{line_number}"
+                )
+            yield {
+                **metadata,
+                "messages": messages,
+                "_omegalax_session_id": session_id,
+                "_omegalax_measured_length": measured_length,
+            }
             conversation_index += 1
 
 

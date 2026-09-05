@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from desktop.execute.protocol import build_action_request
+from desktop.execute.protocol import HeldStateError, build_action_request
 from desktop.geometry import DisplayGeometry
 from grammars.ordered_events_v3_relative_1000_grid_v1.codec import (
     CODEC,
@@ -413,6 +413,64 @@ def test_curator_composes_multicall_turn_in_execution_order():
 
 
 @pytest.mark.parametrize(
+    ("down", "up", "arguments", "expected"),
+    [
+        (
+            "key_down",
+            "key_up",
+            {"keys": ["ctrl"]},
+            ["down(ControlLeft)", "up(ControlLeft)"],
+        ),
+        (
+            "left_mouse_down",
+            "left_mouse_up",
+            {},
+            ["down(LMB)", "up(LMB)"],
+        ),
+    ],
+)
+def test_curator_carries_held_input_state_between_turns(
+    down: str, up: str, arguments: dict, expected: list[str]
+):
+    trajectory = _raw_trajectory(turns=2)
+    for index, action in enumerate((down, up)):
+        call = {"action": action, **arguments}
+        assistant = _assistant(f"reason {index}</think>", call)
+        trajectory["steps"][index] |= {
+            "raw": assistant,
+            "action": action,
+            "meta": call,
+            "raw_action_args": call,
+            "assistant_raw": assistant,
+        }
+
+    curated = curate_rollout(trajectory, Counter(), [])
+
+    assert curated is not None
+    assert [CODEC.format(action_from_dict(step["action"])) for step in curated["steps"]] == expected
+
+
+@pytest.mark.parametrize(
+    ("action", "arguments"),
+    [("key_up", {"keys": ["ctrl"]}), ("left_mouse_up", {})],
+)
+def test_curator_rejects_a_release_without_held_input(action: str, arguments: dict):
+    trajectory = _raw_trajectory(turns=1)
+    call = {"action": action, **arguments}
+    assistant = _assistant("reason</think>", call)
+    trajectory["steps"][0] |= {
+        "raw": assistant,
+        "action": action,
+        "meta": call,
+        "raw_action_args": call,
+        "assistant_raw": assistant,
+    }
+
+    with pytest.raises(HeldStateError, match="not held"):
+        curate_rollout(trajectory, Counter(), [])
+
+
+@pytest.mark.parametrize(
     ("prefix", "reasoning", "counter"),
     [
         ("plain reason", "plain reason", "reasoning_missing_closer"),
@@ -493,6 +551,7 @@ def _image_count(messages: list[dict]) -> int:
 
 def test_stage_04_bounds_history_masks_loss_and_summarizes_evictions():
     rows = build_episode_records(_curated_trajectory(), _Images(), render_contract(), Counter())
+    assert len(rows) == 6
     assert [row["n_history_turns"] for row in rows] == [0, 1, 2, 3, 4, 4]
     assert [_image_count(row["messages"]) for row in rows] == [1, 2, 3, 4, 5, 5]
     final = rows[-1]["messages"]
@@ -501,6 +560,14 @@ def test_stage_04_bounds_history_masks_loss_and_summarizes_evictions():
         message.get("loss") is False for message in final[:-1] if message["role"] == "assistant"
     )
     assert "loss" not in final[-1]
+    assert all(
+        sum(
+            message["role"] == "assistant" and message.get("loss", True)
+            for message in row["messages"]
+        )
+        == 1
+        for row in rows
+    )
     assert "<tool_call>" not in json.dumps(rows)
     assert all(row["grammar"] == CODEC.name for row in rows)
     assert all(
@@ -616,6 +683,15 @@ def test_stage_01_to_stage_04_manifest_and_digest_contract(tmp_path: Path):
     image_store = tmp_path / "images"
     build_store(screenshots, image_store, workers=1)
     trajectory = _raw_trajectory(turns=1)
+    terminate = {"action": "terminate", "status": "success"}
+    assistant = _assistant("done</think>", terminate)
+    trajectory["steps"][0] |= {
+        "raw": assistant,
+        "action": "terminate",
+        "meta": terminate,
+        "raw_action_args": terminate,
+        "assistant_raw": assistant,
+    }
     trajectories = tmp_path / "trajectories.jsonl"
     trajectories.write_text(json.dumps(trajectory) + "\n")
     curated = tmp_path / "curated"
@@ -634,6 +710,7 @@ def test_stage_01_to_stage_04_manifest_and_digest_contract(tmp_path: Path):
     target = row["messages"][-1]["content"][0]["text"]
     assert target.count("<think>") == target.count("</think>") == 1
     assert "Action:" not in target and "tool_call" not in target
+    assert target.endswith("NO_OP\nTERMINATE: success")
     for field in (
         "system_prompt_sha256",
         "render_spec_sha256",
@@ -641,7 +718,48 @@ def test_stage_01_to_stage_04_manifest_and_digest_contract(tmp_path: Path):
         "observation_spec_sha256",
     ):
         assert row[field] == contract[field]
-    assert resolve_chat_artifact(output) == output / "chat.jsonl"
+    with mock.patch(
+        "pipeline.cua_gym.stage_04_build_conversations.build_episode_records",
+        side_effect=AssertionError("resolver replayed the producer"),
+    ):
+        assert resolve_chat_artifact(output) == output / "chat.jsonl"
+    original_chat = (output / "chat.jsonl").read_bytes()
+    row["messages"][1]["content"] = [row["messages"][1]["content"][0]]
+    (output / "chat.jsonl").write_text(json.dumps(row) + "\n")
+    manifest_path = output / "manifest.json"
+    changed_manifest = json.loads(manifest_path.read_text())
+    changed_manifest["chat_sha256"] = hashlib.sha256(
+        (output / "chat.jsonl").read_bytes()
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(changed_manifest))
+    with pytest.raises(ValueError, match="supervision context"):
+        resolve_chat_artifact(output)
+    (output / "chat.jsonl").write_bytes(original_chat)
+    manifest_path.write_text(json.dumps(manifest))
+
+    row = json.loads(original_chat)
+    row["messages"][-1]["content"] = [row["messages"][1]["content"][0]]
+    (output / "chat.jsonl").write_text(json.dumps(row) + "\n")
+    changed_manifest["chat_sha256"] = hashlib.sha256(
+        (output / "chat.jsonl").read_bytes()
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(changed_manifest))
+    with pytest.raises(ValueError, match="assistant content"):
+        resolve_chat_artifact(output)
+    (output / "chat.jsonl").write_bytes(original_chat)
+    manifest_path.write_text(json.dumps(manifest))
+
+    image_manifest = json.loads((image_store / "manifest.json").read_text())
+    shard_name = next(iter(image_manifest["shards"]))
+    shard = image_store / image_manifest["generation"] / shard_name / "images.array_record"
+    original_shard = shard.read_bytes()
+    try:
+        shard.write_bytes(original_shard + b"corrupt")
+        with pytest.raises(ValueError, match="image shard digest mismatch"):
+            resolve_chat_artifact(output)
+    finally:
+        shard.write_bytes(original_shard)
+
     original_id = manifest["chat_sha256"]
     (output / "chat.jsonl").write_text("mutated\n")
     with pytest.raises(ValueError, match="chat digest mismatch"):

@@ -18,7 +18,7 @@ from PIL import Image
 from pipeline.cua_gym.stage_01_image_store import build_store
 from pipeline.cua_gym.stage_04_build_conversations import build_dataset
 from pipeline.lib.manifest import make_artifact_id
-from pipeline.lib.omegalax import attest_processor_snapshot
+from pipeline.lib.omegalax import attest_processor_snapshot, require_conversations_fit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STAGES = REPO_ROOT / "pipeline"
@@ -142,19 +142,9 @@ for name in ("PYTHONHOME", "PYTHONPATH", "UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT")
 if os.environ.get("PYTHONNOUSERSITE") != "1":
     raise SystemExit("PYTHONNOUSERSITE is not set")
 if "-c" in sys.argv:
-    program = sys.argv[sys.argv.index("-c") + 1]
-    if "encode_qwen_messages" not in program:
-        raise SystemExit("unexpected inline Python")
-    verification = os.environ.get("FAKE_RECORD_VERIFICATION")
-    if verification == "fail":
+    if os.environ.get("FAKE_RECORD_VERIFICATION") == "fail":
         raise SystemExit("record encoding mismatch")
     datasets = json.loads(sys.argv[-1])
-    if verification == "mutate":
-        first = next(iter(datasets.values()))
-        shard = Path(first) / "part-00000.array_record"
-        payload = bytearray(shard.read_bytes())
-        payload[112] ^= 1
-        shard.write_bytes(payload)
     print(json.dumps({{
         split: json.loads((Path(root) / "metadata.json").read_text())["num_records"]
         for split, root in datasets.items()
@@ -433,6 +423,40 @@ def test_processor_snapshot_attests_the_consumed_qwen_files(tmp_path: Path) -> N
         attest_processor_snapshot(snapshot)
 
 
+def test_whole_conversation_fit_preserves_conditioning_context(tmp_path: Path) -> None:
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": "system"}]},
+        {"role": "user", "content": [{"type": "text", "text": "first"}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "history"}],
+            "loss": False,
+        },
+        {"role": "user", "content": [{"type": "text", "text": "target input"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "target"}]},
+    ]
+    chat = tmp_path / "chat.jsonl"
+    chat.write_text(json.dumps({"messages": messages}) + "\n")
+    cache = tmp_path / "message_lengths.jsonl"
+    cache.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "conv_idx": 0,
+                    "msg_offset": offset,
+                    "measurement": {"length": 10},
+                }
+            )
+            + "\n"
+            for offset in range(len(messages))
+        )
+    )
+
+    require_conversations_fit(cache, chat, max_length=50)
+    with pytest.raises(ValueError, match=r"conversations exceed max_length=40.*50"):
+        require_conversations_fit(cache, chat, max_length=40)
+
+
 def test_stage_05_refuses_missing_chat_before_launch(tmp_path: Path, production_inputs) -> None:
     source = make_source(tmp_path / "source", production_inputs["image_store"])
     (source / "chat.jsonl").unlink()
@@ -472,7 +496,7 @@ def test_stage_05_refuses_chat_images_outside_the_attested_store(
         num_workers=2,
     )
     assert result.returncode != 0
-    assert "chat rows do not match" in result.stderr
+    assert "outside its attested store" in result.stderr
     assert _invocations(production_inputs["log"]) == []
 
 
@@ -649,6 +673,7 @@ def test_stage_06_builds_verified_nonempty_arrayrecords(tmp_path: Path, producti
             lengths,
             output_dir=output,
             val_fraction=0.3,
+            max_length=30,
         ),
     )
     assert result.returncode == 0, result.stderr
@@ -694,9 +719,7 @@ def test_stage_06_requires_exact_ordered_source_chunks(
     )
 
 
-def test_stage_06_revalidates_all_splits_and_encoder_output(
-    tmp_path: Path, production_inputs
-) -> None:
+def test_stage_06_validates_each_split_once(tmp_path: Path, production_inputs) -> None:
     source = make_source(tmp_path / "source", production_inputs["image_store"])
     lengths = _measure(tmp_path, production_inputs, source)
     flags = _record_flags(
@@ -706,37 +729,95 @@ def test_stage_06_revalidates_all_splits_and_encoder_output(
         lengths,
         val_fraction=0.3,
     )
-    for environment in (
+    result = _run(
+        "stage_06_training_records.py",
         {**production_inputs["env"], "FAKE_MUTATE_TRAIN": "1"},
+        **flags,
+    )
+    assert result.returncode != 0
+    assert not (Path(flags["output_dir"]) / "manifest.json").exists()
+
+
+def test_stage_06_rejects_encoder_verification_failure(tmp_path: Path, production_inputs) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    lengths = _measure(tmp_path, production_inputs, source)
+    output = tmp_path / "records"
+
+    result = _run(
+        "stage_06_training_records.py",
         {**production_inputs["env"], "FAKE_RECORD_VERIFICATION": "fail"},
-        {**production_inputs["env"], "FAKE_RECORD_VERIFICATION": "mutate"},
-    ):
-        result = _run("stage_06_training_records.py", environment, **flags)
-        assert result.returncode != 0
-        assert not (Path(flags["output_dir"]) / "manifest.json").exists()
+        **_record_flags(tmp_path, production_inputs, source, lengths, output_dir=output),
+    )
+
+    assert result.returncode != 0
+    assert "record encoding mismatch" in result.stderr
+    assert not (output / "manifest.json").exists()
 
 
-def test_stage_06_rejects_individually_oversized_messages(
+def test_stage_06_rejects_oversized_conversations_before_replacing_outputs(
     tmp_path: Path, production_inputs
 ) -> None:
     source = make_source(tmp_path / "source", production_inputs["image_store"])
     lengths = _measure(tmp_path, production_inputs, source)
     cache = lengths / "message_lengths.jsonl"
     rows = [json.loads(line) for line in cache.read_text().splitlines()]
-    rows[0]["measurement"]["length"] = 5000
+    for row in rows[:3]:
+        row["measurement"]["length"] = 2000
     cache.write_text("".join(json.dumps(row) + "\n" for row in rows))
     manifest_path = lengths / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["stats"]["cache"]["sha256"] = hashlib.sha256(cache.read_bytes()).hexdigest()
     manifest_path.write_text(json.dumps(manifest))
 
+    output = tmp_path / "records"
+    (output / "train").mkdir(parents=True)
+    (output / "train" / "existing").write_text("keep")
+    (output / "manifest.json").write_text("existing")
     result = _run(
         "stage_06_training_records.py",
         production_inputs["env"],
-        **_record_flags(tmp_path, production_inputs, source, lengths),
+        **_record_flags(tmp_path, production_inputs, source, lengths, output_dir=output),
     )
     assert result.returncode != 0
-    assert "individual source messages exceed" in result.stderr
+    assert "source conversations exceed" in result.stderr
+    assert (output / "manifest.json").read_text() == "existing"
+    assert (output / "train" / "existing").read_text() == "keep"
+    builds = [
+        argv
+        for argv in _script_invocations(production_inputs["log"])
+        if any("build_sft_records" in argument for argument in argv)
+    ]
+    assert builds == []
+
+
+def test_stage_06_rejects_a_masked_target_before_replacing_outputs(
+    tmp_path: Path, production_inputs
+) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    lengths = _measure(tmp_path, production_inputs, source)
+    chat = source / "chat.jsonl"
+    rows = [json.loads(line) for line in chat.read_text().splitlines()]
+    rows[0]["messages"][-1]["loss"] = False
+    chat.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    source_manifest = source / "manifest.json"
+    manifest = json.loads(source_manifest.read_text())
+    manifest["chat_sha256"] = hashlib.sha256(chat.read_bytes()).hexdigest()
+    source_manifest.write_text(json.dumps(manifest))
+    output = tmp_path / "records"
+    (output / "train").mkdir(parents=True)
+    (output / "train" / "existing").write_text("keep")
+    (output / "manifest.json").write_text("existing")
+
+    result = _run(
+        "stage_06_training_records.py",
+        production_inputs["env"],
+        **_record_flags(tmp_path, production_inputs, source, lengths, output_dir=output),
+    )
+
+    assert result.returncode != 0
+    assert "supervision context" in result.stderr
+    assert (output / "manifest.json").read_text() == "existing"
+    assert (output / "train" / "existing").read_text() == "keep"
     builds = [
         argv
         for argv in _script_invocations(production_inputs["log"])

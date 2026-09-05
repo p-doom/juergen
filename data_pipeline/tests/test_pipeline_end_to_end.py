@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import grammars
 import msgpack
@@ -284,7 +285,11 @@ def test_stage_04_attests_prompt_inputs_and_q92_images(chain: Chain):
     prompt = grammars.describe("deltatype_v2")
     assert manifest["system_prompt_sha256"] == hashlib.sha256(prompt.encode()).hexdigest()
     assert manifest["image_domain"] == jpeg_q92_height_domain(clip.FRAME_H)
-    assert resolve_chat_artifact(chain.conversations) == chain.conversations / "chat.jsonl"
+    with mock.patch(
+        "pipeline.stage_04_build_conversations.build_segment_conversations",
+        side_effect=AssertionError("resolver replayed the producer"),
+    ):
+        assert resolve_chat_artifact(chain.conversations) == chain.conversations / "chat.jsonl"
     for image in _images(_jsonl(chain.conversations / "chat.jsonl")[0]):
         with Image.open(io.BytesIO(read_jpeg_bytes(image))) as frame:
             assert frame.format == "JPEG"
@@ -307,8 +312,38 @@ def test_chat_resolver_refuses_a_forged_crowdcast_image(chain: Chain, tmp_path: 
     manifest = json.loads(manifest_path.read_text())
     manifest["chat_sha256"] = hashlib.sha256(chat.read_bytes()).hexdigest()
     manifest_path.write_text(json.dumps(manifest))
-    with pytest.raises(ValueError, match="chat rows do not match"):
+    with pytest.raises(ValueError, match="outside its attested store"):
         resolve_chat_artifact(artifact)
+
+
+def test_chat_resolver_requires_crowdcast_instruction_context(chain: Chain, tmp_path: Path):
+    artifact = tmp_path / "conversations"
+    shutil.copytree(chain.conversations, artifact)
+    chat = artifact / "chat.jsonl"
+    rows = _jsonl(chat)
+    rows[0]["messages"][1]["content"] = [
+        part for part in rows[0]["messages"][1]["content"] if part["type"] == "image"
+    ]
+    chat.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    manifest_path = artifact / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["chat_sha256"] = hashlib.sha256(chat.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError, match="instruction context"):
+        resolve_chat_artifact(artifact)
+
+
+def test_chat_resolver_hashes_referenced_crowdcast_shards(chain: Chain):
+    row = _jsonl(chain.master / "segment_index.jsonl")[0]
+    shard = Path(row["shard_path"])
+    original = shard.read_bytes()
+    try:
+        shard.write_bytes(original + b"corrupt")
+        with pytest.raises(ValueError, match="image shard digest mismatch"):
+            resolve_chat_artifact(chain.conversations)
+    finally:
+        shard.write_bytes(original)
 
 
 def test_stage_04_requires_the_describe_extract_artifact_contract(chain: Chain, tmp_path: Path):

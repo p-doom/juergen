@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from desktop.execute import BUTTON_MASKS
 from desktop.execute.protocol import build_action_request
 from desktop.geometry import DisplayGeometry
 
@@ -258,7 +259,9 @@ def _curate_group(
     source_members: set[str],
     counters: Counter[str],
     dispositions: list[dict[str, Any]],
-) -> dict[str, Any] | None:
+    pointer_button_mask: int,
+    held_keys: set[str],
+) -> tuple[dict[str, Any] | None, int, set[str]]:
     step = rows[0].get("step")
     if isinstance(step, bool) or not isinstance(step, int) or step < 0:
         raise ValueError(f"{task_id}: invalid step id {step!r}")
@@ -272,7 +275,7 @@ def _curate_group(
         if len(rows) != 1 or actions != [None]:
             raise ValueError(f"{task_id} step {step}: mixed executed and failed calls")
         counters["nonexecuted_events"] += 1
-        return None
+        return None, pointer_button_mask, held_keys
 
     assistant = rows[0].get("assistant_raw")
     if not isinstance(assistant, str) or any(
@@ -296,7 +299,7 @@ def _curate_group(
                 "source_call_sha256": _canonical_sha256(raw_calls[0]),
             }
         )
-        return None
+        return None, pointer_button_mask, held_keys
 
     cursor: tuple[int, int] | None = None
     primitives = []
@@ -342,18 +345,26 @@ def _curate_group(
     )
     operations = CODEC.compile_action(action, GEOMETRY, tuple(rows[0]["cursor_before"]))
     if operations:
-        build_action_request(
+        _, pointer_button_mask, held_keys = build_action_request(
             operations,
-            initial_buttons=set(),
-            initial_keys=set(),
+            initial_buttons={
+                button
+                for button, mask in BUTTON_MASKS.items()
+                if pointer_button_mask & mask
+            },
+            initial_keys=held_keys,
         )
-    return {
-        "step": step,
-        "shard": rows[0]["shard"],
-        "member": rows[0]["member"],
-        "reasoning": reasoning,
-        "action": action.to_dict(),
-    }
+    return (
+        {
+            "step": step,
+            "shard": rows[0]["shard"],
+            "member": rows[0]["member"],
+            "reasoning": reasoning,
+            "action": action.to_dict(),
+        },
+        pointer_button_mask,
+        held_keys,
+    )
 
 
 def curate_rollout(
@@ -392,11 +403,21 @@ def curate_rollout(
     curated = []
     executed_before = counters["executed_calls"]
     previous_step = -1
+    pointer_button_mask = 0
+    held_keys: set[str] = set()
     for step, group in itertools.groupby(rows, key=lambda row: row.get("step")):
         if isinstance(step, bool) or not isinstance(step, int) or step <= previous_step:
             raise ValueError(f"{task_id}: source steps are not strictly increasing")
         previous_step = step
-        item = _curate_group(task_id, list(group), set(members), counters, dispositions)
+        item, pointer_button_mask, held_keys = _curate_group(
+            task_id,
+            list(group),
+            set(members),
+            counters,
+            dispositions,
+            pointer_button_mask,
+            held_keys,
+        )
         if item is not None:
             curated.append(item)
     if not curated:

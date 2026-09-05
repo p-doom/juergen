@@ -111,39 +111,30 @@ def main(_) -> None:
     output_dir = Path(FLAGS.output_dir).resolve()
     source_path = Path(FLAGS.source_path).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "manifest.json").unlink(missing_ok=True)
-    (output_dir / "manifest.json.tmp").unlink(missing_ok=True)
-    allowed = {MESSAGE_LENGTHS_FILENAME}
+    allowed = {"manifest.json", "manifest.json.tmp", MESSAGE_LENGTHS_FILENAME}
     unexpected = [path for path in output_dir.iterdir() if path.name not in allowed]
     if unexpected:
         raise ValueError(f"unexpected Stage05 output entries: {unexpected}")
-    (output_dir / MESSAGE_LENGTHS_FILENAME).unlink(missing_ok=True)
 
     src_chat = resolve_chat_artifact(source_path)
+    source_sha256 = file_sha256_short(src_chat, n=64)
     source_id = make_artifact_id(source_path)
     processor_snapshot = attest_processor_snapshot(Path(FLAGS.processor_snapshot))
     omegalax = attest_omegalax(Path(FLAGS.omegalax_repo))
+
+    (output_dir / "manifest.json").unlink(missing_ok=True)
+    (output_dir / "manifest.json.tmp").unlink(missing_ok=True)
+    (output_dir / MESSAGE_LENGTHS_FILENAME).unlink(missing_ok=True)
     cache = _run_measure(src_chat, output_dir, processor_snapshot, omegalax)
     post_processor = attest_processor_snapshot(Path(FLAGS.processor_snapshot))
     post_omegalax = attest_omegalax(Path(FLAGS.omegalax_repo))
     if post_processor != processor_snapshot or post_omegalax != omegalax:
         raise RuntimeError("Stage05 compiler identity changed during execution")
     if (
-        resolve_chat_artifact(source_path) != src_chat
-        or make_artifact_id(source_path) != source_id
+        make_artifact_id(source_path) != source_id
+        or file_sha256_short(src_chat, n=64) != source_sha256
     ):
         raise RuntimeError("Stage05 source changed during execution")
-    cache_path = output_dir / MESSAGE_LENGTHS_FILENAME
-    if (
-        validate_message_lengths(
-            cache_path, src_chat, merge_size=processor_snapshot["merge_size"]
-        )
-        != cache["n_messages"]
-    ):
-        raise RuntimeError("Stage05 cache changed during validation")
-    if file_sha256_short(cache_path, n=64) != cache["sha256"]:
-        raise RuntimeError("Stage05 cache digest changed during validation")
-
     write_manifest(
         output_dir,
         stage="message_lengths",

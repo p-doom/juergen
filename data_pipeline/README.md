@@ -11,6 +11,8 @@ training-record builders. Their Labctl recipes bind the Juergen and Omegalax
 checkouts and the pinned Qwen processor snapshot. Stage05 and Stage06 attest
 the exact processor files they consume and run the attested Omegalax project
 locked and offline.
+Stage06 rejects any full conversation above `max_length`; it never splits away
+conditioning context.
 
 The Crowd-Cast Labctl pipeline owns the complete Stage00--06 chain: raw-source
 inventory, 720p/q92 master frames, strict realignment, filtering, goal
