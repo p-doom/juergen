@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import msgpack
 import pytest
 
+import pipeline.stage_03_filter as stage_03
 from pipeline.lib.manifest import file_sha256_short
 from pipeline.stage_03_filter import (
     FILTER_PARAMS,
@@ -167,3 +169,152 @@ def test_mask_helpers_preserve_half_open_intervals():
             {"start": 5, "end": 7, "reason": "idle_interior"},
         ],
     )
+
+
+def test_stage_03_consumes_closed_subset_of_attested_master(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    master_dir = tmp_path / "master"
+    master_dir.mkdir()
+    (master_dir / "manifest.json").write_text("{}\n")
+    stage_02 = tmp_path / "stage_02"
+    stage_02.mkdir()
+    clips = stage_02 / "clips_manifest.jsonl"
+    clips.write_text(
+        json.dumps(
+            {
+                "segment_id": "accepted",
+                "recording_id": "recording",
+                "segment_idx": 0,
+                "alignment_closed": True,
+                "alignment_status": "aligned",
+            }
+        )
+        + "\n"
+    )
+    alignment = stage_02 / "alignment.jsonl"
+    alignment_rows = [
+        {
+            "segment_id": "accepted",
+            "recording_id": "recording",
+            "segment_idx": 0,
+            "disposition": "accepted",
+            "closed": True,
+            "status": "aligned",
+            "exclusion_reason": None,
+            "model": "naive",
+            "leading_method": "n/a",
+            "n_pauses": 0,
+            "total_collapse_s": 0.0,
+            "overhang_s": 0.0,
+            "residual_s": 0.0,
+            "corr_end_s": 1.0,
+            "keylog_span_s": 1.0,
+            "video_dur_s": 1.0,
+            "corrected_keylog_path": None,
+            "corrected_keylog_sha256": None,
+            "splices": [],
+        },
+        {
+            "segment_id": "excluded",
+            "recording_id": "recording",
+            "segment_idx": 1,
+            "disposition": "excluded",
+            "closed": False,
+            "exclusion_reason": "no_closed_candidate",
+            "candidates": {},
+        },
+    ]
+    alignment.write_text("".join(json.dumps(row) + "\n" for row in alignment_rows))
+    source_sha = "a" * 64
+    source_id = "/source::0123456789abcdef"
+    stage_02_manifest = {
+        "artifact_type": "juergen_annotation_clip_manifest_realigned",
+        "schema_version": 2,
+        "clips_file": clips.name,
+        "clips_sha256": file_sha256_short(clips, n=64),
+        "alignment_file": alignment.name,
+        "alignment_sha256": file_sha256_short(alignment, n=64),
+        "source_clips_sha256": source_sha,
+        "source_clips_id": source_id,
+        "idle_timeout_s": 120.0,
+        "closure_tol_s": 2.0,
+        "n_source_segments": 2,
+        "n_accepted_segments": 1,
+        "n_excluded_segments": 1,
+        "n_recordings": 1,
+        "n_corrected": 0,
+        "n_keylogs_repointed": 0,
+        "status_counts": {"aligned": 1},
+        "exclusion_counts": {"no_closed_candidate": 1},
+        "source_clips_manifest": "/source/clips_manifest.jsonl",
+    }
+    (stage_02 / "manifest.json").write_text(json.dumps(stage_02_manifest) + "\n")
+    (stage_02 / "realign_summary.json").write_text(
+        json.dumps({key: stage_02_manifest[key] for key in stage_03._STAGE02_SUMMARY_FIELDS}) + "\n"
+    )
+    master = {
+        "master_fps": 1.0,
+        "source_clips_sha256": source_sha,
+        "source_clips_id": source_id,
+    }
+    master_rows = [
+        {
+            "segment_id": "accepted",
+            "recording_id": "recording",
+            "segment_idx": 0,
+            "status": "ok",
+        },
+        {
+            "segment_id": "excluded",
+            "recording_id": "recording",
+            "segment_idx": 1,
+            "status": "ok",
+        },
+    ]
+    monkeypatch.setattr(stage_03, "resolve_master_artifact", lambda _path: (master, master_rows))
+    consumed: list[str] = []
+
+    def fake_filter(task: dict) -> dict:
+        segment_id = task["manifest_row"]["segment_id"]
+        consumed.append(segment_id)
+        return {
+            "segment_id": segment_id,
+            "status": "ok",
+            "n_records": 1,
+            "n_kept": 1,
+            "n_black": 0,
+            "n_idle_interior": 0,
+        }
+
+    monkeypatch.setattr(stage_03, "filter_segment", fake_filter)
+    output = tmp_path / "filter_output"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "stage_03_filter.py",
+            "--frames_master_dir",
+            str(master_dir),
+            "--clips_manifest",
+            str(clips),
+            "--output_dir",
+            str(output),
+            "--num_workers",
+            "1",
+        ],
+    )
+
+    stage_03.main()
+
+    assert consumed == ["accepted"]
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["n_master_segments"] == 2
+    assert manifest["n_input_segments"] == 1
+    assert manifest["n_alignment_excluded_segments"] == 1
+
+    alignment.write_text(json.dumps(alignment_rows[0]) + "\n")
+    stage_02_manifest["alignment_sha256"] = file_sha256_short(alignment, n=64)
+    (stage_02 / "manifest.json").write_text(json.dumps(stage_02_manifest) + "\n")
+    with pytest.raises(ValueError, match="partition the Stage01 master"):
+        stage_03.main()

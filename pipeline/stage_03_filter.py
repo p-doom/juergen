@@ -28,7 +28,66 @@ from pipeline.lib.common import (
 from pipeline.lib.events import Window, load_events
 from pipeline.lib.manifest import file_sha256_short, make_artifact_id
 from pipeline.lib.master_frames import resolve_master_artifact
-from pipeline.lib.realign import CLOSED_STATUSES
+from pipeline.lib.realign import (
+    CLOSED_STATUSES,
+    CLOSURE_TOL,
+    EXCLUSION_REASONS,
+    IDLE_TIMEOUT,
+)
+
+_STAGE02_SUMMARY_FIELDS = {
+    "closure_tol_s",
+    "exclusion_counts",
+    "idle_timeout_s",
+    "n_accepted_segments",
+    "n_corrected",
+    "n_excluded_segments",
+    "n_keylogs_repointed",
+    "n_recordings",
+    "n_source_segments",
+    "source_clips_id",
+    "source_clips_manifest",
+    "source_clips_sha256",
+    "status_counts",
+}
+_STAGE02_MANIFEST_FIELDS = _STAGE02_SUMMARY_FIELDS | {
+    "alignment_file",
+    "alignment_sha256",
+    "artifact_type",
+    "clips_file",
+    "clips_sha256",
+    "schema_version",
+}
+_ACCEPTED_ALIGNMENT_FIELDS = {
+    "closed",
+    "corrected_keylog_path",
+    "corrected_keylog_sha256",
+    "corr_end_s",
+    "disposition",
+    "exclusion_reason",
+    "keylog_span_s",
+    "leading_method",
+    "model",
+    "n_pauses",
+    "overhang_s",
+    "recording_id",
+    "residual_s",
+    "segment_id",
+    "segment_idx",
+    "splices",
+    "status",
+    "total_collapse_s",
+    "video_dur_s",
+}
+_EXCLUDED_ALIGNMENT_FIELDS = {
+    "candidates",
+    "closed",
+    "disposition",
+    "exclusion_reason",
+    "recording_id",
+    "segment_id",
+    "segment_idx",
+}
 
 REASON_KEPT = 0
 REASON_BLACK = 1
@@ -269,13 +328,23 @@ def main() -> None:
     clips_artifact = json.loads(clips_artifact_manifest.read_text(encoding="utf-8"))
     required_clips = {
         "artifact_type": "juergen_annotation_clip_manifest_realigned",
-        "schema_version": 1,
+        "schema_version": 2,
         "clips_file": "clips_manifest.jsonl",
+        "alignment_file": "alignment.jsonl",
+        "idle_timeout_s": IDLE_TIMEOUT,
+        "closure_tol_s": CLOSURE_TOL,
     }
-    if {key: clips_artifact.get(key) for key in required_clips} != required_clips:
+    if (
+        set(clips_artifact) != _STAGE02_MANIFEST_FIELDS
+        or {key: clips_artifact.get(key) for key in required_clips} != required_clips
+    ):
         raise ValueError(
             f"Crowd-Cast clips contract mismatch: {clips_artifact_manifest}"
         )
+    summary_path = args.clips_manifest.parent / "realign_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    if summary != {key: clips_artifact[key] for key in _STAGE02_SUMMARY_FIELDS}:
+        raise ValueError(f"Crowd-Cast realignment summary mismatch: {summary_path}")
     if (
         args.clips_manifest.resolve()
         != (args.clips_manifest.parent / clips_artifact["clips_file"]).resolve()
@@ -285,21 +354,88 @@ def main() -> None:
         "clips_sha256"
     ):
         raise ValueError(f"Crowd-Cast clips digest mismatch: {args.clips_manifest}")
+    alignment_path = args.clips_manifest.parent / clips_artifact["alignment_file"]
+    if file_sha256_short(alignment_path, n=64) != clips_artifact.get(
+        "alignment_sha256"
+    ):
+        raise ValueError(f"Crowd-Cast alignment digest mismatch: {alignment_path}")
     if master.get("source_clips_sha256") != clips_artifact.get(
         "source_clips_sha256"
     ) or master.get("source_clips_id") != clips_artifact.get("source_clips_id"):
         raise ValueError("Crowd-Cast Stage01 and Stage02 source inventories differ")
     manifest_rows = read_jsonl(args.clips_manifest)
+    alignment_rows = read_jsonl(alignment_path)
     if not index_rows or not manifest_rows:
         raise ValueError("Crowd-Cast master and clips artifacts must be non-empty")
     master_by_segment = {str(row["segment_id"]): row for row in index_rows}
     manifest_by_segment = {str(row["segment_id"]): row for row in manifest_rows}
+    alignment_by_segment = {str(row["segment_id"]): row for row in alignment_rows}
     if len(master_by_segment) != len(index_rows):
         raise ValueError("Crowd-Cast master contains duplicate segments")
     if len(manifest_by_segment) != len(manifest_rows):
         raise ValueError("Crowd-Cast clips contain duplicate segments")
-    if set(master_by_segment) != set(manifest_by_segment):
-        raise ValueError("Crowd-Cast master and clips segment sets differ")
+    if len(alignment_by_segment) != len(alignment_rows):
+        raise ValueError("Crowd-Cast alignment contains duplicate segments")
+    accepted_alignment = {
+        segment_id
+        for segment_id, row in alignment_by_segment.items()
+        if row.get("disposition") == "accepted"
+    }
+    excluded_alignment = set(alignment_by_segment) - accepted_alignment
+    if (
+        set(alignment_by_segment) != set(master_by_segment)
+        or set(manifest_by_segment) != accepted_alignment
+    ):
+        raise ValueError(
+            "Crowd-Cast Stage02 must partition the Stage01 master segment set"
+        )
+    for segment_id in accepted_alignment:
+        alignment = alignment_by_segment[segment_id]
+        clip = manifest_by_segment[segment_id]
+        master_row = master_by_segment[segment_id]
+        if (
+            set(alignment) != _ACCEPTED_ALIGNMENT_FIELDS
+            or alignment.get("disposition") != "accepted"
+            or alignment.get("closed") is not True
+            or alignment.get("status") not in CLOSED_STATUSES
+            or alignment.get("exclusion_reason") is not None
+            or clip.get("alignment_closed") is not True
+            or clip.get("alignment_status") != alignment["status"]
+            or alignment.get("recording_id") != master_row.get("recording_id")
+            or alignment.get("segment_idx") != master_row.get("segment_idx")
+            or clip.get("recording_id") != master_row.get("recording_id")
+            or clip.get("segment_idx") != master_row.get("segment_idx")
+        ):
+            raise ValueError(f"invalid accepted Stage02 segment: {segment_id}")
+    for segment_id in excluded_alignment:
+        alignment = alignment_by_segment[segment_id]
+        master_row = master_by_segment[segment_id]
+        if (
+            set(alignment) != _EXCLUDED_ALIGNMENT_FIELDS
+            or alignment.get("disposition") != "excluded"
+            or alignment.get("closed") is not False
+            or alignment.get("exclusion_reason") not in EXCLUSION_REASONS
+            or alignment.get("recording_id") != master_row.get("recording_id")
+            or alignment.get("segment_idx") != master_row.get("segment_idx")
+        ):
+            raise ValueError(f"invalid excluded Stage02 segment: {segment_id}")
+    observed_statuses = Counter(
+        alignment_by_segment[segment_id]["status"] for segment_id in accepted_alignment
+    )
+    observed_exclusions = Counter(
+        alignment_by_segment[segment_id]["exclusion_reason"]
+        for segment_id in excluded_alignment
+    )
+    if (
+        clips_artifact.get("n_source_segments") != len(master_by_segment)
+        or clips_artifact.get("n_accepted_segments") != len(accepted_alignment)
+        or clips_artifact.get("n_excluded_segments") != len(excluded_alignment)
+        or clips_artifact.get("status_counts")
+        != dict(sorted(observed_statuses.items()))
+        or clips_artifact.get("exclusion_counts")
+        != dict(sorted(observed_exclusions.items()))
+    ):
+        raise ValueError("Crowd-Cast Stage02 alignment counts do not close")
     filter_dir = ensure_dir(output / "filter")
     tasks = [
         {
@@ -331,6 +467,9 @@ def main() -> None:
     summary = {
         "master_fps": float(master["master_fps"]),
         "n_segments": len(results),
+        "n_master_segments": len(master_by_segment),
+        "n_input_segments": len(manifest_by_segment),
+        "n_alignment_excluded_segments": len(excluded_alignment),
         "n_accepted_segments": status_counts["ok"],
         "n_excluded_segments": status_counts["excluded_invalid_keylog"],
         "status_counts": dict(sorted(status_counts.items())),

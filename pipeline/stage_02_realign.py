@@ -54,6 +54,19 @@ def realign_one_recording(task: dict) -> dict:
 
     rows: list[dict] = []
     for sid, res in results.items():
+        if res["closed"] is not True:
+            rows.append(
+                {
+                    "segment_id": sid,
+                    "recording_id": rec_id,
+                    "segment_idx": res["segment_idx"],
+                    "disposition": "excluded",
+                    "closed": False,
+                    "exclusion_reason": res["exclusion_reason"],
+                    "candidates": res["candidates"],
+                }
+            )
+            continue
         corrected_path = None
         if res["splices"]:
             corrected_path = out_dir / "corrected_keylogs" / f"{sid}.msgpack"
@@ -65,8 +78,10 @@ def realign_one_recording(task: dict) -> dict:
                 "segment_id": sid,
                 "recording_id": rec_id,
                 "segment_idx": res["segment_idx"],
+                "disposition": "accepted",
                 "status": res["status"],
                 "closed": res["closed"],
+                "exclusion_reason": None,
                 "model": res["model"],
                 "leading_method": res["leading_method"],
                 "n_pauses": res["n_pauses"],
@@ -148,25 +163,41 @@ def main() -> None:
 
     n_workers = args.num_workers or mp.cpu_count()
     n_workers = min(n_workers, len(tasks))
-    counts: Counter = Counter()
+    status_counts: Counter = Counter()
+    exclusion_counts: Counter = Counter()
     align_by_sid: dict[str, dict] = {}
     with mp.Pool(n_workers) as pool:
         for i, r in enumerate(
             pool.imap_unordered(realign_one_recording, tasks, chunksize=8), 1
         ):
             for row in r["rows"]:
-                counts[row["status"]] += 1
+                if row["segment_id"] in align_by_sid:
+                    raise ValueError(f"duplicate alignment row: {row['segment_id']}")
+                if row["disposition"] == "accepted":
+                    status_counts[row["status"]] += 1
+                elif row["disposition"] == "excluded":
+                    exclusion_counts[row["exclusion_reason"]] += 1
+                else:
+                    raise ValueError(f"invalid alignment disposition: {row!r}")
                 align_by_sid[row["segment_id"]] = row
             if i % 1000 == 0:
                 print(f"  {i}/{len(tasks)} recordings", flush=True)
 
     if set(align_by_sid) != set(segment_ids):
         raise ValueError("alignment certificate set does not match clip manifest")
-    if any(
-        row["closed"] is not True or row["status"] not in R.CLOSED_STATUSES
-        for row in align_by_sid.values()
-    ):
-        raise ValueError("cannot publish an unclosed Crowd-Cast alignment")
+    for row in align_by_sid.values():
+        if row["disposition"] == "accepted":
+            if (
+                row["closed"] is not True
+                or row["status"] not in R.CLOSED_STATUSES
+                or row["exclusion_reason"] is not None
+            ):
+                raise ValueError(f"invalid accepted alignment row: {row!r}")
+        elif (
+            row["closed"] is not False
+            or row["exclusion_reason"] not in R.EXCLUSION_REASONS
+        ):
+            raise ValueError(f"invalid excluded alignment row: {row!r}")
 
     alignment_path = out_dir / "alignment.jsonl"
     with alignment_path.open("w") as f:
@@ -180,6 +211,8 @@ def main() -> None:
     with clips_path.open("w") as f:
         for r in clip_rows:
             a = align_by_sid.get(r["segment_id"])
+            if a["disposition"] == "excluded":
+                continue
             row = dict(r)
             row["alignment_status"] = a["status"]
             row["alignment_closed"] = a["closed"]
@@ -193,15 +226,21 @@ def main() -> None:
                 n_repointed += 1
             f.write(json.dumps(row) + "\n")
 
-    n = len(align_by_sid)
+    n_source = len(align_by_sid)
+    n_accepted = sum(row["disposition"] == "accepted" for row in align_by_sid.values())
+    n_excluded = n_source - n_accepted
+    if n_accepted == 0:
+        raise ValueError("realignment excluded every Crowd-Cast source segment")
     summary = {
-        "n_segments": n,
+        "n_source_segments": n_source,
+        "n_accepted_segments": n_accepted,
+        "n_excluded_segments": n_excluded,
         "n_recordings": len(by_rec),
         "idle_timeout_s": R.IDLE_TIMEOUT,
         "closure_tol_s": R.CLOSURE_TOL,
-        "status_counts": dict(sorted(counts.items())),
-        "n_closed": sum(counts[s] for s in R.CLOSED_STATUSES),
-        "n_corrected": n - counts.get("aligned", 0),
+        "status_counts": dict(sorted(status_counts.items())),
+        "exclusion_counts": dict(sorted(exclusion_counts.items())),
+        "n_corrected": n_accepted - status_counts.get("aligned", 0),
         "n_keylogs_repointed": n_repointed,
         "source_clips_manifest": source["path"],
         "source_clips_sha256": source["sha256"],
@@ -212,15 +251,19 @@ def main() -> None:
         out_dir / "manifest.json",
         {
             "artifact_type": "juergen_annotation_clip_manifest_realigned",
-            "schema_version": 1,
+            "schema_version": 2,
             "clips_file": "clips_manifest.jsonl",
             "clips_sha256": file_sha256_short(clips_path, n=64),
+            "alignment_file": "alignment.jsonl",
             "alignment_sha256": file_sha256_short(alignment_path, n=64),
             **summary,
         },
     )
-    print(f"Wrote {n} segments; repointed {n_repointed} keylogs -> {out_dir}")
-    print(f"status: {dict(counts)}")
+    print(
+        f"Accepted {n_accepted}/{n_source} segments; "
+        f"repointed {n_repointed} keylogs -> {out_dir}"
+    )
+    print(f"status: {dict(status_counts)}; excluded: {dict(exclusion_counts)}")
 
 
 if __name__ == "__main__":

@@ -3,13 +3,20 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import msgpack
 import pytest
+import synthetic_clip as clip
 
 from pipeline.lib import realign
 from pipeline.lib.source_clips import resolve_source_clips
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+STAGES = REPO_ROOT / "pipeline"
 
 
 def _segment(
@@ -50,8 +57,14 @@ def _segment(
 def test_no_splice_cannot_certify_a_ten_second_overhang(tmp_path: Path):
     segment = _segment(tmp_path, "rec_seg0000", 0, [(20.0, "WindowTitle")], 10.0)
 
-    with pytest.raises(ValueError, match="no closed alignment"):
-        realign.realign_recording([segment])
+    result = realign.realign_recording([segment])["rec_seg0000"]
+
+    assert result["closed"] is False
+    assert result["exclusion_reason"] == "no_closed_candidate"
+    assert result["candidates"] == {
+        "naive": {"status": "UNDER", "residual_s": -10.0, "corr_end_s": 20.0},
+        "global": {"status": "UNDER", "residual_s": -10.0, "corr_end_s": 20.0},
+    }
 
 
 def test_mp4_without_movie_header_has_no_creation_time(tmp_path: Path):
@@ -119,8 +132,10 @@ def test_multi_segment_recording_requires_increasing_creation_times(
     )
     monkeypatch.setattr(realign, "mp4_creation_time", lambda _path: next(creation_times))
 
-    with pytest.raises(ValueError, match="creation time"):
-        realign.realign_recording(segments)
+    results = realign.realign_recording(segments)
+
+    reason = "unreadable_creation_time" if second_offset is None else "nonincreasing_creation_time"
+    assert {result["exclusion_reason"] for result in results.values()} == {reason}
 
 
 def test_global_splice_must_have_a_segment_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -137,8 +152,11 @@ def test_global_splice_must_have_a_segment_owner(tmp_path: Path, monkeypatch: py
         lambda _timestamps: [{"kp": 20.0, "vp": 20.0, "collapse": 1.0}],
     )
 
-    with pytest.raises(ValueError, match="no unique segment"):
-        realign.realign_recording(segments)
+    results = realign.realign_recording(segments)
+
+    assert {result["exclusion_reason"] for result in results.values()} == {
+        "unattributed_global_splice"
+    }
 
 
 @pytest.mark.parametrize("duration", [None, 0.0, float("nan")])
@@ -203,3 +221,74 @@ def test_source_manifest_duration_is_exact_frame_coverage(tmp_path: Path):
 
     with pytest.raises(ValueError, match="inexact Crowd-Cast source video duration"):
         resolve_source_clips(clips)
+
+
+def test_stage_02_publishes_only_closed_segments_with_a_complete_ledger(
+    tmp_path: Path,
+):
+    source = clip.build_uploads_tree(tmp_path / "source")
+    recording_id = "excluded"
+    user_dir = source["video_path"].parent.parent
+    video = user_dir / "recordings" / f"recording_{recording_id}_seg0000.mp4"
+    keylog = user_dir / "keylogs" / f"input_{recording_id}_seg0000.msgpack"
+    clip._write_video(video, clip.frames()[:40])
+    keylog.write_bytes(
+        msgpack.packb([[20_000_000, ["ContextChanged", ["app"]]]], use_bin_type=True)
+    )
+    stage_00 = tmp_path / "stage_00" / "clips_manifest.jsonl"
+    stage_02 = tmp_path / "stage_02"
+    environment = dict(os.environ, PYTHONPATH=str(REPO_ROOT))
+    for script, args in (
+        (
+            "stage_00_clip_manifest.py",
+            [
+                "--dataset-root",
+                str(tmp_path / "source"),
+                "--out",
+                str(stage_00),
+                "--workers",
+                "1",
+            ],
+        ),
+        (
+            "stage_02_realign.py",
+            [
+                "--clips-manifest",
+                str(stage_00),
+                "--output-dir",
+                str(stage_02),
+                "--num-workers",
+                "1",
+            ],
+        ),
+    ):
+        process = subprocess.run(
+            [sys.executable, str(STAGES / script), *args],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert process.returncode == 0, process.stderr
+
+    clips = [
+        json.loads(line) for line in (stage_02 / "clips_manifest.jsonl").read_text().splitlines()
+    ]
+    alignment = [
+        json.loads(line) for line in (stage_02 / "alignment.jsonl").read_text().splitlines()
+    ]
+    manifest = json.loads((stage_02 / "manifest.json").read_text())
+    assert [row["segment_id"] for row in clips] == [clip.SEGMENT_ID]
+    assert {row["segment_id"] for row in alignment} == {
+        clip.SEGMENT_ID,
+        "excluded_seg0000",
+    }
+    excluded = next(row for row in alignment if row["disposition"] == "excluded")
+    assert excluded["exclusion_reason"] == "no_closed_candidate"
+    assert not (stage_02 / "corrected_keylogs" / "excluded_seg0000.msgpack").exists()
+    assert manifest["schema_version"] == 2
+    assert manifest["n_source_segments"] == 2
+    assert manifest["n_accepted_segments"] == 1
+    assert manifest["n_excluded_segments"] == 1
+    assert manifest["status_counts"] == {"aligned": 1}
+    assert manifest["exclusion_counts"] == {"no_closed_candidate": 1}

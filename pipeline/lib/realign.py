@@ -24,6 +24,12 @@ INPUT_TYPES = {
 }
 
 CLOSED_STATUSES = {"aligned", "exact", "benign_idle"}
+EXCLUSION_REASONS = {
+    "no_closed_candidate",
+    "nonincreasing_creation_time",
+    "unattributed_global_splice",
+    "unreadable_creation_time",
+}
 
 _EPOCH_1904 = datetime.datetime(1904, 1, 1, tzinfo=datetime.UTC)
 
@@ -219,12 +225,25 @@ def _refine_and_classify(
     }
 
 
+def _exclude_recording(segs: list[dict], reason: str) -> dict[str, dict]:
+    return {
+        segment["segment_id"]: {
+            "segment_id": segment["segment_id"],
+            "segment_idx": segment["segment_idx"],
+            "closed": False,
+            "exclusion_reason": reason,
+            "candidates": {},
+        }
+        for segment in segs
+    }
+
+
 def realign_recording(segs: list[dict]) -> dict[str, dict]:
     """Realign every segment of ONE recording.
 
     The local candidate captures pauses within a segment. The recording-global
     candidate uses MP4 creation timestamps to capture pauses crossing segment
-    boundaries. A segment is returned only when one candidate closes.
+    boundaries. Segments without a closed candidate receive an exclusion receipt.
     """
     if not segs:
         raise ValueError("recording has no segments")
@@ -278,16 +297,15 @@ def realign_recording(segs: list[dict]) -> dict[str, dict]:
 
     offsets = [0.0] * n
     if n > 1:
-        creation_times = [mp4_creation_time(Path(s["video_path"])) for s in segs]
+        try:
+            creation_times = [mp4_creation_time(Path(s["video_path"])) for s in segs]
+        except (IndexError, OSError, OverflowError, struct.error):
+            return _exclude_recording(segs, "unreadable_creation_time")
         if any(value is None for value in creation_times):
-            raise ValueError(
-                "multi-segment recording has an unreadable MP4 creation time"
-            )
+            return _exclude_recording(segs, "unreadable_creation_time")
         exact_times = [value for value in creation_times if value is not None]
         if any(right <= left for left, right in pairwise(exact_times)):
-            raise ValueError(
-                "multi-segment recording MP4 creation times are not strictly increasing"
-            )
+            return _exclude_recording(segs, "nonincreasing_creation_time")
         offsets = [
             (creation_time - exact_times[0]).total_seconds()
             for creation_time in exact_times
@@ -304,7 +322,7 @@ def realign_recording(segs: list[dict]) -> dict[str, dict]:
     for g in gsplices:
         matches = [i for i in range(n) if offsets[i] <= g["kp"] < segment_ends[i]]
         if len(matches) != 1:
-            raise ValueError(f"global splice has no unique segment: {g['kp']}")
+            return _exclude_recording(segs, "unattributed_global_splice")
         index = matches[0]
         seg_g[index].append({"kp": g["kp"] - offsets[index], "collapse": g["collapse"]})
 
@@ -325,13 +343,21 @@ def realign_recording(segs: list[dict]) -> dict[str, dict]:
             None,
         )
         if accepted is None:
-            details = ", ".join(
-                f"{model}={result['status']} residual={result['residual_s']:.6f}"
-                for model, result in candidates
-            )
-            raise ValueError(
-                f"segment {seg['segment_id']} has no closed alignment: {details}"
-            )
+            out[seg["segment_id"]] = {
+                "segment_id": seg["segment_id"],
+                "segment_idx": seg["segment_idx"],
+                "closed": False,
+                "exclusion_reason": "no_closed_candidate",
+                "candidates": {
+                    model: {
+                        "status": result["status"],
+                        "residual_s": result["residual_s"],
+                        "corr_end_s": result["corr_end_s"],
+                    }
+                    for model, result in candidates
+                },
+            }
+            continue
         model, res = accepted
         res.update(
             {
@@ -341,6 +367,7 @@ def realign_recording(segs: list[dict]) -> dict[str, dict]:
                 "keylog_span_s": S,
                 "video_dur_s": V,
                 "first_input_s": first_input,
+                "exclusion_reason": None,
             }
         )
         out[seg["segment_id"]] = res
