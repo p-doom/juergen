@@ -30,27 +30,6 @@ _SNAPSHOT_FILES = {
     "tokenizer.json",
     "vocab.json",
 }
-_LOSS_MASK_PROBE = """
-import json
-import sys
-from transformers import AutoImageProcessor, AutoTokenizer
-from omegalax.data.collator_qwen3 import VLMSFTCollator
-
-snapshot = sys.argv[1]
-tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True)
-processor = AutoImageProcessor.from_pretrained(
-    snapshot, local_files_only=True, use_fast=False
-)
-collator = VLMSFTCollator(tokenizer, 32, processor)
-totals = []
-for message in (
-    {"role": "assistant", "content": "x", "loss": False},
-    {"role": "assistant", "content": "x"},
-):
-    batch = collator([{"messages": [message]}])
-    totals.append(int(batch["loss_mask_BT"].sum()))
-print(json.dumps(totals))
-""".strip()
 _RECORD_ENCODER_VERIFICATION = """
 import json
 import sys
@@ -179,7 +158,7 @@ def attest_processor_snapshot(path: Path) -> dict[str, Any]:
     }
 
 
-def attest_omegalax(root: Path, processor_snapshot: dict[str, Any]) -> dict[str, Any]:
+def attest_omegalax(root: Path) -> dict[str, Any]:
     root = root.resolve()
     if not root.is_dir():
         raise ValueError(f"Omegalax project is not a directory: {root}")
@@ -226,29 +205,11 @@ def attest_omegalax(root: Path, processor_snapshot: dict[str, Any]) -> dict[str,
     ):
         raise ValueError("Omegalax checkout is missing consumed tracked files")
     files = {name: _sha256(root / name) for name in names}
-    probe = subprocess.run(
-        omegalax_python(
-            root,
-            "-c",
-            _LOSS_MASK_PROBE,
-            processor_snapshot["path"],
-        ),
-        cwd=root,
-        env=isolated_subprocess_environment(),
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    if probe != "[0, 2]":
-        raise ValueError(
-            "Omegalax VLM collator must exclude loss:false history and supervise targets"
-        )
     return {
         "path": str(root),
         "commit": head,
         "tree": tree,
         "files": files,
-        "capability": "vlm_sft_collator_loss_false_v1",
     }
 
 

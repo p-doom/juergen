@@ -246,7 +246,7 @@ def main(_) -> None:
     src_chat = resolve_chat_artifact(source_path)
     source_id = make_artifact_id(source_path)
     processor_snapshot = attest_processor_snapshot(Path(FLAGS.processor_snapshot))
-    omegalax = attest_omegalax(Path(FLAGS.omegalax_repo), processor_snapshot)
+    omegalax = attest_omegalax(Path(FLAGS.omegalax_repo))
     cache_path, cache_id = _resolve_cache(
         lengths_root,
         source_id,
@@ -266,7 +266,7 @@ def main(_) -> None:
             processor_snapshot,
         )
         post_processor = attest_processor_snapshot(Path(FLAGS.processor_snapshot))
-        post_omegalax = attest_omegalax(Path(FLAGS.omegalax_repo), post_processor)
+        post_omegalax = attest_omegalax(Path(FLAGS.omegalax_repo))
         if post_processor != processor_snapshot or post_omegalax != omegalax:
             raise RuntimeError("Stage06 compiler identity changed during execution")
         if (
@@ -309,7 +309,7 @@ def main(_) -> None:
         },
     )
     post_processor = attest_processor_snapshot(Path(FLAGS.processor_snapshot))
-    post_omegalax = attest_omegalax(Path(FLAGS.omegalax_repo), post_processor)
+    post_omegalax = attest_omegalax(Path(FLAGS.omegalax_repo))
     if post_processor != processor_snapshot or post_omegalax != omegalax:
         raise RuntimeError("Stage06 compiler identity changed during verification")
     if (

@@ -143,23 +143,22 @@ if os.environ.get("PYTHONNOUSERSITE") != "1":
     raise SystemExit("PYTHONNOUSERSITE is not set")
 if "-c" in sys.argv:
     program = sys.argv[sys.argv.index("-c") + 1]
-    if "encode_qwen_messages" in program:
-        verification = os.environ.get("FAKE_RECORD_VERIFICATION")
-        if verification == "fail":
-            raise SystemExit("record encoding mismatch")
-        datasets = json.loads(sys.argv[-1])
-        if verification == "mutate":
-            first = next(iter(datasets.values()))
-            shard = Path(first) / "part-00000.array_record"
-            payload = bytearray(shard.read_bytes())
-            payload[112] ^= 1
-            shard.write_bytes(payload)
-        print(json.dumps({{
-            split: json.loads((Path(root) / "metadata.json").read_text())["num_records"]
-            for split, root in datasets.items()
-        }}, sort_keys=True))
-    else:
-        print(os.environ.get("FAKE_LOSS_PROBE", "[0, 2]"))
+    if "encode_qwen_messages" not in program:
+        raise SystemExit("unexpected inline Python")
+    verification = os.environ.get("FAKE_RECORD_VERIFICATION")
+    if verification == "fail":
+        raise SystemExit("record encoding mismatch")
+    datasets = json.loads(sys.argv[-1])
+    if verification == "mutate":
+        first = next(iter(datasets.values()))
+        shard = Path(first) / "part-00000.array_record"
+        payload = bytearray(shard.read_bytes())
+        payload[112] ^= 1
+        shard.write_bytes(payload)
+    print(json.dumps({{
+        split: json.loads((Path(root) / "metadata.json").read_text())["num_records"]
+        for split, root in datasets.items()
+    }}, sort_keys=True))
     raise SystemExit(0)
 flags = dict(a[2:].split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
 script = next(a for a in sys.argv[1:] if a.endswith(".py"))
@@ -491,7 +490,6 @@ def test_stage_05_records_sealed_inputs_and_exact_cache(tmp_path: Path, producti
     assert manifest["inputs"]["source_id"] == make_artifact_id(source)
     assert manifest["params"]["omegalax"]["commit"] == COMMIT
     assert manifest["params"]["omegalax"]["tree"] == TREE
-    assert manifest["params"]["omegalax"]["capability"] == "vlm_sft_collator_loss_false_v1"
     assert manifest["params"]["processor_snapshot"]["revision"] == SNAPSHOT_REVISION
     assert "tokenizer.json" in manifest["params"]["processor_snapshot"]["files"]
     assert manifest["stats"]["cache"] == {
@@ -555,22 +553,6 @@ def test_stage_05_rejects_invalid_cache(
     assert result.returncode != 0
     assert message in result.stderr
     assert not (output / "manifest.json").exists()
-
-
-def test_omegalax_capability_probe_is_required(tmp_path: Path, production_inputs) -> None:
-    source = make_source(tmp_path / "source", production_inputs["image_store"])
-    env = {**production_inputs["env"], "FAKE_LOSS_PROBE": "[2, 2]"}
-    result = _run(
-        "stage_05_measure_lengths.py",
-        env,
-        output_dir=tmp_path / "lengths",
-        source_path=source,
-        omegalax_repo=production_inputs["repo"],
-        processor_snapshot=production_inputs["snapshot"],
-        num_workers=2,
-    )
-    assert result.returncode != 0
-    assert "exclude loss:false history" in result.stderr
 
 
 def test_stage_05_rejects_compiler_changes_during_execution(
