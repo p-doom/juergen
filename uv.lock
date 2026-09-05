@@ -4,8 +4,8 @@ requires-python = "==3.12.*"
 
 [manifest]
 members = [
-    "crowdcast-data-pipeline",
     "juergen",
+    "juergen-data-pipelines",
 ]
 
 [[package]]
@@ -60,49 +60,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d8/53/6f443c9a4a8358a93a6792e2acffb9d9d5cb0a5cfd8802644b7b1c9a02e4/colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44", size = 27697, upload-time = "2022-10-25T02:36:22.414Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6", size = 25335, upload-time = "2022-10-25T02:36:20.889Z" },
-]
-
-[[package]]
-name = "crowdcast-data-pipeline"
-version = "0.1.0"
-source = { editable = "data_pipeline" }
-dependencies = [
-    { name = "absl-py" },
-    { name = "array-record" },
-    { name = "desktop" },
-    { name = "msgpack" },
-    { name = "numpy" },
-    { name = "openai" },
-    { name = "opencv-python-headless" },
-    { name = "pillow" },
-    { name = "pyyaml" },
-    { name = "tqdm" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "absl-py", specifier = ">=2.0" },
-    { name = "array-record", specifier = ">=0.5.1" },
-    { name = "desktop", git = "https://github.com/p-doom/desktop.git?rev=1db6ae2499afc16d87dee15453a57042dff13f64" },
-    { name = "msgpack", specifier = ">=1.0" },
-    { name = "numpy", specifier = ">=2.0" },
-    { name = "openai", specifier = ">=2.26.0" },
-    { name = "opencv-python-headless", specifier = ">=4.10.0.84" },
-    { name = "pillow", specifier = ">=11.3.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "tqdm", specifier = ">=4.66" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8" },
-    { name = "ruff", specifier = "==0.16.6" },
 ]
 
 [[package]]
@@ -251,6 +208,49 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.16.6" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "juergen-data-pipelines"
+version = "0.1.0"
+source = { virtual = "data_pipeline" }
+dependencies = [
+    { name = "absl-py" },
+    { name = "array-record" },
+    { name = "desktop" },
+    { name = "msgpack" },
+    { name = "numpy" },
+    { name = "openai" },
+    { name = "opencv-python-headless" },
+    { name = "pillow" },
+    { name = "pyyaml" },
+    { name = "tqdm" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "absl-py", specifier = ">=2.0" },
+    { name = "array-record", specifier = ">=0.5.1" },
+    { name = "desktop", git = "https://github.com/p-doom/desktop.git?rev=1db6ae2499afc16d87dee15453a57042dff13f64" },
+    { name = "msgpack", specifier = ">=1.0" },
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "openai", specifier = ">=2.26.0" },
+    { name = "opencv-python-headless", specifier = ">=4.10.0.84" },
+    { name = "pillow", specifier = ">=11.3.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "tqdm", specifier = ">=4.66" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "ruff", specifier = "==0.16.6" },
+]
 
 [[package]]
 name = "msgpack"

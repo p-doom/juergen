@@ -1,11 +1,11 @@
 [project]
-name = "crowdcast-data-pipeline"
+name = "juergen-data-pipelines"
 version = "0.1.0"
-description = "Crowd-cast SFT data pipeline: pmanager launch configs and tests for the stages in ../pipeline."
+description = "Locked runtime for Juergen's two checkout-local SFT data pipelines."
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "absl-py>=2.0",
     "array-record>=0.5.1",
@@ -22,17 +22,12 @@ dependencies = [
 [dependency-groups]
 dev = ["pytest>=8", "ruff==0.16.6"]
 
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools]
-packages = ["configs"]
-py-modules = []
+[tool.uv]
+package = false
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = [

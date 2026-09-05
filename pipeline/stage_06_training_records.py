@@ -39,7 +39,7 @@ FLAGS = flags.FLAGS
 
 MESSAGE_LENGTHS_FILENAME = "message_lengths.jsonl"
 
-# pmanager-injected:
+# Pipeline envelope:
 flags.DEFINE_string("output_dir", None, "Inline-records output dir.", required=True)
 flags.DEFINE_string(
     "source_path",
@@ -151,8 +151,6 @@ def _resolve_cache(
             "built_at",
             "inputs",
             "params",
-            "pmanager_parent_run_id",
-            "pmanager_run_id",
             "schema_version",
             "stage",
             "stats",
@@ -162,8 +160,6 @@ def _resolve_cache(
         or isinstance(manifest.get("built_at"), bool)
         or not isinstance(manifest.get("built_at"), int)
         or manifest["built_at"] <= 0
-        or not isinstance(manifest.get("pmanager_run_id"), str)
-        or not isinstance(manifest.get("pmanager_parent_run_id"), str)
     ):
         raise ValueError(f"invalid message-length manifest: {manifest_path}")
     inputs = manifest.get("inputs")

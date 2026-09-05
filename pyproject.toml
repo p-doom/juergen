@@ -27,4 +27,4 @@ include = ["grammars", "grammars.*"]
 "*" = ["vectors/*.json"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "grammars"]
+testpaths = ["tests"]

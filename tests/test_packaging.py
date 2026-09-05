@@ -6,6 +6,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -48,36 +49,48 @@ def _metadata(wheel: Path) -> str:
         return archive.read(name).decode()
 
 
+def _members(wheel: Path) -> tuple[str, ...]:
+    with zipfile.ZipFile(wheel) as archive:
+        return tuple(archive.namelist())
+
+
 @pytest.fixture(scope="module")
-def wheels(tmp_path_factory) -> tuple[Path, Path, Path]:
+def wheel(tmp_path_factory) -> tuple[Path, Path]:
     uv = shutil.which("uv")
     assert uv is not None
     root = tmp_path_factory.mktemp("dist")
     source = root / "source"
     shutil.copytree(_REPO, source, ignore=_NOT_SOURCE, symlinks=True)
-    for project in (source, source / "data_pipeline"):
-        subprocess.run(
-            [uv, "build", "--wheel", "--out-dir", str(root), str(project)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+    subprocess.run(
+        [uv, "build", "--wheel", "--out-dir", str(root), str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     return (
         root,
         root / next(path.name for path in root.glob("juergen-*.whl")),
-        root / next(path.name for path in root.glob("crowdcast_data_pipeline-*.whl")),
     )
 
 
-def test_both_published_wheels_record_the_exact_desktop_requirement(wheels):
-    _, juergen, data_pipeline = wheels
-    requirement = f"Requires-Dist: {_DESKTOP_REQUIREMENT}"
-    assert requirement in _metadata(juergen)
-    assert requirement in _metadata(data_pipeline)
+def test_published_wheel_and_pipeline_runtime_pin_exact_desktop(wheel):
+    _, juergen = wheel
+    assert f"Requires-Dist: {_DESKTOP_REQUIREMENT}" in _metadata(juergen)
+    pipeline_project = tomllib.loads(
+        (_REPO / "data_pipeline" / "pyproject.toml").read_text()
+    )["project"]
+    assert _DESKTOP_REQUIREMENT in pipeline_project["dependencies"]
 
 
-def test_normal_wheel_install_resolves_the_pinned_desktop(wheels):
-    root, juergen, _ = wheels
+def test_published_juergen_wheel_contains_no_test_modules(wheel):
+    _, juergen = wheel
+    assert not [
+        name for name in _members(juergen) if Path(name).name.startswith("test_")
+    ]
+
+
+def test_normal_wheel_install_resolves_the_pinned_desktop(wheel):
+    root, juergen = wheel
     uv = shutil.which("uv")
     environment = root / "venv"
     subprocess.run(

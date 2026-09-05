@@ -1,10 +1,9 @@
 # Juergen data pipelines
 
-This project owns exactly two SFT streams:
+This project owns the stage code for exactly two SFT streams:
 
-- `configs/chain_crowdcast.py`: canonical Crowd-Cast `describe_extract` goals
-  and `deltatype_v2` actions.
-- `configs/chain_cua_gym_parity.py`: CUA-Gym action-format parity with
+- canonical Crowd-Cast `describe_extract` goals and `deltatype_v2` actions;
+- CUA-Gym action-format parity with
   `ordered_events_v3_relative_1000_grid_v1` actions.
 
 Both chains finish through the shared Stage05 message-length and Stage06
@@ -24,9 +23,13 @@ Stage03 curator groups recorded multi-call turns, verifies executed metadata,
 records non-action and nonrepresentable dispositions, and emits the sole schema
 accepted by Stage04.
 
+Labctl owns deployment. Its two TOML pipelines live in the Slurm repository at
+`dev/franz/berlin/crowd-cast-bc/labctl/pipelines/crowdcast_canonical_v1.toml`
+and
+`dev/franz/berlin/crowd-cast-bc/labctl/pipelines/cuagym_action_format_parity_v1.toml`.
+Juergen contains no scheduler compatibility layer.
+
 ```bash
-pmanager launch data_pipeline/configs/chain_crowdcast.py
-pmanager launch data_pipeline/configs/chain_cua_gym_parity.py
 uv run --project data_pipeline --locked pytest -q data_pipeline/tests
 ```
 

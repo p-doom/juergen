@@ -15,7 +15,7 @@ Run the root and pipeline tests with:
 
 ```bash
 uv run --locked --extra dev pytest -q
-uv run --project data_pipeline pytest -q data_pipeline/tests
+uv run --project data_pipeline --locked pytest -q data_pipeline/tests
 ```
 
 Run the micro-eval tests and evaluator from its independent lock:

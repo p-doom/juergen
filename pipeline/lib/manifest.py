@@ -1,19 +1,9 @@
-"""Shared helper for writing the pipeline ``manifest.json``.
-
-Per pipeline_task() contract (pmanager.configs.schema.pipeline_task), every
-pipeline entrypoint must write ``<output_dir>/manifest.json`` before exiting
-cleanly. pmanager polls for this file to detect dataset completion and
-register the dataset in its registry. pmanager does not fabricate one.
-
-The manifest captures: stage name, every config param the entrypoint received,
-input fingerprints (paths + key file hashes), output statistics.
-"""
+"""Shared helper for writing a pipeline artifact's ``manifest.json`` marker."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import time
 from collections import Counter
@@ -46,8 +36,6 @@ def write_manifest(
         "inputs": inputs,
         "stats": stats,
         "built_at": int(time.time()),
-        "pmanager_run_id": os.environ.get("PMANAGER_RUN_ID", ""),
-        "pmanager_parent_run_id": os.environ.get("PMANAGER_PARENT_RUN_ID", ""),
     }
     tmp = output_dir / "manifest.json.tmp"
     tmp.write_text(json.dumps(manifest, indent=2))

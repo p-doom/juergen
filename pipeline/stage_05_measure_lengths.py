@@ -33,7 +33,7 @@ FLAGS = flags.FLAGS
 
 MESSAGE_LENGTHS_FILENAME = "message_lengths.jsonl"
 
-# pmanager-injected:
+# Pipeline envelope:
 flags.DEFINE_string(
     "output_dir", None, "Message-length cache output dir.", required=True
 )

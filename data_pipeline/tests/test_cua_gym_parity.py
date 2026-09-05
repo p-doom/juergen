@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import importlib
 import io
 import json
-import sys
 import tarfile
-import types
 from collections import Counter
 from pathlib import Path
 from unittest import mock
@@ -41,26 +38,6 @@ from pipeline.lib.image_store import parse_arrayrecord_image_uri, read_jpeg_byte
 from pipeline.lib.manifest import resolve_chat_artifact
 
 GEOMETRY = DisplayGeometry(desktop_width=1920, desktop_height=1080)
-
-
-class _Bag:
-    def __init__(self) -> None:
-        object.__setattr__(self, "values", {})
-
-    def __getattr__(self, name: str):
-        values = object.__getattribute__(self, "values")
-        if name not in values:
-            values[name] = _Bag()
-        return values[name]
-
-    def __setattr__(self, name: str, value: object) -> None:
-        object.__getattribute__(self, "values")[name] = value
-
-    def to_dict(self) -> dict:
-        return {
-            key: value.to_dict() if isinstance(value, _Bag) else value
-            for key, value in object.__getattribute__(self, "values").items()
-        }
 
 
 def _png(color: tuple[int, int, int] = (10, 20, 30)) -> bytes:
@@ -670,69 +647,3 @@ def test_stage_01_to_stage_04_manifest_and_digest_contract(tmp_path: Path):
     with pytest.raises(ValueError, match="chat digest mismatch"):
         resolve_chat_artifact(output)
     assert json.loads((output / "manifest.json").read_text())["chat_sha256"] == original_id
-
-
-def test_labctl_chain_requires_and_connects_omegalax_scripts(monkeypatch, tmp_path: Path):
-    schema = types.ModuleType("pmanager.configs.schema")
-    schema.pipeline_task = _Bag
-    monkeypatch.setitem(sys.modules, "pmanager", types.ModuleType("pmanager"))
-    monkeypatch.setitem(sys.modules, "pmanager.configs", types.ModuleType("pmanager.configs"))
-    monkeypatch.setitem(sys.modules, "pmanager.configs.schema", schema)
-    module = importlib.import_module("configs.chain_cua_gym_parity")
-
-    def attest(path, processor_snapshot):
-        required = path / "scripts" / "measure_message_lengths_from_chat.py"
-        if not required.is_file():
-            raise RuntimeError(f"OMEGALAX_REPO is missing {required.name}")
-        return {"path": str(path)}
-
-    monkeypatch.setattr(module, "attest_omegalax", attest)
-
-    screenshots = tmp_path / "screenshots"
-    screenshots.mkdir()
-    trajectories = tmp_path / "trajectories.jsonl"
-    trajectories.write_text("{}\n")
-    datasets = tmp_path / "datasets"
-    datasets.mkdir()
-    omegalax = tmp_path / "omegalax"
-    omegalax.mkdir()
-    snapshot = tmp_path / "model" / "snapshots" / ("a" * 40)
-    snapshot.mkdir(parents=True)
-    for name in (
-        "chat_template.json",
-        "config.json",
-        "generation_config.json",
-        "merges.txt",
-        "preprocessor_config.json",
-        "tokenizer.json",
-        "tokenizer_config.json",
-        "vocab.json",
-    ):
-        value = {"merge_size": 2} if name == "preprocessor_config.json" else {}
-        (snapshot / name).write_text(json.dumps(value))
-    monkeypatch.setenv("LABCTL_DATASETS_ROOT", str(datasets))
-    monkeypatch.setenv("CUA_GYM_SCREENSHOTS_DIR", str(screenshots))
-    monkeypatch.setenv("CUA_GYM_TRAJECTORIES", str(trajectories))
-    monkeypatch.setenv("OMEGALAX_REPO", str(omegalax))
-    monkeypatch.setenv("SFT_PROCESSOR_SNAPSHOT", str(snapshot))
-    monkeypatch.setenv("JUERGEN_REPO", str(Path(__file__).resolve().parents[2]))
-
-    with pytest.raises(RuntimeError, match="measure_message_lengths_from_chat"):
-        module.get_config()
-    scripts = omegalax / "scripts"
-    scripts.mkdir()
-    for name in (
-        "measure_message_lengths_from_chat.py",
-        "build_sft_records_from_chat.py",
-    ):
-        (scripts / name).touch()
-    config = module.get_config().to_dict()
-    assert config["entrypoint"]["path"] == "pipeline/cua_gym/stage_01_image_store.py"
-    stage_03 = config["children"][0]
-    stage_04 = stage_03["children"][0]
-    stage_05 = stage_04["children"][0]
-    stage_06 = stage_05["children"][0]
-    assert stage_04["entrypoint"]["path"] == "pipeline/cua_gym/stage_04_build_conversations.py"
-    assert stage_05["entrypoint"]["path"] == "pipeline/stage_05_measure_lengths.py"
-    assert stage_06["entrypoint"]["path"] == "pipeline/stage_06_training_records.py"
-    assert stage_03["entrypoint"]["path"] == "pipeline/cua_gym/stage_03_curate_trajectories.py"
