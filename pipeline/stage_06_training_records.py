@@ -26,10 +26,13 @@ from pipeline.lib.manifest import (
 from pipeline.lib.omegalax import (
     attest_omegalax,
     attest_processor_snapshot,
+    discard_compiler_diagnostics,
     isolated_subprocess_environment,
     omegalax_python,
+    require_messages_fit,
     validate_message_lengths,
     validate_record_dataset,
+    verify_record_encodings,
 )
 
 FLAGS = flags.FLAGS
@@ -98,7 +101,7 @@ def _run_split(
     out_split_dir: Path,
     cache_path: Path,
     processor_snapshot: dict,
-) -> dict:
+) -> int:
     out_split_dir.mkdir(parents=True, exist_ok=True)
     cmd = omegalax_python(
         Path(FLAGS.omegalax_repo),
@@ -129,15 +132,7 @@ def _run_split(
         raise RuntimeError(
             f"build_sft_records_from_chat.py failed (rc={rc}) for {split}"
         )
-    validated = validate_record_dataset(
-        out_split_dir,
-        source_chat=src_chat,
-        processor_snapshot=processor_snapshot,
-        max_length=FLAGS.max_length,
-        split=split,
-        val_fraction=FLAGS.val_fraction,
-    )
-    return {"split": split, **validated, "elapsed_s": int(elapsed)}
+    return int(elapsed)
 
 
 def _resolve_cache(
@@ -241,6 +236,7 @@ def main(_) -> None:
     lengths_root = Path(FLAGS.message_lengths_path).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "manifest.json").unlink(missing_ok=True)
+    (output_dir / "manifest.json.tmp").unlink(missing_ok=True)
     unexpected = [
         path for path in output_dir.iterdir() if path.name not in {"train", "val"}
     ]
@@ -262,10 +258,11 @@ def main(_) -> None:
         processor_snapshot,
         omegalax,
     )
+    require_messages_fit(cache_path, max_length=FLAGS.max_length)
     splits = ("train", "val") if FLAGS.val_fraction > 0.0 else ("train",)
-    per_split = []
+    elapsed_by_split = {}
     for split in splits:
-        result = _run_split(
+        elapsed_by_split[split] = _run_split(
             split,
             src_chat,
             output_dir / split,
@@ -290,7 +287,72 @@ def main(_) -> None:
         )
         if observed_cache_path != cache_path or observed_cache_id != cache_id:
             raise RuntimeError("Stage06 cache changed during execution")
-        per_split.append(result)
+
+    split_paths = {split: output_dir / split for split in splits}
+    for path in split_paths.values():
+        discard_compiler_diagnostics(path)
+    preliminary = {
+        split: validate_record_dataset(
+            path,
+            source_chat=src_chat,
+            processor_snapshot=processor_snapshot,
+            max_length=FLAGS.max_length,
+            split=split,
+            val_fraction=FLAGS.val_fraction,
+            message_lengths=cache_path,
+        )
+        for split, path in split_paths.items()
+    }
+    verify_record_encodings(
+        Path(omegalax["path"]),
+        processor_snapshot,
+        split_paths,
+        max_length=FLAGS.max_length,
+        expected_counts={
+            split: receipt["num_records"] for split, receipt in preliminary.items()
+        },
+    )
+    post_processor = attest_processor_snapshot(Path(FLAGS.processor_snapshot))
+    post_omegalax = attest_omegalax(Path(FLAGS.omegalax_repo), post_processor)
+    if post_processor != processor_snapshot or post_omegalax != omegalax:
+        raise RuntimeError("Stage06 compiler identity changed during verification")
+    if (
+        resolve_chat_artifact(source_path) != src_chat
+        or make_artifact_id(source_path) != source_id
+    ):
+        raise RuntimeError("Stage06 source changed during verification")
+    observed_cache_path, observed_cache_id = _resolve_cache(
+        lengths_root,
+        source_id,
+        src_chat,
+        processor_snapshot,
+        omegalax,
+    )
+    if observed_cache_path != cache_path or observed_cache_id != cache_id:
+        raise RuntimeError("Stage06 cache changed during verification")
+    require_messages_fit(cache_path, max_length=FLAGS.max_length)
+    final_receipts = {
+        split: validate_record_dataset(
+            path,
+            source_chat=src_chat,
+            processor_snapshot=processor_snapshot,
+            max_length=FLAGS.max_length,
+            split=split,
+            val_fraction=FLAGS.val_fraction,
+            message_lengths=cache_path,
+        )
+        for split, path in split_paths.items()
+    }
+    if final_receipts != preliminary:
+        raise RuntimeError("Stage06 record artifacts changed during verification")
+    per_split = [
+        {
+            "split": split,
+            **final_receipts[split],
+            "elapsed_s": elapsed_by_split[split],
+        }
+        for split in splits
+    ]
 
     write_manifest(
         output_dir,

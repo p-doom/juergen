@@ -51,6 +51,57 @@ for message in (
     totals.append(int(batch["loss_mask_BT"].sum()))
 print(json.dumps(totals))
 """.strip()
+_RECORD_ENCODER_VERIFICATION = """
+import json
+import sys
+from pathlib import Path
+
+from array_record.python.array_record_module import ArrayRecordReader
+from transformers import AutoImageProcessor, AutoTokenizer
+
+from omegalax.data.qwen3_encoding import encode_qwen_messages
+
+snapshot = sys.argv[1]
+max_length = int(sys.argv[2])
+datasets = json.loads(sys.argv[3])
+tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True)
+processor = AutoImageProcessor.from_pretrained(
+    snapshot, local_files_only=True, use_fast=False
+)
+observed = {}
+for split, root_value in datasets.items():
+    root = Path(root_value)
+    metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+    count = 0
+    for name in metadata["shard_paths"]:
+        reader = ArrayRecordReader(str(root / name))
+        try:
+            for _ in range(reader.num_records()):
+                record = json.loads(reader.read().decode("utf-8"))
+                encoded = encode_qwen_messages(
+                    record["messages"],
+                    tokenizer=tokenizer,
+                    image_processor=processor,
+                    include_pixels=False,
+                )
+                length = len(encoded["input_ids"])
+                supervised = int(encoded["loss_mask"].sum())
+                if (
+                    length != record["_omegalax_measured_length"]
+                    or length > max_length
+                    or supervised <= 0
+                ):
+                    raise ValueError(
+                        f"record encoding mismatch in {root / name}: "
+                        f"length={length}, measured="
+                        f"{record['_omegalax_measured_length']}, loss={supervised}"
+                    )
+                count += 1
+        finally:
+            reader.close()
+    observed[split] = count
+print(json.dumps(observed, sort_keys=True))
+""".strip()
 _COMPILED_SIDECARS = {
     "sequence_lengths.jsonl",
     "token_stats.json",
@@ -107,15 +158,16 @@ def attest_processor_snapshot(path: Path) -> dict[str, Any]:
         raise ValueError(
             "model snapshot must be an existing Hugging Face snapshots/<40-hex-revision> directory"
         )
-    paths = sorted(path for path in resolved.iterdir() if path.is_file())
-    relative = {str(path.relative_to(resolved)): path for path in paths}
-    observed = set(relative)
-    if observed != _SNAPSHOT_FILES or any(path.is_dir() for path in resolved.iterdir()):
+    entries = sorted(resolved.iterdir())
+    observed = {path.name for path in entries}
+    if observed != _SNAPSHOT_FILES or any(not path.is_file() for path in entries):
         raise ValueError(
             "processor snapshot files do not match the Qwen3-VL contract: "
             f"missing={sorted(_SNAPSHOT_FILES - observed)}, "
             f"unexpected={sorted(observed - _SNAPSHOT_FILES)}"
         )
+    paths = entries
+    relative = {str(path.relative_to(resolved)): path for path in paths}
     preprocessor = json.loads(relative["preprocessor_config.json"].read_text())
     if not isinstance(preprocessor, dict) or preprocessor.get("merge_size") != 2:
         raise ValueError("processor snapshot must declare merge_size=2")
@@ -321,6 +373,153 @@ def validate_message_lengths(cache: Path, chat: Path, *, merge_size: int) -> int
     return len(observed_keys)
 
 
+def message_length_map(cache: Path) -> dict[tuple[int, int], int]:
+    lengths: dict[tuple[int, int], int] = {}
+    with cache.open(encoding="utf-8") as source:
+        for line in source:
+            row = json.loads(line)
+            key = (row["conv_idx"], row["msg_offset"])
+            if key in lengths:
+                raise ValueError(f"duplicate message-length cache key: {key}")
+            lengths[key] = row["measurement"]["length"]
+    return lengths
+
+
+def require_messages_fit(cache: Path, *, max_length: int) -> None:
+    oversized = [
+        key for key, length in message_length_map(cache).items() if length > max_length
+    ]
+    if oversized:
+        raise ValueError(
+            f"individual source messages exceed max_length={max_length}: {oversized[:5]}"
+        )
+
+
+def _recording_split(recording_id: str, val_fraction: float) -> str:
+    if val_fraction <= 0.0 or not recording_id:
+        return "train"
+    bucket = int(hashlib.sha1(recording_id.encode()).hexdigest(), 16) % 1000
+    return "val" if bucket < round(val_fraction * 1000) else "train"
+
+
+def _supervised(message: dict[str, Any]) -> bool:
+    return message.get("role") == "assistant" and message.get("loss", True) is True
+
+
+def _expected_records(
+    source_chat: Path,
+    lengths: dict[tuple[int, int], int],
+    *,
+    max_length: int,
+    split: str,
+    val_fraction: float,
+):
+    conversation_index = 0
+    with source_chat.open(encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            messages = row["messages"]
+            recording_id = row.get("recording_id")
+            if not isinstance(recording_id, str) or not recording_id:
+                raise ValueError(
+                    f"source chat has no recording_id at {source_chat}:{line_number}"
+                )
+            if _recording_split(recording_id, val_fraction) != split:
+                conversation_index += 1
+                continue
+            metadata = {
+                key: value
+                for key, value in row.items()
+                if key not in {"messages", "session_id"}
+            }
+            session_id = f"{source_chat.stem}-{line_number:09d}"
+            chunk: list[dict[str, Any]] = []
+            chunk_length = 0
+            for offset, message in enumerate(messages):
+                length = lengths[(conversation_index, offset)]
+                if length > max_length:
+                    raise ValueError(
+                        f"source message exceeds max_length at "
+                        f"{source_chat}:{line_number}:{offset}"
+                    )
+                if chunk and chunk_length + length > max_length:
+                    if any(_supervised(item) for item in chunk):
+                        yield {
+                            **metadata,
+                            "messages": chunk,
+                            "_omegalax_session_id": session_id,
+                            "_omegalax_measured_length": chunk_length,
+                        }
+                    chunk = []
+                    chunk_length = 0
+                chunk.append(message)
+                chunk_length += length
+            if chunk and any(_supervised(item) for item in chunk):
+                yield {
+                    **metadata,
+                    "messages": chunk,
+                    "_omegalax_session_id": session_id,
+                    "_omegalax_measured_length": chunk_length,
+                }
+            conversation_index += 1
+
+
+def discard_compiler_diagnostics(output_dir: Path) -> None:
+    entries = {path.name: path for path in output_dir.iterdir()}
+    shards = {name for name in entries if name.endswith(".array_record")}
+    expected = {"metadata.json", *shards, *_COMPILED_SIDECARS}
+    if (
+        set(entries) != expected
+        or not shards
+        or any(not path.is_file() for path in entries.values())
+    ):
+        raise ValueError(f"Omegalax output set is invalid: {output_dir}")
+    for name in _COMPILED_SIDECARS:
+        entries[name].unlink()
+
+
+def verify_record_encodings(
+    omegalax_root: Path,
+    processor_snapshot: dict[str, Any],
+    datasets: dict[str, Path],
+    *,
+    max_length: int,
+    expected_counts: dict[str, int],
+) -> None:
+    serialized = json.dumps(
+        {name: str(path.resolve()) for name, path in datasets.items()},
+        sort_keys=True,
+    )
+    result = subprocess.run(
+        omegalax_python(
+            omegalax_root,
+            "-c",
+            _RECORD_ENCODER_VERIFICATION,
+            processor_snapshot["path"],
+            str(max_length),
+            serialized,
+        ),
+        cwd=omegalax_root.resolve(),
+        env=isolated_subprocess_environment(),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    try:
+        observed = json.loads(result.stdout.strip())
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "Omegalax record verification returned invalid output"
+        ) from exc
+    if observed != expected_counts:
+        raise ValueError(
+            f"Omegalax record verification count mismatch: "
+            f"expected {expected_counts}, got {observed}"
+        )
+
+
 def validate_record_dataset(
     output_dir: Path,
     *,
@@ -329,6 +528,7 @@ def validate_record_dataset(
     max_length: int,
     split: str,
     val_fraction: float,
+    message_lengths: Path,
 ) -> dict[str, Any]:
     metadata_path = output_dir / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -379,34 +579,23 @@ def validate_record_dataset(
         raise ValueError(
             f"Omegalax metadata shard sequence is invalid: {metadata_path}"
         )
-    expected_entries = {"metadata.json", *expected_shards, *_COMPILED_SIDECARS}
+    expected_entries = {"metadata.json", *expected_shards}
     entries = {path.name: path for path in output_dir.iterdir()}
     if set(entries) != expected_entries or any(
         not path.is_file() for path in entries.values()
     ):
         raise ValueError(f"Omegalax output set does not match metadata: {output_dir}")
-    for name in _COMPILED_SIDECARS:
-        sidecar = entries[name]
-        if sidecar.stat().st_size == 0:
-            raise ValueError(f"empty Omegalax sidecar: {sidecar}")
-        sidecar.unlink()
-
-    source_sessions: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
-    with source_chat.open(encoding="utf-8") as source:
-        for line_number, line in enumerate(source, 1):
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            messages = row["messages"]
-            session_id = f"{source_chat.stem}-{line_number:09d}"
-            source_sessions[session_id] = (
-                {
-                    key: value
-                    for key, value in row.items()
-                    if key not in {"messages", "session_id"}
-                },
-                messages,
-            )
+    lengths = message_length_map(message_lengths)
+    expected_records = iter(
+        _expected_records(
+            source_chat,
+            lengths,
+            max_length=max_length,
+            split=split,
+            val_fraction=val_fraction,
+        )
+    )
+    missing = object()
 
     from array_record.python.array_record_module import ArrayRecordReader
 
@@ -433,42 +622,11 @@ def validate_record_dataset(
                     record, sort_keys=True
                 ).encode("utf-8"):
                     raise ValueError(f"noncanonical Omegalax record {index} in {path}")
-                session_id = record.get("_omegalax_session_id")
-                measured = record.get("_omegalax_measured_length")
-                messages = record.get("messages")
-                if (
-                    not isinstance(session_id, str)
-                    or session_id not in source_sessions
-                    or isinstance(measured, bool)
-                    or not isinstance(measured, int)
-                    or not 0 < measured <= max_length
-                    or not isinstance(messages, list)
-                    or not messages
-                    or not any(
-                        isinstance(message, dict)
-                        and message.get("role") == "assistant"
-                        and message.get("loss", True) is True
-                        for message in messages
-                    )
-                ):
-                    raise ValueError(f"invalid Omegalax record {index} in {path}")
-                expected_metadata, source_messages = source_sessions[session_id]
-                observed_metadata = {
-                    key: value
-                    for key, value in record.items()
-                    if key
-                    not in {
-                        "_omegalax_measured_length",
-                        "_omegalax_session_id",
-                        "messages",
-                    }
-                }
-                if observed_metadata != expected_metadata or not any(
-                    messages == source_messages[start : start + len(messages)]
-                    for start in range(len(source_messages) - len(messages) + 1)
-                ):
+                expected = next(expected_records, missing)
+                if expected is missing or record != expected:
                     raise ValueError(
-                        f"Omegalax record {index} does not match source chat"
+                        f"Omegalax record {index} does not match the expected "
+                        f"source chunk in {path}"
                     )
             try:
                 reader.read()
@@ -489,6 +647,8 @@ def validate_record_dataset(
         raise ValueError(
             f"Omegalax record count does not match metadata: {metadata_path}"
         )
+    if next(expected_records, missing) is not missing:
+        raise ValueError("Omegalax records omit expected source chunks")
     return {
         "metadata_sha256": _sha256(metadata_path),
         "num_records": total_records,

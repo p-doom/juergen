@@ -112,6 +112,7 @@ def main(_) -> None:
     source_path = Path(FLAGS.source_path).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "manifest.json").unlink(missing_ok=True)
+    (output_dir / "manifest.json.tmp").unlink(missing_ok=True)
     allowed = {MESSAGE_LENGTHS_FILENAME}
     unexpected = [path for path in output_dir.iterdir() if path.name not in allowed]
     if unexpected:

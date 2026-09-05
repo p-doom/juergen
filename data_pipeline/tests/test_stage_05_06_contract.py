@@ -142,7 +142,24 @@ for name in ("PYTHONHOME", "PYTHONPATH", "UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT")
 if os.environ.get("PYTHONNOUSERSITE") != "1":
     raise SystemExit("PYTHONNOUSERSITE is not set")
 if "-c" in sys.argv:
-    print(os.environ.get("FAKE_LOSS_PROBE", "[0, 2]"))
+    program = sys.argv[sys.argv.index("-c") + 1]
+    if "encode_qwen_messages" in program:
+        verification = os.environ.get("FAKE_RECORD_VERIFICATION")
+        if verification == "fail":
+            raise SystemExit("record encoding mismatch")
+        datasets = json.loads(sys.argv[-1])
+        if verification == "mutate":
+            first = next(iter(datasets.values()))
+            shard = Path(first) / "part-00000.array_record"
+            payload = bytearray(shard.read_bytes())
+            payload[112] ^= 1
+            shard.write_bytes(payload)
+        print(json.dumps({{
+            split: json.loads((Path(root) / "metadata.json").read_text())["num_records"]
+            for split, root in datasets.items()
+        }}, sort_keys=True))
+    else:
+        print(os.environ.get("FAKE_LOSS_PROBE", "[0, 2]"))
     raise SystemExit(0)
 flags = dict(a[2:].split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
 script = next(a for a in sys.argv[1:] if a.endswith(".py"))
@@ -185,8 +202,8 @@ elif os.environ.get("FAKE_UV_RECORDS", "valid") != "absent":
     mode = os.environ.get("FAKE_UV_RECORDS", "valid")
     shard = out / "part-00000.array_record"
     writer = ArrayRecordWriter(str(shard), "group_size:1")
+    rows = []
     if mode != "empty":
-        rows = []
         with Path(flags["data_path"]).open() as source:
             for line_number, line in enumerate(source, 1):
                 if not line.strip():
@@ -202,27 +219,33 @@ elif os.environ.get("FAKE_UV_RECORDS", "valid") != "absent":
                 )
                 if expected == flags["split"]:
                     rows.append((line_number, row))
-        line_number, row = rows[0]
-        record = {{
-            key: value
-            for key, value in row.items()
-            if key not in {{"messages", "session_id"}}
-        }}
-        record["messages"] = row["messages"]
-        record["_omegalax_session_id"] = (
-            f"{{Path(flags['data_path']).stem}}-{{line_number:09d}}"
-        )
-        record["_omegalax_measured_length"] = (
-            int(flags["max_length"]) + 1 if mode == "length_overflow" else 30
-        )
-        if mode == "unsupervised":
-            for message in record["messages"]:
-                if message.get("role") == "assistant":
-                    message["loss"] = False
-        payload = json.dumps(record, sort_keys=True).encode()
-        if mode == "noncanonical":
-            payload = json.dumps(record, sort_keys=False).encode()
-        writer.write(payload)
+        if mode == "omit":
+            rows = rows[:1]
+        if mode == "reverse":
+            rows.reverse()
+        for line_number, row in rows:
+            record = {{
+                key: value
+                for key, value in row.items()
+                if key not in {{"messages", "session_id"}}
+            }}
+            record["messages"] = row["messages"]
+            record["_omegalax_session_id"] = (
+                f"{{Path(flags['data_path']).stem}}-{{line_number:09d}}"
+            )
+            record["_omegalax_measured_length"] = (
+                int(flags["max_length"]) + 1
+                if mode == "length_overflow"
+                else (1 if mode == "wrong_length" else 10 * len(record["messages"]))
+            )
+            if mode == "unsupervised":
+                for message in record["messages"]:
+                    if message.get("role") == "assistant":
+                        message["loss"] = False
+            payload = json.dumps(record, sort_keys=True).encode()
+            if mode == "noncanonical":
+                payload = json.dumps(record, sort_keys=False).encode()
+            writer.write(payload)
     writer.close()
     if mode == "corrupt":
         shard.write_bytes(b"corrupt")
@@ -244,7 +267,11 @@ elif os.environ.get("FAKE_UV_RECORDS", "valid") != "absent":
             "preprocessor_config": None,
         }},
         "version": 1,
-        "num_records": 2 if mode == "count_mismatch" else (0 if mode == "empty" else 1),
+        "num_records": (
+            len(rows) + 1
+            if mode == "count_mismatch"
+            else (0 if mode == "empty" else len(rows))
+        ),
         "num_shards": 1,
         "shard_paths": ["part-00000.array_record"],
     }}
@@ -260,6 +287,11 @@ elif os.environ.get("FAKE_UV_RECORDS", "valid") != "absent":
             (out / name).write_text("{{}}\\n")
     if mode == "extra_file":
         (out / "extra.json").write_text("{{}}\\n")
+    if os.environ.get("FAKE_MUTATE_TRAIN") and flags["split"] == "val":
+        train = out.parent / "train" / "part-00000.array_record"
+        payload = bytearray(train.read_bytes())
+        payload[112] ^= 1
+        train.write_bytes(payload)
     if os.environ.get("FAKE_MUTATE_REPO"):
         (Path.cwd() / "omegalax/data/qwen3_encoding.py").write_text("mutated")
 """
@@ -397,6 +429,10 @@ def test_processor_snapshot_requires_the_exact_qwen_file_set(tmp_path: Path) -> 
     (snapshot / "model.SAFETENSORS").write_bytes(b"weights")
     with pytest.raises(ValueError, match="files do not match"):
         attest_processor_snapshot(snapshot)
+    (snapshot / "model.SAFETENSORS").unlink()
+    (snapshot / "model.SAFETENSORS").symlink_to(snapshot / "missing")
+    with pytest.raises(ValueError, match="files do not match"):
+        attest_processor_snapshot(snapshot)
 
 
 def test_stage_05_refuses_missing_chat_before_launch(tmp_path: Path, production_inputs) -> None:
@@ -465,6 +501,30 @@ def test_stage_05_records_sealed_inputs_and_exact_cache(tmp_path: Path, producti
         "n_messages": 6,
         "elapsed_s": 0,
     }
+
+
+def test_stages_remove_interrupted_manifest_temps(tmp_path: Path, production_inputs) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    lengths = tmp_path / "lengths-source"
+    lengths.mkdir()
+    (lengths / "manifest.json.tmp").write_text("interrupted")
+    assert _measure(tmp_path, production_inputs, source) == lengths
+
+    output = tmp_path / "records"
+    output.mkdir()
+    (output / "manifest.json.tmp").write_text("interrupted")
+    result = _run(
+        "stage_06_training_records.py",
+        production_inputs["env"],
+        **_record_flags(
+            tmp_path,
+            production_inputs,
+            source,
+            lengths,
+            output_dir=output,
+        ),
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(
@@ -636,6 +696,74 @@ def test_stage_06_builds_verified_nonempty_arrayrecords(tmp_path: Path, producti
         }
 
 
+@pytest.mark.parametrize("mode", ["omit", "reverse", "wrong_length"])
+def test_stage_06_requires_exact_ordered_source_chunks(
+    tmp_path: Path, production_inputs, mode: str
+) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    lengths = _measure(tmp_path, production_inputs, source)
+    result = _run(
+        "stage_06_training_records.py",
+        {**production_inputs["env"], "FAKE_UV_RECORDS": mode},
+        **_record_flags(tmp_path, production_inputs, source, lengths),
+    )
+    assert result.returncode != 0
+    assert (
+        "expected source chunk" in result.stderr or "omit expected source chunks" in result.stderr
+    )
+
+
+def test_stage_06_revalidates_all_splits_and_encoder_output(
+    tmp_path: Path, production_inputs
+) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    lengths = _measure(tmp_path, production_inputs, source)
+    flags = _record_flags(
+        tmp_path,
+        production_inputs,
+        source,
+        lengths,
+        val_fraction=0.3,
+    )
+    for environment in (
+        {**production_inputs["env"], "FAKE_MUTATE_TRAIN": "1"},
+        {**production_inputs["env"], "FAKE_RECORD_VERIFICATION": "fail"},
+        {**production_inputs["env"], "FAKE_RECORD_VERIFICATION": "mutate"},
+    ):
+        result = _run("stage_06_training_records.py", environment, **flags)
+        assert result.returncode != 0
+        assert not (Path(flags["output_dir"]) / "manifest.json").exists()
+
+
+def test_stage_06_rejects_individually_oversized_messages(
+    tmp_path: Path, production_inputs
+) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    lengths = _measure(tmp_path, production_inputs, source)
+    cache = lengths / "message_lengths.jsonl"
+    rows = [json.loads(line) for line in cache.read_text().splitlines()]
+    rows[0]["measurement"]["length"] = 5000
+    cache.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    manifest_path = lengths / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["stats"]["cache"]["sha256"] = hashlib.sha256(cache.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = _run(
+        "stage_06_training_records.py",
+        production_inputs["env"],
+        **_record_flags(tmp_path, production_inputs, source, lengths),
+    )
+    assert result.returncode != 0
+    assert "individual source messages exceed" in result.stderr
+    builds = [
+        argv
+        for argv in _script_invocations(production_inputs["log"])
+        if any("build_sft_records" in argument for argument in argv)
+    ]
+    assert builds == []
+
+
 def test_stage_06_rejects_compiler_changes_during_execution(
     tmp_path: Path, production_inputs
 ) -> None:
@@ -662,14 +790,14 @@ def test_stage_06_rejects_compiler_changes_during_execution(
 @pytest.mark.parametrize(
     ("mode", "message"),
     [
-        ("absent", "metadata.json"),
+        ("absent", "output set"),
         ("empty", "counts must be positive"),
         ("corrupt", "invalid Omegalax ArrayRecord"),
         ("crc", "cannot read Omegalax record"),
         ("count_mismatch", "record count"),
         ("bad_metadata", "metadata values"),
-        ("length_overflow", "invalid Omegalax record"),
-        ("unsupervised", "invalid Omegalax record"),
+        ("length_overflow", "expected source chunk"),
+        ("unsupervised", "expected source chunk"),
         ("noncanonical", "noncanonical Omegalax record"),
         ("missing_sidecar", "output set"),
         ("extra_file", "output set"),
