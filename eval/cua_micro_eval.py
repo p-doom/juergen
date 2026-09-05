@@ -931,7 +931,7 @@ def _parse_response(response: str) -> OrderedEventsV3Action:
     if control.body.strip():
         action = CODEC.parse(control.body)
     elif control.status is not None:
-        action = OrderedEventsV3Action(no_op=True, prompt_digest=CODEC.digest)
+        action = OrderedEventsV3Action(no_op=True)
     else:
         raise OrderedEventsV3Error("empty model response")
     return replace(action, terminate=control.status)

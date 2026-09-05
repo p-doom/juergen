@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from desktop.geometry import DisplayGeometry
@@ -200,7 +200,6 @@ class OrderedEventsV3Action:
     #: The episode-control status this turn declares, from ``_support.CONTROL_SPEC``.
     #: ``parse`` never sees a control line.
     terminate: str | None = None
-    prompt_digest: str = field(default="", compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.primitives, tuple) or any(
@@ -212,8 +211,6 @@ class OrderedEventsV3Action:
         if self.no_op != (not self.primitives):
             raise OrderedEventsV3Error("no_op must exactly identify an empty program")
         _support.terminate_status(self.terminate, error=OrderedEventsV3Error)
-        if not isinstance(self.prompt_digest, str):
-            raise OrderedEventsV3Error("prompt_digest must be text")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -323,10 +320,9 @@ class OrderedEventsV3Codec:
 
     def parse(self, text: str) -> OrderedEventsV3Action:
         line = _support.final_line(text)
-        digest = self.digest
         if line == NO_OP:
-            return OrderedEventsV3Action(no_op=True, prompt_digest=digest)
-        return OrderedEventsV3Action(primitives=self._scan(line), prompt_digest=digest)
+            return OrderedEventsV3Action(no_op=True)
+        return OrderedEventsV3Action(primitives=self._scan(line))
 
     def format(self, action: OrderedEventsV3Action) -> str:
         body = (

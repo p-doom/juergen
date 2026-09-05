@@ -439,13 +439,11 @@ class Control:
     """The episode-control decision read off one completion.
 
     ``body`` is the completion with the control removed, and is the only text a
-    codec is given — so nothing on the far side of a termination can be parsed or
-    dispatched. ``ignored`` remains zero because the control line must be last.
+    codec is given, so nothing after a termination can be parsed or dispatched.
     """
 
     status: str | None
     body: str
-    ignored: int = 0
 
 
 def render_control(status: str, *, error: type[Exception] = ValueError) -> str:

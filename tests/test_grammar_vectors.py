@@ -167,7 +167,6 @@ def test_control_channel_round_trip(name, status):
     text = codec.format(action)
     control = _support.split_control(text)
     assert control.status == status
-    assert control.ignored == 0
     assert _rows(codec.compile(control.body, geometry, cursor)) == [
         ["mouse_down", ["left"]],
         ["mouse_up", ["left"]],

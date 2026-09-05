@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from desktop.geometry import DisplayGeometry
 from desktop.ir import Operation
@@ -29,8 +29,6 @@ class DeltatypeV2Action:
     #: Never set by ``parse`` — the driver strips the control line before the codec
     #: sees the text — and rendered by ``with_control``.
     terminate: str | None = None
-    #: sha256 of the prompt the parse ran under, excluded from action equality.
-    prompt_digest: str = field(default="", compare=False)
 
     def __post_init__(self) -> None:
         if any(type(value) is not int for value in (self.dx, self.dy, self.scroll)):
@@ -42,8 +40,6 @@ class DeltatypeV2Action:
         if type(self.no_op) is not bool:
             raise DeltatypeV2Error("no_op must be a boolean")
         _support.terminate_status(self.terminate, error=DeltatypeV2Error)
-        if not isinstance(self.prompt_digest, str):
-            raise DeltatypeV2Error("prompt_digest must be text")
         if self.no_op and (self.dx or self.dy or self.scroll or self.elements):
             raise DeltatypeV2Error("NO_OP cannot carry mouse values or elements")
 
@@ -116,15 +112,14 @@ class DeltatypeV2Codec:
 
     def parse(self, text: str) -> DeltatypeV2Action:
         line = _support.final_line(text)
-        digest = self.digest
         if line == "NO_OP":
-            return DeltatypeV2Action(no_op=True, prompt_digest=digest)
+            return DeltatypeV2Action(no_op=True)
         mouse, _, tail = line.partition(";")
         dx, dy, scroll = _support.parse_mouse_triple(mouse, error=DeltatypeV2Error)
         elements = _support.scan_elements(
             tail, allow_type=True, allow_move=True, error=DeltatypeV2Error
         )
-        action = DeltatypeV2Action(dx, dy, scroll, elements, prompt_digest=digest)
+        action = DeltatypeV2Action(dx, dy, scroll, elements)
         return self._validate_drag(action)
 
     def format(self, action: DeltatypeV2Action) -> str:
