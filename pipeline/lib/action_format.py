@@ -11,7 +11,6 @@ from pipeline.lib.common import ActionBin
 from pipeline.lib.events import (
     DeadZone,
     LabeledEvent,
-    PolicyCounters,
     RawEvent,
     Window,
     apply_label_policy,
@@ -27,7 +26,6 @@ class WindowKeyboard:
 class FormatResult:
     labels: list[str]
     keyboard: list[WindowKeyboard]
-    counters: PolicyCounters
 
 
 TEXT_KEYS = frozenset(
@@ -36,13 +34,13 @@ TEXT_KEYS = frozenset(
         "BackQuote",
         "Minus",
         "Equal",
-        "LeftBracket",
-        "RightBracket",
+        "BracketLeft",
+        "BracketRight",
         "BackSlash",
         "SemiColon",
         "Quote",
         "Comma",
-        "Dot",
+        "Period",
         "Slash",
         *(f"Key{char}" for char in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
         *(f"Num{digit}" for digit in "0123456789"),
@@ -81,9 +79,10 @@ def format_segment(
     *,
     master_fps: float,
 ) -> FormatResult:
-    labeled, counters = apply_label_policy(
-        events, windows, dead_zones, master_fps=master_fps
-    )
+    for event in events:
+        if event.kind not in {"move", "scroll", "press", "release"}:
+            raise ValueError(f"unexpected event kind: {event.kind!r}")
+    labeled = apply_label_policy(events, windows, dead_zones, master_fps=master_fps)
     bins = [ActionBin() for _ in windows]
     for labeled_event in _owned(labeled):
         event = labeled_event.event
@@ -95,8 +94,10 @@ def format_segment(
             action_bin.scroll += event.scroll
         elif event.kind == "press":
             action_bin.events.append(("+", event.name))
-        else:
+        elif event.kind == "release":
             action_bin.events.append(("-", event.name))
+        else:
+            raise ValueError(f"unexpected event kind: {event.kind!r}")
     actions = [_action(action_bin) for action_bin in bins]
     return FormatResult(
         labels=[CODEC.format(action) for action in actions],
@@ -110,5 +111,4 @@ def format_segment(
             )
             for action in actions
         ],
-        counters=counters,
     )

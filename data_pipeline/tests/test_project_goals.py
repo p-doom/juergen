@@ -43,7 +43,7 @@ def _view(kept_ranges, dropped=None, n_records=150, fps=1.0):
             "master_fps": 15.0,
             "n_master_records": n_records,
             "shard_path": "/nowhere/frames/s0/images.array_record",
-            "keylog_path": None,
+            "keylog_path": "/nowhere/keylog.msgpack",
             "alignment_status": "aligned",
             "kept_ranges": kept_ranges,
             "dropped": dropped or [],

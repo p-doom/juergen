@@ -17,6 +17,8 @@ if str(REPO_ROOT) not in sys.path:
 from pipeline.lib import config
 from pipeline.lib.action_format import format_segment
 from pipeline.lib.common import (
+    EVENT_EXCLUSION_REASONS,
+    KeylogError,
     ensure_dir,
     read_jsonl,
     write_json,
@@ -77,7 +79,7 @@ def _rounded_activity_mask(
         for start in range(0, n_records, bin_ticks)
     ]
     labels = format_segment(
-        load_events(keylog_path)[0], windows, (), master_fps=master_fps
+        load_events(keylog_path), windows, (), master_fps=master_fps
     ).labels
     active = [False] * n_records
     for index, label in enumerate(labels):
@@ -156,12 +158,32 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
         raise FileNotFoundError(f"Crowd-Cast keylog is missing: {keylog}")
     if file_sha256_short(keylog, n=64) != manifest_row.get("keylog_sha256"):
         raise ValueError(f"keylog digest mismatch: {keylog}")
-    active = _rounded_activity_mask(
-        keylog,
-        len(master_manifest),
-        master_fps,
-        round(config.DEFAULT_IDLE_JUDGMENT_BIN_S * master_fps),
-    )
+    try:
+        active = _rounded_activity_mask(
+            keylog,
+            len(master_manifest),
+            master_fps,
+            round(config.DEFAULT_IDLE_JUDGMENT_BIN_S * master_fps),
+        )
+    except KeylogError as exc:
+        if exc.reason not in EVENT_EXCLUSION_REASONS:
+            raise
+        return {
+            "segment_id": segment_id,
+            "recording_id": manifest_row["recording_id"],
+            "segment_idx": manifest_row["segment_idx"],
+            "alignment_status": manifest_row["alignment_status"],
+            "keylog_path": str(keylog),
+            "keylog_sha256": manifest_row["keylog_sha256"],
+            "filter_path": None,
+            "filter_sha256": None,
+            "status": "excluded_invalid_keylog",
+            "exclusion_reason": exc.reason,
+            "n_records": len(master_manifest),
+            "n_kept": 0,
+            "n_black": 0,
+            "n_idle_interior": 0,
+        }
     reasons = [REASON_KEPT] * len(master_manifest)
     for start, end in _idle_interiors(
         active,
@@ -300,10 +322,19 @@ def main() -> None:
     for result in results:
         for key in ("n_records", "n_kept", "n_black", "n_idle_interior"):
             totals[key] += int(result[key])
+    status_counts = Counter(result["status"] for result in results)
+    exclusion_counts = Counter(
+        result["exclusion_reason"]
+        for result in results
+        if result["status"] == "excluded_invalid_keylog"
+    )
     summary = {
         "master_fps": float(master["master_fps"]),
         "n_segments": len(results),
-        "status_counts": {"ok": len(results)},
+        "n_accepted_segments": status_counts["ok"],
+        "n_excluded_segments": status_counts["excluded_invalid_keylog"],
+        "status_counts": dict(sorted(status_counts.items())),
+        "exclusion_counts": dict(sorted(exclusion_counts.items())),
         "n_records_total": totals["n_records"],
         "n_kept_total": totals["n_kept"],
         "n_black_total": totals["n_black"],

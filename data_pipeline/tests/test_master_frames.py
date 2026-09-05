@@ -112,6 +112,8 @@ def _write_merge_inputs(tmp_path: Path) -> Path:
         )
     clips.write_text("".join(json.dumps(row) + "\n" for row in clip_rows))
     clips_sha256 = hashlib.sha256(clips.read_bytes()).hexdigest()
+    exclusions = source / "exclusions.jsonl"
+    exclusions.write_text("")
     (source / "manifest.json").write_text(
         json.dumps(
             {
@@ -119,9 +121,15 @@ def _write_merge_inputs(tmp_path: Path) -> Path:
                 "schema_version": 1,
                 "clips_file": "clips_manifest.jsonl",
                 "clips_sha256": clips_sha256,
+                "exclusions_file": "exclusions.jsonl",
+                "exclusions_sha256": hashlib.sha256(exclusions.read_bytes()).hexdigest(),
                 "source_root": str(source_root),
                 "n_segments": 2,
                 "n_recordings": 1,
+                "n_exclusions": 0,
+                "n_source_videos": 2,
+                "n_source_keylogs": 2,
+                "exclusion_counts": {},
             }
         )
     )

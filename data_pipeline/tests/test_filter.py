@@ -69,6 +69,12 @@ def _task(root: Path) -> dict:
     }
 
 
+def _replace_keylog(task: dict, entries: list) -> None:
+    keylog = Path(task["manifest_row"]["keylog_path"])
+    keylog.write_bytes(msgpack.packb(entries))
+    task["manifest_row"]["keylog_sha256"] = file_sha256_short(keylog, n=64)
+
+
 def test_canonical_idle_activity_is_deltatype_v2(tmp_path: Path):
     keylog = tmp_path / "keylog.msgpack"
     keylog.write_bytes(
@@ -111,6 +117,30 @@ def test_filter_requires_complete_inputs(tmp_path: Path):
     task = _task(tmp_path / "unclosed")
     task["manifest_row"]["alignment_closed"] = False
     with pytest.raises(ValueError, match="no closed alignment"):
+        filter_segment(task)
+
+
+def test_filter_excludes_the_whole_segment_for_an_unexecutable_action(
+    tmp_path: Path,
+):
+    task = _task(tmp_path)
+    _replace_keylog(task, [[0, ["KeyPress", [0, "PlayPause"]]]])
+
+    result = filter_segment(task)
+
+    assert result["status"] == "excluded_invalid_keylog"
+    assert result["exclusion_reason"] == "unexecutable_action"
+    assert result["filter_path"] is None
+    assert result["filter_sha256"] is None
+    assert result["n_kept"] == 0
+    assert not (tmp_path / "filter" / "seg0.json").exists()
+
+
+def test_filter_requires_stage_00_to_have_excluded_an_empty_keylog(tmp_path: Path):
+    task = _task(tmp_path)
+    _replace_keylog(task, [])
+
+    with pytest.raises(ValueError, match="keylog is empty"):
         filter_segment(task)
 
 

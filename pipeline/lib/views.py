@@ -27,11 +27,12 @@ from __future__ import annotations
 
 import json
 from bisect import bisect_right
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pipeline.lib.common import read_jsonl
+from pipeline.lib.common import EVENT_EXCLUSION_REASONS, read_jsonl
 from pipeline.lib.events import DeadZone, Window
 from pipeline.lib.image_store import make_arrayrecord_image_uri
 from pipeline.lib.manifest import check_artifact_id, file_sha256_short, make_artifact_id
@@ -69,8 +70,8 @@ class ViewFrame:
 @dataclass
 class SegmentView:
     segment_id: str
-    recording_id: str | None
-    segment_idx: int | None
+    recording_id: str
+    segment_idx: int
     master_fps: float
     fps: float
     stride: int
@@ -79,8 +80,8 @@ class SegmentView:
     n_masked_slots: int
     frames: list[ViewFrame]
     dead_zones: list[DeadZone]
-    keylog_path: str | None
-    alignment_status: str | None
+    keylog_path: str
+    alignment_status: str
 
     def windows(self) -> list[Window]:
         return [Window(f.master_idx, f.win_start, f.win_end) for f in self.frames]
@@ -144,8 +145,11 @@ def build_segment_view(filter_seg: dict[str, Any], *, fps: float) -> SegmentView
     dead_zones: list[DeadZone] = []
     if first_tick > 0:
         dead_zones.append(DeadZone(0, first_tick, "pre_first_frame"))
-    for span in filter_seg.get("dropped", []):
-        if span["reason"] != "black":
+    for span in filter_seg["dropped"]:
+        reason = span["reason"]
+        if reason not in {"black", "idle_interior"}:
+            raise ValueError(f"unexpected dropped-span reason: {reason!r}")
+        if reason == "idle_interior":
             continue
         start = max(int(span["start"]), first_tick)
         end = min(int(span["end"]), n_records)
@@ -154,8 +158,8 @@ def build_segment_view(filter_seg: dict[str, Any], *, fps: float) -> SegmentView
 
     return SegmentView(
         segment_id=str(filter_seg["segment_id"]),
-        recording_id=filter_seg.get("recording_id"),
-        segment_idx=filter_seg.get("segment_idx"),
+        recording_id=filter_seg["recording_id"],
+        segment_idx=filter_seg["segment_idx"],
         master_fps=master_fps,
         fps=fps,
         stride=stride,
@@ -164,8 +168,8 @@ def build_segment_view(filter_seg: dict[str, Any], *, fps: float) -> SegmentView
         n_masked_slots=n_slots - len(frames),
         frames=frames,
         dead_zones=dead_zones,
-        keylog_path=filter_seg.get("keylog_path"),
-        alignment_status=filter_seg.get("alignment_status"),
+        keylog_path=filter_seg["keylog_path"],
+        alignment_status=filter_seg["alignment_status"],
     )
 
 
@@ -207,11 +211,49 @@ class FilterArtifact:
             raise ValueError(f"filter artifact contains duplicate segments: {self.dir}")
 
     def usable_rows(self) -> list[dict[str, Any]]:
+        for row in self.index_rows:
+            status = row.get("status")
+            if status == "ok":
+                if (
+                    not isinstance(row.get("filter_path"), str)
+                    or not isinstance(row.get("filter_sha256"), str)
+                    or "exclusion_reason" in row
+                ):
+                    raise ValueError(
+                        f"filter artifact contains incomplete segment: {row!r}"
+                    )
+                continue
+            if (
+                status != "excluded_invalid_keylog"
+                or row.get("exclusion_reason") not in EVENT_EXCLUSION_REASONS
+                or not isinstance(row.get("keylog_path"), str)
+                or not isinstance(row.get("keylog_sha256"), str)
+                or row.get("filter_path") is not None
+                or row.get("filter_sha256") is not None
+                or row.get("n_kept") != 0
+                or row.get("n_black") != 0
+                or row.get("n_idle_interior") != 0
+            ):
+                raise ValueError(
+                    f"filter artifact contains incomplete segment: {row!r}"
+                )
+        status_counts = Counter(row["status"] for row in self.index_rows)
+        exclusion_counts = Counter(
+            row["exclusion_reason"]
+            for row in self.index_rows
+            if row["status"] == "excluded_invalid_keylog"
+        )
+        if (
+            self.manifest["n_segments"] != len(self.index_rows)
+            or self.manifest["n_accepted_segments"] != status_counts["ok"]
+            or self.manifest["n_excluded_segments"]
+            != status_counts["excluded_invalid_keylog"]
+            or self.manifest["status_counts"] != dict(sorted(status_counts.items()))
+            or self.manifest["exclusion_counts"]
+            != dict(sorted(exclusion_counts.items()))
+        ):
+            raise ValueError("filter manifest/index summary mismatch")
         rows = [row for row in self.index_rows if row.get("status") == "ok"]
-        if len(rows) != len(self.index_rows):
-            raise ValueError(
-                f"filter artifact contains incomplete segments: {self.dir}"
-            )
         return rows
 
     def stride_for(self, fps: float) -> int:
@@ -223,6 +265,8 @@ class FilterArtifact:
     def load_segment(self, segment_id: str) -> dict[str, Any]:
         master_row = self._master_index[segment_id]
         row = self._index[segment_id]
+        if row["status"] != "ok":
+            raise ValueError(f"filter segment is not usable: {segment_id}")
         path = self.segment_path(segment_id)
         if Path(row["filter_path"]).resolve() != path.resolve():
             raise ValueError(f"filter index path mismatch for {segment_id}")

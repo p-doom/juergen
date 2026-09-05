@@ -7,12 +7,25 @@ import hashlib
 import json
 import re
 import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from pipeline.lib.common import KeylogError, load_keylog_entries
+from pipeline.lib.source_clips import SOURCE_EXCLUSION_REASONS
+
 # recording_<rid>_seg<NNNN>.mp4  ->  rid, NNNN
 _NAME_RE = re.compile(r"^recording_(?P<rid>.+)_seg(?P<idx>\d{4})\.mp4$")
+_KEYLOG_RE = re.compile(r"^input_.+_seg\d{4}\.msgpack$")
+
+
+class UndecodableVideoError(ValueError):
+    pass
 
 
 def _sha256(path: Path) -> str:
@@ -58,11 +71,10 @@ def build_row(video: Path) -> dict[str, Any]:
     rec_dir = video.parent
     user_dir = rec_dir.parent
     keylog = user_dir / "keylogs" / f"input_{rid}_{seg_tag}.msgpack"
-    if not keylog.is_file() or keylog.stat().st_size == 0:
-        raise FileNotFoundError(f"Crowd-Cast keylog is missing or empty: {keylog}")
+    load_keylog_entries(keylog)
     video_info = probe_video(video)
     if not video_info["video_ok"]:
-        raise ValueError(f"Crowd-Cast video is not decodable: {video}")
+        raise UndecodableVideoError(f"Crowd-Cast video is not decodable: {video}")
     row: dict[str, Any] = {
         "segment_id": f"{rid}_{seg_tag}",
         "segment_idx": idx,
@@ -78,6 +90,28 @@ def build_row(video: Path) -> dict[str, Any]:
     return row
 
 
+def _exclusion(
+    reason: str, *, video: Path | None = None, keylog: Path | None = None
+) -> dict[str, Any]:
+    if reason not in SOURCE_EXCLUSION_REASONS:
+        raise ValueError(f"unknown source exclusion reason: {reason!r}")
+    return {
+        "reason": reason,
+        "video_path": str(video.resolve()) if video is not None else None,
+        "video_sha256": _sha256(video) if video is not None else None,
+        "keylog_path": str(keylog.resolve()) if keylog is not None else None,
+        "keylog_sha256": _sha256(keylog) if keylog is not None else None,
+    }
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    temporary = path.with_suffix(".tmp")
+    with temporary.open("w") as output:
+        for row in rows:
+            output.write(json.dumps(row) + "\n")
+    temporary.replace(path)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dataset-root", type=Path, required=True)
@@ -91,6 +125,7 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     manifest_path = args.out.parent / "manifest.json"
     manifest_path.unlink(missing_ok=True)
+    exclusions_path = args.out.parent / "exclusions.jsonl"
     if args.workers <= 0:
         raise SystemExit("--workers must be positive")
     if args.out.name != "clips_manifest.jsonl":
@@ -100,53 +135,82 @@ def main() -> None:
     print(f"found {len(videos)} mp4 under {root}/uploads", file=sys.stderr)
     if not videos:
         raise SystemExit("no videos found")
-    expected_keylogs: set[Path] = set()
+    observed_keylogs = set(root.glob("uploads/*/*/keylogs/*.msgpack"))
+    paired_keylogs: set[Path] = set()
+    paired_videos: list[Path] = []
+    exclusions: list[dict[str, Any]] = []
     for video in videos:
         match = _NAME_RE.fullmatch(video.name)
         if match is None:
-            raise ValueError(f"invalid Crowd-Cast video name: {video.name}")
-        expected_keylogs.add(
+            exclusions.append(_exclusion("noncanonical_video_name", video=video))
+            continue
+        keylog = (
             video.parent.parent
             / "keylogs"
             / f"input_{match.group('rid')}_seg{match.group('idx')}.msgpack"
         )
-    observed_keylogs = set(root.glob("uploads/*/*/keylogs/*.msgpack"))
-    if observed_keylogs != expected_keylogs:
-        raise ValueError(
-            "Crowd-Cast keylog inventory does not match the video inventory: "
-            f"missing={sorted(map(str, expected_keylogs - observed_keylogs))}, "
-            f"orphan={sorted(map(str, observed_keylogs - expected_keylogs))}"
+        if not keylog.is_file():
+            exclusions.append(_exclusion("missing_keylog", video=video))
+            continue
+        paired_keylogs.add(keylog)
+        paired_videos.append(video)
+    for keylog in sorted(observed_keylogs - paired_keylogs):
+        reason = (
+            "orphan_keylog"
+            if _KEYLOG_RE.fullmatch(keylog.name)
+            else "noncanonical_keylog_name"
         )
+        exclusions.append(_exclusion(reason, keylog=keylog))
 
     rows: list[dict[str, Any]] = []
     done = 0
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        futs = {ex.submit(build_row, v): v for v in videos}
+        futs = {ex.submit(build_row, video): video for video in paired_videos}
         for fut in as_completed(futs):
             done += 1
             if done % 2000 == 0:
-                print(f"  probed {done}/{len(videos)}", file=sys.stderr)
-            rows.append(fut.result())
+                print(f"  probed {done}/{len(paired_videos)}", file=sys.stderr)
+            video = futs[fut]
+            match = _NAME_RE.fullmatch(video.name)
+            assert match is not None
+            keylog = (
+                video.parent.parent
+                / "keylogs"
+                / f"input_{match.group('rid')}_seg{match.group('idx')}.msgpack"
+            )
+            try:
+                rows.append(fut.result())
+            except KeylogError as exc:
+                exclusions.append(_exclusion(exc.reason, video=video, keylog=keylog))
+            except UndecodableVideoError:
+                exclusions.append(
+                    _exclusion("undecodable_video", video=video, keylog=keylog)
+                )
 
     rows.sort(key=lambda r: (r["recording_id"], r["segment_idx"]))
     segment_ids = [row["segment_id"] for row in rows]
     if len(set(segment_ids)) != len(segment_ids):
         raise ValueError("Crowd-Cast uploads contain duplicate segment IDs")
-    temporary = args.out.with_suffix(".tmp")
-    with temporary.open("w") as f:
-        for r in rows:
-            f.write(json.dumps(r) + "\n")
-    temporary.replace(args.out)
+    _write_jsonl(args.out, rows)
+    exclusions.sort(key=lambda row: (row["video_path"] or "", row["keylog_path"] or ""))
+    _write_jsonl(exclusions_path, exclusions)
 
     clips_sha256 = _sha256(args.out)
+    exclusion_counts = Counter(row["reason"] for row in exclusions)
     manifest = {
         "artifact_type": "crowdcast_source_clips",
         "schema_version": 1,
         "clips_file": "clips_manifest.jsonl",
         "clips_sha256": clips_sha256,
+        "exclusions_file": "exclusions.jsonl",
+        "exclusions_sha256": _sha256(exclusions_path),
         "source_root": str(root),
         "n_segments": len(rows),
         "n_recordings": len({row["recording_id"] for row in rows}),
+        "n_exclusions": len(exclusions),
+        "n_source_videos": len(videos),
+        "n_source_keylogs": len(observed_keylogs),
+        "exclusion_counts": dict(sorted(exclusion_counts.items())),
     }
     temporary_manifest = args.out.parent / ".manifest.json.tmp"
     temporary_manifest.write_text(json.dumps(manifest, indent=2) + "\n")

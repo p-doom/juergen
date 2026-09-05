@@ -33,7 +33,7 @@ def _seg(
         "master_fps": master_fps,
         "n_master_records": n_records,
         "shard_path": "/nowhere/frames/s0/images.array_record",
-        "keylog_path": None,
+        "keylog_path": "/nowhere/keylog.msgpack",
         "alignment_status": "aligned",
         "kept_ranges": kept_ranges,
         "dropped": dropped or [],
@@ -125,6 +125,22 @@ class SelectorTest(unittest.TestCase):
         self.assertEqual(view.frames, [])
         self.assertEqual(view.n_masked_slots, view.n_slots)
 
+    def test_unknown_drop_reason_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unexpected dropped-span reason"):
+            build_segment_view(
+                _seg(
+                    kept_ranges=[[0, 15]],
+                    dropped=[{"start": 15, "end": 30, "reason": "other"}],
+                ),
+                fps=1.0,
+            )
+
+    def test_keylog_path_is_required(self) -> None:
+        segment = _seg(kept_ranges=[[0, 150]])
+        del segment["keylog_path"]
+        with self.assertRaises(KeyError):
+            build_segment_view(segment, fps=1.0)
+
     def test_conservation_over_view(self) -> None:
         # Every event is owned by exactly one window or discarded-with-reason.
         view = build_segment_view(
@@ -138,7 +154,7 @@ class SelectorTest(unittest.TestCase):
             RawEvent(i, t, "move", dx=1.0)
             for i, t in enumerate([0.2, 1.7, 3.99, 4.0, 4.3, 5.0, 8.6, 9.99, 11.0])
         ]  # seconds; ticks 3,25,59,60,64,75,129,149,165 at 15 fps
-        labeled, _ = apply_label_policy(
+        labeled = apply_label_policy(
             events, view.windows(), view.dead_zones, master_fps=view.master_fps
         )
         n_owned = sum(1 for le in labeled if le.window is not None)

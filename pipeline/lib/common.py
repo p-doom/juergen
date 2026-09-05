@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import msgpack
+from desktop.execute.keymap import KeymapError, guest_button, guest_key
 
 UNKNOWN_RE = re.compile(r"^Unknown\((\d+)\)$")
 MACOS_UNKNOWN_NAME_BY_CODE: dict[int, str] = {
@@ -26,6 +27,44 @@ MACOS_UNKNOWN_NAME_BY_CODE: dict[int, str] = {
     119: "End",
     121: "PageDown",
 }
+
+RECORDER_KEY_NAME_ALIASES = {
+    "DownArrow": "ArrowDown",
+    "LeftArrow": "ArrowLeft",
+    "RightArrow": "ArrowRight",
+    "UpArrow": "ArrowUp",
+    "Dot": "Period",
+    "LeftBracket": "BracketLeft",
+    "RightBracket": "BracketRight",
+}
+
+KEYLOG_ERROR_REASONS = frozenset(
+    {
+        "empty_keylog",
+        "invalid_action_payload",
+        "invalid_event",
+        "invalid_msgpack",
+        "invalid_non_action_payload",
+        "unexecutable_action",
+        "unsupported_event_type",
+    }
+)
+EVENT_EXCLUSION_REASONS = frozenset(
+    {
+        "invalid_action_payload",
+        "invalid_non_action_payload",
+        "unexecutable_action",
+        "unsupported_event_type",
+    }
+)
+
+
+class KeylogError(ValueError):
+    def __init__(self, reason: str, message: str):
+        if reason not in KEYLOG_ERROR_REASONS:
+            raise ValueError(f"unknown keylog error reason: {reason!r}")
+        super().__init__(message)
+        self.reason = reason
 
 
 @dataclass
@@ -81,38 +120,65 @@ def write_json_atomic(path: Path, value: Any) -> None:
 
 
 def resolve_key_name(payload: Any) -> str | None:
-    if not isinstance(payload, list) or len(payload) < 2:
+    if (
+        not isinstance(payload, list)
+        or len(payload) != 2
+        or isinstance(payload[0], bool)
+        or not isinstance(payload[0], int)
+        or payload[0] < 0
+        or not isinstance(payload[1], str)
+        or not payload[1]
+    ):
         return None
-    name = str(payload[1])
-    if not name.startswith("Unknown("):
-        return name
-    match = UNKNOWN_RE.fullmatch(name)
-    if match is None:
+    name = payload[1]
+    if name.startswith("Unknown("):
+        match = UNKNOWN_RE.fullmatch(name)
+        if match is None:
+            return None
+        name = MACOS_UNKNOWN_NAME_BY_CODE.get(int(match.group(1)), "")
+    name = RECORDER_KEY_NAME_ALIASES.get(name, name)
+    try:
+        guest_key(name)
+    except KeymapError:
         return None
-    raw_code = int(match.group(1))
-    return MACOS_UNKNOWN_NAME_BY_CODE.get(raw_code, f"KC_{raw_code}")
+    return name
 
 
 def resolve_button_name(payload: Any) -> str | None:
-    if not isinstance(payload, list) or not payload:
+    if not isinstance(payload, list) or len(payload) != 3:
         return None
     button = payload[0]
-    if isinstance(button, str):
-        return {"Left": "LMB", "Right": "RMB", "Middle": "MMB"}.get(
-            button, f"M_{button}"
-        )
-    if isinstance(button, dict) and len(button) == 1:
-        key, value = next(iter(button.items()))
-        return f"M_{key}_{value}"
-    return None
+    if not isinstance(button, str):
+        return None
+    name = {"Left": "LMB", "Right": "RMB", "Middle": "MMB"}.get(button)
+    if name is None:
+        return None
+    try:
+        guest_button(name)
+    except KeymapError:
+        return None
+    return name
 
 
 def load_keylog_entries(keylog_path: Path) -> list[Any]:
-    if not keylog_path.is_file() or keylog_path.stat().st_size == 0:
-        raise ValueError(f"keylog is missing or empty: {keylog_path}")
-    entries = msgpack.unpackb(keylog_path.read_bytes(), raw=False, strict_map_key=False)
-    if not isinstance(entries, list) or not entries:
-        raise ValueError(f"keylog must contain a nonempty event list: {keylog_path}")
+    if not keylog_path.is_file():
+        raise FileNotFoundError(f"keylog is missing: {keylog_path}")
+    if keylog_path.stat().st_size == 0:
+        raise KeylogError("empty_keylog", f"keylog is empty: {keylog_path}")
+    try:
+        entries = msgpack.unpackb(
+            keylog_path.read_bytes(), raw=False, strict_map_key=False
+        )
+    except (ValueError, msgpack.exceptions.UnpackException) as exc:
+        raise KeylogError(
+            "invalid_msgpack", f"keylog is not valid msgpack: {keylog_path}"
+        ) from exc
+    if not isinstance(entries, list):
+        raise KeylogError(
+            "invalid_event", f"keylog must contain an event list: {keylog_path}"
+        )
+    if not entries:
+        raise KeylogError("empty_keylog", f"keylog is empty: {keylog_path}")
     previous_timestamp = -1
     for index, entry in enumerate(entries):
         if (
@@ -123,10 +189,12 @@ def load_keylog_entries(keylog_path: Path) -> list[Any]:
             or entry[0] < 0
             or entry[0] < previous_timestamp
             or not isinstance(entry[1], list)
-            or len(entry[1]) not in (1, 2)
+            or len(entry[1]) != 2
             or not isinstance(entry[1][0], str)
             or not entry[1][0]
         ):
-            raise ValueError(f"invalid keylog event at {keylog_path}:{index}")
+            raise KeylogError(
+                "invalid_event", f"invalid keylog event at {keylog_path}:{index}"
+            )
         previous_timestamp = entry[0]
     return entries

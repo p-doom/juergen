@@ -89,8 +89,7 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
             )
         return {**base, "status": "empty_view", "rows": []}
 
-    keylog = Path(view.keylog_path) if view.keylog_path else None
-    events = load_events(keylog)[0] if keylog else []
+    events = load_events(Path(view.keylog_path))
     if not segment_goals:
         return {**base, "status": "no_goals", "rows": []}
     projections, projection_stats = project_goals(

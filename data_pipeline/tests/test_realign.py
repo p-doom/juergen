@@ -22,9 +22,18 @@ def _segment(
     keylog = root / f"{segment_id}.msgpack"
     video = root / f"{segment_id}.mp4"
     keylog.parent.mkdir(parents=True, exist_ok=True)
+    payloads = {
+        "KeyPress": [0, "KeyA"],
+        "KeyRelease": [0, "KeyA"],
+        "MousePress": ["Left", 0.0, 0.0],
+        "MouseRelease": ["Left", 0.0, 0.0],
+        "MouseScroll": [0.0, 1.0, 0.0, 0.0],
+        "MouseMove": [1.0, 0.0],
+        "WindowTitle": ["title"],
+    }
     keylog.write_bytes(
         msgpack.packb(
-            [[round(timestamp * 1e6), [kind]] for timestamp, kind in events],
+            [[round(timestamp * 1e6), [kind, payloads[kind]]] for timestamp, kind in events],
             use_bin_type=True,
         )
     )
@@ -173,14 +182,22 @@ def test_source_manifest_duration_is_exact_frame_coverage(tmp_path: Path):
     clips = tmp_path / "artifact" / "clips_manifest.jsonl"
     clips.parent.mkdir()
     clips.write_text(json.dumps(row) + "\n")
+    exclusions = clips.parent / "exclusions.jsonl"
+    exclusions.write_text("")
     manifest = {
         "artifact_type": "crowdcast_source_clips",
         "schema_version": 1,
         "clips_file": clips.name,
         "clips_sha256": digest(clips),
+        "exclusions_file": exclusions.name,
+        "exclusions_sha256": digest(exclusions),
         "source_root": str(source),
         "n_segments": 1,
         "n_recordings": 1,
+        "n_exclusions": 0,
+        "n_source_videos": 1,
+        "n_source_keylogs": 1,
+        "exclusion_counts": {},
     }
     (clips.parent / "manifest.json").write_text(json.dumps(manifest) + "\n")
 

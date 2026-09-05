@@ -34,8 +34,8 @@ WINDOW_TAIL_BUFFER = 0
 EST_TOKENS_PER_FRAME = 1500
 
 
-def _segment_keyboard(view, keylog_path: str | None) -> list[WindowKeyboard]:
-    events, _ = load_events(Path(keylog_path)) if keylog_path else ([], None)
+def _segment_keyboard(view, keylog_path: str) -> list[WindowKeyboard]:
+    events = load_events(Path(keylog_path))
     return format_segment(
         events,
         view.windows(),

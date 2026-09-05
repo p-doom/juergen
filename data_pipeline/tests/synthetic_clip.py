@@ -106,8 +106,8 @@ EVENT_WINDOWS = [
 EVENTS: list[tuple[float, str, Any]] = [
     (0.10, "MouseMove", [5.0, 0.0]),  # tick 0  -> W0
     (0.50, "MouseMove", [4.0, 3.0]),  # tick 2  -> W0
-    (1.10, "MousePress", ["Left"]),  # tick 4  -> W1
-    (1.40, "MouseRelease", ["Left"]),  # tick 5  -> W1
+    (1.10, "MousePress", ["Left", 0.0, 0.0]),  # tick 4  -> W1
+    (1.40, "MouseRelease", ["Left", 0.0, 0.0]),  # tick 5  -> W1
     (2.10, "KeyPress", [0, "KeyA"]),  # tick 8  -> W2
     (2.50, "KeyPress", [0, "KeyA"]),  # tick 10 -> autorepeat, deduped
     (2.90, "MouseMove", [2.0, -1.0]),  # tick 11 -> W2
@@ -122,7 +122,7 @@ EVENTS: list[tuple[float, str, Any]] = [
     (5.30, "KeyRelease", [0, "KeyB"]),  # tick 21 -> W4
     (5.60, "MouseMove", [-3.0, 2.0]),  # tick 22 -> W4
     (6.10, "KeyRelease", [0, "KeyZ"]),  # tick 24 -> dangling release
-    (6.50, "MouseScroll", [0.0, -3.0]),  # tick 26 -> W5
+    (6.50, "MouseScroll", [0.0, -3.0, 0.0, 0.0]),  # tick 26 -> W5
     (7.10, "KeyPress", [0, "ShiftLeft"]),  # tick 28 -> W6, typing run
     (7.15, "KeyPress", [0, "KeyH"]),  # tick 28
     (7.20, "KeyRelease", [0, "KeyH"]),  # tick 28

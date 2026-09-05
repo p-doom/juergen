@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import grammars
+import msgpack
 import pytest
 import synthetic_clip as clip
 from grammars.deltatype_v2 import CODEC
@@ -25,6 +26,7 @@ from pipeline.lib.manifest import (
     make_artifact_id,
     resolve_chat_artifact,
 )
+from pipeline.lib.source_clips import resolve_source_clips
 from pipeline.lib.views import FilterArtifact
 from pipeline.stage_01_master_frames import build_segment_master
 
@@ -50,10 +52,14 @@ def _jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def test_stage_00_rejects_an_orphan_keylog(tmp_path: Path):
+def test_stage_00_seals_noncanonical_and_orphan_inputs(tmp_path: Path):
     source = clip.build_uploads_tree(tmp_path / "source")
     orphan = source["keylog_path"].with_name("input_orphan_seg0000.msgpack")
     orphan.write_bytes(b"orphan")
+    test_video = source["video_path"].with_name("test_video.mp4")
+    shutil.copy2(source["video_path"], test_video)
+    test_keylog = source["keylog_path"].with_name("test_keylogs.msgpack")
+    test_keylog.write_bytes(b"fixture")
     output = tmp_path / "stage_00" / "clips_manifest.jsonl"
     process = subprocess.run(
         [
@@ -71,9 +77,48 @@ def test_stage_00_rejects_an_orphan_keylog(tmp_path: Path):
         text=True,
         check=False,
     )
-    assert process.returncode != 0
-    assert "orphan=" in process.stderr
-    assert not (output.parent / "manifest.json").exists()
+    assert process.returncode == 0, process.stderr
+    exclusions = _jsonl(output.parent / "exclusions.jsonl")
+    assert {row["reason"] for row in exclusions} == {
+        "noncanonical_keylog_name",
+        "noncanonical_video_name",
+        "orphan_keylog",
+    }
+    manifest = json.loads((output.parent / "manifest.json").read_text())
+    assert manifest["n_segments"] == 1
+    assert manifest["n_source_videos"] == 2
+    assert manifest["n_source_keylogs"] == 3
+    assert manifest["exclusion_counts"] == {
+        "noncanonical_keylog_name": 1,
+        "noncanonical_video_name": 1,
+        "orphan_keylog": 1,
+    }
+    resolve_source_clips(output)
+
+
+def test_stage_00_excludes_an_empty_keylog_before_realign(tmp_path: Path):
+    source = clip.build_uploads_tree(tmp_path / "source")
+    duplicate_video = source["video_path"].with_name(f"recording_{clip.RECORDING_ID}_seg0001.mp4")
+    duplicate_keylog = source["keylog_path"].with_name(f"input_{clip.RECORDING_ID}_seg0001.msgpack")
+    shutil.copy2(source["video_path"], duplicate_video)
+    duplicate_keylog.write_bytes(msgpack.packb([]))
+    output = tmp_path / "stage_00" / "clips_manifest.jsonl"
+
+    _run_stage(
+        "stage_00_clip_manifest.py",
+        "--dataset-root",
+        source["dataset_root"],
+        "--out",
+        output,
+        "--workers",
+        1,
+    )
+
+    assert [row["segment_id"] for row in _jsonl(output)] == [clip.SEGMENT_ID]
+    assert _jsonl(output.parent / "exclusions.jsonl")[0]["reason"] == "empty_keylog"
+    manifest = json.loads((output.parent / "manifest.json").read_text())
+    assert manifest["exclusion_counts"] == {"empty_keylog": 1}
+    resolve_source_clips(output)
 
 
 class Chain:

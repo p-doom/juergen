@@ -21,7 +21,7 @@ events.
 
 Dead-zone label policy:
   * Mouse move / scroll deltas inside a dead zone are discarded from labels
-    (counted per zone reason).
+    with the zone reason retained on the labeled event.
   * When the keylog runs past the video's last frame, those events fall in the
     trailing ``no_coverage`` zone and are discarded — never folded into the last
     selected frame's action, since nothing was visible there.
@@ -36,21 +36,23 @@ Dead-zone label policy:
   * A pair fully inside dead zones (no visible window between its endpoints)
     is discarded. A press in a dead zone that is never released is discarded
     too: clamping it forward would emit a press with no matching release.
-  * Every removal/clamp is counted (``PolicyCounters``); zero dangling keys from
-    dead zones by construction. Dropping a release instead of clamping it would
+  * Zero dangling keys leave dead zones by construction. Dropping a release
+    instead of clamping it would
     leave the key held for the rest of the conversation, making every later
-    label wrong undetectably. The counters double as a per-segment realignment
-    health metric.
+    label wrong undetectably.
 """
 
 from __future__ import annotations
 
+import math
+import re
 from bisect import bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from pipeline.lib.common import (
+    KeylogError,
     load_keylog_entries,
     resolve_button_name,
     resolve_key_name,
@@ -62,6 +64,8 @@ from pipeline.lib.common import (
 ZONE_BLACK = "black"
 ZONE_NO_COVERAGE = "no_coverage"
 ZONE_PRE_FIRST_FRAME = "pre_first_frame"
+
+_UTC_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
 
 @dataclass(frozen=True)
@@ -81,30 +85,6 @@ class RawEvent:
     dy: float = 0.0
     scroll: float = 0.0
     name: str | None = None
-
-
-@dataclass
-class EventStats:
-    """Parse-layer counts over the whole keylog (before any window logic).
-
-    The ``n_dropped_*`` counters close the parse layer: an entry counted in
-    ``n_events`` either becomes a RawEvent, is a deliberate ignore
-    (``ContextChanged`` / an event type this pipeline does not model), or is
-    dropped as unparseable — and the last kind loses real demonstrator input,
-    so it is counted rather than skipped invisibly. ``Unknown(-1)`` key names
-    from the macOS recorder are the known live instance."""
-
-    n_events: int = 0
-    n_mousemove: int = 0
-    n_scroll: int = 0
-    n_keypress: int = 0
-    n_keyrelease: int = 0
-    n_mousepress: int = 0
-    n_mouserelease: int = 0
-    n_dropped_unresolved_name: int = 0
-    n_dropped_bad_payload: int = 0
-    n_dropped_bad_timestamp: int = 0
-    n_ignored_other_type: int = 0
 
 
 @dataclass(frozen=True)
@@ -133,111 +113,150 @@ class LabeledEvent:
     label_t: float
     window: int | None
     discard_reason: str | None = None
-    clamped: str | None = None  # "press_to_zone_end" | "release_to_zone_start"
 
 
-@dataclass
-class PolicyCounters:
-    """Per-segment dead-zone accounting (a realignment health metric)."""
-
-    n_discarded_black: int = 0
-    n_discarded_no_coverage: int = 0
-    n_discarded_pre_first_frame: int = 0
-    n_pairs_dropped_dead_zone: int = 0
-    n_unreleased_press_dropped: int = 0
-    n_releases_clamped: int = 0
-    n_presses_clamped: int = 0
-    n_dangling_release: int = 0
-    n_redundant_press: int = 0
-    n_held_at_end: int = 0
-    max_simultaneous_keys: int = 0
-
-    def count_discarded_delta(self, reason: str) -> None:
-        if reason == ZONE_BLACK:
-            self.n_discarded_black += 1
-        elif reason == ZONE_PRE_FIRST_FRAME:
-            self.n_discarded_pre_first_frame += 1
-        else:
-            self.n_discarded_no_coverage += 1
+def _numeric_payload(
+    payload: object, *, size: int, keylog_path: Path, index: int, event_type: str
+) -> tuple[float, ...]:
+    if (
+        not isinstance(payload, list)
+        or len(payload) != size
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            for value in payload
+        )
+    ):
+        raise KeylogError(
+            "invalid_action_payload",
+            f"invalid {event_type} payload at {keylog_path}:{index}: {payload!r}",
+        )
+    return tuple(float(value) for value in payload)
 
 
-_PER_TYPE_COUNTER = {
-    "MouseMove": "n_mousemove",
-    "MouseScroll": "n_scroll",
-    "KeyPress": "n_keypress",
-    "KeyRelease": "n_keyrelease",
-    "MousePress": "n_mousepress",
-    "MouseRelease": "n_mouserelease",
-}
+def _is_source_metadata(payload: object) -> bool:
+    if not isinstance(payload, list):
+        return False
+    if len(payload) == 5:
+        dimensions = payload[:4]
+        ratios: list[object] = []
+    elif len(payload) == 10:
+        dimensions = [payload[index] for index in (0, 1, 3, 4, 6, 7)]
+        ratios = [payload[index] for index in (2, 5, 8)]
+    else:
+        return False
+    return (
+        all(
+            not isinstance(value, bool) and isinstance(value, int) and value >= 0
+            for value in dimensions
+        )
+        and all(
+            isinstance(value, float) and math.isfinite(value) and value >= 0
+            for value in ratios
+        )
+        and isinstance(payload[-1], str)
+        and _UTC_TIMESTAMP_RE.fullmatch(payload[-1]) is not None
+    )
 
 
-def load_events(keylog_path: Path) -> tuple[list[RawEvent], EventStats]:
-    """Parse a realigned msgpack keylog into an ordered RawEvent stream + stats.
-
-    One pass, so the counts describe exactly the stream returned. Every entry
-    counted in ``n_events`` is accounted for: emitted, deliberately ignored, or
-    counted into an ``n_dropped_*`` bucket. The realigned pipeline consumes
-    corrected keylogs, so the timestamps are already master-clock."""
-    stats = EventStats()
+def load_events(keylog_path: Path) -> list[RawEvent]:
+    """Parse the exact actionable Crowd-Cast keylog schema."""
     events: list[RawEvent] = []
-    for entry in load_keylog_entries(keylog_path):
-        if not isinstance(entry, list) or len(entry) < 2:
-            continue
-        timestamp, event = entry[0], entry[1]
-        if not isinstance(event, list) or not event:
-            continue
-        stats.n_events += 1
-        event_type = str(event[0])
-        counter = _PER_TYPE_COUNTER.get(event_type)
-        if counter is not None:
-            setattr(stats, counter, getattr(stats, counter) + 1)
-        try:
-            timestamp_us = int(timestamp)
-        except (TypeError, ValueError):
-            stats.n_dropped_bad_timestamp += 1
-            continue
+    for index, (timestamp_us, event) in enumerate(load_keylog_entries(keylog_path)):
+        event_type = event[0]
         if event_type == "ContextChanged":
+            payload = event[1]
+            if not (
+                isinstance(payload, list)
+                and len(payload) == 1
+                and isinstance(payload[0], str)
+                and payload[0]
+            ):
+                raise KeylogError(
+                    "invalid_non_action_payload",
+                    f"invalid ContextChanged payload at {keylog_path}:{index}: "
+                    f"{payload!r}",
+                )
             continue
-        payload = event[1] if len(event) > 1 else None
+        if event_type == "Metadata":
+            payload = event[1]
+            if not _is_source_metadata(payload):
+                raise KeylogError(
+                    "invalid_non_action_payload",
+                    f"invalid Metadata payload at {keylog_path}:{index}: {payload!r}",
+                )
+            continue
+        payload = event[1]
         t_s = timestamp_us / 1_000_000
         seq = len(events)
 
         if event_type == "MouseMove":
-            if not (isinstance(payload, list) and len(payload) >= 2):
-                stats.n_dropped_bad_payload += 1
-                continue
-            events.append(
-                RawEvent(seq, t_s, "move", dx=float(payload[0]), dy=float(payload[1]))
+            dx, dy = _numeric_payload(
+                payload,
+                size=2,
+                keylog_path=keylog_path,
+                index=index,
+                event_type=event_type,
             )
+            events.append(RawEvent(seq, t_s, "move", dx=dx, dy=dy))
         elif event_type == "MouseScroll":
-            if not (isinstance(payload, list) and len(payload) >= 2):
-                stats.n_dropped_bad_payload += 1
-                continue
-            value = payload[1] if payload[1] != 0 else payload[0]
-            events.append(
-                RawEvent(
-                    seq,
-                    t_s,
-                    "scroll",
-                    dx=float(payload[0]),
-                    dy=float(payload[1]),
-                    scroll=float(value),
-                )
+            dx, dy, _, _ = _numeric_payload(
+                payload,
+                size=4,
+                keylog_path=keylog_path,
+                index=index,
+                event_type=event_type,
             )
+            value = dy if dy != 0 else dx
+            events.append(RawEvent(seq, t_s, "scroll", dx=dx, dy=dy, scroll=value))
         elif event_type in ("KeyPress", "MousePress", "KeyRelease", "MouseRelease"):
+            payload_size = 2 if event_type.startswith("Key") else 3
+            if not isinstance(payload, list) or len(payload) != payload_size:
+                raise KeylogError(
+                    "invalid_action_payload",
+                    f"invalid {event_type} payload at {keylog_path}:{index}: "
+                    f"{payload!r}",
+                )
+            if event_type.startswith("Key"):
+                if (
+                    isinstance(payload[0], bool)
+                    or not isinstance(payload[0], int)
+                    or payload[0] < 0
+                ):
+                    raise KeylogError(
+                        "invalid_action_payload",
+                        f"invalid {event_type} payload at {keylog_path}:{index}: "
+                        f"{payload!r}",
+                    )
+            else:
+                _numeric_payload(
+                    payload[1:],
+                    size=2,
+                    keylog_path=keylog_path,
+                    index=index,
+                    event_type=event_type,
+                )
             name = (
                 resolve_key_name(payload)
                 if event_type.startswith("Key")
                 else resolve_button_name(payload)
             )
             if name is None:
-                stats.n_dropped_unresolved_name += 1
-                continue
+                raise KeylogError(
+                    "unexecutable_action",
+                    f"unexecutable {event_type} name at {keylog_path}:{index}: "
+                    f"{payload!r}",
+                )
             kind = "press" if event_type.endswith("Press") else "release"
             events.append(RawEvent(seq, t_s, kind, name=name))
         else:
-            stats.n_ignored_other_type += 1
-    return events, stats
+            raise KeylogError(
+                "unsupported_event_type",
+                f"unsupported keylog event type at {keylog_path}:{index}: "
+                f"{event_type!r}",
+            )
+    return events
 
 
 class _Locator:
@@ -247,7 +266,7 @@ class _Locator:
     its events away from the window). Ticks outside every window and every
     explicit zone resolve to implicit ``pre_first_frame`` / ``no_coverage``
     zones, so the partition is total: every event is owned by exactly one
-    window, clamped, or discarded-with-counter."""
+    window, clamped, or discarded with a reason."""
 
     def __init__(self, windows: Sequence[Window], dead_zones: Sequence[DeadZone]):
         self.windows = list(windows)
@@ -318,15 +337,14 @@ def apply_label_policy(
     dead_zones: Sequence[DeadZone],
     *,
     master_fps: float,
-) -> tuple[list[LabeledEvent], PolicyCounters]:
+) -> list[LabeledEvent]:
     """Assign every event a label disposition per the dead-zone policy.
 
-    Returns one LabeledEvent per input event (same order) + counters. Pair
+    Returns one LabeledEvent per input event in the same order. Pair
     matching runs a segment-global held-set over the full stream first (a press
     of an already-held name is redundant, a release of an un-held name is
     dangling), then each
     canonical pair is completed/clamped/dropped by where its endpoints fall."""
-    counters = PolicyCounters()
     if not windows:
         raise ValueError("apply_label_policy needs at least one window")
     loc = _Locator(windows, dead_zones)
@@ -341,22 +359,15 @@ def apply_label_policy(
         if e.kind == "press":
             if e.name in held:
                 le.discard_reason = "redundant_press"
-                counters.n_redundant_press += 1
             else:
                 held[e.name] = i
-                counters.max_simultaneous_keys = max(
-                    counters.max_simultaneous_keys, len(held)
-                )
         elif e.kind == "release":
             if e.name in held:
                 pairs.append((held.pop(e.name), i))
             else:
                 le.discard_reason = "dangling_release"
-                counters.n_dangling_release += 1
     for press_idx in held.values():
         pairs.append((press_idx, None))
-    counters.n_held_at_end = len(held)
-
     # Pass 2: move/scroll deltas — owned or discarded.
     for le in labeled:
         if le.event.kind not in ("move", "scroll"):
@@ -366,7 +377,6 @@ def apply_label_policy(
             le.window = win
         else:
             le.discard_reason = zone.reason
-            counters.count_discarded_delta(zone.reason)
 
     # Pass 3: pairs — emit, clamp, or drop.
     def _drop_pair(press: LabeledEvent, release: LabeledEvent | None) -> None:
@@ -375,7 +385,6 @@ def apply_label_policy(
         if release is not None:
             release.window = None
             release.discard_reason = "pair_in_dead_zone"
-        counters.n_pairs_dropped_dead_zone += 1
 
     for press_idx, release_idx in pairs:
         press = labeled[press_idx]
@@ -396,7 +405,6 @@ def apply_label_policy(
                 # Never released: a clamped press would emit a lone +KEY with
                 # no matching release, so discard it.
                 press.discard_reason = "unreleased_press_in_dead_zone"
-                counters.n_unreleased_press_dropped += 1
                 continue
             if vt is None or r_tick < vt:
                 # No visible frame while the key was down: nothing was seen
@@ -405,13 +413,10 @@ def apply_label_policy(
                 continue
             press.window = loc.window_of(vt)
             press.label_t = vt / master_fps
-            press.clamped = "press_to_zone_end"
-            counters.n_presses_clamped += 1
 
         if release is None:
             press.window = None
             press.discard_reason = "unreleased_press"
-            counters.n_unreleased_press_dropped += 1
             continue
         r_win, r_zone = loc.locate(_tick(release.event.t_s, master_fps))
         if r_win is not None:
@@ -427,7 +432,5 @@ def apply_label_policy(
                 continue
             release.window = loc.window_of(vt)
             release.label_t = (vt + 1) / master_fps
-            release.clamped = "release_to_zone_start"
-            counters.n_releases_clamped += 1
 
-    return labeled, counters
+    return labeled
