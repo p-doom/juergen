@@ -84,7 +84,7 @@ class SegmentView:
     alignment_status: str
 
     def windows(self) -> list[Window]:
-        return [Window(f.master_idx, f.win_start, f.win_end) for f in self.frames]
+        return [Window(f.win_start, f.win_end) for f in self.frames]
 
 
 class _KeptRanges:

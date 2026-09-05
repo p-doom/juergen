@@ -103,7 +103,6 @@ def build_segment_conversations(task: dict[str, Any]) -> dict[str, Any]:
             events,
             [
                 Window(
-                    frame.master_idx,
                     frame.win_start,
                     frame.win_end,
                 )

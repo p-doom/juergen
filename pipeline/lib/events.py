@@ -91,7 +91,6 @@ class RawEvent:
 class Window:
     """Label-ownership span of one selected frame: ``[start, end)`` master ticks."""
 
-    master_idx: int
     start: int
     end: int
 

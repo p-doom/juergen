@@ -21,7 +21,7 @@ M = 1.0
 
 # Layout A: 20-tick axis, frames selected at ticks 0/5/15, black flash [10,15).
 # Window 1 spans [5,15) — the zone is interior to its span and zone-wins.
-WINDOWS_A = [Window(0, 0, 5), Window(5, 5, 15), Window(15, 15, 20)]
+WINDOWS_A = [Window(0, 5), Window(5, 15), Window(15, 20)]
 ZONES_A = [DeadZone(10, 15, "black")]
 
 
@@ -127,7 +127,7 @@ class StraddleClampTest(unittest.TestCase):
     def test_zone_interior_to_window_clamps_within_it(self) -> None:
         # Flash [8,10) sits inside window [5,15): the clamped press stays in
         # that same window, ordered at the flash end, before the release.
-        windows = [Window(0, 0, 5), Window(5, 5, 15)]
+        windows = [Window(0, 5), Window(5, 15)]
         zones = [DeadZone(8, 10, "black")]
         labels = _format(
             _events((8.5, "press", "KeyG"), (12.0, "release", "KeyG")),
@@ -150,7 +150,7 @@ class DeltaDiscardTest(unittest.TestCase):
         self.assertEqual(labels, ["NO_OP", "3 0 0", "NO_OP"])
 
     def test_pre_first_frame_zone(self) -> None:
-        windows = [Window(3, 3, 10)]
+        windows = [Window(3, 10)]
         labels = _format(
             _events(
                 (1.0, "move", 9.0, 0.0),  # before the first selected frame
@@ -204,7 +204,7 @@ class StateLayerTest(unittest.TestCase):
     def test_idle_spans_are_not_dead_zones(self) -> None:
         # An idle-thinned gap between selected frames stays inside the previous
         # frame's window: events there are owned, never discarded.
-        windows = [Window(0, 0, 40), Window(40, 40, 50)]  # frames 1..39 thinned
+        windows = [Window(0, 40), Window(40, 50)]  # frames 1..39 thinned
         labels = _format(_events((25.0, "move", 7.0, 0.0)), windows=windows, zones=[])
         self.assertEqual(labels, ["7 0 0", "NO_OP"])
 

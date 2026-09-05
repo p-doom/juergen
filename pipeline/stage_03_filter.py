@@ -134,7 +134,7 @@ def _rounded_activity_mask(
     if bin_ticks <= 0:
         raise ValueError("idle judgment bin must contain at least one master tick")
     windows = [
-        Window(start, start, min(start + bin_ticks, n_records))
+        Window(start, min(start + bin_ticks, n_records))
         for start in range(0, n_records, bin_ticks)
     ]
     labels = format_segment(

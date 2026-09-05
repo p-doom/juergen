@@ -24,7 +24,6 @@ def _write_keylog(path: Path, entries: list[tuple[float, list]]) -> None:
 def _windows(count: int, axis_end: int) -> list[Window]:
     return [
         Window(
-            master_idx=index * STRIDE,
             start=index * STRIDE,
             end=(index + 1) * STRIDE if index < count - 1 else axis_end,
         )
@@ -223,7 +222,7 @@ def test_formatter_rejects_an_unexpected_event_kind():
     with pytest.raises(ValueError, match="unexpected event kind"):
         format_segment(
             [RawEvent(0, 0.0, "other")],
-            [Window(0, 0, 1)],
+            [Window(0, 1)],
             [],
             master_fps=1.0,
         )

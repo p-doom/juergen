@@ -95,24 +95,13 @@ def load_keylog(path: str) -> list[Any]:
 
 
 def input_timestamps_s(events: list[Any]) -> list[float]:
-    """Sorted input-event timestamps (s) -- the 6 idle-gating event types."""
-    ts = [
-        e[0] / 1e6
-        for e in events
-        if isinstance(e, list)
-        and len(e) >= 2
-        and isinstance(e[1], list)
-        and e[1]
-        and e[1][0] in INPUT_TYPES
-    ]
-    ts.sort()
-    return ts
+    """Input-event timestamps (s) for the six idle-gating event types."""
+    return [entry[0] / 1e6 for entry in events if entry[1][0] in INPUT_TYPES]
 
 
 def keylog_span_s(events: list[Any]) -> float:
     """Last event timestamp (s) -- the keylog span."""
-    ts = [e[0] for e in events if isinstance(e, list) and e]
-    return (max(ts) / 1e6) if ts else 0.0
+    return events[-1][0] / 1e6
 
 
 def compute_splices(input_ts: list[float]) -> list[dict]:

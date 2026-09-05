@@ -82,12 +82,10 @@ def ensure_dir(path: Path) -> Path:
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    if not path.exists():
-        return rows
     with path.open() as source:
         for line_num, line in enumerate(source, start=1):
             if not line.strip():
-                continue
+                raise ValueError(f"Blank JSONL row at {path}:{line_num}")
             try:
                 value = json.loads(line)
             except json.JSONDecodeError as exc:
