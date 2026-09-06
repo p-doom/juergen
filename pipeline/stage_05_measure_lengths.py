@@ -408,15 +408,13 @@ def _merge(
     if final_backup.exists() or manifest_backup.exists():
         temporary.unlink(missing_ok=True)
         raise RuntimeError(f"interrupted Stage05 publication under {output_dir}")
-    final_saved = False
-    manifest_saved = False
+    final_existed = final.exists()
+    manifest_existed = manifest.exists()
     try:
-        if final.exists():
+        if final_existed:
             final.replace(final_backup)
-            final_saved = True
-        if manifest.exists():
+        if manifest_existed:
             manifest.replace(manifest_backup)
-            manifest_saved = True
         temporary.replace(final)
         write_manifest(
             output_dir,
@@ -431,13 +429,18 @@ def _merge(
             stats={"cache": cache},
         )
     except BaseException:
-        final.unlink(missing_ok=True)
-        manifest.unlink(missing_ok=True)
-        (output_dir / "manifest.json.tmp").unlink(missing_ok=True)
-        if final_saved:
+        if final_backup.exists():
+            final.unlink(missing_ok=True)
             final_backup.replace(final)
-        if manifest_saved:
+        elif not final_existed:
+            final.unlink(missing_ok=True)
+        if manifest_backup.exists():
+            manifest.unlink(missing_ok=True)
             manifest_backup.replace(manifest)
+        elif not manifest_existed:
+            manifest.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
+        (output_dir / "manifest.json.tmp").unlink(missing_ok=True)
         raise
     final_backup.unlink(missing_ok=True)
     manifest_backup.unlink(missing_ok=True)
