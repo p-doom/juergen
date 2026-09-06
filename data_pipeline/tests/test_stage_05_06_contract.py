@@ -524,6 +524,74 @@ def test_stage_05_records_sealed_inputs_and_exact_cache(tmp_path: Path, producti
     }
 
 
+def test_stage_05_shards_equal_single_worker_output(tmp_path: Path, production_inputs) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"], n_conversations=3)
+    single = _measure(tmp_path, production_inputs, source)
+    expected = (single / "message_lengths.jsonl").read_text()
+    sharded = tmp_path / "sharded"
+    common = {
+        "output_dir": sharded,
+        "source_path": source,
+        "omegalax_repo": production_inputs["repo"],
+        "processor_snapshot": production_inputs["snapshot"],
+        "num_workers": 2,
+        "num_shards": 2,
+    }
+    for index in range(2):
+        result = _run(
+            "stage_05_measure_lengths.py", production_inputs["env"], **common, shard_index=index
+        )
+        assert result.returncode == 0, result.stderr
+        assert not (sharded / "manifest.json").exists()
+    result = _run("stage_05_measure_lengths.py", production_inputs["env"], **common, merge=True)
+    assert result.returncode == 0, result.stderr
+    assert (sharded / "message_lengths.jsonl").read_text() == expected
+
+
+def test_stage_05_resumes_only_matching_shard_receipt(tmp_path: Path, production_inputs) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    output = _measure(tmp_path, production_inputs, source)
+    before = len(_script_invocations(production_inputs["log"]))
+    assert _measure(tmp_path, production_inputs, source) == output
+    assert len(_script_invocations(production_inputs["log"])) == before
+    receipt = output / "measure_receipt.shard0000_of_0001.json"
+    value = json.loads(receipt.read_text())
+    value["identity"]["source_sha256"] = "0" * 64
+    receipt.write_text(json.dumps(value))
+    assert _measure(tmp_path, production_inputs, source) == output
+    assert len(_script_invocations(production_inputs["log"])) == before + 1
+
+
+def test_stage_05_failed_merge_does_not_replace_canonical_cache(
+    tmp_path: Path, production_inputs
+) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"], n_conversations=3)
+    output = tmp_path / "sharded"
+    common = {
+        "output_dir": output,
+        "source_path": source,
+        "omegalax_repo": production_inputs["repo"],
+        "processor_snapshot": production_inputs["snapshot"],
+        "num_workers": 2,
+        "num_shards": 2,
+    }
+    for index in range(2):
+        assert (
+            _run(
+                "stage_05_measure_lengths.py", production_inputs["env"], **common, shard_index=index
+            ).returncode
+            == 0
+        )
+    canonical = output / "message_lengths.jsonl"
+    canonical.write_text("previous\n")
+    shard = output / "message_lengths.shard0001_of_0002.jsonl"
+    shard.write_text(shard.read_text().splitlines()[0] + "\n")
+    result = _run("stage_05_measure_lengths.py", production_inputs["env"], **common, merge=True)
+    assert result.returncode != 0
+    assert "does not match receipt" in result.stderr
+    assert canonical.read_text() == "previous\n"
+
+
 def test_stages_remove_interrupted_manifest_temps(tmp_path: Path, production_inputs) -> None:
     source = make_source(tmp_path / "source", production_inputs["image_store"])
     lengths = tmp_path / "lengths-source"

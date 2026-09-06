@@ -8,7 +8,6 @@ import json
 import os
 import re
 import subprocess
-from itertools import zip_longest
 from pathlib import Path
 from typing import Any
 
@@ -216,7 +215,107 @@ def attest_omegalax(root: Path) -> dict[str, Any]:
 def validate_message_lengths(cache: Path, chat: Path, *, merge_size: int) -> int:
     if merge_size <= 0:
         raise ValueError("processor merge_size must be positive")
-    expected_keys: list[tuple[int, int]] = []
+    expected = _message_keys(chat)
+    expected_count = 0
+    observed_count = 0
+    with cache.open(encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                raise ValueError(f"blank cache row at {cache}:{line_number}")
+            row = json.loads(line)
+            indexes = validate_message_length_row(row, cache, line_number, merge_size)
+            expected_key = next(expected, None)
+            if indexes != expected_key:
+                raise ValueError(
+                    f"message-length cache keys do not match {chat}: first mismatch "
+                    f"({expected_key}, {indexes}) after {observed_count} rows"
+                )
+            expected_count += 1
+            observed_count += 1
+    remaining = next(expected, None)
+    if remaining is not None:
+        expected_count += 1 + sum(1 for _ in expected)
+        raise ValueError(
+            f"message-length cache keys do not match {chat}: expected "
+            f"{expected_count}, got {observed_count}, first mismatch "
+            f"({remaining}, None)"
+        )
+    return observed_count
+
+
+def validate_message_length_row(row, cache: Path, line_number: int, merge_size: int):
+    if not isinstance(row, dict) or set(row) != {
+        "conv_idx",
+        "msg_offset",
+        "measurement",
+    }:
+        raise ValueError(f"invalid cache row at {cache}:{line_number}")
+    key = row["conv_idx"], row["msg_offset"]
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in key
+    ):
+        raise ValueError(f"invalid cache key at {cache}:{line_number}")
+    measurement = row["measurement"]
+    fields = {
+        "length",
+        "vision_tokens",
+        "vision_patches",
+        "num_images",
+        "image_grid_thw",
+    }
+    if not isinstance(measurement, dict) or set(measurement) != fields:
+        raise ValueError(f"invalid measurement at {cache}:{line_number}")
+    length = measurement["length"]
+    counters = [
+        measurement["vision_tokens"],
+        measurement["vision_patches"],
+        measurement["num_images"],
+    ]
+    if isinstance(length, bool) or not isinstance(length, int) or length <= 0:
+        raise ValueError(f"invalid measured length at {cache}:{line_number}")
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in counters
+    ):
+        raise ValueError(f"invalid vision counters at {cache}:{line_number}")
+    grid = measurement["image_grid_thw"]
+    if not isinstance(grid, list) or len(grid) != measurement["num_images"]:
+        raise ValueError(f"invalid image grid at {cache}:{line_number}")
+    if any(
+        not isinstance(shape, list)
+        or len(shape) != 3
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in shape
+        )
+        for shape in grid
+    ):
+        raise ValueError(f"invalid image grid at {cache}:{line_number}")
+    if measurement["vision_patches"] != sum(
+        t * height * width for t, height, width in grid
+    ):
+        raise ValueError(f"vision patch count mismatch at {cache}:{line_number}")
+    if any(height % merge_size or width % merge_size for _time, height, width in grid):
+        raise ValueError(
+            f"image grid is not divisible by merge_size at {cache}:{line_number}"
+        )
+    vision_tokens = sum(
+        time * (height // merge_size) * (width // merge_size)
+        for time, height, width in grid
+    )
+    if measurement["vision_tokens"] != vision_tokens:
+        raise ValueError(f"vision token count mismatch at {cache}:{line_number}")
+    if vision_tokens > length:
+        raise ValueError(f"vision token count exceeds length at {cache}:{line_number}")
+    if not grid and any(counters):
+        raise ValueError(
+            f"empty image grid has nonzero vision counters at {cache}:{line_number}"
+        )
+    return key
+
+
+def _message_keys(chat: Path):
     with chat.open(encoding="utf-8") as source:
         conversation_index = 0
         for line_number, line in enumerate(source, 1):
@@ -228,109 +327,9 @@ def validate_message_lengths(cache: Path, chat: Path, *, merge_size: int) -> int
                 raise ValueError(
                     f"chat messages must be a non-empty list at {chat}:{line_number}"
                 )
-            expected_keys.extend(
-                (conversation_index, offset) for offset in range(len(messages))
-            )
+            for offset in range(len(messages)):
+                yield conversation_index, offset
             conversation_index += 1
-
-    observed_keys: list[tuple[int, int]] = []
-    with cache.open(encoding="utf-8") as source:
-        for line_number, line in enumerate(source, 1):
-            if not line.strip():
-                raise ValueError(f"blank cache row at {cache}:{line_number}")
-            row = json.loads(line)
-            if not isinstance(row, dict) or set(row) != {
-                "conv_idx",
-                "msg_offset",
-                "measurement",
-            }:
-                raise ValueError(f"invalid cache row at {cache}:{line_number}")
-            indexes = (row["conv_idx"], row["msg_offset"])
-            if any(
-                isinstance(value, bool) or not isinstance(value, int) or value < 0
-                for value in indexes
-            ):
-                raise ValueError(f"invalid cache key at {cache}:{line_number}")
-            measurement = row["measurement"]
-            fields = {
-                "length",
-                "vision_tokens",
-                "vision_patches",
-                "num_images",
-                "image_grid_thw",
-            }
-            if not isinstance(measurement, dict) or set(measurement) != fields:
-                raise ValueError(f"invalid measurement at {cache}:{line_number}")
-            length = measurement["length"]
-            counters = [
-                measurement["vision_tokens"],
-                measurement["vision_patches"],
-                measurement["num_images"],
-            ]
-            if isinstance(length, bool) or not isinstance(length, int) or length <= 0:
-                raise ValueError(f"invalid measured length at {cache}:{line_number}")
-            if any(
-                isinstance(value, bool) or not isinstance(value, int) or value < 0
-                for value in counters
-            ):
-                raise ValueError(f"invalid vision counters at {cache}:{line_number}")
-            grid = measurement["image_grid_thw"]
-            if not isinstance(grid, list) or len(grid) != measurement["num_images"]:
-                raise ValueError(f"invalid image grid at {cache}:{line_number}")
-            if any(
-                not isinstance(shape, list)
-                or len(shape) != 3
-                or any(
-                    isinstance(value, bool) or not isinstance(value, int) or value <= 0
-                    for value in shape
-                )
-                for shape in grid
-            ):
-                raise ValueError(f"invalid image grid at {cache}:{line_number}")
-            patches = sum(t * height * width for t, height, width in grid)
-            if measurement["vision_patches"] != patches:
-                raise ValueError(
-                    f"vision patch count mismatch at {cache}:{line_number}"
-                )
-            if any(
-                height % merge_size or width % merge_size
-                for _time, height, width in grid
-            ):
-                raise ValueError(
-                    f"image grid is not divisible by merge_size at {cache}:{line_number}"
-                )
-            vision_tokens = sum(
-                time * (height // merge_size) * (width // merge_size)
-                for time, height, width in grid
-            )
-            if measurement["vision_tokens"] != vision_tokens:
-                raise ValueError(
-                    f"vision token count mismatch at {cache}:{line_number}"
-                )
-            if vision_tokens > length:
-                raise ValueError(
-                    f"vision token count exceeds length at {cache}:{line_number}"
-                )
-            if not grid and any(counters):
-                raise ValueError(
-                    f"empty image grid has nonzero vision counters at {cache}:{line_number}"
-                )
-            observed_keys.append(indexes)
-    if observed_keys != expected_keys:
-        mismatch = next(
-            (
-                (expected, observed)
-                for expected, observed in zip_longest(expected_keys, observed_keys)
-                if expected != observed
-            ),
-            None,
-        )
-        raise ValueError(
-            f"message-length cache keys do not match {chat}: "
-            f"expected {len(expected_keys)}, got {len(observed_keys)}, "
-            f"first mismatch {mismatch}"
-        )
-    return len(observed_keys)
 
 
 def message_length_map(cache: Path) -> dict[tuple[int, int], int]:
