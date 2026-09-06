@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
+import sys
 import tarfile
 from pathlib import Path
 from unittest import mock
@@ -13,8 +15,10 @@ from PIL import Image
 from pipeline.cua_gym import stage_01_image_store
 from pipeline.cua_gym.stage_01_image_store import (
     build_inventory_shard,
+    build_store,
     finalize_store,
     prepare_inventory,
+    validate_image_store,
 )
 from pipeline.cua_gym.stage_04_build_conversations import ImageIndex
 from pipeline.lib.image_store import read_jpeg_bytes
@@ -103,3 +107,105 @@ def test_encoding_contract_change_rebuilds_shard(tmp_path: Path, monkeypatch):
     inventory, digest = _inventory(sources, output)
     new = build_inventory_shard(inventory, digest, output, 0, workers=1)
     assert new["directory"] != old["directory"]
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra", "swapped", "stale"])
+def test_manifest_shards_are_bound_to_exact_inventory(tmp_path: Path, mutation: str):
+    sources, output = tmp_path / "sources", tmp_path / "output"
+    _tar(sources, 0, (10, 20, 30))
+    _tar(sources, 1, (40, 50, 60))
+    inventory, digest = _inventory(sources, output)
+    for index in range(2):
+        build_inventory_shard(inventory, digest, output, index, workers=1)
+    manifest = finalize_store(inventory, digest, output)
+    if mutation == "missing":
+        manifest["shards"].pop("screenshots-0001")
+    elif mutation == "extra":
+        manifest["shards"]["screenshots-9999"] = manifest["shards"]["screenshots-0000"]
+    elif mutation == "swapped":
+        left = manifest["shards"]["screenshots-0000"]
+        manifest["shards"]["screenshots-0000"] = manifest["shards"]["screenshots-0001"]
+        manifest["shards"]["screenshots-0001"] = left
+    else:
+        receipt = manifest["shards"]["screenshots-0000"]
+        receipt["source_size"] += 1
+        receipt_path = output / "shards" / receipt["directory"] / "receipt.json"
+        receipt_path.write_text(json.dumps(receipt))
+    (output / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError):
+        validate_image_store(output)
+
+
+def test_worker_and_finalizer_reject_external_inventory(tmp_path: Path):
+    sources, output = tmp_path / "sources", tmp_path / "output"
+    _tar(sources, 0, (10, 20, 30))
+    inventory, digest = _inventory(sources, output)
+    external = tmp_path / inventory.name
+    shutil.copyfile(inventory, external)
+    with pytest.raises(ValueError, match="directly under output_dir"):
+        build_inventory_shard(external, digest, output, 0, workers=1)
+    with pytest.raises(ValueError, match="directly under output_dir"):
+        finalize_store(external, digest, output)
+
+
+def test_invalid_producer_cleans_its_temporary_directory(tmp_path: Path):
+    sources, output = tmp_path / "sources", tmp_path / "output"
+    _tar(sources, 0, (10, 20, 30))
+    inventory, digest = _inventory(sources, output)
+    with (
+        mock.patch(
+            "pipeline.cua_gym.stage_01_image_store._transcode",
+            side_effect=ValueError("invalid PNG"),
+        ),
+        pytest.raises(ValueError, match="invalid PNG"),
+    ):
+        build_inventory_shard(inventory, digest, output, 0, workers=1)
+    assert not list((output / "shards").glob("*.tmp"))
+
+
+def test_cli_rejects_workers_outside_worker_invocation(tmp_path: Path, monkeypatch):
+    screenshots, output = tmp_path / "screenshots", tmp_path / "output"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "stage_01_image_store.py",
+            "--screenshots_dir",
+            str(screenshots),
+            "--output_dir",
+            str(output),
+            "--workers",
+            "1",
+        ],
+    )
+    with pytest.raises(SystemExit, match="only valid with --tar_index"):
+        stage_01_image_store.main()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "stage_01_image_store.py",
+            "--inventory",
+            str(output / "source_inventory-digest.json"),
+            "--inventory_sha256",
+            "digest",
+            "--finalize",
+            "--output_dir",
+            str(output),
+            "--workers",
+            "1",
+        ],
+    )
+    with pytest.raises(SystemExit, match="only valid with --tar_index"):
+        stage_01_image_store.main()
+
+
+def test_build_store_rejects_workers_before_inventory(tmp_path: Path):
+    with (
+        mock.patch(
+            "pipeline.cua_gym.stage_01_image_store.prepare_inventory",
+            side_effect=AssertionError("inventory was hashed"),
+        ),
+        pytest.raises(ValueError, match="workers must be positive"),
+    ):
+        build_store(tmp_path / "screenshots", tmp_path / "output", workers=0)

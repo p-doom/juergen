@@ -235,6 +235,25 @@ def _directory_name(source: dict) -> str:
     return f"{source['name'].removesuffix('.tar')}-{source['sha256'][:16]}-{ENCODING_SHA256[:16]}"
 
 
+def _validate_inventory_location(inventory_path: Path, output_dir: Path) -> None:
+    if inventory_path.resolve().parent != output_dir.resolve():
+        raise ValueError(
+            f"source inventory must be directly under output_dir: {inventory_path}"
+        )
+
+
+def _validate_source_receipt(source: dict, receipt: dict) -> None:
+    expected = {
+        "source": source["name"],
+        "source_size": source["size"],
+        "source_sha256": source["sha256"],
+        "encoding_sha256": ENCODING_SHA256,
+        "directory": _directory_name(source),
+    }
+    if {key: receipt.get(key) for key in expected} != expected:
+        raise ValueError(f"stale image shard receipt for {source['name']}")
+
+
 def build_inventory_shard(
     inventory_path: Path,
     inventory_sha256: str,
@@ -245,6 +264,7 @@ def build_inventory_shard(
 ) -> dict:
     if workers <= 0:
         raise ValueError(f"workers must be positive, got {workers}")
+    _validate_inventory_location(inventory_path, output_dir)
     source_entry = _source_entry(
         _read_inventory(inventory_path, inventory_sha256), index
     )
@@ -260,17 +280,11 @@ def build_inventory_shard(
         try:
             receipt = json.loads((final / RECEIPT_NAME).read_text())
             _validate_receipt(final, receipt)
-            if (
-                all(
-                    receipt[k] == source_entry[v]
-                    for k, v in (
-                        ("source", "name"),
-                        ("source_size", "size"),
-                        ("source_sha256", "sha256"),
-                    )
-                )
-                and receipt["encoding_sha256"] == ENCODING_SHA256
-            ):
+            try:
+                _validate_source_receipt(source_entry, receipt)
+            except ValueError:
+                pass
+            else:
                 return receipt
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
             pass
@@ -281,8 +295,15 @@ def build_inventory_shard(
     temporary.mkdir()
     from array_record.python.array_record_module import ArrayRecordWriter
 
-    writer, count = ArrayRecordWriter(str(temporary / SHARD_NAME), "group_size:1"), 0
-    pool = multiprocessing.Pool(workers) if workers > 1 else None
+    try:
+        writer = ArrayRecordWriter(str(temporary / SHARD_NAME), "group_size:1")
+        pool = multiprocessing.Pool(workers) if workers > 1 else None
+    except BaseException:
+        if "writer" in locals():
+            writer.close()
+        shutil.rmtree(temporary)
+        raise
+    count = 0
     try:
         encoded = (
             pool.imap(_transcode, _members(source), chunksize=8)
@@ -307,27 +328,34 @@ def build_inventory_shard(
                 )
                 count += 1
     finally:
+        failed = sys.exc_info()[0] is not None
         writer.close()
         if pool:
             pool.close()
             pool.join()
+        if failed and temporary.exists():
+            shutil.rmtree(temporary)
     if count == 0:
         shutil.rmtree(temporary)
         raise ValueError(f"screenshot tar contains no PNG members: {source}")
-    receipt = {
-        "source": source_entry["name"],
-        "source_size": source_entry["size"],
-        "source_sha256": source_entry["sha256"],
-        "encoding_sha256": ENCODING_SHA256,
-        "directory": directory_name,
-        "num_images": count,
-        "index_sha256": _sha256(temporary / INDEX_NAME),
-        "arrayrecord_sha256": _sha256(temporary / SHARD_NAME),
-    }
-    (temporary / RECEIPT_NAME).write_text(
-        json.dumps(receipt, indent=2, sort_keys=True) + "\n"
-    )
-    _validate_new_output(temporary, final, receipt)
+    try:
+        receipt = {
+            "source": source_entry["name"],
+            "source_size": source_entry["size"],
+            "source_sha256": source_entry["sha256"],
+            "encoding_sha256": ENCODING_SHA256,
+            "directory": directory_name,
+            "num_images": count,
+            "index_sha256": _sha256(temporary / INDEX_NAME),
+            "arrayrecord_sha256": _sha256(temporary / SHARD_NAME),
+        }
+        (temporary / RECEIPT_NAME).write_text(
+            json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+        )
+        _validate_new_output(temporary, final, receipt)
+    except BaseException:
+        shutil.rmtree(temporary)
+        raise
     backup = final.parent / f".{directory_name}.{os.getpid()}.old"
     if final.exists():
         final.replace(backup)
@@ -336,6 +364,8 @@ def build_inventory_shard(
     except BaseException:
         if backup.exists():
             backup.replace(final)
+        if temporary.exists():
+            shutil.rmtree(temporary)
         raise
     if backup.exists():
         shutil.rmtree(backup)
@@ -366,14 +396,25 @@ def validate_image_store(output_dir: Path) -> dict:
         or inventory_name != f"{INVENTORY_PREFIX}-{inventory_sha256}.json"
     ):
         raise ValueError(f"invalid image-store inventory: {manifest_path}")
-    _read_inventory(output_dir / inventory_name, inventory_sha256)
+    inventory = _read_inventory(output_dir / inventory_name, inventory_sha256)
+    sources = {}
+    for index in range(len(inventory["sources"])):
+        source = _source_entry(inventory, index)
+        sources[source["name"].removesuffix(".tar")] = source
+    if set(shards) != set(sources):
+        raise ValueError(
+            f"image-store shard set does not match inventory: {manifest_path}"
+        )
     for name, receipt in shards.items():
+        if not isinstance(name, str) or not isinstance(receipt, dict):
+            raise ValueError(f"invalid image shard entry: {name!r}")
         directory = output_dir / "shards" / str(receipt.get("directory"))
         if (
             receipt.get("source") != f"{name}.tar"
             or json.loads((directory / RECEIPT_NAME).read_text()) != receipt
         ):
             raise ValueError(f"image shard receipt mismatch: {directory}")
+        _validate_source_receipt(sources[name], receipt)
         _validate_receipt(directory, receipt)
     if manifest.get("num_tars") != len(shards) or manifest.get("total_images") != sum(
         r["num_images"] for r in shards.values()
@@ -385,6 +426,7 @@ def validate_image_store(output_dir: Path) -> dict:
 def finalize_store(
     inventory_path: Path, inventory_sha256: str, output_dir: Path
 ) -> dict:
+    _validate_inventory_location(inventory_path, output_dir)
     inventory = _read_inventory(inventory_path, inventory_sha256)
     shards = {}
     for index in range(len(inventory["sources"])):
@@ -397,13 +439,7 @@ def finalize_store(
             raise ValueError(
                 f"incomplete image shard for {source['name']}: {exc}"
             ) from exc
-        if (
-            receipt["source"] != source["name"]
-            or receipt["source_sha256"] != source["sha256"]
-            or receipt["source_size"] != source["size"]
-            or receipt["encoding_sha256"] != ENCODING_SHA256
-        ):
-            raise ValueError(f"stale image shard receipt for {source['name']}")
+        _validate_source_receipt(source, receipt)
         shards[source["name"].removesuffix(".tar")] = receipt
     manifest = {
         "artifact_type": "cuagym_stage_01_image_store",
@@ -422,6 +458,8 @@ def finalize_store(
 
 
 def build_store(screenshots_dir: Path, output_dir: Path, *, workers: int) -> dict:
+    if workers <= 0:
+        raise ValueError(f"workers must be positive, got {workers}")
     inventory_path = prepare_inventory(screenshots_dir, output_dir)
     digest = json.loads(inventory_path.read_text())["inventory_sha256"]
     inventory = _read_inventory(inventory_path, digest)
@@ -440,8 +478,10 @@ def main() -> None:
     parser.add_argument("--finalize", action="store_true")
     parser.add_argument("--screenshots_dir", type=Path)
     parser.add_argument("--output_dir", type=Path, required=True)
-    parser.add_argument("--workers", type=int, default=os.cpu_count() or 1)
+    parser.add_argument("--workers", type=int)
     args = parser.parse_args()
+    if args.workers is not None and (args.screenshots_dir or args.finalize):
+        raise SystemExit("--workers is only valid with --tar_index")
     if args.screenshots_dir:
         if any(
             (
@@ -472,7 +512,7 @@ def main() -> None:
                 args.inventory_sha256,
                 args.output_dir,
                 args.tar_index,
-                workers=args.workers,
+                workers=(os.cpu_count() or 1) if args.workers is None else args.workers,
             )
         )
     print(json.dumps(result, indent=2, sort_keys=True))

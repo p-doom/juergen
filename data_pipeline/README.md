@@ -39,6 +39,23 @@ CUA-Gym Stage01 first seals a source inventory, then runs one independently
 resumable job per tar and a finalizer. Workers take the inventory path, its
 printed `inventory_sha256`, and one `--tar_index`; `--finalize` accepts the
 same sealed inventory and refuses missing, stale, or corrupt shard receipts.
+Schema-v1 image stores must be rebuilt; Stage04 accepts only the schema-v2
+receipt layout. The local loop below can be dispatched as independent tar jobs:
+
+```bash
+metadata=$(uv run --project data_pipeline --locked python pipeline/cua_gym/stage_01_image_store.py \
+  --screenshots_dir /data/screenshots --output_dir /data/images)
+digest=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["inventory_sha256"])' <<<"$metadata")
+count=$(python3 -c 'import json,sys; print(len(json.load(sys.stdin)["sources"]))' <<<"$metadata")
+inventory=/data/images/source_inventory-$digest.json
+for ((index=0; index<count; index++)); do
+  uv run --project data_pipeline --locked python pipeline/cua_gym/stage_01_image_store.py \
+    --inventory "$inventory" --inventory_sha256 "$digest" --tar_index "$index" \
+    --workers 8 --output_dir /data/images
+done
+uv run --project data_pipeline --locked python pipeline/cua_gym/stage_01_image_store.py \
+  --inventory "$inventory" --inventory_sha256 "$digest" --finalize --output_dir /data/images
+```
 
 ### Sharded message-length measurement
 

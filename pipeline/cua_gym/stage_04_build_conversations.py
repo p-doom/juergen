@@ -103,26 +103,28 @@ class ImageIndex:
             mapping: dict[str, str] = {}
             index_path = directory / "index.jsonl"
             try:
-                lines = index_path.read_text(encoding="utf-8").splitlines()
-                for expected_index, line in enumerate(lines):
-                    row = json.loads(line)
-                    if set(row) != {"member", "uri", "jpeg_sha256"}:
-                        raise ValueError(f"invalid image index row {expected_index}")
-                    name = row["member"]
-                    uri = row["uri"]
-                    if not isinstance(name, str) or not isinstance(uri, str):
-                        raise TypeError("image index fields must be text")
-                    if name in mapping:
-                        raise ValueError(f"duplicate image member {name!r}")
-                    path, record_index = parse_arrayrecord_image_uri(uri)
-                    if (
-                        path.resolve() != expected_path
-                        or record_index != expected_index
-                    ):
-                        raise ValueError(
-                            f"image index URI does not match row {expected_index}: {uri}"
-                        )
-                    mapping[name] = uri
+                with index_path.open(encoding="utf-8") as lines:
+                    for expected_index, line in enumerate(lines):
+                        row = json.loads(line)
+                        if set(row) != {"member", "uri", "jpeg_sha256"}:
+                            raise ValueError(
+                                f"invalid image index row {expected_index}"
+                            )
+                        name = row["member"]
+                        uri = row["uri"]
+                        if not isinstance(name, str) or not isinstance(uri, str):
+                            raise TypeError("image index fields must be text")
+                        if name in mapping:
+                            raise ValueError(f"duplicate image member {name!r}")
+                        path, record_index = parse_arrayrecord_image_uri(uri)
+                        if (
+                            path.resolve() != expected_path
+                            or record_index != expected_index
+                        ):
+                            raise ValueError(
+                                f"image index URI does not match row {expected_index}: {uri}"
+                            )
+                        mapping[name] = uri
             except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
                 raise ValueError(
                     f"cannot read image index {index_path}: {exc}"
