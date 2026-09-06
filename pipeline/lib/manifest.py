@@ -258,19 +258,17 @@ def _cuagym_image_inventory(root: Path) -> dict[Path, tuple[int, str]]:
     manifest = json.loads(manifest_path.read_text())
     required = {
         "artifact_type": "cuagym_stage_01_image_store",
-        "schema_version": 1,
+        "schema_version": 2,
         "uri_scheme": "ar:///abs/path/images.array_record#idx",
         "jpeg_quality": 92,
+        "jpeg_subsampling": "4:2:0",
         "width": 1920,
         "height": 1080,
         "image_domain": "osworld_cursor_jpeg_q92_420_1920x1080_v1",
     }
-    generation = manifest.get("generation")
     shards = manifest.get("shards")
     if (
         {key: manifest.get(key) for key in required} != required
-        or not isinstance(generation, str)
-        or Path(generation).name != generation
         or not isinstance(shards, dict)
         or not shards
     ):
@@ -281,15 +279,28 @@ def _cuagym_image_inventory(root: Path) -> dict[Path, tuple[int, str]]:
         digest = (
             receipt.get("arrayrecord_sha256") if isinstance(receipt, dict) else None
         )
-        path = (root / generation / str(name) / "images.array_record").resolve()
+        index_digest = (
+            receipt.get("index_sha256") if isinstance(receipt, dict) else None
+        )
+        directory = receipt.get("directory") if isinstance(receipt, dict) else None
+        shard_root = root / "shards" / str(directory)
+        path = (shard_root / "images.array_record").resolve()
+        receipt_path = shard_root / "receipt.json"
+        index_path = shard_root / "index.jsonl"
         if (
             not isinstance(name, str)
+            or not isinstance(directory, str)
+            or Path(directory).name != directory
             or not isinstance(digest, str)
             or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or not isinstance(index_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", index_digest) is None
             or isinstance(count, bool)
             or not isinstance(count, int)
             or count <= 0
             or not path.is_file()
+            or json.loads(receipt_path.read_text()) != receipt
+            or file_sha256_short(index_path, n=64) != index_digest
         ):
             raise ValueError(f"invalid CUA-Gym image shard: {name!r}")
         images[path] = (count, digest)

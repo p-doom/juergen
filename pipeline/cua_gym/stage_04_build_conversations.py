@@ -88,8 +88,8 @@ class ImageIndex:
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
         manifest = validate_image_store(self.root)
-        self.generation = self.root / str(manifest["generation"])
-        self.source_tars = set(manifest["source_tars"])
+        self.receipts = manifest["shards"]
+        self.source_tars = {f"{name}.tar" for name in self.receipts}
         self._shards: dict[str, dict[str, str]] = {}
 
     def uri(self, shard: str, member: str) -> str:
@@ -97,11 +97,11 @@ class ImageIndex:
             raise ValueError(f"unknown screenshot shard: {shard!r}")
         shard_name = shard.removesuffix(".tar")
         if shard_name not in self._shards:
-            expected_path = (
-                self.generation / shard_name / "images.array_record"
-            ).resolve()
+            receipt = self.receipts[shard_name]
+            directory = self.root / "shards" / receipt["directory"]
+            expected_path = (directory / "images.array_record").resolve()
             mapping: dict[str, str] = {}
-            index_path = self.generation / shard_name / "index.jsonl"
+            index_path = directory / "index.jsonl"
             try:
                 lines = index_path.read_text(encoding="utf-8").splitlines()
                 for expected_index, line in enumerate(lines):
@@ -129,6 +129,8 @@ class ImageIndex:
                 ) from exc
             if not mapping:
                 raise ValueError(f"image index is empty: {index_path}")
+            if len(mapping) != receipt["num_images"]:
+                raise ValueError(f"image index count mismatch: {index_path}")
             self._shards[shard_name] = mapping
         try:
             return self._shards[shard_name][member]

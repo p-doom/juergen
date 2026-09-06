@@ -34,3 +34,7 @@ uv run --project data_pipeline --locked pytest -q data_pipeline/tests
 ```
 
 Each stage publishes `manifest.json` only after its outputs are complete.
+CUA-Gym Stage01 first seals a source inventory, then runs one independently
+resumable job per tar and a finalizer. Workers take the inventory path, its
+printed `inventory_sha256`, and one `--tar_index`; `--finalize` accepts the
+same sealed inventory and refuses missing, stale, or corrupt shard receipts.

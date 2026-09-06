@@ -1,4 +1,4 @@
-"""Build the fixed JPEG-q92 image store for CUA-Gym trajectories."""
+"""Build independently resumable CUA-Gym JPEG ArrayRecord shards."""
 
 from __future__ import annotations
 
@@ -16,18 +16,27 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-
-from cua_parity_contract import (
-    JPEG_QUALITY,
-    OBSERVATION_CONTRACT,
-    OBSERVATION_SIZE,
-)
+from cua_parity_contract import JPEG_QUALITY, OBSERVATION_CONTRACT, OBSERVATION_SIZE
 from image_domain import encode_jpeg_q92, validate_jpeg_q92
-from pipeline.lib.image_store import make_arrayrecord_image_uri
+from pipeline.lib.image_store import (
+    make_arrayrecord_image_uri,
+    parse_arrayrecord_image_uri,
+)
 
 SCREEN = OBSERVATION_SIZE
-SHARD_NAME = "images.array_record"
-INDEX_NAME = "index.jsonl"
+SHARD_NAME, INDEX_NAME, RECEIPT_NAME = (
+    "images.array_record",
+    "index.jsonl",
+    "receipt.json",
+)
+INVENTORY_PREFIX, SCHEMA_VERSION = "source_inventory", 2
+ENCODING_CONTRACT = {
+    "image_domain": OBSERVATION_CONTRACT,
+    "jpeg_quality": JPEG_QUALITY,
+    "jpeg_subsampling": "4:2:0",
+    "width": SCREEN[0],
+    "height": SCREEN[1],
+}
 
 
 def _sha256(path: Path) -> str:
@@ -38,13 +47,81 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _bytes_sha256(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
-
 def _canonical_sha256(value: object) -> str:
-    encoded = json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
-    return _bytes_sha256(encoded)
+    return hashlib.sha256(
+        json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
+
+
+ENCODING_SHA256 = _canonical_sha256(ENCODING_CONTRACT)
+
+
+def _atomic_json(path: Path, value: object) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    temporary.replace(path)
+
+
+def prepare_inventory(screenshots_dir: Path, output_dir: Path) -> Path:
+    sources = sorted(screenshots_dir.glob("screenshots-*.tar"))
+    if not sources:
+        raise ValueError(f"no screenshots-*.tar files under {screenshots_dir}")
+    entries = [
+        {
+            "name": p.name,
+            "path": str(p.resolve()),
+            "size": p.stat().st_size,
+            "sha256": _sha256(p),
+        }
+        for p in sources
+    ]
+    payload = {
+        "artifact_type": "cuagym_stage_01_source_inventory",
+        "schema_version": SCHEMA_VERSION,
+        "encoding": ENCODING_CONTRACT,
+        "encoding_sha256": ENCODING_SHA256,
+        "sources": entries,
+    }
+    payload["inventory_sha256"] = _canonical_sha256(payload)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"{INVENTORY_PREFIX}-{payload['inventory_sha256']}.json"
+    _atomic_json(path, payload)
+    return path
+
+
+def _read_inventory(path: Path, expected_sha256: str) -> dict:
+    if path.name != f"{INVENTORY_PREFIX}-{expected_sha256}.json":
+        raise ValueError(f"source inventory filename does not bind digest: {path}")
+    inventory = json.loads(path.read_text())
+    digest = inventory.pop("inventory_sha256", None)
+    if digest != expected_sha256 or _canonical_sha256(inventory) != digest:
+        raise ValueError(f"source inventory digest mismatch: {path}")
+    if (
+        inventory.get("artifact_type") != "cuagym_stage_01_source_inventory"
+        or inventory.get("schema_version") != SCHEMA_VERSION
+        or inventory.get("encoding") != ENCODING_CONTRACT
+        or inventory.get("encoding_sha256") != ENCODING_SHA256
+        or not isinstance(inventory.get("sources"), list)
+        or not inventory["sources"]
+    ):
+        raise ValueError(f"source inventory contract mismatch: {path}")
+    inventory["inventory_sha256"] = digest
+    return inventory
+
+
+def _source_entry(inventory: dict, index: int) -> dict:
+    sources = inventory["sources"]
+    if not 0 <= index < len(sources):
+        raise ValueError(f"tar index {index} outside inventory")
+    source = sources[index]
+    if (
+        not isinstance(source, dict)
+        or set(source) != {"name", "path", "size", "sha256"}
+        or Path(source["name"]).name != source["name"]
+        or not source["name"].endswith(".tar")
+    ):
+        raise ValueError(f"invalid source inventory entry {index}")
+    return source
 
 
 def _transcode(job: tuple[str, bytes]) -> tuple[str, bytes]:
@@ -57,14 +134,12 @@ def _transcode(job: tuple[str, bytes]) -> tuple[str, bytes]:
             raise ValueError(f"{member} must be PNG, got {image.format!r}")
         rgb = image.convert("RGB")
     if rgb.size != SCREEN:
-        raise ValueError(
-            f"{member} must be {SCREEN[0]}x{SCREEN[1]}, got {rgb.size[0]}x{rgb.size[1]}"
-        )
+        raise ValueError(f"{member} must be {SCREEN[0]}x{SCREEN[1]}")
     return member, encode_jpeg_q92(rgb)
 
 
 def _members(path: Path):
-    seen: set[str] = set()
+    seen = set()
     with tarfile.open(path, mode="r|*") as archive:
         for member in archive:
             if not member.isfile() or not member.name.endswith(".png"):
@@ -78,294 +153,329 @@ def _members(path: Path):
             yield member.name, source.read()
 
 
-def _validate_shard(
-    physical: Path,
-    published: Path,
-    expected: dict[str, object],
-) -> None:
+def _validate_receipt(directory: Path, receipt: dict) -> None:
     from array_record.python.array_record_module import ArrayRecordReader
 
-    index_path = physical / INDEX_NAME
-    shard_path = physical / SHARD_NAME
-    try:
-        rows = [
-            json.loads(line)
-            for line in index_path.read_text(encoding="utf-8").splitlines()
-        ]
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"cannot read image index {index_path}: {exc}") from exc
-    if len(rows) != expected["num_images"] or not rows:
-        raise ValueError(f"image count mismatch in {index_path}")
-    if _sha256(index_path) != expected["index_sha256"]:
+    required = {
+        "source",
+        "source_size",
+        "source_sha256",
+        "encoding_sha256",
+        "directory",
+        "num_images",
+        "index_sha256",
+        "arrayrecord_sha256",
+    }
+    if set(receipt) != required or receipt.get("directory") != directory.name:
+        raise ValueError(f"invalid image shard receipt: {directory}")
+    count = receipt.get("num_images")
+    if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+        raise ValueError("invalid image count")
+    index_path, shard_path = directory / INDEX_NAME, directory / SHARD_NAME
+    if _sha256(index_path) != receipt["index_sha256"]:
         raise ValueError(f"image index digest mismatch: {index_path}")
-    if _sha256(shard_path) != expected["arrayrecord_sha256"]:
+    if _sha256(shard_path) != receipt["arrayrecord_sha256"]:
         raise ValueError(f"ArrayRecord digest mismatch: {shard_path}")
-
     reader = ArrayRecordReader(str(shard_path))
     try:
-        if reader.num_records() != len(rows):
+        if reader.num_records() != count:
             raise ValueError(f"ArrayRecord count mismatch: {shard_path}")
-        for record_index, row in enumerate(rows):
-            if set(row) != {"member", "uri", "jpeg_sha256"}:
-                raise ValueError(f"invalid image index row {record_index}: {row!r}")
-            expected_uri = make_arrayrecord_image_uri(
-                published / SHARD_NAME, record_index
-            )
-            if row["uri"] != expected_uri:
-                raise ValueError(
-                    f"image index URI mismatch at row {record_index}: {row['uri']!r}"
-                )
-            jpeg = reader.read([record_index])[0]
-            if _bytes_sha256(jpeg) != row["jpeg_sha256"]:
-                raise ValueError(
-                    f"JPEG digest mismatch at {shard_path} record {record_index}"
-                )
-            with validate_jpeg_q92(jpeg) as image:
-                if image.size != SCREEN:
-                    raise ValueError(
-                        f"invalid JPEG at {shard_path} record {record_index}"
-                    )
+        observed = 0
+        with index_path.open(encoding="utf-8") as index_file:
+            for expected_index, line in enumerate(index_file):
+                row = json.loads(line)
+                if set(row) != {"member", "uri", "jpeg_sha256"}:
+                    raise ValueError("invalid image index row")
+                path, index = parse_arrayrecord_image_uri(row["uri"])
+                if path.resolve() != shard_path.resolve() or index != expected_index:
+                    raise ValueError("image index URI mismatch")
+                observed += 1
+        if observed != count:
+            raise ValueError(f"image count mismatch: {index_path}")
     finally:
         reader.close()
 
 
-def _validate_generation(
-    physical: Path,
-    published: Path,
-    shards: dict[str, dict[str, object]],
-) -> None:
-    observed = {path.name for path in physical.iterdir() if path.is_dir()}
-    if observed != set(shards):
-        raise ValueError(
-            f"image-store shard set mismatch: expected {set(shards)}, got {observed}"
-        )
-    for name, expected in shards.items():
-        _validate_shard(physical / name, published / name, expected)
+def _validate_new_output(directory: Path, published: Path, receipt: dict) -> None:
+    from array_record.python.array_record_module import ArrayRecordReader
 
-
-def validate_image_store(
-    output_dir: Path, *, manifest_path: Path | None = None
-) -> dict[str, object]:
-    manifest_path = manifest_path or output_dir / "manifest.json"
+    temporary_index = directory / INDEX_NAME
+    published_shard = (published / SHARD_NAME).resolve()
+    if _sha256(temporary_index) != receipt["index_sha256"]:
+        raise ValueError(f"image index digest mismatch: {temporary_index}")
+    if _sha256(directory / SHARD_NAME) != receipt["arrayrecord_sha256"]:
+        raise ValueError(f"ArrayRecord digest mismatch: {directory / SHARD_NAME}")
+    reader = ArrayRecordReader(str(directory / SHARD_NAME))
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(
-            f"cannot read image-store manifest {manifest_path}: {exc}"
-        ) from exc
-    required = {
-        "artifact_type": "cuagym_stage_01_image_store",
-        "schema_version": 1,
-        "uri_scheme": "ar:///abs/path/images.array_record#idx",
-        "jpeg_quality": JPEG_QUALITY,
-        "width": SCREEN[0],
-        "height": SCREEN[1],
-        "image_domain": OBSERVATION_CONTRACT,
-    }
-    if {key: manifest.get(key) for key in required} != required:
-        raise ValueError(f"image-store contract mismatch: {manifest!r}")
-    generation = manifest.get("generation")
-    shards = manifest.get("shards")
-    source_tars = manifest.get("source_tars")
-    if (
-        not isinstance(generation, str)
-        or not generation.startswith("generation-")
-        or Path(generation).name != generation
-        or not isinstance(shards, dict)
-        or not shards
-        or not isinstance(source_tars, dict)
-    ):
-        raise ValueError(f"invalid image-store manifest: {manifest_path}")
-    if manifest.get("num_tars") != len(shards):
-        raise ValueError(f"image-store tar count mismatch: {manifest_path}")
-    if manifest.get("total_images") != sum(
-        int(item["num_images"]) for item in shards.values()
-    ):
-        raise ValueError(f"image-store image count mismatch: {manifest_path}")
-    for name, expected in shards.items():
-        if not isinstance(name, str) or not isinstance(expected, dict):
-            raise TypeError(f"invalid shard entry in {manifest_path}")
-        if set(expected) != {
-            "source",
-            "source_sha256",
-            "num_images",
-            "index_sha256",
-            "arrayrecord_sha256",
-        }:
-            raise ValueError(f"invalid shard contract for {name!r}")
-        if expected["source"] != f"{name}.tar":
-            raise ValueError(f"shard/source mismatch for {name!r}")
-        if source_tars.get(expected["source"]) != expected["source_sha256"]:
-            raise ValueError(f"source digest mismatch for {name!r}")
-    if set(source_tars) != {f"{name}.tar" for name in shards}:
-        raise ValueError(f"image-store source/shard set mismatch: {manifest_path}")
-    path = output_dir / generation
-    generations = {item.name for item in output_dir.glob("generation-*")}
-    if generations != {generation}:
-        raise ValueError(
-            f"image-store generation set mismatch: expected {generation!r}, got {generations}"
-        )
-    _validate_generation(path, path, shards)
-    return manifest
+        if reader.num_records() != receipt["num_images"]:
+            raise ValueError("ArrayRecord count mismatch")
+        observed = 0
+        with temporary_index.open(encoding="utf-8") as index_file:
+            for record_index, line in enumerate(index_file):
+                row = json.loads(line)
+                if set(row) != {"member", "uri", "jpeg_sha256"}:
+                    raise ValueError("invalid image index row")
+                path, index = parse_arrayrecord_image_uri(row["uri"])
+                if path.resolve() != published_shard or index != record_index:
+                    raise ValueError("image index URI mismatch")
+                jpeg = reader.read([record_index])[0]
+                if hashlib.sha256(jpeg).hexdigest() != row["jpeg_sha256"]:
+                    raise ValueError("JPEG digest mismatch")
+                with validate_jpeg_q92(jpeg) as image:
+                    if image.size != SCREEN:
+                        raise ValueError("invalid JPEG dimensions")
+                observed += 1
+        if observed != receipt["num_images"]:
+            raise ValueError("image index count mismatch")
+    finally:
+        reader.close()
 
 
-def _existing_manifest(
+def _directory_name(source: dict) -> str:
+    return f"{source['name'].removesuffix('.tar')}-{source['sha256'][:16]}-{ENCODING_SHA256[:16]}"
+
+
+def build_inventory_shard(
+    inventory_path: Path,
+    inventory_sha256: str,
     output_dir: Path,
-    source_tars: dict[str, str],
-    previous_manifest: Path,
-) -> dict[str, object] | None:
-    try:
-        manifest = validate_image_store(output_dir, manifest_path=previous_manifest)
-    except (OSError, KeyError, TypeError, ValueError):
-        return None
-    return manifest if manifest["source_tars"] == source_tars else None
-
-
-def _build_shard(
-    source: Path,
-    physical: Path,
-    published: Path,
+    index: int,
     *,
     workers: int,
-) -> dict[str, object]:
-    from array_record.python.array_record_module import ArrayRecordWriter
-
-    physical.mkdir(parents=True)
-    writer = ArrayRecordWriter(str(physical / SHARD_NAME), "group_size:1")
-    count = 0
-
-    def write(encoded) -> None:
-        nonlocal count
-        for member, jpeg in encoded:
-            writer.write(jpeg)
-            uri = make_arrayrecord_image_uri(published / SHARD_NAME, count)
-            index.write(
-                json.dumps(
-                    {
-                        "member": member,
-                        "uri": uri,
-                        "jpeg_sha256": _bytes_sha256(jpeg),
-                    },
-                    sort_keys=True,
-                )
-                + "\n"
-            )
-            count += 1
-
-    try:
-        with (physical / INDEX_NAME).open("w", encoding="utf-8") as index:
-            jobs = _members(source)
-            if workers == 1:
-                write(map(_transcode, jobs))
-            else:
-                with multiprocessing.Pool(workers) as pool:
-                    write(pool.imap(_transcode, jobs, chunksize=8))
-    finally:
-        writer.close()
-    if count == 0:
-        raise ValueError(f"screenshot tar contains no PNG members: {source}")
-    return {
-        "source": source.name,
-        "source_sha256": _sha256(source),
-        "num_images": count,
-        "index_sha256": _sha256(physical / INDEX_NAME),
-        "arrayrecord_sha256": _sha256(physical / SHARD_NAME),
-    }
-
-
-def _publish_manifest(output_dir: Path, manifest: dict[str, object]) -> None:
-    temporary = output_dir / f".manifest.{os.getpid()}.tmp"
-    temporary.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    temporary.replace(output_dir / "manifest.json")
-
-
-def build_store(screenshots_dir: Path, output_dir: Path, *, workers: int) -> dict:
+) -> dict:
     if workers <= 0:
         raise ValueError(f"workers must be positive, got {workers}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = output_dir / "manifest.json"
-    previous_manifest = output_dir / ".manifest.previous.json"
-    if manifest_path.exists():
-        manifest_path.replace(previous_manifest)
-    sources = sorted(screenshots_dir.glob("screenshots-*.tar"))
-    if not sources:
-        raise ValueError(f"no screenshots-*.tar files under {screenshots_dir}")
-    source_tars = {source.name: _sha256(source) for source in sources}
-    if manifest := _existing_manifest(output_dir, source_tars, previous_manifest):
-        _publish_manifest(output_dir, manifest)
-        previous_manifest.unlink(missing_ok=True)
-        return manifest
-
-    generation_name = f"generation-{_canonical_sha256(source_tars)[:16]}"
-    generation = output_dir / generation_name
-    temporary = output_dir / f".{generation_name}.{os.getpid()}.tmp"
+    source_entry = _source_entry(
+        _read_inventory(inventory_path, inventory_sha256), index
+    )
+    source = Path(source_entry["path"])
+    if (
+        source.stat().st_size != source_entry["size"]
+        or _sha256(source) != source_entry["sha256"]
+    ):
+        raise ValueError(f"source tar changed since inventory: {source}")
+    directory_name = _directory_name(source_entry)
+    final = output_dir / "shards" / directory_name
+    if (final / RECEIPT_NAME).is_file():
+        try:
+            receipt = json.loads((final / RECEIPT_NAME).read_text())
+            _validate_receipt(final, receipt)
+            if (
+                all(
+                    receipt[k] == source_entry[v]
+                    for k, v in (
+                        ("source", "name"),
+                        ("source_size", "size"),
+                        ("source_sha256", "sha256"),
+                    )
+                )
+                and receipt["encoding_sha256"] == ENCODING_SHA256
+            ):
+                return receipt
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+    final.parent.mkdir(parents=True, exist_ok=True)
+    temporary = final.parent / f".{directory_name}.{os.getpid()}.tmp"
     if temporary.exists():
         shutil.rmtree(temporary)
     temporary.mkdir()
-    shards: dict[str, dict[str, object]] = {}
-    try:
-        for source in sources:
-            name = source.name.removesuffix(".tar")
-            shards[name] = _build_shard(
-                source,
-                temporary / name,
-                generation / name,
-                workers=workers,
-            )
-        _validate_generation(temporary, generation, shards)
-        if generation.exists():
-            backup = output_dir / f".{generation_name}.{os.getpid()}.old"
-            generation.replace(backup)
-            temporary.replace(generation)
-            shutil.rmtree(backup)
-        else:
-            temporary.replace(generation)
-    except BaseException:
-        if temporary.exists():
-            shutil.rmtree(temporary)
-        raise
+    from array_record.python.array_record_module import ArrayRecordWriter
 
-    manifest: dict[str, object] = {
-        "artifact_type": "cuagym_stage_01_image_store",
-        "schema_version": 1,
-        "uri_scheme": "ar:///abs/path/images.array_record#idx",
-        "jpeg_quality": JPEG_QUALITY,
-        "width": SCREEN[0],
-        "height": SCREEN[1],
-        "image_domain": OBSERVATION_CONTRACT,
-        "generation": generation_name,
-        "num_tars": len(shards),
-        "total_images": sum(int(item["num_images"]) for item in shards.values()),
-        "source_tars": source_tars,
-        "shards": shards,
+    writer, count = ArrayRecordWriter(str(temporary / SHARD_NAME), "group_size:1"), 0
+    pool = multiprocessing.Pool(workers) if workers > 1 else None
+    try:
+        encoded = (
+            pool.imap(_transcode, _members(source), chunksize=8)
+            if pool
+            else map(_transcode, _members(source))
+        )
+        with (temporary / INDEX_NAME).open("w") as index_file:
+            for member, jpeg in encoded:
+                writer.write(jpeg)
+                index_file.write(
+                    json.dumps(
+                        {
+                            "member": member,
+                            "uri": make_arrayrecord_image_uri(
+                                final / SHARD_NAME, count
+                            ),
+                            "jpeg_sha256": hashlib.sha256(jpeg).hexdigest(),
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+                count += 1
+    finally:
+        writer.close()
+        if pool:
+            pool.close()
+            pool.join()
+    if count == 0:
+        shutil.rmtree(temporary)
+        raise ValueError(f"screenshot tar contains no PNG members: {source}")
+    receipt = {
+        "source": source_entry["name"],
+        "source_size": source_entry["size"],
+        "source_sha256": source_entry["sha256"],
+        "encoding_sha256": ENCODING_SHA256,
+        "directory": directory_name,
+        "num_images": count,
+        "index_sha256": _sha256(temporary / INDEX_NAME),
+        "arrayrecord_sha256": _sha256(temporary / SHARD_NAME),
     }
-    for path in output_dir.glob("generation-*"):
-        if path != generation:
-            shutil.rmtree(path)
-    _publish_manifest(output_dir, manifest)
-    previous_manifest.unlink(missing_ok=True)
+    (temporary / RECEIPT_NAME).write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+    )
+    _validate_new_output(temporary, final, receipt)
+    backup = final.parent / f".{directory_name}.{os.getpid()}.old"
+    if final.exists():
+        final.replace(backup)
+    try:
+        temporary.replace(final)
+    except BaseException:
+        if backup.exists():
+            backup.replace(final)
+        raise
+    if backup.exists():
+        shutil.rmtree(backup)
+    return receipt
+
+
+def validate_image_store(output_dir: Path) -> dict:
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    required = {
+        "artifact_type": "cuagym_stage_01_image_store",
+        "schema_version": SCHEMA_VERSION,
+        "uri_scheme": "ar:///abs/path/images.array_record#idx",
+        **ENCODING_CONTRACT,
+        "encoding_sha256": ENCODING_SHA256,
+    }
+    shards = manifest.get("shards")
+    if (
+        {k: manifest.get(k) for k in required} != required
+        or not isinstance(shards, dict)
+        or not shards
+    ):
+        raise ValueError(f"image-store contract mismatch: {manifest_path}")
+    inventory_sha256 = manifest.get("inventory_sha256")
+    inventory_name = manifest.get("inventory")
+    if (
+        not isinstance(inventory_sha256, str)
+        or inventory_name != f"{INVENTORY_PREFIX}-{inventory_sha256}.json"
+    ):
+        raise ValueError(f"invalid image-store inventory: {manifest_path}")
+    _read_inventory(output_dir / inventory_name, inventory_sha256)
+    for name, receipt in shards.items():
+        directory = output_dir / "shards" / str(receipt.get("directory"))
+        if (
+            receipt.get("source") != f"{name}.tar"
+            or json.loads((directory / RECEIPT_NAME).read_text()) != receipt
+        ):
+            raise ValueError(f"image shard receipt mismatch: {directory}")
+        _validate_receipt(directory, receipt)
+    if manifest.get("num_tars") != len(shards) or manifest.get("total_images") != sum(
+        r["num_images"] for r in shards.values()
+    ):
+        raise ValueError("image-store count mismatch")
     return manifest
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--screenshots_dir", type=Path, required=True)
-    parser.add_argument("--output_dir", type=Path, required=True)
-    parser.add_argument("--workers", type=int, default=os.cpu_count() or 1)
-    return parser.parse_args(argv)
+def finalize_store(
+    inventory_path: Path, inventory_sha256: str, output_dir: Path
+) -> dict:
+    inventory = _read_inventory(inventory_path, inventory_sha256)
+    shards = {}
+    for index in range(len(inventory["sources"])):
+        source = _source_entry(inventory, index)
+        directory = output_dir / "shards" / _directory_name(source)
+        try:
+            receipt = json.loads((directory / RECEIPT_NAME).read_text())
+            _validate_receipt(directory, receipt)
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"incomplete image shard for {source['name']}: {exc}"
+            ) from exc
+        if (
+            receipt["source"] != source["name"]
+            or receipt["source_sha256"] != source["sha256"]
+            or receipt["source_size"] != source["size"]
+            or receipt["encoding_sha256"] != ENCODING_SHA256
+        ):
+            raise ValueError(f"stale image shard receipt for {source['name']}")
+        shards[source["name"].removesuffix(".tar")] = receipt
+    manifest = {
+        "artifact_type": "cuagym_stage_01_image_store",
+        "schema_version": SCHEMA_VERSION,
+        "uri_scheme": "ar:///abs/path/images.array_record#idx",
+        **ENCODING_CONTRACT,
+        "encoding_sha256": ENCODING_SHA256,
+        "inventory": inventory_path.name,
+        "inventory_sha256": inventory_sha256,
+        "num_tars": len(shards),
+        "total_images": sum(r["num_images"] for r in shards.values()),
+        "shards": shards,
+    }
+    _atomic_json(output_dir / "manifest.json", manifest)
+    return manifest
+
+
+def build_store(screenshots_dir: Path, output_dir: Path, *, workers: int) -> dict:
+    inventory_path = prepare_inventory(screenshots_dir, output_dir)
+    digest = json.loads(inventory_path.read_text())["inventory_sha256"]
+    inventory = _read_inventory(inventory_path, digest)
+    for index in range(len(inventory["sources"])):
+        build_inventory_shard(
+            inventory_path, digest, output_dir, index, workers=workers
+        )
+    return finalize_store(inventory_path, digest, output_dir)
 
 
 def main() -> None:
-    args = parse_args()
-    print(
-        json.dumps(
-            build_store(args.screenshots_dir, args.output_dir, workers=args.workers),
-            indent=2,
-            sort_keys=True,
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--inventory", type=Path)
+    parser.add_argument("--inventory_sha256")
+    parser.add_argument("--tar_index", type=int)
+    parser.add_argument("--finalize", action="store_true")
+    parser.add_argument("--screenshots_dir", type=Path)
+    parser.add_argument("--output_dir", type=Path, required=True)
+    parser.add_argument("--workers", type=int, default=os.cpu_count() or 1)
+    args = parser.parse_args()
+    if args.screenshots_dir:
+        if any(
+            (
+                args.inventory,
+                args.inventory_sha256,
+                args.tar_index is not None,
+                args.finalize,
+            )
+        ):
+            raise SystemExit("--screenshots_dir only prepares an inventory")
+        result = json.loads(
+            prepare_inventory(args.screenshots_dir, args.output_dir).read_text()
         )
-    )
+    else:
+        if (
+            args.inventory is None
+            or args.inventory_sha256 is None
+            or args.finalize == (args.tar_index is not None)
+        ):
+            raise SystemExit(
+                "provide inventory digest and exactly one of --tar_index/--finalize"
+            )
+        result = (
+            finalize_store(args.inventory, args.inventory_sha256, args.output_dir)
+            if args.finalize
+            else build_inventory_shard(
+                args.inventory,
+                args.inventory_sha256,
+                args.output_dir,
+                args.tar_index,
+                workers=args.workers,
+            )
+        )
+    print(json.dumps(result, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

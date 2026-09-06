@@ -234,13 +234,11 @@ def test_stage_01_writes_q92_rgb_arrayrecord_and_manifest(tmp_path: Path):
     assert manifest["artifact_type"] == "cuagym_stage_01_image_store"
     assert manifest["jpeg_quality"] == 92
     assert manifest["total_images"] == 2
-    generation = output / manifest["generation"]
-    rows = [
-        json.loads(line)
-        for line in (generation / "screenshots-0000" / "index.jsonl").read_text().splitlines()
-    ]
+    receipt = manifest["shards"]["screenshots-0000"]
+    generation = output / "shards" / receipt["directory"]
+    rows = [json.loads(line) for line in (generation / "index.jsonl").read_text().splitlines()]
     shard, index = parse_arrayrecord_image_uri(rows[0]["uri"])
-    assert shard == (generation / "screenshots-0000" / "images.array_record").resolve()
+    assert shard == (generation / "images.array_record").resolve()
     assert index == 0
     with Image.open(io.BytesIO(read_jpeg_bytes(rows[0]["uri"]))) as image:
         assert image.format == "JPEG"
@@ -254,8 +252,8 @@ def test_stage_01_rebuilds_corruption_and_closes_the_source_set(tmp_path: Path):
     _screenshot_tar(screenshots, count=1)
     output = tmp_path / "images"
     first = build_store(screenshots, output, workers=1)
-    first_generation = output / first["generation"]
-    shard = first_generation / "screenshots-0000" / "images.array_record"
+    first_generation = output / "shards" / first["shards"]["screenshots-0000"]["directory"]
+    shard = first_generation / "images.array_record"
     shard.write_bytes(b"corrupt")
 
     repaired = build_store(screenshots, output, workers=1)
@@ -266,15 +264,16 @@ def test_stage_01_rebuilds_corruption_and_closes_the_source_set(tmp_path: Path):
     first_tar = screenshots / "screenshots-0000.tar"
     first_tar.replace(second_tar)
     changed = build_store(screenshots, output, workers=1)
-    assert set(changed["source_tars"]) == {"screenshots-0001.tar"}
-    current = output / changed["generation"]
-    assert {path.name for path in current.iterdir()} == {"screenshots-0001"}
-    assert {path.name for path in output.glob("generation-*")} == {changed["generation"]}
+    assert set(changed["shards"]) == {"screenshots-0001"}
+    current = output / "shards"
+    assert {path.name for path in current.iterdir()} >= {
+        changed["shards"]["screenshots-0001"]["directory"]
+    }
 
-    orphan = output / "generation-orphan"
+    orphan = output / "shards" / "orphan"
     orphan.mkdir()
     assert build_store(screenshots, output, workers=1) == changed
-    assert not orphan.exists()
+    assert orphan.exists()
 
 
 def test_stage_01_rejects_duplicate_png_members(tmp_path: Path):
@@ -289,21 +288,22 @@ def test_stage_01_rejects_duplicate_png_members(tmp_path: Path):
         build_store(screenshots, tmp_path / "images", workers=1)
 
 
-def test_stage_01_failure_cannot_leave_a_completion_manifest(tmp_path: Path):
+def test_stage_01_failure_preserves_previous_completion_manifest(tmp_path: Path):
     screenshots = tmp_path / "screenshots"
     _screenshot_tar(screenshots, count=1)
     output = tmp_path / "images"
     build_store(screenshots, output, workers=1)
-    (output / "generation-orphan").mkdir()
+    previous = (output / "manifest.json").read_bytes()
     with (
         mock.patch(
-            "pipeline.cua_gym.stage_01_image_store.shutil.rmtree",
-            side_effect=OSError("cleanup failed"),
+            "pipeline.cua_gym.stage_01_image_store.build_inventory_shard",
+            side_effect=OSError("worker failed"),
         ),
-        pytest.raises(OSError, match="cleanup failed"),
+        pytest.raises(OSError, match="worker failed"),
     ):
         build_store(screenshots, output, workers=1)
-    assert not (output / "manifest.json").exists()
+    assert (output / "manifest.json").read_bytes() == previous
+    assert ImageIndex(output).uri("screenshots-0000.tar", "task/step_000.png")
 
 
 class _Images:
@@ -751,7 +751,12 @@ def test_stage_01_to_stage_04_manifest_and_digest_contract(tmp_path: Path):
 
     image_manifest = json.loads((image_store / "manifest.json").read_text())
     shard_name = next(iter(image_manifest["shards"]))
-    shard = image_store / image_manifest["generation"] / shard_name / "images.array_record"
+    shard = (
+        image_store
+        / "shards"
+        / image_manifest["shards"][shard_name]["directory"]
+        / "images.array_record"
+    )
     original_shard = shard.read_bytes()
     try:
         shard.write_bytes(original_shard + b"corrupt")
