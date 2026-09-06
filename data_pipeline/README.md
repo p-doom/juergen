@@ -1,97 +1,96 @@
-# crowdcast-data-pipeline
+# Juergen data pipelines
 
-SFT data pipeline for crowd-cast: turns raw S3-synced screen recordings + keylogs into omegalax-ingestable Grain ArrayRecord shards, and prepares replay-source corpora (SmolTalk2, FineVision, Tulu3-Persona-IF) in the same chat-format.
+This project owns the stage code for exactly two SFT streams:
 
-Consumed by [`pmanager`][pmanager]/[`labctl`][labctl] recipes that inject params via `absl` flags and poll `<output_dir>/manifest.json` for stage completion.
+- canonical Crowd-Cast `describe_extract` goals and `deltatype_v2` actions;
+- CUA-Gym action-format parity with
+  `ordered_events_v3_relative_1000_grid_v1` actions.
 
-[pmanager]: https://github.com/anthropics/pmanager
-[labctl]: https://github.com/anthropics/labctl
+Both chains finish through the shared Stage05 message-length and Stage06
+training-record builders. Their Labctl recipes bind the Juergen and Omegalax
+checkouts and the pinned Qwen processor snapshot. Stage05 and Stage06 attest
+the exact processor files they consume and run the attested Omegalax project
+locked and offline.
+Stage06 rejects any full conversation above `max_length`; it never splits away
+conditioning context.
 
-## Layout
+The Crowd-Cast Labctl pipeline owns the complete Stage00--06 chain: raw-source
+inventory, 720p/q92 master frames, strict realignment, filtering, goal
+annotation, conversations, message lengths, and training records. Every raw
+video and keylog is sealed as accepted or explicitly excluded. The parity
+pipeline begins from the recorded CUA-Gym screenshots and native
+`computer_use` trajectory JSONL. Its curator groups recorded multi-call turns,
+verifies executed metadata, records non-action and nonrepresentable
+dispositions, and emits the sole schema accepted by its conversation builder.
 
-### Crowd-cast 4-stage chain (`stage_*`)
-
-| Stage | Script | Role |
-| --- | --- | --- |
-| A | `stage_a_prepare.py` | S3 sync → per-segment JPEG frames at target fps/height + per-frame action strings + per-split `chat.jsonl`. Pass `--image_store_format=arrayrecord` to store each segment's JPEGs as records in `images.array_record` and emit `ar:///...#idx` image refs instead of `frames/frame_*.jpg` files. |
-| B | `stage_b_run_length_cap.py` | Cap NO_OP runs (`k = round(k_seconds · target_fps)`). Rewrites `chat_line.json` only — frames are referenced in place. |
-| C | `stage_c_grain_payload.py` | Compile per-split `chat.jsonl` → Grain ArrayRecord shards. Wraps `omegalax/scripts/compile_sft_dataset.py` (one subprocess per split, in omegalax's uv venv). |
-| D | `stage_d_chunk_index.py` | Build the offline chunk index from the Grain payload. Wraps `omegalax/scripts/build_sft_chunk_index.py`. |
-
-Chain configs in `configs/chain_v1.py` (full) and `configs/chain_smoke.py` (10 segments — end-to-end pmanager validation without burning ~17 h of cluster time).
-
-### Replay-source preps (`prep_*`)
-
-| Script | Source | Notes |
-| --- | --- | --- |
-| `prep_smoltalk2.py` | `HuggingFaceTB/smoltalk2` (SFT) | Pass-through of HF `messages`; stashes sub-corpus tag under `_source`. |
-| `prep_finevision.py` | `HuggingFaceM4/FineVision` | Stratified-sample N configs; materializes PIL images to disk and rewrites turns with inline `{"type":"image","url":...}` blocks (omegalax `qwen3_encoding.py` contract). |
-| `prep_tulu3_persona_if.py` | `allenai/tulu-3-sft-personas-instruction-following` | Verbatim `messages`; stashes `constraints` under `_constraints`. |
-
-### On-policy completion gen (runs in the eval venv)
-
-| Script | Role |
-| --- | --- |
-| `generate_onpolicy_completions.py` | Text-only: regenerates assistant turns from a teacher via SGLang OAI endpoint. Single-turn protocol (prefix up to first assistant, one teacher completion). |
-| `generate_onpolicy_completions_mm.py` | Multimodal sibling over FineVision prompts; base64-data-URL image blocks; captures `finish_reason` at the source and optionally drops truncated rows. |
-| `_smoke_mm_sglang.py` | Wire-format smoke test for the SGLang OAI vision API before scaling up. |
-
-### Post-hoc filters
-
-| Script | Role |
-| --- | --- |
-| `filter_truncated.py` | Drops rows whose assistant turn hit the `max_tokens` cap (heuristic recovery of OpenAI-style `finish_reason == "length"`). Runs in the omegalax venv to share its pinned tokenizer. |
-| `preprocess_smoltalk_prompts.py` | smoltalk2 `chat.jsonl` → prompts-only JSONL for slime OPD rollouts. Templated-length filter (`--max_prompt_tokens`) to avoid budget waste on OOL prompts. |
-
-### Misc
-
-| Script | Role |
-| --- | --- |
-| `_manifest.py` | `write_manifest()` — shared helper for the `<output_dir>/manifest.json` completion marker that pmanager polls for. |
-
-> Dataset browsing (contributor index, day-grouped segments, timeline heatmap, frame-by-frame viewer) lives in the labctl UI's artifact panel — open any `dataset` artifact and use the **Browse** section.
-
-## Setup
+Labctl owns deployment. Its two TOML pipelines live in the Slurm repository at
+`dev/franz/berlin/crowd-cast-bc/labctl/pipelines/crowdcast_canonical_v1.toml`
+and
+`dev/franz/berlin/crowd-cast-bc/labctl/pipelines/cuagym_action_format_parity_v1.toml`.
+Juergen contains no scheduler compatibility layer.
 
 ```bash
-uv sync  # creates .venv with msgpack, Pillow, datasets, transformers, ...
+uv run --project data_pipeline --locked pytest -q data_pipeline/tests
 ```
 
-Scripts that run in *other* venvs (see `pyproject.toml` notes):
-
-| Script(s) | Venv |
-| --- | --- |
-| `filter_truncated.py`, `stage_c_*`, `stage_d_*` | omegalax — `uv run --project <omegalax_repo>` |
-| `generate_onpolicy_completions{,_mm}.py`, `_smoke_mm_sglang.py` | crowdcast-eval — `cd ../eval && uv run python …` |
-
-## Running
-
-### The chain (via pmanager)
+The Omegalax compiler must use one structural Qwen encoder for per-message
+measurement, full-example encoding, and VLM collation. Assistant messages with
+`loss: false` must contribute no supervised tokens. Run the real consumer
+contract against the checkout and immutable processor snapshot selected for a
+job:
 
 ```bash
-pmanager launch /fast/home/franz.srambical/data_pipeline/configs/chain_smoke.py   # 10-segment smoke
-pmanager launch /fast/home/franz.srambical/data_pipeline/configs/chain_v1.py      # full
+export OMEGALAX_REPO=/path/to/omegalax
+export PROCESSOR_SNAPSHOT=/path/to/models--Qwen--Qwen3-VL-2B-Instruct/snapshots/REVISION
+uv run --project data_pipeline --locked pytest -q \
+  data_pipeline/runtime_tests/test_omegalax_encoder_contract.py
 ```
 
-Each stage's `cfg.children` triggers the next on `on_complete`. To launch a single stage standalone, point pmanager at e.g. `configs/stage_a_v1_5fps_360p.py`.
+Each stage publishes `manifest.json` only after its outputs are complete.
 
-### Replay-source preps (standalone)
+CUA-Gym Stage01 first seals a source inventory, then runs one independently
+resumable job per tar and a finalizer. Workers take the inventory path, its
+printed `inventory_sha256`, and one `--tar_index`; `--finalize` accepts the
+same sealed inventory and refuses missing, stale, or corrupt shard receipts.
+Schema-v1 image stores must be rebuilt; Stage04 accepts only the schema-v2
+receipt layout. The local loop below can be dispatched as independent tar jobs:
 
 ```bash
-uv run python prep_smoltalk2.py --output_dir=/path/to/smoltalk2_chat --max_rows=200000 --seed=0
-uv run python prep_finevision.py --output_dir=/path/to/finevision_chat --configs=DoclingMatrix,SynthChartNet,GroundUI --per_config_max=5000 --seed=0
-uv run python prep_tulu3_persona_if.py --output_dir=/path/to/tulu3_chat
+metadata=$(uv run --project data_pipeline --locked python pipeline/cua_gym/stage_01_image_store.py \
+  --screenshots_dir /data/screenshots --output_dir /data/images)
+digest=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["inventory_sha256"])' <<<"$metadata")
+count=$(python3 -c 'import json,sys; print(len(json.load(sys.stdin)["sources"]))' <<<"$metadata")
+inventory=/data/images/source_inventory-$digest.json
+for ((index=0; index<count; index++)); do
+  uv run --project data_pipeline --locked python pipeline/cua_gym/stage_01_image_store.py \
+    --inventory "$inventory" --inventory_sha256 "$digest" --tar_index "$index" \
+    --workers 8 --output_dir /data/images
+done
+uv run --project data_pipeline --locked python pipeline/cua_gym/stage_01_image_store.py \
+  --inventory "$inventory" --inventory_sha256 "$digest" --finalize --output_dir /data/images
 ```
 
-## Output contract
+### Sharded message-length measurement
 
-Every stage entrypoint writes `<output_dir>/manifest.json` before exiting (per `pipeline_task()` in `pmanager.configs.schema`). pmanager polls for this file to mark the dataset complete and register it. Schema is owned by `_manifest.write_manifest()` and captures: stage name, every flag the entrypoint received, input fingerprints (paths + key file hashes), and output statistics.
-
-## Development
+Run one Stage05 worker per shard against a shared output directory, then run
+the finalizer after every worker receipt exists. This local loop can also be
+dispatched as independent jobs, one `--shard_index` per job:
 
 ```bash
-uvx ruff check .       # lint
-uvx ruff format .      # format
+lengths=/path/to/message-lengths
+chat=/path/to/stage04
+omegalax=/path/to/omegalax
+snapshot=/path/to/processor/snapshots/REVISION
+common=(--output_dir="$lengths" --source_path="$chat" --omegalax_repo="$omegalax" \
+  --processor_snapshot="$snapshot" --num_workers=8 --num_shards=8)
+for index in {0..7}; do
+  uv run --project data_pipeline --locked python pipeline/stage_05_measure_lengths.py \
+    "${common[@]}" --shard_index="$index"
+done
+uv run --project data_pipeline --locked python pipeline/stage_05_measure_lengths.py \
+  "${common[@]}" --merge
 ```
 
-`pyproject.toml` carries the strict rule set (pycodestyle, pyflakes, isort, bugbear, pyupgrade, simplify, ruff, pylint, tidy-imports, use-pathlib, return, comprehensions, pep8-naming).
+A shard with no assigned conversations publishes an empty receipt without
+launching the compiler. With `--num_shards=1`, the worker uses the same shard
+contract and finalizes automatically.

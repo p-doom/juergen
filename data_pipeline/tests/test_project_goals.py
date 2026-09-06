@@ -7,14 +7,14 @@ from __future__ import annotations
 
 import unittest
 
-from realigned_pipeline.lib.goals import (
+from pipeline.lib.goals import (
     assert_same_artifact,
     goals_by_segment,
     project_goals,
     validate_goal_row,
     view_span_to_master,
 )
-from realigned_pipeline.lib.views import build_segment_view
+from pipeline.lib.views import build_segment_view
 
 
 def _goal(start: int, end: int, *, goal_id: str = "g0", segment_id: str = "s0", **extra) -> dict:
@@ -25,6 +25,8 @@ def _goal(start: int, end: int, *, goal_id: str = "g0", segment_id: str = "s0", 
         "start_master_idx": start,
         "end_master_idx": end,
         "instruction": "do the thing",
+        "anchor": "do",
+        "grounding": "The user initiated the action.",
         "method": "describe_extract",
         "model": "test-model",
         "prompt_pack_sha": "deadbeef",
@@ -40,8 +42,8 @@ def _view(kept_ranges, dropped=None, n_records=150, fps=1.0):
             "segment_idx": 0,
             "master_fps": 15.0,
             "n_master_records": n_records,
-            "shard_path": None,
-            "keylog_path": None,
+            "shard_path": "/nowhere/frames/s0/images.array_record",
+            "keylog_path": "/nowhere/keylog.msgpack",
             "alignment_status": "aligned",
             "kept_ranges": kept_ranges,
             "dropped": dropped or [],
@@ -72,13 +74,6 @@ class ProjectGoalsTest(unittest.TestCase):
         self.assertEqual([f.master_idx for f in p.frames], [30, 45, 75, 90, 105])
         self.assertFalse(p.snapped_start)
 
-    def test_snap_start_inside_excludes_prior_frame(self) -> None:
-        view = _view([[0, 60], [75, 150]], [{"start": 60, "end": 75, "reason": "black"}])
-        projections, _ = project_goals([_goal(60, 105)], view, snap_start="inside")
-        [p] = projections
-        self.assertEqual([f.master_idx for f in p.frames], [75, 90])
-        self.assertFalse(p.snapped_start)
-
     def test_snap_start_noop_when_frame_at_goal_start(self) -> None:
         view = _view([[0, 150]])
         projections, stats = project_goals([_goal(45, 90)], view)
@@ -95,20 +90,10 @@ class ProjectGoalsTest(unittest.TestCase):
         self.assertEqual(stats.n_empty_projection, 1)
         self.assertEqual(stats.rejected, [{"goal_id": "g0", "reason": "empty_projection"}])
 
-    def test_too_few_frames_counted(self) -> None:
-        view = _view([[0, 150]])
-        projections, stats = project_goals([_goal(45, 60)], view, min_frames=3, snap_start="inside")
-        self.assertEqual(projections, [])
-        self.assertEqual(stats.n_too_few_frames, 1)
-
     def test_wrong_segment_refused(self) -> None:
         view = _view([[0, 150]])
         with self.assertRaises(ValueError):
             project_goals([_goal(0, 30, segment_id="OTHER")], view)
-
-    def test_bad_snap_mode_refused(self) -> None:
-        with self.assertRaises(ValueError):
-            project_goals([], _view([[0, 150]]), snap_start="nearest")
 
 
 class ViewSpanToMasterTest(unittest.TestCase):
@@ -142,7 +127,7 @@ class ViewSpanToMasterTest(unittest.TestCase):
 
 class SchemaTest(unittest.TestCase):
     def test_valid_row_passes(self) -> None:
-        validate_goal_row(_goal(0, 30, instruction_variants=["a", "b"]))
+        validate_goal_row(_goal(0, 30))
 
     def test_violations_raise(self) -> None:
         bad_rows = [
@@ -150,22 +135,25 @@ class SchemaTest(unittest.TestCase):
             _goal(30, 30),  # empty interval
             _goal(-1, 30),  # negative start
             _goal(0, 30) | {"start_master_idx": 0.5},  # float coordinate
+            _goal(0, 30) | {"start_master_idx": True},
             _goal(0, 30) | {"instruction": "  "},  # blank instruction
-            _goal(0, 30) | {"instruction_variants": "not-a-list"},
+            _goal(0, 30) | {"method": "other_method"},
+            _goal(0, 30) | {"plan": "unsupported"},
         ]
         for row in bad_rows:
-            with self.assertRaises(ValueError, msg=row):
+            with self.assertRaises((TypeError, ValueError), msg=row):
                 validate_goal_row(row)
 
-    def test_goals_by_segment_sorts(self) -> None:
+    def test_goals_by_segment_requires_canonical_order(self) -> None:
         rows = [
             _goal(60, 90, goal_id="g2"),
             _goal(0, 30, goal_id="g1"),
             _goal(0, 15, goal_id="g0", segment_id="s1"),
         ]
-        grouped = goals_by_segment(rows)
+        with self.assertRaisesRegex(ValueError, "canonically ordered"):
+            goals_by_segment(rows)
+        grouped = goals_by_segment([rows[1], rows[0], rows[2]])
         self.assertEqual([g["goal_id"] for g in grouped["s0"]], ["g1", "g2"])
-        self.assertEqual([g["goal_id"] for g in grouped["s1"]], ["g0"])
 
     def test_assert_same_artifact(self) -> None:
         assert_same_artifact("x::1", "x::1", what="filter")

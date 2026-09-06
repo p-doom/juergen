@@ -1,0 +1,624 @@
+{
+  "grammar": "ordered_events_v3_relative_1000_grid_v1",
+  "prompt_sha256": "fabe870c3b7f7f5debf34900f73484d347624b4e292b95fd987586b3839e25d9",
+  "geometry": {
+    "desktop_width": 1920,
+    "desktop_height": 1080
+  },
+  "default_cursor": [
+    960,
+    540
+  ],
+  "note": "cases pin all three directions: parse(text) == action, format(action) == canonical, compile(text, geometry, cursor) == operations.",
+  "cases": [
+    {
+      "name": "left_click",
+      "text": "move(12,-4); down(LMB); up(LMB)",
+      "canonical": "move(12,-4); down(LMB); up(LMB)",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": 12,
+            "dy": -4
+          },
+          {
+            "kind": "down",
+            "name": "LMB"
+          },
+          {
+            "kind": "up",
+            "name": "LMB"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            983,
+            536
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "interleaved_move_press_move_release",
+      "text": "move(12,-4); down(LMB); move(3,0); up(LMB)",
+      "canonical": "move(12,-4); down(LMB); move(3,0); up(LMB)",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": 12,
+            "dy": -4
+          },
+          {
+            "kind": "down",
+            "name": "LMB"
+          },
+          {
+            "kind": "move",
+            "dx": 3,
+            "dy": 0
+          },
+          {
+            "kind": "up",
+            "name": "LMB"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            983,
+            536
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "move_to",
+          [
+            989,
+            536
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ],
+      "documents": "the aggregate dx/dy/scroll format cannot represent move -> click -> move; this one can, and the relative deltas fold cumulatively onto the cursor."
+    },
+    {
+      "name": "drag_from_current_position",
+      "text": "down(LMB); move(30,0); up(LMB)",
+      "canonical": "down(LMB); move(30,0); up(LMB)",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "LMB"
+          },
+          {
+            "kind": "move",
+            "dx": 30,
+            "dy": 0
+          },
+          {
+            "kind": "up",
+            "name": "LMB"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "move_to",
+          [
+            1018,
+            540
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "scroll_down",
+      "text": "scroll(0,-3)",
+      "canonical": "scroll(0,-3)",
+      "action": {
+        "primitives": [
+          {
+            "kind": "scroll",
+            "dx": 0,
+            "dy": -3
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "scroll",
+          [
+            0,
+            -3
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "horizontal_scroll",
+      "text": "scroll(5,0)",
+      "canonical": "scroll(5,0)",
+      "action": {
+        "primitives": [
+          {
+            "kind": "scroll",
+            "dx": 5,
+            "dy": 0
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "scroll",
+          [
+            5,
+            0
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "type_burst",
+      "text": "type(\"Hi\")",
+      "canonical": "type(\"Hi\")",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "Hi"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "Hi"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "type_with_both_legal_escapes",
+      "text": "type(\"say \\\"hi\\\" C:\\\\tmp\")",
+      "canonical": "type(\"say \\\"hi\\\" C:\\\\tmp\")",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "say \"hi\" C:\\tmp"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "say \"hi\" C:\\tmp"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "return_is_an_event_after_typing",
+      "text": "type(\"hi\"); down(Return); up(Return)",
+      "canonical": "type(\"hi\"); down(Return); up(Return)",
+      "action": {
+        "primitives": [
+          {
+            "kind": "type",
+            "text": "hi"
+          },
+          {
+            "kind": "down",
+            "name": "Return"
+          },
+          {
+            "kind": "up",
+            "name": "Return"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "coalesced_type",
+          [
+            "hi"
+          ]
+        ],
+        [
+          "key_down",
+          [
+            "Return"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "Return"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "key_chord",
+      "text": "down(ControlLeft); down(KeyC); up(KeyC); up(ControlLeft)",
+      "canonical": "down(ControlLeft); down(KeyC); up(KeyC); up(ControlLeft)",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "ControlLeft"
+          },
+          {
+            "kind": "down",
+            "name": "KeyC"
+          },
+          {
+            "kind": "up",
+            "name": "KeyC"
+          },
+          {
+            "kind": "up",
+            "name": "ControlLeft"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "key_down",
+          [
+            "ControlLeft"
+          ]
+        ],
+        [
+          "key_down",
+          [
+            "KeyC"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "KeyC"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "ControlLeft"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "rdev_name_is_not_rewritten",
+      "text": "down(Alt); up(Alt)",
+      "canonical": "down(Alt); up(Alt)",
+      "action": {
+        "primitives": [
+          {
+            "kind": "down",
+            "name": "Alt"
+          },
+          {
+            "kind": "up",
+            "name": "Alt"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "key_down",
+          [
+            "Alt"
+          ]
+        ],
+        [
+          "key_up",
+          [
+            "Alt"
+          ]
+        ]
+      ],
+      "documents": "bare-token grammars already speak rdev; `Alt` must NOT be silently normalised into `AltLeft`."
+    },
+    {
+      "name": "think_block_precedes_the_action_line",
+      "text": "<think>The menu is just above the cursor.</think>\nmove(0,-20); down(LMB); up(LMB)",
+      "canonical": "move(0,-20); down(LMB); up(LMB)",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": 0,
+            "dy": -20
+          },
+          {
+            "kind": "down",
+            "name": "LMB"
+          },
+          {
+            "kind": "up",
+            "name": "LMB"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            960,
+            518
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ],
+        [
+          "mouse_up",
+          [
+            "left"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "whitespace_is_canonicalised",
+      "text": "move( 4 , 5 )  ;   down(LMB)",
+      "canonical": "move(4,5); down(LMB)",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": 4,
+            "dy": 5
+          },
+          {
+            "kind": "down",
+            "name": "LMB"
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            968,
+            545
+          ]
+        ],
+        [
+          "mouse_down",
+          [
+            "left"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "clamped_to_top_left",
+      "cursor": [
+        5,
+        5
+      ],
+      "text": "move(-50,-50)",
+      "canonical": "move(-50,-50)",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": -50,
+            "dy": -50
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            0,
+            0
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "move_that_clamps_onto_the_cursor_emits_nothing",
+      "cursor": [
+        0,
+        0
+      ],
+      "text": "move(-10,-10)",
+      "canonical": "move(-10,-10)",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": -10,
+            "dy": -10
+          }
+        ],
+        "no_op": false
+      },
+      "operations": []
+    },
+    {
+      "name": "cua_gym_coordinate_regression",
+      "cursor": [
+        1728,
+        972
+      ],
+      "text": "move(-511,-592)",
+      "canonical": "move(-511,-592)",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": -511,
+            "dy": -592
+          }
+        ],
+        "no_op": false
+      },
+      "operations": [
+        [
+          "move_to",
+          [
+            747,
+            333
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "no_op",
+      "text": "NO_OP",
+      "canonical": "NO_OP",
+      "action": {
+        "primitives": [],
+        "no_op": true
+      },
+      "operations": []
+    }
+  ],
+  "format_only": [
+    {
+      "name": "single_move",
+      "action": {
+        "primitives": [
+          {
+            "kind": "move",
+            "dx": 1,
+            "dy": 2
+          }
+        ],
+        "no_op": false
+      },
+      "canonical": "move(1,2)"
+    }
+  ],
+  "invalid_parse": [
+    {
+      "name": "escaped_newline_in_type",
+      "text": "type(\"a\\nb\")",
+      "error": "only the escapes",
+      "documents": "THE defect guard: `\\n` inside type() is rejected instead of typing two literal characters. Return is down(Return); up(Return)."
+    },
+    {
+      "name": "escaped_tab_in_type",
+      "text": "type(\"a\\tb\")",
+      "error": "only the escapes"
+    },
+    {
+      "name": "move_with_one_argument",
+      "text": "move(1)",
+      "error": "two integers"
+    },
+    {
+      "name": "unknown_primitive",
+      "text": "click(1,2)",
+      "error": "unknown primitive"
+    },
+    {
+      "name": "missing_separator",
+      "text": "move(1,2) down(LMB)",
+      "error": "separated by"
+    },
+    {
+      "name": "comma_separator",
+      "text": "move(1,2), down(LMB)",
+      "error": "separated by"
+    },
+    {
+      "name": "unclosed_type_payload",
+      "text": "type(\"abc)",
+      "error": "not closed"
+    },
+    {
+      "name": "type_without_quotes",
+      "text": "type(abc)",
+      "error": "quoted"
+    },
+    {
+      "name": "down_without_name",
+      "text": "down()",
+      "error": "one key or button name"
+    },
+    {
+      "name": "down_name_with_separator",
+      "text": "down(a;b)",
+      "error": "one key or button name"
+    },
+    {
+      "name": "bare_separator",
+      "text": ";",
+      "error": "expected a primitive call"
+    },
+    {
+      "name": "empty",
+      "text": "   \n  ",
+      "error": "empty action text"
+    }
+  ],
+  "invalid_compile": [],
+  "invalid_compile_note": "empty by construction: parsing is line based and every backslash escape except \\\\ and \\\" is rejected, so no newline can reach type()."
+}

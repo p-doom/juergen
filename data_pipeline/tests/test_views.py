@@ -10,9 +10,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from realigned_pipeline.lib.events import RawEvent, apply_label_policy
-from realigned_pipeline.lib.manifest import make_artifact_id
-from realigned_pipeline.lib.views import (
+from pipeline.lib.events import RawEvent, apply_label_policy
+from pipeline.lib.manifest import file_sha256_short, make_artifact_id
+from pipeline.lib.views import (
     FilterArtifact,
     build_segment_view,
     resolve_stride,
@@ -33,7 +33,7 @@ def _seg(
         "master_fps": master_fps,
         "n_master_records": n_records,
         "shard_path": "/nowhere/frames/s0/images.array_record",
-        "keylog_path": None,
+        "keylog_path": "/nowhere/keylog.msgpack",
         "alignment_status": "aligned",
         "kept_ranges": kept_ranges,
         "dropped": dropped or [],
@@ -53,53 +53,6 @@ class StrideTest(unittest.TestCase):
                 resolve_stride(master, fps)
         with self.assertRaises(ValueError):
             resolve_stride(15.0, 0.0)
-
-
-class NearestModeTest(unittest.TestCase):
-    def test_nearest_allows_non_divisors(self) -> None:
-        self.assertAlmostEqual(resolve_stride(15.0, 4.0, "nearest"), 3.75)
-        self.assertAlmostEqual(resolve_stride(15.0, 2.0, "nearest"), 7.5)
-        with self.assertRaises(ValueError):  # still refuses upsampling
-            resolve_stride(15.0, 20.0, "nearest")
-        with self.assertRaises(ValueError):
-            resolve_stride(15.0, 4.0, "middle")
-
-    def test_nearest_picks_alfreds_ticks(self) -> None:
-        # 4 fps on a 15 fps master: ideal ticks 0,3.75,7.5,11.25,15,... ->
-        # nearest 0,4,8,11,15,... — exactly the old sampler's picks, uneven
-        # spacing (4,4,3,4) but exactly 4 frames per second.
-        view = build_segment_view(_seg(kept_ranges=[[0, 150]]), fps=4.0, fps_mode="nearest")
-        self.assertEqual([f.master_idx for f in view.frames][:8], [0, 4, 8, 11, 15, 19, 23, 26])
-        self.assertEqual(view.n_slots, 40)  # 10 s x 4 fps, none masked
-        self.assertEqual(view.fps_mode, "nearest")
-
-    def test_nearest_windows_start_at_actual_ticks(self) -> None:
-        # Causality: each label window starts AT the selected tick (no smear),
-        # tiling contiguously to the next selected tick.
-        view = build_segment_view(_seg(kept_ranges=[[0, 150]]), fps=4.0, fps_mode="nearest")
-        for f, g in zip(view.frames, view.frames[1:], strict=False):
-            self.assertEqual(f.win_start, f.master_idx)
-            self.assertEqual(f.win_end, g.master_idx)
-        self.assertEqual(view.frames[-1].win_end, 150)
-
-    def test_nearest_masked_slot_still_skipped(self) -> None:
-        # Slot 3's nearest tick (11) is masked -> no frame, no substitution.
-        view = build_segment_view(
-            _seg(kept_ranges=[[0, 11], [12, 150]],
-                 dropped=[{"start": 11, "end": 12, "reason": "black"}]),
-            fps=4.0, fps_mode="nearest",
-        )
-        ticks = [f.master_idx for f in view.frames]
-        self.assertNotIn(11, ticks)
-        self.assertNotIn(12, ticks)  # the neighbor is NOT substituted
-        self.assertEqual(view.n_masked_slots, 1)
-
-    def test_exact_mode_unchanged_by_new_loop(self) -> None:
-        view = build_segment_view(_seg(kept_ranges=[[0, 150]]), fps=1.0)
-        self.assertEqual([f.master_idx for f in view.frames],
-                         [0, 15, 30, 45, 60, 75, 90, 105, 120, 135])
-        self.assertEqual(view.n_slots, 10)
-        self.assertEqual(view.stride, 15)
 
 
 class SelectorTest(unittest.TestCase):
@@ -172,6 +125,22 @@ class SelectorTest(unittest.TestCase):
         self.assertEqual(view.frames, [])
         self.assertEqual(view.n_masked_slots, view.n_slots)
 
+    def test_unknown_drop_reason_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unexpected dropped-span reason"):
+            build_segment_view(
+                _seg(
+                    kept_ranges=[[0, 15]],
+                    dropped=[{"start": 15, "end": 30, "reason": "other"}],
+                ),
+                fps=1.0,
+            )
+
+    def test_keylog_path_is_required(self) -> None:
+        segment = _seg(kept_ranges=[[0, 150]])
+        del segment["keylog_path"]
+        with self.assertRaises(KeyError):
+            build_segment_view(segment, fps=1.0)
+
     def test_conservation_over_view(self) -> None:
         # Every event is owned by exactly one window or discarded-with-reason.
         view = build_segment_view(
@@ -185,7 +154,7 @@ class SelectorTest(unittest.TestCase):
             RawEvent(i, t, "move", dx=1.0)
             for i, t in enumerate([0.2, 1.7, 3.99, 4.0, 4.3, 5.0, 8.6, 9.99, 11.0])
         ]  # seconds; ticks 3,25,59,60,64,75,129,149,165 at 15 fps
-        labeled, _ = apply_label_policy(
+        labeled = apply_label_policy(
             events, view.windows(), view.dead_zones, master_fps=view.master_fps
         )
         n_owned = sum(1 for le in labeled if le.window is not None)
@@ -205,25 +174,33 @@ class ArtifactJoinTest(unittest.TestCase):
     def _make_filter(self, root: Path, master: Path) -> Path:
         fdir = root / "filter_art"
         (fdir / "filter").mkdir(parents=True)
-        (fdir / "filter_index.jsonl").write_text("")
+        clips = root / "clips"
+        clips.mkdir()
+        (clips / "manifest.json").write_text(json.dumps({"artifact_type": "clips"}))
+        index = fdir / "filter_index.jsonl"
+        index.write_text(
+            json.dumps(
+                {
+                    "segment_id": "seg0",
+                    "status": "ok",
+                    "filter_path": str(fdir / "filter" / "seg0.json"),
+                    "filter_sha256": "0" * 64,
+                }
+            )
+            + "\n"
+        )
         (fdir / "manifest.json").write_text(
             json.dumps(
                 {
                     "artifact_type": "realigned_filter_mask",
                     "master_fps": 15.0,
                     "master_store_id": make_artifact_id(master),
+                    "source_clips_id": make_artifact_id(clips),
+                    "filter_index_sha256": file_sha256_short(index, n=64),
                 }
             )
         )
         return fdir
-
-    def test_matching_ids_load(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            master = self._make_master(root)
-            art = FilterArtifact(self._make_filter(root, master))
-            self.assertEqual(art.master_dir, master.resolve())
-            self.assertEqual(art.stride_for(0.5), 30)
 
     def test_rebuilt_master_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

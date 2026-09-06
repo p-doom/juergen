@@ -1,56 +1,33 @@
 [project]
-name = "crowdcast-data-pipeline"
+name = "juergen-data-pipelines"
 version = "0.1.0"
-description = "Crowd-cast SFT data pipeline (stages: prepare, run_length_cap, grain_payload, chunk_index). Configs consumed by pmanager."
+description = "Locked runtime for Juergen's two checkout-local SFT data pipelines."
 license = "MIT"
 license-files = ["LICENSE"]
 readme = "README.md"
-requires-python = ">=3.11"
-# Entrypoints only — pmanager itself is loaded by the *outer* process (the
-# `pmanager launch` invocation), not by these stage scripts. Configs in
-# this project use ``from pmanager.configs.schema import …``, but those
-# imports resolve in pmanager's own venv, not here.
-#
-# Several scripts in this repo deliberately run inside OTHER venvs and
-# therefore do NOT contribute to this dep set:
-#   * filter_truncated.py — runs under omegalax's uv venv (uses its pinned
-#     transformers + Qwen3-VL fast tokenizer).
-#   * stage_c_grain_payload.py / stage_d_chunk_index.py — subprocess-wrap
-#     omegalax scripts via ``uv run --project <omegalax_repo>``.
-#   * generate_onpolicy_completions{,_mm}.py / _smoke_mm_sglang.py — run
-#     under the crowdcast-eval venv (sglang + openai client live there).
+requires-python = ">=3.12,<3.13"
 dependencies = [
-    "absl-py>=2.0",                # flag-based entrypoints across every stage_*.py / prep_*.py
-    "msgpack>=1.0",                # stage A: parse per-recording keylog msgpacks
-    "Pillow>=11.3.0",              # stage A JPEG encode + prep_finevision image materialization
-    "numpy>=2.0",                  # stage A frame-array math
-    "array-record>=0.5.1",         # ArrayRecord (grain) JPEG image store: stage_01 pack + migration + ar:// decode
-    # Floor at 0.5.1 (not 0.6.0) so sglang's diffusion extra — which pins ==0.5.1 — can co-resolve in the workspace lock. Only a PATH fallback; minor version doesn't matter.
-    "imageio-ffmpeg>=0.5.1",
-    "openai>=2.26.0",              # annotation_pipeline stage 02 labeler (Azure/OpenAI-compatible) + local Qwen
-    "PyYAML>=6.0",                 # annotation_pipeline prompts.yaml loader (prompts.py)
-    "opencv-python-headless>=4.10.0.84",  # annotation_pipeline video probing/frame rendering; matches sglang workspace pin
-    "datasets>=3.0",               # prep_{finevision,smoltalk2,tulu3_persona_if} + preprocess_smoltalk_prompts HF loaders
-    # tokenizer for prompt-length filtering in preprocess_smoltalk_prompts.py
-    # (Qwen3-VL-2B chat template).
-    "transformers>=4.45",
-    # transformers' chat-template renderer pulls jinja2 lazily; needed so
-    # apply_chat_template doesn't ImportError on first call.
-    "jinja2>=3.1",
+    "absl-py>=2.0",
+    "array-record>=0.5.1",
+    "desktop @ git+https://github.com/p-doom/desktop.git@1db6ae2499afc16d87dee15453a57042dff13f64",
+    "msgpack>=1.0",
+    "numpy>=2.0",
+    "openai>=2.26.0",
+    "opencv-python-headless>=4.10.0.84",
+    "Pillow>=11.3.0",
+    "PyYAML>=6.0",
+    "tqdm>=4.66",
 ]
 
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
+[dependency-groups]
+dev = ["pytest>=8", "ruff==0.16.6"]
 
-[tool.setuptools]
-# Not a published package — pyproject anchors a uv venv at this directory.
-packages = ["annotation_pipeline", "configs"]
-py-modules = []
+[tool.uv]
+package = false
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = [
@@ -79,18 +56,6 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = [
-    "_manifest",
     "configs",
-    "annotation_pipeline",
-    "filter_truncated",
-    "generate_onpolicy_completions",
-    "generate_onpolicy_completions_mm",
-    "prep_finevision",
-    "prep_smoltalk2",
-    "prep_tulu3_persona_if",
-    "preprocess_smoltalk_prompts",
-    "stage_a_prepare",
-    "stage_b_run_length_cap",
-    "stage_c_grain_payload",
-    "stage_d_chunk_index",
+    "pipeline",
 ]
