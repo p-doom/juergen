@@ -583,6 +583,43 @@ def test_stage_05_failed_merge_does_not_replace_canonical_cache(
     assert canonical.read_text() == "previous\n"
 
 
+def test_stage_05_manifest_failure_restores_sealed_artifact(
+    tmp_path: Path, production_inputs
+) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    output = _measure(tmp_path, production_inputs, source)
+    manifest = (output / "manifest.json").read_bytes()
+    cache = (output / "message_lengths.jsonl").read_bytes()
+    harness = """
+from pipeline import stage_05_measure_lengths as stage
+def fail(*args, **kwargs):
+    raise RuntimeError("injected manifest failure")
+stage.write_manifest = fail
+stage.app.run(stage.main)
+"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            harness,
+            f"--output_dir={output}",
+            f"--source_path={source}",
+            f"--omegalax_repo={production_inputs['repo']}",
+            f"--processor_snapshot={production_inputs['snapshot']}",
+            "--num_workers=2",
+            "--merge=true",
+        ],
+        env=production_inputs["env"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "injected manifest failure" in result.stderr
+    assert (output / "manifest.json").read_bytes() == manifest
+    assert (output / "message_lengths.jsonl").read_bytes() == cache
+
+
 @pytest.mark.parametrize("mode", ["wrong_partition", "bad_counters", "duplicate"])
 def test_stage_05_merge_rejects_resealed_bad_shards(
     tmp_path: Path, production_inputs, mode: str

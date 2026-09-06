@@ -393,28 +393,54 @@ def _merge(
             raise RuntimeError(
                 "Stage05 source or compiler identity changed during execution"
             )
-        temporary.replace(final)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
     cache = {
         "file": MESSAGE_LENGTHS_FILENAME,
-        "sha256": file_sha256_short(final, n=64),
+        "sha256": file_sha256_short(temporary, n=64),
         "n_messages": rows,
         "elapsed_s": sum(info["elapsed_s"] for info in infos),
     }
-    write_manifest(
-        output_dir,
-        stage="message_lengths",
-        params={
-            "processor_snapshot": processor,
-            "num_workers": FLAGS.num_workers,
-            "omegalax_repo": omegalax["path"],
-            "omegalax": omegalax,
-        },
-        inputs={"source": str(source_path), "source_id": identity["source_id"]},
-        stats={"cache": cache},
-    )
+    manifest = output_dir / "manifest.json"
+    final_backup = output_dir / f".{MESSAGE_LENGTHS_FILENAME}.previous"
+    manifest_backup = output_dir / ".manifest.json.previous"
+    if final_backup.exists() or manifest_backup.exists():
+        temporary.unlink(missing_ok=True)
+        raise RuntimeError(f"interrupted Stage05 publication under {output_dir}")
+    final_saved = False
+    manifest_saved = False
+    try:
+        if final.exists():
+            final.replace(final_backup)
+            final_saved = True
+        if manifest.exists():
+            manifest.replace(manifest_backup)
+            manifest_saved = True
+        temporary.replace(final)
+        write_manifest(
+            output_dir,
+            stage="message_lengths",
+            params={
+                "processor_snapshot": processor,
+                "num_workers": FLAGS.num_workers,
+                "omegalax_repo": omegalax["path"],
+                "omegalax": omegalax,
+            },
+            inputs={"source": str(source_path), "source_id": identity["source_id"]},
+            stats={"cache": cache},
+        )
+    except BaseException:
+        final.unlink(missing_ok=True)
+        manifest.unlink(missing_ok=True)
+        (output_dir / "manifest.json.tmp").unlink(missing_ok=True)
+        if final_saved:
+            final_backup.replace(final)
+        if manifest_saved:
+            manifest_backup.replace(manifest)
+        raise
+    final_backup.unlink(missing_ok=True)
+    manifest_backup.unlink(missing_ok=True)
 
 
 def main(_) -> None:
