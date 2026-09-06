@@ -407,7 +407,7 @@ def validate_image_store(output_dir: Path) -> dict:
         )
     for name, receipt in shards.items():
         if not isinstance(name, str) or not isinstance(receipt, dict):
-            raise ValueError(f"invalid image shard entry: {name!r}")
+            raise TypeError(f"invalid image shard entry: {name!r}")
         directory = output_dir / "shards" / str(receipt.get("directory"))
         if (
             receipt.get("source") != f"{name}.tar"
