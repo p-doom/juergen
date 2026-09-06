@@ -41,7 +41,7 @@ job:
 
 ```bash
 export OMEGALAX_REPO=/path/to/omegalax
-export PROCESSOR_SNAPSHOT=/path/to/models--Qwen--Qwen3-VL-2B-Instruct/snapshots/<revision>
+export PROCESSOR_SNAPSHOT=/path/to/models--Qwen--Qwen3-VL-2B-Instruct/snapshots/REVISION
 uv run --project data_pipeline --locked pytest -q \
   data_pipeline/runtime_tests/test_omegalax_encoder_contract.py
 ```

@@ -38,6 +38,7 @@ import json
 import sys
 from pathlib import Path
 
+import ml_dtypes
 import numpy as np
 from transformers import AutoImageProcessor, AutoTokenizer
 
@@ -52,7 +53,8 @@ tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True)
 processor = AutoImageProcessor.from_pretrained(snapshot, local_files_only=True, use_fast=False)
 for source, messages in examples.items():
     measure = qwen3_encoding.make_message_length_fn(tokenizer, processor)
-    measured_length = sum(measure(message)["length"] for message in messages)
+    lengths = [measure(message)["length"] for message in messages]
+    measured_length = sum(lengths)
     encoded = qwen3_encoding.encode_qwen_messages(
         messages, tokenizer=tokenizer, image_processor=processor, include_pixels=True
     )
@@ -60,44 +62,26 @@ for source, messages in examples.items():
     assert int(encoded["loss_mask"].sum()) > 0
     assert len(encoded["image_grid_thw"]) > 0
     assert len(encoded["pixel_values"]) > 0
-    collator = collator_qwen3.VLMSFTCollator(
-        tokenizer,
-        measured_length,
-        processor,
-        pixel_values_dtype=encoded["pixel_values"].dtype,
-    )
+    offset = 0
+    for message, length in zip(messages, lengths, strict=True):
+        mask = encoded["loss_mask"][offset:offset + length]
+        if message["role"] == "assistant" and message.get("loss", True):
+            assert int(mask.sum()) > 0
+        else:
+            assert not mask.any()
+        offset += length
+    collator = collator_qwen3.VLMSFTCollator(tokenizer, measured_length + 16, processor)
     batch = collator([{"messages": messages}])
-    np.testing.assert_array_equal(batch["token_ids_BT"][0], encoded["input_ids"])
-    np.testing.assert_array_equal(batch["loss_mask_BT"][0], encoded["loss_mask"])
+    np.testing.assert_array_equal(batch["token_ids_BT"][0, :measured_length], encoded["input_ids"])
+    np.testing.assert_array_equal(batch["loss_mask_BT"][0, :measured_length], encoded["loss_mask"])
+    assert batch["token_ids_BT"].shape == (1, measured_length + 16)
+    assert np.all(batch["token_ids_BT"][0, measured_length:] == tokenizer.pad_token_id)
+    assert not batch["loss_mask_BT"][0, measured_length:].any()
+    assert np.all(batch["attention_mask_BT"][0, :measured_length] == 1)
+    assert not batch["attention_mask_BT"][0, measured_length:].any()
     np.testing.assert_array_equal(batch["image_grid_thw"], encoded["image_grid_thw"])
-    np.testing.assert_array_equal(batch["pixel_values"], encoded["pixel_values"])
-    assert int(batch["attention_mask_BT"].sum()) == measured_length
-    if source == "cua":
-        history = next(
-            index for index, message in enumerate(messages)
-            if message["role"] == "assistant" and message.get("loss") is False
-        )
-        changed = [dict(message) for message in messages]
-        changed[history].pop("loss")
-        changed_mask = qwen3_encoding.encode_qwen_messages(
-            changed, tokenizer=tokenizer, image_processor=processor
-        )["loss_mask"]
-        delta = changed_mask - encoded["loss_mask"]
-        assert int(delta.sum()) > 0
-        assert np.all(encoded["loss_mask"][delta.astype(bool)] == 0)
-    else:
-        history = next(
-            index for index, message in enumerate(messages[:-1])
-            if message["role"] == "assistant"
-        )
-        changed = [dict(message) for message in messages]
-        changed[history]["loss"] = False
-        changed_mask = qwen3_encoding.encode_qwen_messages(
-            changed, tokenizer=tokenizer, image_processor=processor
-        )["loss_mask"]
-        delta = encoded["loss_mask"] - changed_mask
-        assert int(delta.sum()) > 0
-        assert np.all(changed_mask[delta.astype(bool)] == 0)
+    assert batch["pixel_values"].dtype == ml_dtypes.bfloat16
+    np.testing.assert_array_equal(batch["pixel_values"], encoded["pixel_values"].astype(ml_dtypes.bfloat16))
 print(json.dumps({name: len(messages) for name, messages in examples.items()}))
 """.strip()
 
