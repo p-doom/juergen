@@ -4,18 +4,16 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import io
 import json
+import re
 from pathlib import Path
 from typing import Any
-
-from PIL import Image
 
 from image_domain import validate_jpeg_q92
 from pipeline.lib import config
 from pipeline.lib.image_store import parse_arrayrecord_image_uri
 from pipeline.lib.manifest import file_sha256_short
-from pipeline.lib.source_clips import resolve_source_clips
+from pipeline.lib.source_clips import resolve_source_clips_receipt
 
 _INDEX_FIELDS = {
     "frame_manifest",
@@ -63,26 +61,24 @@ _MANIFEST_FIELDS = {
     "target_height",
     "total_jpeg_bytes",
 }
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 def _read_exact_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for line_number, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), 1
-    ):
-        if not line:
-            raise ValueError(f"blank JSONL row at {path}:{line_number}")
-        value = json.loads(line)
-        if not isinstance(value, dict):
-            raise TypeError(f"JSONL row must be an object at {path}:{line_number}")
-        rows.append(value)
+    with path.open(encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                raise ValueError(f"blank JSONL row at {path}:{line_number}")
+            value = json.loads(line)
+            if not isinstance(value, dict):
+                raise TypeError(f"JSONL row must be an object at {path}:{line_number}")
+            rows.append(value)
     return rows
 
 
-def _luma_metrics(jpeg: bytes) -> tuple[float, float]:
-    with Image.open(io.BytesIO(jpeg)) as image:
-        image.load()
-        histogram = image.convert("L").histogram()
+def _luma_metrics(image: Any) -> tuple[float, float]:
+    histogram = image.convert("L").histogram()
     total = sum(histogram) or 1
     return (
         round(sum(index * count for index, count in enumerate(histogram)) / total, 3),
@@ -90,15 +86,16 @@ def _luma_metrics(jpeg: bytes) -> tuple[float, float]:
     )
 
 
-def _validate_jpeg(
+def _validate_jpeg_and_luma(
     payload: bytes, *, height: int, width: int, path: Path, index: int
-) -> None:
+) -> tuple[float, float]:
     with validate_jpeg_q92(payload) as image:
         if image.height != height or image.width != width:
             raise ValueError(f"invalid q92 JPEG frame {index} in {path}")
+        return _luma_metrics(image)
 
 
-def validate_master_segment(
+def _validate_master_segment_receipt(
     row: dict[str, Any],
     *,
     root: Path,
@@ -132,11 +129,75 @@ def validate_master_segment(
         or frame_manifest != expected_dir / "frame_manifest.jsonl"
         or not shard.is_file()
         or not frame_manifest.is_file()
-        or file_sha256_short(shard, n=64) != row["shard_sha256"]
+        or not isinstance(row["shard_sha256"], str)
+        or _SHA256.fullmatch(row["shard_sha256"]) is None
+        or not isinstance(row["frame_manifest_sha256"], str)
+        or _SHA256.fullmatch(row["frame_manifest_sha256"]) is None
+    ):
+        raise ValueError(f"invalid master payload identity for {segment_id}")
+    counts = (row["num_records"], row["total_jpeg_bytes"])
+    if (
+        any(isinstance(value, bool) or not isinstance(value, int) for value in counts)
+        or row["num_records"] <= 0
+        or row["total_jpeg_bytes"] <= 0
+    ):
+        raise ValueError(f"invalid master payload counts for {segment_id}")
+
+    marker_path = expected_dir / "segment_manifest.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    expected_marker = {
+        "schema_version": 1,
+        "inputs": {
+            "jpeg_quality": row["jpeg_quality"],
+            "master_fps": row["master_fps"],
+            "target_height": row["target_height"],
+            "video_sha256": row["video_sha256"],
+        },
+        "outputs": {
+            "frame_manifest_sha256": row["frame_manifest_sha256"],
+            "num_records": row["num_records"],
+            "shard_sha256": row["shard_sha256"],
+            "total_jpeg_bytes": row["total_jpeg_bytes"],
+        },
+    }
+    if marker != expected_marker or {path.name for path in expected_dir.iterdir()} != {
+        "frame_manifest.jsonl",
+        "images.array_record",
+        "segment_manifest.json",
+    }:
+        raise ValueError(f"invalid master segment closure: {expected_dir}")
+
+
+def validate_master_segment_receipt(
+    row: dict[str, Any],
+    *,
+    root: Path,
+    source_row: dict[str, Any],
+) -> None:
+    _validate_master_segment_receipt(row, root=root, source_row=source_row)
+    segment_id = source_row["segment_id"]
+    shard = Path(row["shard_path"]).resolve()
+    frame_manifest = Path(row["frame_manifest"]).resolve()
+    if (
+        file_sha256_short(shard, n=64) != row["shard_sha256"]
         or file_sha256_short(frame_manifest, n=64) != row["frame_manifest_sha256"]
     ):
         raise ValueError(f"invalid master payload identity for {segment_id}")
+
+
+def validate_master_segment(
+    row: dict[str, Any],
+    *,
+    root: Path,
+    source_row: dict[str, Any],
+) -> None:
+    validate_master_segment_receipt(row, root=root, source_row=source_row)
+    segment_id = source_row["segment_id"]
+    shard = Path(row["shard_path"]).resolve()
+    frame_manifest = Path(row["frame_manifest"]).resolve()
     rows = _read_exact_jsonl(frame_manifest)
+    if len(rows) != row["num_records"]:
+        raise ValueError(f"invalid master payload counts for {segment_id}")
     expected_width = (
         round(
             source_row["video_width"]
@@ -146,14 +207,6 @@ def validate_master_segment(
         )
         * 2
     )
-    counts = (row["num_records"], row["total_jpeg_bytes"])
-    if (
-        any(isinstance(value, bool) or not isinstance(value, int) for value in counts)
-        or row["num_records"] <= 0
-        or row["total_jpeg_bytes"] <= 0
-        or len(rows) != row["num_records"]
-    ):
-        raise ValueError(f"invalid master payload counts for {segment_id}")
 
     from array_record.python.array_record_module import ArrayRecordReader
 
@@ -196,18 +249,21 @@ def validate_master_segment(
                     for field in ("mean_luma", "frac_dark")
                 )
                 or frame["sha256"] != hashlib.sha256(payload).hexdigest()
-                or (frame["mean_luma"], frame["frac_dark"]) != _luma_metrics(payload)
             ):
                 raise ValueError(
                     f"frame row/payload mismatch at {frame_manifest}:{index}"
                 )
-            _validate_jpeg(
+            luma = _validate_jpeg_and_luma(
                 payload,
                 height=row["target_height"],
                 width=expected_width,
                 path=shard,
                 index=index,
             )
+            if (frame["mean_luma"], frame["frac_dark"]) != luma:
+                raise ValueError(
+                    f"frame row/payload mismatch at {frame_manifest}:{index}"
+                )
             total_bytes += len(payload)
         try:
             reader.read()
@@ -225,30 +281,6 @@ def validate_master_segment(
     if total_bytes != row["total_jpeg_bytes"]:
         raise ValueError(f"master JPEG byte count mismatch: {shard}")
 
-    marker_path = expected_dir / "segment_manifest.json"
-    marker = json.loads(marker_path.read_text(encoding="utf-8"))
-    expected_marker = {
-        "schema_version": 1,
-        "inputs": {
-            "jpeg_quality": row["jpeg_quality"],
-            "master_fps": row["master_fps"],
-            "target_height": row["target_height"],
-            "video_sha256": row["video_sha256"],
-        },
-        "outputs": {
-            "frame_manifest_sha256": row["frame_manifest_sha256"],
-            "num_records": row["num_records"],
-            "shard_sha256": row["shard_sha256"],
-            "total_jpeg_bytes": row["total_jpeg_bytes"],
-        },
-    }
-    if marker != expected_marker or {path.name for path in expected_dir.iterdir()} != {
-        "frame_manifest.jsonl",
-        "images.array_record",
-        "segment_manifest.json",
-    }:
-        raise ValueError(f"invalid master segment closure: {expected_dir}")
-
 
 def resolve_master_artifact(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     root = root.resolve()
@@ -265,7 +297,9 @@ def resolve_master_artifact(root: Path) -> tuple[dict[str, Any], list[dict[str, 
         or manifest["jpeg_quality"] != 92
     ):
         raise ValueError(f"invalid master manifest contract: {manifest_path}")
-    source_rows, source = resolve_source_clips(Path(manifest["source_clips_manifest"]))
+    source_rows, source = resolve_source_clips_receipt(
+        Path(manifest["source_clips_manifest"])
+    )
     if (
         manifest["source_clips_manifest"] != source["path"]
         or manifest["source_clips_sha256"] != source["sha256"]
@@ -284,7 +318,7 @@ def resolve_master_artifact(root: Path) -> tuple[dict[str, Any], list[dict[str, 
     ):
         raise ValueError("master index does not cover the exact Stage00 segment set")
     for row in rows:
-        validate_master_segment(
+        _validate_master_segment_receipt(
             row,
             root=root,
             source_row=source_by_segment[row["segment_id"]],

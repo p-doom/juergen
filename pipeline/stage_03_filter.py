@@ -209,7 +209,14 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
     ):
         raise ValueError(f"segment {segment_id} has no closed alignment")
     master_fps = float(master_row["master_fps"])
-    master_manifest = read_jsonl(_master_frame_manifest(master_row))
+    master_manifest_path = _master_frame_manifest(master_row)
+    if file_sha256_short(master_manifest_path, n=64) != master_row.get(
+        "frame_manifest_sha256"
+    ):
+        raise ValueError(
+            f"master frame manifest digest mismatch: {master_manifest_path}"
+        )
+    master_manifest = read_jsonl(master_manifest_path)
     if not master_manifest:
         raise ValueError(f"master segment has no frames: {segment_id}")
     keylog = Path(manifest_row["keylog_path"])

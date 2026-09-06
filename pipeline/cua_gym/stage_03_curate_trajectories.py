@@ -591,20 +591,20 @@ def resolve_curated_artifact(root: Path) -> tuple[Path, dict[str, Any]]:
         for item in dispositions
     ):
         raise ValueError(f"invalid curated disposition receipt: {manifest_path}")
-    rows = []
-    for line_number, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), 1
-    ):
-        if not line:
-            raise ValueError(f"blank curated row at {path}:{line_number}")
-        row = json.loads(line)
-        if not isinstance(row, dict):
-            raise TypeError(f"curated row must be an object at {path}:{line_number}")
-        rows.append(row)
-    if (
-        len(rows) != stats["retained_rollouts"]
-        or sum(len(row.get("steps", ())) for row in rows) != stats["executable_targets"]
-    ):
+    n_rows = 0
+    n_steps = 0
+    with path.open(encoding="utf-8") as source:
+        for line_number, line in enumerate(source, 1):
+            if not line.strip():
+                raise ValueError(f"blank curated row at {path}:{line_number}")
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise TypeError(
+                    f"curated row must be an object at {path}:{line_number}"
+                )
+            n_rows += 1
+            n_steps += len(row.get("steps", ()))
+    if n_rows != stats["retained_rollouts"] or n_steps != stats["executable_targets"]:
         raise ValueError(f"curated trajectory counts mismatch: {path}")
     return path, manifest
 

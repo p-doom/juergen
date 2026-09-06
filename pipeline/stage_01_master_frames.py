@@ -64,7 +64,11 @@ from pipeline.lib.frames_actions import (
 )
 from pipeline.lib.image_store import make_arrayrecord_image_uri
 from pipeline.lib.manifest import file_sha256_short
-from pipeline.lib.master_frames import resolve_master_artifact, validate_master_segment
+from pipeline.lib.master_frames import (
+    resolve_master_artifact,
+    validate_master_segment,
+    validate_master_segment_receipt,
+)
 from pipeline.lib.source_clips import resolve_source_clips
 
 DEFAULT_MASTER_FPS = 4.0
@@ -482,7 +486,7 @@ def run_merge(args: argparse.Namespace) -> None:
             raise ValueError(
                 f"master-frame row parameters mismatch: {row['segment_id']}"
             )
-        validate_master_segment(
+        validate_master_segment_receipt(
             row,
             root=out_dir,
             source_row=source_by_segment[str(row["segment_id"])],
@@ -697,12 +701,6 @@ def main() -> None:
         source_by_segment = {str(row["segment_id"]): row for row in rows}
         if {str(row["segment_id"]) for row in index_rows} != set(source_by_segment):
             raise ValueError("Stage01 index does not cover the exact Stage00 inventory")
-        for row in index_rows:
-            validate_master_segment(
-                row,
-                root=out_dir,
-                source_row=source_by_segment[str(row["segment_id"])],
-            )
         write_index_jsonl(out_dir / "segment_index.jsonl", index_rows)
         write_summary_and_manifest(out_dir, summary)
         try:

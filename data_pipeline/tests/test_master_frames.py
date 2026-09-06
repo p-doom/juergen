@@ -10,6 +10,7 @@ import pytest
 from image_domain import encode_jpeg_q92, validate_jpeg_q92
 from PIL import Image
 
+from pipeline.lib import master_frames, source_clips
 from pipeline.lib.manifest import file_sha256_short, make_artifact_id
 from pipeline.stage_01_master_frames import pack_master_arrayrecord, run_merge
 
@@ -194,6 +195,44 @@ def test_merge_publishes_one_closed_artifact(tmp_path: Path):
     assert manifest["n_segments"] == 2
     assert manifest["n_records_total"] == 2
     assert manifest["merged_shards"] == [0, 1]
+
+
+def test_master_consumer_does_not_replay_raw_or_decode_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    output = _write_merge_inputs(tmp_path)
+    _merge(output)
+    original_source_hash = source_clips.file_sha256_short
+    original_master_hash = master_frames.file_sha256_short
+
+    def reject_raw_hash(path: Path, *, n: int) -> str:
+        if path.suffix in {".mp4", ".msgpack"}:
+            raise AssertionError(f"raw payload was replayed: {path}")
+        return original_source_hash(path, n=n)
+
+    def reject_frame_hash(path: Path, *, n: int) -> str:
+        if path.name in {"images.array_record", "frame_manifest.jsonl"}:
+            raise AssertionError(f"frame payload was replayed: {path}")
+        return original_master_hash(path, n=n)
+
+    monkeypatch.setattr(source_clips, "file_sha256_short", reject_raw_hash)
+    monkeypatch.setattr(master_frames, "file_sha256_short", reject_frame_hash)
+    monkeypatch.setattr(
+        master_frames,
+        "validate_jpeg_q92",
+        lambda _payload: (_ for _ in ()).throw(AssertionError("JPEG was decoded")),
+    )
+    manifest, rows = master_frames.resolve_master_artifact(output)
+    assert manifest["n_segments"] == len(rows) == 2
+
+
+def test_master_consumer_rejects_changed_direct_index(tmp_path: Path):
+    output = _write_merge_inputs(tmp_path)
+    _merge(output)
+    with (output / "segment_index.jsonl").open("a") as target:
+        target.write("{}\n")
+    with pytest.raises(ValueError, match="master index digest mismatch"):
+        master_frames.resolve_master_artifact(output)
 
 
 def test_merge_rejects_master_row_rebound_to_changed_source(tmp_path: Path):

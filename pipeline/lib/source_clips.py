@@ -51,7 +51,9 @@ _EXCLUSION_FIELDS = {
 }
 
 
-def resolve_source_clips(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _resolve_source_clips_receipt(
+    path: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], str]:
     path = path.resolve()
     manifest_path = path.parent / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -152,13 +154,6 @@ def resolve_source_clips(path: Path) -> tuple[list[dict[str, Any]], dict[str, An
             or _SHA256.fullmatch(row["keylog_sha256"]) is None
         ):
             raise ValueError(f"invalid Crowd-Cast source path or digest: {row!r}")
-        if (
-            not Path(video).is_file()
-            or not Path(keylog).is_file()
-            or file_sha256_short(Path(video), n=64) != row["video_sha256"]
-            or file_sha256_short(Path(keylog), n=64) != row["keylog_sha256"]
-        ):
-            raise ValueError(f"Crowd-Cast source payload digest mismatch: {row!r}")
         attested_videos.add(Path(video))
         attested_keylogs.add(Path(keylog))
         for field in ("video_frame_count", "video_width", "video_height"):
@@ -221,10 +216,8 @@ def resolve_source_clips(path: Path) -> tuple[list[dict[str, Any]], dict[str, An
             if payload is not None and (
                 not isinstance(payload, str)
                 or not Path(payload).is_absolute()
-                or not Path(payload).is_file()
                 or not isinstance(digest, str)
                 or _SHA256.fullmatch(digest) is None
-                or file_sha256_short(Path(payload), n=64) != digest
             ):
                 raise ValueError(f"invalid Crowd-Cast excluded payload: {exclusion!r}")
         if video is not None and Path(video) in attested_videos:
@@ -238,10 +231,6 @@ def resolve_source_clips(path: Path) -> tuple[list[dict[str, Any]], dict[str, An
         exclusion_counts[exclusion["reason"]] = (
             exclusion_counts.get(exclusion["reason"], 0) + 1
         )
-    observed_videos = set(root.glob("uploads/*/*/recordings/*.mp4"))
-    observed_keylogs = set(root.glob("uploads/*/*/keylogs/*.msgpack"))
-    if attested_videos != observed_videos or attested_keylogs != observed_keylogs:
-        raise ValueError("Crowd-Cast source artifact does not close its raw inventory")
     exclusion_receipt = (
         manifest["n_exclusions"],
         manifest["n_source_videos"],
@@ -264,14 +253,69 @@ def resolve_source_clips(path: Path) -> tuple[list[dict[str, Any]], dict[str, An
         or exclusion_receipt
         != (
             len(exclusions),
-            len(observed_videos),
-            len(observed_keylogs),
+            len(attested_videos),
+            len(attested_keylogs),
             dict(sorted(exclusion_counts.items())),
         )
     ):
         raise ValueError(
             f"Crowd-Cast source exclusion counts mismatch: {manifest_path}"
         )
+    return rows, exclusions, manifest, observed_sha
+
+
+def resolve_source_clips_receipt(
+    path: Path,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    rows, _, _, observed_sha = _resolve_source_clips_receipt(path)
+    path = path.resolve()
+    return rows, {
+        "path": str(path),
+        "sha256": observed_sha,
+        "artifact_id": make_artifact_id(path.parent),
+    }
+
+
+def resolve_source_clips(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    rows, exclusions, manifest, observed_sha = _resolve_source_clips_receipt(path)
+    root = Path(manifest["source_root"])
+    attested_videos: set[Path] = set()
+    attested_keylogs: set[Path] = set()
+    for row in rows:
+        video = Path(row["video_path"])
+        keylog = Path(row["keylog_path"])
+        if (
+            not video.is_file()
+            or not keylog.is_file()
+            or file_sha256_short(video, n=64) != row["video_sha256"]
+            or file_sha256_short(keylog, n=64) != row["keylog_sha256"]
+        ):
+            raise ValueError(f"Crowd-Cast source payload digest mismatch: {row!r}")
+        attested_videos.add(video)
+        attested_keylogs.add(keylog)
+    for exclusion in exclusions:
+        for payload, digest in (
+            (exclusion["video_path"], exclusion["video_sha256"]),
+            (exclusion["keylog_path"], exclusion["keylog_sha256"]),
+        ):
+            if payload is not None:
+                payload_path = Path(payload)
+                if (
+                    not payload_path.is_file()
+                    or file_sha256_short(payload_path, n=64) != digest
+                ):
+                    raise ValueError(
+                        f"invalid Crowd-Cast excluded payload: {exclusion!r}"
+                    )
+                if payload_path.suffix == ".mp4":
+                    attested_videos.add(payload_path)
+                else:
+                    attested_keylogs.add(payload_path)
+    observed_videos = set(root.glob("uploads/*/*/recordings/*.mp4"))
+    observed_keylogs = set(root.glob("uploads/*/*/keylogs/*.msgpack"))
+    if attested_videos != observed_videos or attested_keylogs != observed_keylogs:
+        raise ValueError("Crowd-Cast source artifact does not close its raw inventory")
+    path = path.resolve()
     return rows, {
         "path": str(path),
         "sha256": observed_sha,
