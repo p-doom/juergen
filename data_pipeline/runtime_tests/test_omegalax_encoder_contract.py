@@ -149,8 +149,7 @@ def _cua_messages(tmp_path: Path) -> list[dict]:
     messages = rows[-1]["messages"]
     assert messages[-1]["content"][0]["text"].endswith("NO_OP\nTERMINATE: success")
     assert any(
-        message["role"] == "assistant" and message.get("loss") is False
-        for message in messages
+        message["role"] == "assistant" and message.get("loss") is False for message in messages
     )
     return messages
 
