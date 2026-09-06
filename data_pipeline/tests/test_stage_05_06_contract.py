@@ -592,6 +592,127 @@ def test_stage_05_failed_merge_does_not_replace_canonical_cache(
     assert canonical.read_text() == "previous\n"
 
 
+@pytest.mark.parametrize("mode", ["wrong_partition", "bad_counters", "duplicate"])
+def test_stage_05_merge_rejects_resealed_bad_shards(
+    tmp_path: Path, production_inputs, mode: str
+) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"], n_conversations=3)
+    output = tmp_path / "sharded"
+    common = {
+        "output_dir": output,
+        "source_path": source,
+        "omegalax_repo": production_inputs["repo"],
+        "processor_snapshot": production_inputs["snapshot"],
+        "num_workers": 2,
+        "num_shards": 2,
+    }
+    for index in range(2):
+        assert (
+            _run(
+                "stage_05_measure_lengths.py", production_inputs["env"], **common, shard_index=index
+            ).returncode
+            == 0
+        )
+    shard = output / "message_lengths.shard0001_of_0002.jsonl"
+    rows = [json.loads(line) for line in shard.read_text().splitlines()]
+    if mode == "wrong_partition":
+        rows[0]["conv_idx"] = 0
+    elif mode == "bad_counters":
+        rows[0]["measurement"]["vision_tokens"] += 1
+    else:
+        rows.insert(1, rows[0])
+    shard.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    receipt = output / "measure_receipt.shard0001_of_0002.json"
+    value = json.loads(receipt.read_text())
+    value["cache"]["sha256"] = hashlib.sha256(shard.read_bytes()).hexdigest()
+    value["cache"]["n_messages"] = len(rows)
+    receipt.write_text(json.dumps(value))
+    result = _run("stage_05_measure_lengths.py", production_inputs["env"], **common, merge=True)
+    assert result.returncode != 0
+
+
+def test_stage_05_merge_requires_every_shard_receipt(tmp_path: Path, production_inputs) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    result = _run(
+        "stage_05_measure_lengths.py",
+        production_inputs["env"],
+        output_dir=tmp_path / "output",
+        source_path=source,
+        omegalax_repo=production_inputs["repo"],
+        processor_snapshot=production_inputs["snapshot"],
+        num_workers=2,
+        num_shards=2,
+        merge=True,
+    )
+    assert result.returncode != 0
+    assert "missing shard receipt" in result.stderr
+
+
+@pytest.mark.parametrize("worker_flag", [{"shard_index": 0}, {"work_dir": "/tmp/work"}])
+def test_stage_05_merge_rejects_worker_flags(
+    tmp_path: Path, production_inputs, worker_flag: dict[str, object]
+) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    result = _run(
+        "stage_05_measure_lengths.py",
+        production_inputs["env"],
+        output_dir=tmp_path / "output",
+        source_path=source,
+        omegalax_repo=production_inputs["repo"],
+        processor_snapshot=production_inputs["snapshot"],
+        num_workers=2,
+        merge=True,
+        **worker_flag,
+    )
+    assert result.returncode != 0
+    assert "merge does not accept worker flags" in result.stderr
+
+
+def test_stage_05_failed_worker_preserves_sealed_artifact(
+    tmp_path: Path, production_inputs
+) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    output = _measure(tmp_path, production_inputs, source)
+    manifest = (output / "manifest.json").read_bytes()
+    cache = (output / "message_lengths.jsonl").read_bytes()
+    receipt = output / "measure_receipt.shard0000_of_0001.json"
+    receipt.unlink()
+    result = _run(
+        "stage_05_measure_lengths.py",
+        {**production_inputs["env"], "FAKE_UV_CACHE": "malformed"},
+        output_dir=output,
+        source_path=source,
+        omegalax_repo=production_inputs["repo"],
+        processor_snapshot=production_inputs["snapshot"],
+        num_workers=2,
+    )
+    assert result.returncode != 0
+    assert (output / "manifest.json").read_bytes() == manifest
+    assert (output / "message_lengths.jsonl").read_bytes() == cache
+
+
+def test_stage_05_supports_empty_partitions(tmp_path: Path, production_inputs) -> None:
+    source = make_source(tmp_path / "source", production_inputs["image_store"])
+    result = _run(
+        "stage_05_measure_lengths.py",
+        production_inputs["env"],
+        output_dir=tmp_path / "output",
+        source_path=source,
+        omegalax_repo=production_inputs["repo"],
+        processor_snapshot=production_inputs["snapshot"],
+        num_workers=2,
+        num_shards=3,
+        shard_index=2,
+    )
+    assert result.returncode == 0, result.stderr
+    assert _script_invocations(production_inputs["log"]) == []
+    receipt = json.loads(
+        (tmp_path / "output" / "measure_receipt.shard0002_of_0003.json").read_text()
+    )
+    assert receipt["cache"]["n_conversations"] == 0
+    assert receipt["cache"]["n_messages"] == 0
+
+
 def test_stages_remove_interrupted_manifest_temps(tmp_path: Path, production_inputs) -> None:
     source = make_source(tmp_path / "source", production_inputs["image_store"])
     lengths = tmp_path / "lengths-source"
@@ -644,7 +765,7 @@ def test_stage_05_rejects_invalid_cache(
     )
     assert result.returncode != 0
     assert message in result.stderr
-    assert not (output / "manifest.json").exists()
+    assert (output / "manifest.json").read_text() == "stale"
 
 
 def test_stage_05_rejects_compiler_changes_during_execution(

@@ -34,7 +34,24 @@ uv run --project data_pipeline --locked pytest -q data_pipeline/tests
 ```
 
 Each stage publishes `manifest.json` only after its outputs are complete.
+
 CUA-Gym Stage01 first seals a source inventory, then runs one independently
 resumable job per tar and a finalizer. Workers take the inventory path, its
 printed `inventory_sha256`, and one `--tar_index`; `--finalize` accepts the
 same sealed inventory and refuses missing, stale, or corrupt shard receipts.
+
+### Sharded message-length measurement
+
+Run one Stage 05 worker per shard against a shared output directory, then run
+the finalizer after every worker receipt exists:
+
+```bash
+common=(--output_dir="$lengths" --source_path="$chat" --omegalax_repo="$omegalax" \
+  --processor_snapshot="$snapshot" --num_workers=8 --num_shards=8)
+python pipeline/stage_05_measure_lengths.py "${common[@]}" --shard_index=0
+python pipeline/stage_05_measure_lengths.py "${common[@]}" --merge
+```
+
+A shard with no assigned conversations publishes an empty receipt without
+launching the compiler. With `--num_shards=1`, the worker uses the same shard
+contract and finalizes automatically.

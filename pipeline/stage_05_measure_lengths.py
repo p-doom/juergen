@@ -102,8 +102,11 @@ def _write_slice(chat: Path, target: Path, index: int, count: int) -> int:
     return conversations
 
 
-def _remap(source: Path, target: Path, index: int, count: int) -> int:
+def _remap(
+    source: Path, target: Path, chat: Path, index: int, count: int, merge_size: int
+) -> int:
     rows = 0
+    expected = _iter_expected(chat, index, count)
     with (
         source.open(encoding="utf-8") as measured,
         target.open("w", encoding="utf-8") as output,
@@ -112,12 +115,23 @@ def _remap(source: Path, target: Path, index: int, count: int) -> int:
             if not line.strip():
                 raise ValueError(f"blank cache row at {source}:{line_number}")
             row = json.loads(line)
-            local = row.get("conv_idx") if isinstance(row, dict) else None
-            if isinstance(local, bool) or not isinstance(local, int) or local < 0:
-                raise ValueError(f"invalid local cache key at {source}:{line_number}")
+            local, offset = validate_message_length_row(
+                row, source, line_number, merge_size
+            )
             row["conv_idx"] = index + local * count
+            key = row["conv_idx"], offset
+            wanted = next(expected, None)
+            if key != wanted:
+                raise ValueError(
+                    f"{_tag(index, count)} cache keys mismatch: expected {wanted}, got {key}"
+                )
             output.write(json.dumps(row, separators=(",", ":")) + "\n")
             rows += 1
+    missing = next(expected, None)
+    if missing is not None:
+        raise ValueError(
+            f"{_tag(index, count)} cache keys mismatch: expected {missing}, got None"
+        )
     return rows
 
 
@@ -135,51 +149,26 @@ def _identity(
     }
 
 
-def _iter_keyed(path: Path, merge_size: int | None = None):
+def _iter_keyed(path: Path, merge_size: int, shard_index: int, num_shards: int):
     previous = None
     with path.open(encoding="utf-8") as source:
         for line_number, line in enumerate(source, 1):
             if not line.strip():
                 raise ValueError(f"blank cache row at {path}:{line_number}")
             row = json.loads(line)
-            if merge_size is None:
-                if not isinstance(row, dict):
-                    raise TypeError(f"invalid cache row at {path}:{line_number}")
-                key = row.get("conv_idx"), row.get("msg_offset")
-            else:
-                key = validate_message_length_row(row, path, line_number, merge_size)
-            if any(
-                isinstance(value, bool) or not isinstance(value, int) or value < 0
-                for value in key
-            ):
-                raise ValueError(f"invalid cache key at {path}:{line_number}")
+            key = validate_message_length_row(row, path, line_number, merge_size)
+            if key[0] % num_shards != shard_index:
+                raise ValueError(f"wrong partition key at {path}:{line_number}: {key}")
             if previous is not None and key <= previous:
                 raise ValueError(
                     f"cache keys are not strictly sorted at {path}:{line_number}"
                 )
             previous = key
-            yield key, line.rstrip("\n")
-
-
-def _validate_shard_keys(cache: Path, chat: Path, index: int, count: int) -> int:
-    expected = _iter_expected(chat, index, count)
-    observed = _iter_keyed(cache)
-    rows = 0
-    while True:
-        wanted = next(expected, None)
-        item = next(observed, None)
-        got = item[0] if item is not None else None
-        if wanted != got:
-            raise ValueError(
-                f"{_tag(index, count)} cache keys mismatch: expected {wanted}, got {got}"
-            )
-        if wanted is None:
-            return rows
-        rows += 1
+            yield key, shard_index, line.rstrip("\n")
 
 
 def _validate_receipt(
-    receipt_path: Path, cache: Path, identity: dict, index: int, chat: Path
+    receipt_path: Path, cache: Path, identity: dict, index: int
 ) -> dict:
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     if not isinstance(receipt, dict) or set(receipt) != {
@@ -194,15 +183,21 @@ def _validate_receipt(
     fields = {"file", "sha256", "n_messages", "n_conversations", "elapsed_s"}
     if not isinstance(info, dict) or set(info) != fields:
         raise ValueError(f"invalid shard receipt cache: {receipt_path}")
+    if any(
+        isinstance(info[name], bool)
+        or not isinstance(info[name], int)
+        or info[name] < 0
+        for name in ("n_messages", "n_conversations", "elapsed_s")
+    ):
+        raise ValueError(f"invalid shard receipt counters: {receipt_path}")
+    if not isinstance(info["sha256"], str) or len(info["sha256"]) != 64:
+        raise ValueError(f"invalid shard receipt digest: {receipt_path}")
     if (
         info["file"] != cache.name
         or not cache.is_file()
         or info["sha256"] != file_sha256_short(cache, n=64)
     ):
         raise ValueError(f"shard cache does not match receipt: {receipt_path}")
-    rows = _validate_shard_keys(cache, chat, index, identity["num_shards"])
-    if rows != info["n_messages"]:
-        raise ValueError(f"shard cache count does not match receipt: {receipt_path}")
     return info
 
 
@@ -217,7 +212,17 @@ def _measure(
     cache, receipt_path = _paths(output_dir, index, identity["num_shards"])
     if receipt_path.is_file():
         try:
-            _validate_receipt(receipt_path, cache, identity, index, chat)
+            info = _validate_receipt(receipt_path, cache, identity, index)
+            rows = sum(
+                1
+                for _ in _iter_keyed(
+                    cache, processor["merge_size"], index, identity["num_shards"]
+                )
+            )
+            if rows != info["n_messages"]:
+                raise ValueError(
+                    f"shard cache count does not match receipt: {receipt_path}"
+                )
         except (OSError, ValueError, json.JSONDecodeError):
             pass
         else:
@@ -238,26 +243,30 @@ def _measure(
         conversations = _write_slice(chat, sliced, index, identity["num_shards"])
         measured = work / "measured"
         measured.mkdir()
-        cmd = omegalax_python(
-            Path(omegalax["path"]),
-            "scripts/measure_message_lengths_from_chat.py",
-            f"--data_path={sliced}",
-            f"--out_dir={measured}",
-            f"--model_id={processor['path']}",
-            f"--processor={processor['path']}",
-            f"--num_workers={FLAGS.num_workers}",
-        )
         started = time.time()
-        result = subprocess.run(
-            cmd,
-            cwd=omegalax["path"],
-            env=isolated_subprocess_environment(),
-            check=False,
-        )
-        if result.returncode:
-            raise RuntimeError(
-                f"measure_message_lengths_from_chat.py failed (rc={result.returncode})"
+        if conversations == 0:
+            (measured / MESSAGE_LENGTHS_FILENAME).write_text("", encoding="utf-8")
+        else:
+            cmd = omegalax_python(
+                Path(omegalax["path"]),
+                "scripts/measure_message_lengths_from_chat.py",
+                f"--data_path={sliced}",
+                f"--out_dir={measured}",
+                f"--model_id={processor['path']}",
+                f"--processor={processor['path']}",
+                f"--num_workers={FLAGS.num_workers}",
             )
+            result = subprocess.run(
+                cmd,
+                cwd=omegalax["path"],
+                env=isolated_subprocess_environment(),
+                check=False,
+            )
+            if result.returncode:
+                raise RuntimeError(
+                    f"measure_message_lengths_from_chat.py failed (rc={result.returncode})"
+                )
+        elapsed = int(time.time() - started)
         entries = list(measured.iterdir())
         if (
             len(entries) != 1
@@ -267,8 +276,14 @@ def _measure(
             raise RuntimeError(
                 f"measurement produced no cache: {measured / MESSAGE_LENGTHS_FILENAME}"
             )
-        _remap(entries[0], temporary, index, identity["num_shards"])
-        messages = _validate_shard_keys(temporary, chat, index, identity["num_shards"])
+        messages = _remap(
+            entries[0],
+            temporary,
+            chat,
+            index,
+            identity["num_shards"],
+            processor["merge_size"],
+        )
         current = _identity(
             Path(identity["source"]),
             chat,
@@ -289,7 +304,7 @@ def _measure(
                 "sha256": file_sha256_short(cache, n=64),
                 "n_messages": messages,
                 "n_conversations": conversations,
-                "elapsed_s": int(time.time() - started),
+                "elapsed_s": elapsed,
             },
         }
         receipt_tmp = receipt_path.with_suffix(receipt_path.suffix + ".tmp")
@@ -300,8 +315,8 @@ def _measure(
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _close_rows(path: Path, merge_size: int):
-    return closing(_iter_keyed(path, merge_size))
+def _close_rows(path: Path, merge_size: int, shard_index: int, num_shards: int):
+    return closing(_iter_keyed(path, merge_size, shard_index, num_shards))
 
 
 def _merge(
@@ -318,19 +333,28 @@ def _merge(
         cache, receipt = _paths(output_dir, index, identity["num_shards"])
         if not receipt.is_file():
             raise ValueError(f"missing shard receipt: {receipt}")
-        infos.append(_validate_receipt(receipt, cache, identity, index, chat))
+        infos.append(_validate_receipt(receipt, cache, identity, index))
         caches.append(cache)
     final = output_dir / MESSAGE_LENGTHS_FILENAME
     temporary = output_dir / f".{MESSAGE_LENGTHS_FILENAME}.tmp"
     rows = 0
+    shard_rows = [0] * identity["num_shards"]
+    shard_conversations = [0] * identity["num_shards"]
+    previous_conversation = [None] * identity["num_shards"]
     try:
         with ExitStack() as stack, temporary.open("w", encoding="utf-8") as target:
             streams = [
-                stack.enter_context(_close_rows(path, processor["merge_size"]))
-                for path in caches
+                stack.enter_context(
+                    _close_rows(
+                        path, processor["merge_size"], index, identity["num_shards"]
+                    )
+                )
+                for index, path in enumerate(caches)
             ]
             expected = _iter_expected(chat)
-            for key, line in heapq.merge(*streams, key=lambda item: item[0]):
+            for key, shard_index, line in heapq.merge(
+                *streams, key=lambda item: item[0]
+            ):
                 wanted = next(expected, None)
                 if key != wanted:
                     raise ValueError(
@@ -338,11 +362,27 @@ def _merge(
                     )
                 target.write(line + "\n")
                 rows += 1
+                shard_rows[shard_index] += 1
+                if key[0] != previous_conversation[shard_index]:
+                    shard_conversations[shard_index] += 1
+                    previous_conversation[shard_index] = key[0]
             missing = next(expected, None)
             if missing is not None:
                 raise ValueError(
                     f"merged cache is incomplete: first missing key {missing}"
                 )
+            for index, (observed, info) in enumerate(zip(shard_rows, infos)):
+                if observed != info["n_messages"]:
+                    raise ValueError(
+                        f"shard {_tag(index, identity['num_shards'])} cache count does not "
+                        f"match receipt: expected {info['n_messages']}, got {observed}"
+                    )
+                if shard_conversations[index] != info["n_conversations"]:
+                    raise ValueError(
+                        f"shard {_tag(index, identity['num_shards'])} conversation count "
+                        f"does not match receipt: expected {info['n_conversations']}, "
+                        f"got {shard_conversations[index]}"
+                    )
         current = _identity(
             source_path,
             chat,
@@ -390,9 +430,16 @@ def main(_) -> None:
     identity = _identity(source_path, chat, processor, omegalax, FLAGS.num_shards)
     (output_dir / "manifest.json.tmp").unlink(missing_ok=True)
     if FLAGS.merge:
+        unsupported = [
+            name for name in ("shard_index", "work_dir") if FLAGS[name].present
+        ]
+        if unsupported:
+            raise ValueError(
+                "merge does not accept worker flags: "
+                + ", ".join(f"--{name}" for name in unsupported)
+            )
         _merge(source_path, chat, output_dir, identity, processor, omegalax)
         return
-    (output_dir / "manifest.json").unlink(missing_ok=True)
     _measure(chat, output_dir, identity, FLAGS.shard_index, processor, omegalax)
     if FLAGS.num_shards == 1:
         _merge(source_path, chat, output_dir, identity, processor, omegalax)
