@@ -268,13 +268,7 @@ def build_segment_master(task: dict[str, Any]) -> dict[str, Any]:
         "video_sha256": row["video_sha256"],
     }
     if cached := _cached_segment(segment_frame_dir, cache_inputs):
-        result = {**base_row, "status": "ok", **cached}
-        validate_master_segment(
-            result,
-            root=Path(task["frames_dir"]).parent,
-            source_row=row,
-        )
-        return result
+        return {**base_row, "status": "ok", **cached}
     (segment_frame_dir / "segment_manifest.json").unlink(missing_ok=True)
 
     extract_frames_ffmpeg(

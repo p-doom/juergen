@@ -21,6 +21,7 @@ from PIL import Image
 
 from pipeline.annotation import stage_annotate
 from pipeline.annotation.lib.labeler import LabelResult
+from pipeline.lib import master_frames
 from pipeline.lib.image_store import make_arrayrecord_image_uri, read_jpeg_bytes
 from pipeline.lib.manifest import (
     file_sha256_short,
@@ -449,7 +450,9 @@ def test_stage_04_refuses_an_unprojectable_goal(chain: Chain, tmp_path: Path):
     assert "goal projection failed" in process.stderr
 
 
-def test_stage_01_cache_validates_closed_payload(chain: Chain, tmp_path: Path):
+def test_stage_01_cache_validates_closed_payload(
+    chain: Chain, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     source_segment = chain.master / "frames" / clip.SEGMENT_ID
     frames_dir = tmp_path / "frames"
     segment_dir = frames_dir / clip.SEGMENT_ID
@@ -491,6 +494,11 @@ def test_stage_01_cache_validates_closed_payload(chain: Chain, tmp_path: Path):
         "jpeg_quality": index_row["jpeg_quality"],
         "ffmpeg_bin": "must-not-run",
     }
+    monkeypatch.setattr(
+        master_frames,
+        "validate_jpeg_q92",
+        lambda _payload: (_ for _ in ()).throw(AssertionError("JPEG was decoded")),
+    )
     assert build_segment_master(task)["status"] == "ok"
     source_video = Path(chain.clip_rows[0]["video_path"])
     original_video = source_video.read_bytes()
