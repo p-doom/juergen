@@ -32,7 +32,6 @@ from pipeline.lib.omegalax import (
     require_conversations_fit,
     validate_message_lengths,
     validate_record_dataset,
-    verify_record_encodings,
 )
 
 FLAGS = flags.FLAGS
@@ -287,15 +286,6 @@ def main(_) -> None:
         )
         for split, path in split_paths.items()
     }
-    verify_record_encodings(
-        Path(omegalax["path"]),
-        processor_snapshot,
-        split_paths,
-        max_length=FLAGS.max_length,
-        expected_counts={
-            split: receipt["num_records"] for split, receipt in final_receipts.items()
-        },
-    )
     post_processor = attest_processor_snapshot(Path(FLAGS.processor_snapshot))
     post_omegalax = attest_omegalax(Path(FLAGS.omegalax_repo))
     if post_processor != processor_snapshot or post_omegalax != omegalax:

@@ -29,57 +29,6 @@ _SNAPSHOT_FILES = {
     "tokenizer.json",
     "vocab.json",
 }
-_RECORD_ENCODER_VERIFICATION = """
-import json
-import sys
-from pathlib import Path
-
-from array_record.python.array_record_module import ArrayRecordReader
-from transformers import AutoImageProcessor, AutoTokenizer
-
-from omegalax.data.qwen3_encoding import encode_qwen_messages
-
-snapshot = sys.argv[1]
-max_length = int(sys.argv[2])
-datasets = json.loads(sys.argv[3])
-tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True)
-processor = AutoImageProcessor.from_pretrained(
-    snapshot, local_files_only=True, use_fast=False
-)
-observed = {}
-for split, root_value in datasets.items():
-    root = Path(root_value)
-    metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
-    count = 0
-    for name in metadata["shard_paths"]:
-        reader = ArrayRecordReader(str(root / name))
-        try:
-            for _ in range(reader.num_records()):
-                record = json.loads(reader.read().decode("utf-8"))
-                encoded = encode_qwen_messages(
-                    record["messages"],
-                    tokenizer=tokenizer,
-                    image_processor=processor,
-                    include_pixels=False,
-                )
-                length = len(encoded["input_ids"])
-                supervised = int(encoded["loss_mask"].sum())
-                if (
-                    length != record["_omegalax_measured_length"]
-                    or length > max_length
-                    or supervised <= 0
-                ):
-                    raise ValueError(
-                        f"record encoding mismatch in {root / name}: "
-                        f"length={length}, measured="
-                        f"{record['_omegalax_measured_length']}, loss={supervised}"
-                    )
-                count += 1
-        finally:
-            reader.close()
-    observed[split] = count
-print(json.dumps(observed, sort_keys=True))
-""".strip()
 _COMPILED_SIDECARS = {
     "sequence_lengths.jsonl",
     "token_stats.json",
@@ -439,46 +388,6 @@ def discard_compiler_diagnostics(output_dir: Path) -> None:
         raise ValueError(f"Omegalax output set is invalid: {output_dir}")
     for name in _COMPILED_SIDECARS:
         entries[name].unlink()
-
-
-def verify_record_encodings(
-    omegalax_root: Path,
-    processor_snapshot: dict[str, Any],
-    datasets: dict[str, Path],
-    *,
-    max_length: int,
-    expected_counts: dict[str, int],
-) -> None:
-    serialized = json.dumps(
-        {name: str(path.resolve()) for name, path in datasets.items()},
-        sort_keys=True,
-    )
-    result = subprocess.run(
-        omegalax_python(
-            omegalax_root,
-            "-c",
-            _RECORD_ENCODER_VERIFICATION,
-            processor_snapshot["path"],
-            str(max_length),
-            serialized,
-        ),
-        cwd=omegalax_root.resolve(),
-        env=isolated_subprocess_environment(),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    try:
-        observed = json.loads(result.stdout.strip())
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            "Omegalax record verification returned invalid output"
-        ) from exc
-    if observed != expected_counts:
-        raise ValueError(
-            f"Omegalax record verification count mismatch: "
-            f"expected {expected_counts}, got {observed}"
-        )
 
 
 def validate_record_dataset(

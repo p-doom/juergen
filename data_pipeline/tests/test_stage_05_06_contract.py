@@ -141,15 +141,6 @@ for name in ("PYTHONHOME", "PYTHONPATH", "UV_NO_SYNC", "UV_PROJECT_ENVIRONMENT")
         raise SystemExit(f"unscrubbed environment: {{name}}")
 if os.environ.get("PYTHONNOUSERSITE") != "1":
     raise SystemExit("PYTHONNOUSERSITE is not set")
-if "-c" in sys.argv:
-    if os.environ.get("FAKE_RECORD_VERIFICATION") == "fail":
-        raise SystemExit("record encoding mismatch")
-    datasets = json.loads(sys.argv[-1])
-    print(json.dumps({{
-        split: json.loads((Path(root) / "metadata.json").read_text())["num_records"]
-        for split, root in datasets.items()
-    }}, sort_keys=True))
-    raise SystemExit(0)
 flags = dict(a[2:].split("=", 1) for a in sys.argv[1:] if a.startswith("--") and "=" in a)
 script = next(a for a in sys.argv[1:] if a.endswith(".py"))
 out = Path(flags["out_dir"])
@@ -925,22 +916,6 @@ def test_stage_06_validates_each_split_once(tmp_path: Path, production_inputs) -
     )
     assert result.returncode != 0
     assert not (Path(flags["output_dir"]) / "manifest.json").exists()
-
-
-def test_stage_06_rejects_encoder_verification_failure(tmp_path: Path, production_inputs) -> None:
-    source = make_source(tmp_path / "source", production_inputs["image_store"])
-    lengths = _measure(tmp_path, production_inputs, source)
-    output = tmp_path / "records"
-
-    result = _run(
-        "stage_06_training_records.py",
-        {**production_inputs["env"], "FAKE_RECORD_VERIFICATION": "fail"},
-        **_record_flags(tmp_path, production_inputs, source, lengths, output_dir=output),
-    )
-
-    assert result.returncode != 0
-    assert "record encoding mismatch" in result.stderr
-    assert not (output / "manifest.json").exists()
 
 
 def test_stage_06_rejects_oversized_conversations_before_replacing_outputs(

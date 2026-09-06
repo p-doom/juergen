@@ -33,6 +33,19 @@ Juergen contains no scheduler compatibility layer.
 uv run --project data_pipeline --locked pytest -q data_pipeline/tests
 ```
 
+The Omegalax compiler must use one structural Qwen encoder for per-message
+measurement, full-example encoding, and VLM collation. Assistant messages with
+`loss: false` must contribute no supervised tokens. Run the real consumer
+contract against the checkout and immutable processor snapshot selected for a
+job:
+
+```bash
+export OMEGALAX_REPO=/path/to/omegalax
+export PROCESSOR_SNAPSHOT=/path/to/models--Qwen--Qwen3-VL-2B-Instruct/snapshots/<revision>
+uv run --project data_pipeline --locked pytest -q \
+  data_pipeline/runtime_tests/test_omegalax_encoder_contract.py
+```
+
 Each stage publishes `manifest.json` only after its outputs are complete.
 
 CUA-Gym Stage01 first seals a source inventory, then runs one independently
