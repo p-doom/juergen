@@ -42,14 +42,23 @@ same sealed inventory and refuses missing, stale, or corrupt shard receipts.
 
 ### Sharded message-length measurement
 
-Run one Stage 05 worker per shard against a shared output directory, then run
-the finalizer after every worker receipt exists:
+Run one Stage05 worker per shard against a shared output directory, then run
+the finalizer after every worker receipt exists. This local loop can also be
+dispatched as independent jobs, one `--shard_index` per job:
 
 ```bash
+lengths=/path/to/message-lengths
+chat=/path/to/stage04
+omegalax=/path/to/omegalax
+snapshot=/path/to/processor/snapshots/REVISION
 common=(--output_dir="$lengths" --source_path="$chat" --omegalax_repo="$omegalax" \
   --processor_snapshot="$snapshot" --num_workers=8 --num_shards=8)
-python pipeline/stage_05_measure_lengths.py "${common[@]}" --shard_index=0
-python pipeline/stage_05_measure_lengths.py "${common[@]}" --merge
+for index in {0..7}; do
+  uv run --project data_pipeline --locked python pipeline/stage_05_measure_lengths.py \
+    "${common[@]}" --shard_index="$index"
+done
+uv run --project data_pipeline --locked python pipeline/stage_05_measure_lengths.py \
+  "${common[@]}" --merge
 ```
 
 A shard with no assigned conversations publishes an empty receipt without

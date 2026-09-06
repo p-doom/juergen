@@ -85,11 +85,10 @@ def _iter_chat(chat: Path) -> Iterator[tuple[int, str, int]]:
             index += 1
 
 
-def _iter_expected(chat: Path, shard_index: int | None = None, num_shards: int = 1):
+def _iter_expected(chat: Path):
     for index, _line, size in _iter_chat(chat):
-        if shard_index is None or index % num_shards == shard_index:
-            for offset in range(size):
-                yield index, offset
+        for offset in range(size):
+            yield index, offset
 
 
 def _write_slice(chat: Path, target: Path, index: int, count: int) -> int:
@@ -106,7 +105,7 @@ def _remap(
     source: Path, target: Path, chat: Path, index: int, count: int, merge_size: int
 ) -> int:
     rows = 0
-    expected = _iter_expected(chat, index, count)
+    expected = _iter_expected(chat)
     with (
         source.open(encoding="utf-8") as measured,
         target.open("w", encoding="utf-8") as output,
@@ -118,13 +117,13 @@ def _remap(
             local, offset = validate_message_length_row(
                 row, source, line_number, merge_size
             )
-            row["conv_idx"] = index + local * count
-            key = row["conv_idx"], offset
+            key = local, offset
             wanted = next(expected, None)
             if key != wanted:
                 raise ValueError(
                     f"{_tag(index, count)} cache keys mismatch: expected {wanted}, got {key}"
                 )
+            row["conv_idx"] = index + local * count
             output.write(json.dumps(row, separators=(",", ":")) + "\n")
             rows += 1
     missing = next(expected, None)
@@ -279,7 +278,7 @@ def _measure(
         messages = _remap(
             entries[0],
             temporary,
-            chat,
+            sliced,
             index,
             identity["num_shards"],
             processor["merge_size"],
@@ -419,16 +418,8 @@ def _merge(
 
 
 def main(_) -> None:
-    output_dir = Path(FLAGS.output_dir).resolve()
-    source_path = Path(FLAGS.source_path).resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
     if not 0 <= FLAGS.shard_index < FLAGS.num_shards:
         raise ValueError(f"shard_index must be in [0, {FLAGS.num_shards})")
-    chat = resolve_chat_artifact(source_path)
-    processor = attest_processor_snapshot(Path(FLAGS.processor_snapshot))
-    omegalax = attest_omegalax(Path(FLAGS.omegalax_repo))
-    identity = _identity(source_path, chat, processor, omegalax, FLAGS.num_shards)
-    (output_dir / "manifest.json.tmp").unlink(missing_ok=True)
     if FLAGS.merge:
         unsupported = [
             name for name in ("shard_index", "work_dir") if FLAGS[name].present
@@ -438,6 +429,14 @@ def main(_) -> None:
                 "merge does not accept worker flags: "
                 + ", ".join(f"--{name}" for name in unsupported)
             )
+    output_dir = Path(FLAGS.output_dir).resolve()
+    source_path = Path(FLAGS.source_path).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    chat = resolve_chat_artifact(source_path)
+    processor = attest_processor_snapshot(Path(FLAGS.processor_snapshot))
+    omegalax = attest_omegalax(Path(FLAGS.omegalax_repo))
+    identity = _identity(source_path, chat, processor, omegalax, FLAGS.num_shards)
+    if FLAGS.merge:
         _merge(source_path, chat, output_dir, identity, processor, omegalax)
         return
     _measure(chat, output_dir, identity, FLAGS.shard_index, processor, omegalax)

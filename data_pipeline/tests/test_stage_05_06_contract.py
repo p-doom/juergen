@@ -652,12 +652,11 @@ def test_stage_05_merge_requires_every_shard_receipt(tmp_path: Path, production_
 def test_stage_05_merge_rejects_worker_flags(
     tmp_path: Path, production_inputs, worker_flag: dict[str, object]
 ) -> None:
-    source = make_source(tmp_path / "source", production_inputs["image_store"])
     result = _run(
         "stage_05_measure_lengths.py",
         production_inputs["env"],
         output_dir=tmp_path / "output",
-        source_path=source,
+        source_path=tmp_path / "missing-source",
         omegalax_repo=production_inputs["repo"],
         processor_snapshot=production_inputs["snapshot"],
         num_workers=2,
@@ -666,6 +665,7 @@ def test_stage_05_merge_rejects_worker_flags(
     )
     assert result.returncode != 0
     assert "merge does not accept worker flags" in result.stderr
+    assert not (tmp_path / "output").exists()
 
 
 def test_stage_05_failed_worker_preserves_sealed_artifact(
