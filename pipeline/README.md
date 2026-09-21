@@ -30,7 +30,7 @@ and
 Juergen contains no scheduler compatibility layer.
 
 ```bash
-uv run --project data_pipeline --locked pytest -q data_pipeline/tests
+uv run --locked --extra dev pytest -q pipeline/tests
 ```
 
 The Omegalax compiler must use one structural Qwen encoder for per-message
@@ -42,8 +42,8 @@ job:
 ```bash
 export OMEGALAX_REPO=/path/to/omegalax
 export PROCESSOR_SNAPSHOT=/path/to/models--Qwen--Qwen3-VL-2B-Instruct/snapshots/REVISION
-uv run --project data_pipeline --locked pytest -q \
-  data_pipeline/runtime_tests/test_omegalax_encoder_contract.py
+uv run --locked pytest -q \
+  runtime_tests/test_omegalax_encoder_contract.py
 ```
 
 Each stage publishes `manifest.json` only after its outputs are complete.
@@ -56,17 +56,17 @@ Schema-v1 image stores must be rebuilt; Stage04 accepts only the schema-v2
 receipt layout. The local loop below can be dispatched as independent tar jobs:
 
 ```bash
-metadata=$(uv run --project data_pipeline --locked python pipeline/cua_gym/stage_01_image_store.py \
+metadata=$(uv run --locked python pipeline/cua_gym/stage_01_image_store.py \
   --screenshots_dir /data/screenshots --output_dir /data/images)
 digest=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["inventory_sha256"])' <<<"$metadata")
 count=$(python3 -c 'import json,sys; print(len(json.load(sys.stdin)["sources"]))' <<<"$metadata")
 inventory=/data/images/source_inventory-$digest.json
 for ((index=0; index<count; index++)); do
-  uv run --project data_pipeline --locked python pipeline/cua_gym/stage_01_image_store.py \
+  uv run --locked python pipeline/cua_gym/stage_01_image_store.py \
     --inventory "$inventory" --inventory_sha256 "$digest" --tar_index "$index" \
     --workers 8 --output_dir /data/images
 done
-uv run --project data_pipeline --locked python pipeline/cua_gym/stage_01_image_store.py \
+uv run --locked python pipeline/cua_gym/stage_01_image_store.py \
   --inventory "$inventory" --inventory_sha256 "$digest" --finalize --output_dir /data/images
 ```
 
@@ -84,10 +84,10 @@ snapshot=/path/to/processor/snapshots/REVISION
 common=(--output_dir="$lengths" --source_path="$chat" --omegalax_repo="$omegalax" \
   --processor_snapshot="$snapshot" --num_workers=8 --num_shards=8)
 for index in {0..7}; do
-  uv run --project data_pipeline --locked python pipeline/stage_05_measure_lengths.py \
+  uv run --locked python pipeline/stage_05_measure_lengths.py \
     "${common[@]}" --shard_index="$index"
 done
-uv run --project data_pipeline --locked python pipeline/stage_05_measure_lengths.py \
+uv run --locked python pipeline/stage_05_measure_lengths.py \
   "${common[@]}" --merge
 ```
 

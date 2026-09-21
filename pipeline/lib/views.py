@@ -1,7 +1,7 @@
 """The shared frame selector: pick frames @fps within a stage-03 filter's
 survivors and derive per-frame label windows + dead zones.
 
-Used identically by stage 03b (annotation @k fps) and stage 04 (training
+Used identically by annotation/stage_annotate (@k fps) and stage 04 (training
 @x fps). Both rates must divide the master fps exactly.
 The master axis is integer ticks == master record
 indices; nothing here touches timestamps.

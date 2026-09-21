@@ -11,14 +11,14 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-import grammars
 import msgpack
 import pytest
 import synthetic_clip as clip
-from grammars.deltatype_v2 import CODEC
-from image_domain import jpeg_q92_height_domain
 from PIL import Image
 
+import grammars
+from grammars.deltatype_v2 import CODEC
+from image_domain import jpeg_q92_height_domain
 from pipeline.annotation import stage_annotate
 from pipeline.annotation.lib.labeler import LabelResult
 from pipeline.lib import master_frames
@@ -33,12 +33,11 @@ from pipeline.lib.views import FilterArtifact
 from pipeline.stage_01_master_frames import build_segment_master
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DATA_PIPELINE_DIR = REPO_ROOT / "data_pipeline"
 STAGES = REPO_ROOT / "pipeline"
 
 
 def _run_stage(script: str, *args: object) -> None:
-    roots = [REPO_ROOT, DATA_PIPELINE_DIR]
+    roots = [REPO_ROOT]
     environment = dict(os.environ, PYTHONPATH=os.pathsep.join(map(str, roots)))
     process = subprocess.run(
         [sys.executable, str(STAGES / script), *map(str, args)],

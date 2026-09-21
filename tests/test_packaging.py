@@ -6,7 +6,6 @@ import json
 import shutil
 import subprocess
 import sys
-import tomllib
 import zipfile
 from pathlib import Path
 
@@ -73,13 +72,9 @@ def wheel(tmp_path_factory) -> tuple[Path, Path]:
     )
 
 
-def test_published_wheel_and_pipeline_runtime_pin_exact_desktop(wheel):
+def test_published_wheel_pins_exact_desktop(wheel):
     _, juergen = wheel
     assert f"Requires-Dist: {_DESKTOP_REQUIREMENT}" in _metadata(juergen)
-    pipeline_project = tomllib.loads(
-        (_REPO / "data_pipeline" / "pyproject.toml").read_text()
-    )["project"]
-    assert _DESKTOP_REQUIREMENT in pipeline_project["dependencies"]
 
 
 def test_published_juergen_wheel_contains_no_test_modules(wheel):

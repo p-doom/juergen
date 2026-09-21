@@ -440,7 +440,7 @@ def build_curated_dataset(source_path: Path, output_dir: Path) -> dict[str, Any]
     manifest_path.unlink(missing_ok=True)
     target_path = output_dir / "trajectories.jsonl"
     temporary = output_dir / f".trajectories.{os.getpid()}.jsonl"
-    counters: Counter[str] = Counter({field: 0 for field in _STAT_FIELDS})
+    counters: Counter[str] = Counter(dict.fromkeys(_STAT_FIELDS, 0))
     exclusions = []
     dispositions: list[dict[str, Any]] = []
     try:

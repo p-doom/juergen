@@ -7,9 +7,9 @@ import json
 from pathlib import Path
 
 import pytest
-from image_domain import encode_jpeg_q92, validate_jpeg_q92
 from PIL import Image
 
+from image_domain import encode_jpeg_q92, validate_jpeg_q92
 from pipeline.lib import master_frames, source_clips
 from pipeline.lib.manifest import file_sha256_short, make_artifact_id
 from pipeline.stage_01_master_frames import pack_master_arrayrecord, run_merge

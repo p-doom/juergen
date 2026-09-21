@@ -11,14 +11,14 @@ from unittest import mock
 import pytest
 from desktop.execute.protocol import HeldStateError, build_action_request
 from desktop.geometry import DisplayGeometry
+from PIL import Image
+
 from grammars.ordered_events_v3_relative_1000_grid_v1.codec import (
     CODEC,
     action_from_dict,
     grid_delta,
     pixels_from_grid,
 )
-from PIL import Image
-
 from pipeline.cua_gym.stage_01_image_store import build_store
 from pipeline.cua_gym.stage_03_curate_trajectories import (
     build_curated_dataset,

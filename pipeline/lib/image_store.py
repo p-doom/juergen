@@ -5,9 +5,8 @@ string can point at an ArrayRecord record instead of a standalone JPEG file:
 
     {"type": "image", "image": "ar:///abs/path/to/images.array_record#12"}
 
-Each ArrayRecord record is the raw JPEG byte stream for one frame. This mirrors
-``data_pipeline/image_store.py`` on the ``main`` branch (Alfred's stage_a store)
-so the two pipelines share one URI scheme and the same training consumers.
+Each ArrayRecord record is the raw JPEG byte stream for one frame. Both SFT
+streams and the training consumers share this one URI scheme.
 """
 
 from __future__ import annotations

@@ -1,13 +1,13 @@
-"""Every numbered stage must import under the interpreter this suite runs in.
+"""Every stage must import under the interpreter this suite runs in.
 
 The stages are dispatched as file paths (``python pipeline/stage_NN_*.py --flags``)
-from whatever cwd the scheduler picks, and their dependency set is declared here,
-in ``data_pipeline/pyproject.toml`` -- not in the root project, which packages no
-``pipeline/`` and carries neither cv2 nor array-record. Nothing tied the two
-together, so ``absl`` reached stage 05/06 declared in one venv and dispatched
-against another: job 141103 died with ``ModuleNotFoundError: No module named
-'absl'`` after being scheduled, and stage 06 followed it into
-DependencyNeverSatisfied.
+from whatever cwd the scheduler picks, and their dependency set is declared in the
+root project's ``pipeline`` dependency group -- which ``[tool.uv] default-groups``
+installs by default, so the suite's venv and the dispatch venv are the same one.
+Nothing tied the two together before: ``absl`` reached stage 05/06 declared in one
+venv and dispatched against another, and job 141103 died with
+``ModuleNotFoundError: No module named 'absl'`` after being scheduled, with stage 06
+following it into DependencyNeverSatisfied.
 
 Reading the TOML cannot catch that. Each stage is executed in a subprocess under
 ``-I`` from a temporary directory, so nothing resolves out of the checkout except

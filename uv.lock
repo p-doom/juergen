@@ -1,12 +1,6 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = "==3.12.*"
-
-[manifest]
-members = [
-    "juergen",
-    "juergen-data-pipelines",
-]
 
 [[package]]
 name = "absl-py"
@@ -201,22 +195,10 @@ dev = [
     { name = "ruff" },
 ]
 
-[package.metadata]
-requires-dist = [
-    { name = "desktop", git = "https://github.com/p-doom/desktop.git?rev=1db6ae2499afc16d87dee15453a57042dff13f64" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.16.6" },
-]
-provides-extras = ["dev"]
-
-[[package]]
-name = "juergen-data-pipelines"
-version = "0.1.0"
-source = { virtual = "data_pipeline" }
-dependencies = [
+[package.dev-dependencies]
+pipeline = [
     { name = "absl-py" },
     { name = "array-record" },
-    { name = "desktop" },
     { name = "msgpack" },
     { name = "numpy" },
     { name = "openai" },
@@ -226,17 +208,18 @@ dependencies = [
     { name = "tqdm" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
 [package.metadata]
 requires-dist = [
+    { name = "desktop", git = "https://github.com/p-doom/desktop.git?rev=1db6ae2499afc16d87dee15453a57042dff13f64" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.16.6" },
+]
+provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+pipeline = [
     { name = "absl-py", specifier = ">=2.0" },
     { name = "array-record", specifier = ">=0.5.1" },
-    { name = "desktop", git = "https://github.com/p-doom/desktop.git?rev=1db6ae2499afc16d87dee15453a57042dff13f64" },
     { name = "msgpack", specifier = ">=1.0" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "openai", specifier = ">=2.26.0" },
@@ -244,12 +227,6 @@ requires-dist = [
     { name = "pillow", specifier = ">=11.3.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "tqdm", specifier = ">=4.66" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8" },
-    { name = "ruff", specifier = "==0.16.6" },
 ]
 
 [[package]]

@@ -29,7 +29,7 @@ def test_renderer_uses_exact_prompt_and_four_completed_turns():
         "role": "system",
         "content": [{"type": "text", "text": SYSTEM_PROMPT}],
     }
-    assert SYSTEM_PROMPT == CODEC.describe()
+    assert CODEC.describe() == SYSTEM_PROMPT
     assert len([message for message in messages if message["role"] == "assistant"]) == (
         MAX_COMPLETED_TURNS
     )

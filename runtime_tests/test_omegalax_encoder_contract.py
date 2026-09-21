@@ -11,10 +11,10 @@ from pathlib import Path
 
 from PIL import Image
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-TESTS_ROOT = REPO_ROOT / "data_pipeline" / "tests"
+TESTS_ROOT = REPO_ROOT / "pipeline" / "tests"
 if str(TESTS_ROOT) not in sys.path:
     sys.path.insert(0, str(TESTS_ROOT))
 

@@ -40,9 +40,9 @@ carries one instance of every disposition the dead-zone label policy can reach:
 
 The master frame store is packed from the SAME arrays the mp4 is written from,
 through stage 01's own ``pack_master_arrayrecord``, rather than by decoding the
-mp4: stage 01 shells out to an ffmpeg binary, which the data-pipeline test venv
-does not carry (``imageio-ffmpeg`` is declared in ``data_pipeline/pyproject.toml``
-but absent from the gate venv, and there is no ffmpeg on PATH). Feeding the
+mp4: stage 01 shells out to an ffmpeg binary, which the test venv does not
+carry (nothing declares an ffmpeg distribution, and there is no ffmpeg on
+PATH). Feeding the
 packer the source arrays is a lossless decode, and it makes the black span
 exactly black instead of codec-dependent. The mp4 is still real and is what
 stage 00 probes.

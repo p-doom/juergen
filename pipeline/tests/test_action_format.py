@@ -4,8 +4,8 @@ from pathlib import Path
 
 import msgpack
 import pytest
-from grammars.deltatype_v2 import CODEC
 
+from grammars.deltatype_v2 import CODEC
 from pipeline.lib.action_format import format_segment
 from pipeline.lib.common import resolve_key_name
 from pipeline.lib.events import RawEvent, Window, load_events

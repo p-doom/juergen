@@ -6,12 +6,12 @@ at a fixed master fps into one ``images.array_record`` (grain store),
 referenced as ``ar:///abs/path/images.array_record#idx`` -- the same URI scheme
 ``image_store`` / stage 01 / stage 02 already consume.
 
-A downstream sampler (01b) then picks the nearest master record per target-fps
-bin and bins the keylog actions, emitting a metadata-only dataset (no new JPEG
-bytes). The master fps is therefore the sampling ceiling: you can sample down
-to any fps <= master, never up. Pick it as the highest fps you will ever want
+``lib/views`` then selects one master record per target-fps slot on an integer
+stride and bins the keylog actions, emitting metadata only (no new JPEG bytes).
+The master fps is therefore the sampling ceiling: you can sample down to any fps
+that divides it, never up. Pick it as the highest fps you will ever want
 (storage scales linearly with it). No action binning / NO_OP thinning happens
-here -- those are fps-dependent and belong to 01b.
+here -- those are fps-dependent and belong to the selector.
 
 Frames are stored CFR at ``master_fps`` (ffmpeg's ``fps=`` filter resamples any
 VFR source), so master record ``i`` is at ``source_time_s = i / master_fps``.
@@ -28,9 +28,9 @@ Outputs (under --output-dir):
                                             num_records, master_fps, video-relative
                                             timing + video provenance. Alignment-
                                             agnostic and keylog-free: the decode
-                                            ignores the keylog, so 01b joins the
-                                            realigned manifest by segment_id to
-                                            bin actions.
+                                            ignores the keylog, so the selector
+                                            joins the realigned manifest by
+                                            segment_id to bin actions.
   frames_master_summary.json                aggregate stats.
   manifest.json                             artifact marker.
 """

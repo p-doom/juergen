@@ -1,6 +1,6 @@
 """Unit chunking + frame rendering for annotation methods.
 
-An ``AnnotationUnit`` is the work quantum stage 03b dispatches to a labeler
+An ``AnnotationUnit`` is the work quantum stage_annotate dispatches to a labeler
 model: one segment's view (frames @k fps within filter survivors), split into
 window-units only when the segment exceeds the model's context budget. Cuts
 are snapped to a command/prompt submission (Return/Enter) or a real time-gap —

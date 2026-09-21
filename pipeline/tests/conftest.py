@@ -5,7 +5,7 @@ repo root goes on ``sys.path``.
 
 ``pipeline.lib.action_format`` renders every label through a grammar codec, and
 ``grammars`` hard-imports ``desktop``, so the sibling checkout goes on the path
-too — exactly as ``juergen/tests/conftest.py`` does. Under a venv that resolves
+too. Under a venv that resolves
 ``desktop`` as the declared dependency it is already importable and this append
 is inert.
 """

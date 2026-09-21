@@ -9,9 +9,9 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from image_domain import encode_jpeg_q92
 from PIL import Image
 
+from image_domain import encode_jpeg_q92
 from pipeline.cua_gym import stage_01_image_store
 from pipeline.cua_gym.stage_01_image_store import (
     build_inventory_shard,
