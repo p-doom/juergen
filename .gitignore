@@ -9,6 +9,26 @@ __pycache__/
 wandb/
 cache/
 draft/
-uv.lock
 _clamp_audit/
 slurm-*.out
+build/
+.coverage
+.coverage.*
+
+# Stage outputs, when a run is pointed at a relative path inside the checkout.
+/crowdcast_*_v2/
+/annotation_pilot/
+/dataset_runs/
+/iteration_runs/
+/logs/
+/_errors/
+/sft/
+/sft_think/
+*.array_record
+
+# Generated dataset manifests + black-active scan/exclusion outputs. Regenerable,
+# and large -- the crowd-cast manifest alone is ~22 MB.
+manifest*.jsonl
+*.scan.jsonl
+blackactive.*.jsonl
+exclude.*_black_active.jsonl

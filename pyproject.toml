@@ -1,40 +1,91 @@
 [project]
 name = "juergen"
 version = "0.1.0"
-description = "Crowd-cast SFT supply-chain monorepo: data pipeline, eval harnesses, and the opd-slime venv builder. The model trainer (omegalax) is a separate generic library, kept as its own repo."
+description = "Crowd-Cast and CUA-Gym SFT data pipelines with shared action grammars."
+license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "av>=16.1.0",
+    "desktop @ git+https://github.com/p-doom/desktop.git@1db6ae2499afc16d87dee15453a57042dff13f64",
 ]
 
-[tool.uv.workspace]
-members = ["data_pipeline", "eval"]
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff==0.16.6"]
+
+[dependency-groups]
+pipeline = [
+    "absl-py>=2.0",
+    "array-record>=0.5.1",
+    "msgpack>=1.0",
+    "numpy>=2.0",
+    "openai>=2.26.0",
+    "opencv-python-headless>=4.10.0.84",
+    "Pillow>=11.3.0",
+    "PyYAML>=6.0",
+    "tqdm>=4.66",
+]
 
 [tool.uv]
-prerelease = "allow"
-override-dependencies = [
-    "openai>=2.26.0",
-    "nvidia-cudnn-cu12>=9.16",
-]
-
-# Force the torch stack to come from PyTorch's cu128 wheel index. The hai
-# nodes have NVIDIA driver 12080 (CUDA 12.8); the default PyPI/PyTorch
-# index for torch 2.11.0 ships +cu130 wheels that the driver rejects with
-# "No accelerator available". cu128 wheels are runtime-compatible.
-[[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
-explicit = true
-
-[tool.uv.sources]
-torch = { index = "pytorch-cu128" }
-torchaudio = { index = "pytorch-cu128" }
-torchvision = { index = "pytorch-cu128" }
-torchcodec = { index = "pytorch-cu128" }
+default-groups = ["pipeline"]
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = []
+py-modules = ["cua_parity_contract", "image_domain"]
+
+[tool.setuptools.packages.find]
+include = ["grammars", "grammars.*"]
+
+[tool.setuptools.package-data]
+"*" = ["vectors/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "pipeline/tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
+    "PL",   # pylint
+    "TID",  # flake8-tidy-imports
+    "PTH",  # flake8-use-pathlib
+    "RET",  # flake8-return
+    "C4",   # flake8-comprehensions
+    "N",    # pep8-naming
+]
+ignore = [
+    "PLR0912",  # too many branches (stage main() loops are long by design)
+    "PLR0913",  # too many arguments (absl-flags entrypoints have many)
+    "PLR0915",  # too many statements (per-segment processing loops are long by nature)
+    "PLR0917",  # too many positional arguments (same shape as PLR0913, above)
+    "PLR2004",  # magic value (port numbers, fps, jpeg quality inline are fine)
+    "E501",     # line length (enforced by formatter, not lint)
+    "PLC0415",  # import outside top level (array-record and cv2 are imported
+                # inside the workers that use them, so a venv missing them fails
+                # at dispatch rather than at module load -- see
+                # pipeline/tests/test_stage_dependencies.py)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Dispatched stages put the repo root on sys.path before importing ``pipeline``,
+# because the scheduler runs them as file paths from an arbitrary cwd.
+"pipeline/**/stage_*.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "grammars",
+    "pipeline",
+]
