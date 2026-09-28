@@ -129,6 +129,41 @@ def test_actionable_events_fail_instead_of_disappearing(event: list, tmp_path: P
         load_events(keylog)
 
 
+def test_unexecutable_events_can_be_dropped_on_request(tmp_path: Path):
+    keylog = tmp_path / "keylog.msgpack"
+    keylog.write_bytes(
+        msgpack.packb(
+            [
+                [0, ["KeyPress", [0, "PlayPause"]]],
+                [1, ["KeyPress", [0, "Unknown(999)"]]],
+                [2, ["MousePress", ["Other", 0.0, 0.0]]],
+                [3, ["MouseMove", [1.0, 0.0]]],
+                [4, ["KeyRelease", [0, "PlayPause"]]],
+            ]
+        )
+    )
+    with pytest.raises(ValueError, match="unexecutable"):
+        load_events(keylog)
+    assert load_events(keylog, drop_unexecutable=True) == [
+        RawEvent(0, 0.000003, "move", dx=1.0, dy=0.0)
+    ]
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        ["UnknownType", []],
+        ["MouseMove", [1.0]],
+        ["MousePress", ["Left", "x", 0.0]],
+    ],
+)
+def test_dropping_unexecutable_events_keeps_malformed_events_fatal(event: list, tmp_path: Path):
+    keylog = tmp_path / "bad.msgpack"
+    keylog.write_bytes(msgpack.packb([[0, event]]))
+    with pytest.raises(ValueError, match=r"at .*bad\.msgpack:0"):
+        load_events(keylog, drop_unexecutable=True)
+
+
 @pytest.mark.parametrize("timestamp", [True, 0.5, -1])
 def test_malformed_timestamps_fail(timestamp: object, tmp_path: Path):
     keylog = tmp_path / "bad.msgpack"

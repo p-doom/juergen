@@ -198,6 +198,13 @@ class FilterArtifact:
         self.source_clips_dir = check_artifact_id(
             str(self.manifest["source_clips_id"]), what="realigned clips"
         )
+        self.unexecutable_actions = self.manifest["params"].get(
+            "unexecutable_actions", "exclude_segment"
+        )
+        if self.unexecutable_actions not in ("exclude_segment", "drop_event"):
+            raise ValueError(
+                f"unknown unexecutable action policy: {self.unexecutable_actions!r}"
+            )
         index_path = self.dir / "filter_index.jsonl"
         if file_sha256_short(index_path, n=64) != self.manifest.get(
             "filter_index_sha256"
