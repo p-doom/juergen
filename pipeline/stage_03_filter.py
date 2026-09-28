@@ -274,7 +274,22 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
     )
     n_kept = len(master_manifest) - n_black - n_idle
     if n_kept <= 0:
-        raise ValueError(f"Crowd-Cast filter retained no frames: {segment_id}")
+        return {
+            "segment_id": segment_id,
+            "recording_id": manifest_row["recording_id"],
+            "segment_idx": manifest_row["segment_idx"],
+            "alignment_status": manifest_row["alignment_status"],
+            "keylog_path": str(keylog),
+            "keylog_sha256": manifest_row["keylog_sha256"],
+            "filter_path": None,
+            "filter_sha256": None,
+            "status": "excluded_no_retained_frames",
+            "exclusion_reason": "no_retained_frames",
+            "n_records": len(master_manifest),
+            "n_kept": 0,
+            "n_black": n_black,
+            "n_idle_interior": n_idle,
+        }
     output = Path(task["filter_dir"]) / f"{segment_id}.json"
     write_json(
         output,
@@ -467,9 +482,7 @@ def main() -> None:
             totals[key] += int(result[key])
     status_counts = Counter(result["status"] for result in results)
     exclusion_counts = Counter(
-        result["exclusion_reason"]
-        for result in results
-        if result["status"] == "excluded_invalid_keylog"
+        result["exclusion_reason"] for result in results if result["status"] != "ok"
     )
     summary = {
         "master_fps": float(master["master_fps"]),
@@ -478,7 +491,7 @@ def main() -> None:
         "n_input_segments": len(manifest_by_segment),
         "n_alignment_excluded_segments": len(excluded_alignment),
         "n_accepted_segments": status_counts["ok"],
-        "n_excluded_segments": status_counts["excluded_invalid_keylog"],
+        "n_excluded_segments": len(results) - status_counts["ok"],
         "status_counts": dict(sorted(status_counts.items())),
         "exclusion_counts": dict(sorted(exclusion_counts.items())),
         "n_records_total": totals["n_records"],

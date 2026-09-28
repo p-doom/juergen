@@ -146,7 +146,7 @@ def test_filter_requires_stage_00_to_have_excluded_an_empty_keylog(tmp_path: Pat
         filter_segment(task)
 
 
-def test_filter_refuses_a_segment_with_no_kept_frames(tmp_path: Path):
+def test_filter_excludes_a_segment_with_no_kept_frames(tmp_path: Path):
     task = _task(tmp_path)
     frame_manifest = Path(task["master_row"]["shard_path"]).parent / "frame_manifest.jsonl"
     rows = [json.loads(line) for line in frame_manifest.read_text().splitlines()]
@@ -155,8 +155,16 @@ def test_filter_refuses_a_segment_with_no_kept_frames(tmp_path: Path):
         row["frac_dark"] = 1.0
     frame_manifest.write_text("".join(json.dumps(row) + "\n" for row in rows))
     task["master_row"]["frame_manifest_sha256"] = file_sha256_short(frame_manifest, n=64)
-    with pytest.raises(ValueError, match="retained no frames"):
-        filter_segment(task)
+
+    result = filter_segment(task)
+
+    assert result["status"] == "excluded_no_retained_frames"
+    assert result["exclusion_reason"] == "no_retained_frames"
+    assert result["filter_path"] is None
+    assert result["filter_sha256"] is None
+    assert result["n_kept"] == 0
+    assert result["n_black"] + result["n_idle_interior"] == result["n_records"]
+    assert not (tmp_path / "filter" / "seg0.json").exists()
 
 
 def test_mask_helpers_preserve_half_open_intervals():
