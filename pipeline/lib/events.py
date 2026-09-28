@@ -134,28 +134,59 @@ def _numeric_payload(
     return tuple(float(value) for value in payload)
 
 
+def _is_int(value: object) -> bool:
+    return not isinstance(value, bool) and isinstance(value, int)
+
+
+def _is_display(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == 9
+        and isinstance(value[0], str)
+        and value[0] != ""
+        and isinstance(value[1], str)
+        and all(_is_int(value[index]) for index in (2, 3))
+        and all(_is_int(value[index]) and value[index] >= 0 for index in range(4, 8))
+        and isinstance(value[8], bool)
+    )
+
+
+def _is_display_extension(extension: list[object]) -> bool:
+    if not extension:
+        return True
+    capture_display, displays, *capture_context = extension
+    return (
+        (capture_display is None or _is_display(capture_display))
+        and isinstance(displays, list)
+        and all(_is_display(display) for display in displays)
+        and all(isinstance(value, str) for value in capture_context)
+    )
+
+
 def _is_source_metadata(payload: object) -> bool:
     if not isinstance(payload, list):
         return False
     if len(payload) == 5:
         dimensions = payload[:4]
         ratios: list[object] = []
-    elif len(payload) == 10:
+        timestamp = payload[4]
+        extension: list[object] = []
+    elif len(payload) in (10, 12, 14):
         dimensions = [payload[index] for index in (0, 1, 3, 4, 6, 7)]
         ratios = [payload[index] for index in (2, 5, 8)]
+        timestamp = payload[9]
+        extension = payload[10:]
     else:
         return False
     return (
-        all(
-            not isinstance(value, bool) and isinstance(value, int) and value >= 0
-            for value in dimensions
-        )
+        all(_is_int(value) and value >= 0 for value in dimensions)
         and all(
             isinstance(value, float) and math.isfinite(value) and value >= 0
             for value in ratios
         )
-        and isinstance(payload[-1], str)
-        and _UTC_TIMESTAMP_RE.fullmatch(payload[-1]) is not None
+        and isinstance(timestamp, str)
+        and _UTC_TIMESTAMP_RE.fullmatch(timestamp) is not None
+        and _is_display_extension(extension)
     )
 
 

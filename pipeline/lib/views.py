@@ -223,16 +223,29 @@ class FilterArtifact:
                         f"filter artifact contains incomplete segment: {row!r}"
                     )
                 continue
+            if status == "excluded_invalid_keylog":
+                valid_exclusion = (
+                    row.get("exclusion_reason") in EVENT_EXCLUSION_REASONS
+                    and row.get("n_black") == 0
+                    and row.get("n_idle_interior") == 0
+                )
+            elif status == "excluded_no_retained_frames":
+                n_black, n_idle = row.get("n_black"), row.get("n_idle_interior")
+                valid_exclusion = (
+                    row.get("exclusion_reason") == "no_retained_frames"
+                    and isinstance(n_black, int)
+                    and isinstance(n_idle, int)
+                    and n_black + n_idle == row.get("n_records")
+                )
+            else:
+                valid_exclusion = False
             if (
-                status != "excluded_invalid_keylog"
-                or row.get("exclusion_reason") not in EVENT_EXCLUSION_REASONS
+                not valid_exclusion
                 or not isinstance(row.get("keylog_path"), str)
                 or not isinstance(row.get("keylog_sha256"), str)
                 or row.get("filter_path") is not None
                 or row.get("filter_sha256") is not None
                 or row.get("n_kept") != 0
-                or row.get("n_black") != 0
-                or row.get("n_idle_interior") != 0
             ):
                 raise ValueError(
                     f"filter artifact contains incomplete segment: {row!r}"
@@ -241,13 +254,13 @@ class FilterArtifact:
         exclusion_counts = Counter(
             row["exclusion_reason"]
             for row in self.index_rows
-            if row["status"] == "excluded_invalid_keylog"
+            if row["status"] != "ok"
         )
         if (
             self.manifest["n_segments"] != len(self.index_rows)
             or self.manifest["n_accepted_segments"] != status_counts["ok"]
             or self.manifest["n_excluded_segments"]
-            != status_counts["excluded_invalid_keylog"]
+            != len(self.index_rows) - status_counts["ok"]
             or self.manifest["status_counts"] != dict(sorted(status_counts.items()))
             or self.manifest["exclusion_counts"]
             != dict(sorted(exclusion_counts.items()))

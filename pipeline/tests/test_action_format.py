@@ -156,6 +156,22 @@ def test_missing_keylog_fails(tmp_path: Path):
         load_events(tmp_path / "missing.msgpack")
 
 
+_V10_METADATA = [
+    1920,
+    1080,
+    1.7777777777777777,
+    1920,
+    1080,
+    1.7777777777777777,
+    2560,
+    1440,
+    1.7777777777777777,
+    "2026-07-23T08:21:07Z",
+]
+_BUILTIN = ["37D8832A", "Built-in Display", 0, 0, 1800, 1169, 3600, 2338, True]
+_EXTERNAL = ["E9396EE8", "External Display 3", -2560, -671, 2560, 1440, 2560, 1440, False]
+
+
 def test_observed_non_action_events_are_validated_and_ignored(tmp_path: Path):
     keylog = tmp_path / "keylog.msgpack"
     keylog.write_bytes(
@@ -181,11 +197,22 @@ def test_observed_non_action_events_are_validated_and_ignored(tmp_path: Path):
                         ],
                     ],
                 ],
-                [3, ["MouseMove", [1.0, 0.0]]],
+                [3, ["Metadata", [*_V10_METADATA, None, []]]],
+                [4, ["Metadata", [*_V10_METADATA, _BUILTIN, [_BUILTIN, _EXTERNAL]]]],
+                [
+                    5,
+                    [
+                        "Metadata",
+                        [*_V10_METADATA, None, [_EXTERNAL], "macos", "single_active_app"],
+                    ],
+                ],
+                [6, ["Metadata", [*_V10_METADATA, None, [], "windows", "display"]]],
+                [7, ["Metadata", [*_V10_METADATA, None, [_EXTERNAL], "", ""]]],
+                [8, ["MouseMove", [1.0, 0.0]]],
             ]
         )
     )
-    assert load_events(keylog) == [RawEvent(0, 0.000003, "move", dx=1.0, dy=0.0)]
+    assert load_events(keylog) == [RawEvent(0, 0.000008, "move", dx=1.0, dy=0.0)]
 
 
 @pytest.mark.parametrize(
@@ -209,6 +236,15 @@ def test_observed_non_action_events_are_validated_and_ignored(tmp_path: Path):
                 "2026-06-18T12:34:56Z",
             ],
         ],
+        ["Metadata", [*_V10_METADATA, None]],
+        ["Metadata", [*_V10_METADATA, None, [], "macos"]],
+        ["Metadata", [*_V10_METADATA, None, None]],
+        ["Metadata", [*_V10_METADATA, _BUILTIN[:8], []]],
+        ["Metadata", [*_V10_METADATA, None, [[*_BUILTIN[:8], 1]]]],
+        ["Metadata", [*_V10_METADATA, None, [["", *_BUILTIN[1:]]]]],
+        ["Metadata", [*_V10_METADATA, None, [[*_BUILTIN[:4], -1, *_BUILTIN[5:]]]]],
+        ["Metadata", [*_V10_METADATA, None, [[*_BUILTIN[:2], True, *_BUILTIN[3:]]]]],
+        ["Metadata", [*_V10_METADATA, None, [], "macos", 1]],
     ],
 )
 def test_malformed_non_action_payload_fails(event: list[object], tmp_path: Path):
