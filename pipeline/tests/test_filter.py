@@ -68,6 +68,7 @@ def _task(root: Path) -> dict:
             "frame_manifest_sha256": file_sha256_short(frame_manifest, n=64),
         },
         "filter_dir": str(root / "filter"),
+        "params": FILTER_PARAMS,
     }
 
 
@@ -87,7 +88,9 @@ def test_canonical_idle_activity_is_deltatype_v2(tmp_path: Path):
             ]
         )
     )
-    assert _rounded_activity_mask(keylog, 4, master_fps=1.0, bin_ticks=2) == [
+    assert _rounded_activity_mask(
+        keylog, 4, master_fps=1.0, bin_ticks=2, drop_unexecutable=False
+    ) == [
         False,
         False,
         True,
@@ -136,6 +139,37 @@ def test_filter_excludes_the_whole_segment_for_an_unexecutable_action(
     assert result["filter_sha256"] is None
     assert result["n_kept"] == 0
     assert not (tmp_path / "filter" / "seg0.json").exists()
+
+
+def test_filter_can_drop_unexecutable_events_and_keep_the_segment(tmp_path: Path):
+    task = _task(tmp_path)
+    reference = filter_segment(_task(tmp_path / "reference"))
+    _replace_keylog(
+        task,
+        [
+            [200_000, ["MouseMove", [3.0, 0.0]]],
+            [5_000_000, ["KeyPress", [0, "PlayPause"]]],
+            [5_100_000, ["KeyRelease", [0, "PlayPause"]]],
+            [11_200_000, ["MouseMove", [0.0, 4.0]]],
+        ],
+    )
+    task["params"] = {**FILTER_PARAMS, "unexecutable_actions": "drop_event"}
+
+    result = filter_segment(task)
+
+    assert result["status"] == "ok"
+    document = json.loads((tmp_path / "filter" / "seg0.json").read_text())
+    assert document["params"]["unexecutable_actions"] == "drop_event"
+    reference_document = json.loads((tmp_path / "reference" / "filter" / "seg0.json").read_text())
+    assert document["kept_ranges"] == reference_document["kept_ranges"]
+    assert result["n_kept"] == reference["n_kept"]
+
+
+def test_filter_rejects_an_unknown_unexecutable_action_policy(tmp_path: Path):
+    task = _task(tmp_path)
+    task["params"] = {**FILTER_PARAMS, "unexecutable_actions": "ignore"}
+    with pytest.raises(ValueError, match="unknown unexecutable action policy"):
+        filter_segment(task)
 
 
 def test_filter_requires_stage_00_to_have_excluded_an_empty_keylog(tmp_path: Path):

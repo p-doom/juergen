@@ -94,6 +94,8 @@ REASON_BLACK = 1
 REASON_IDLE = 2
 _REASON_NAMES = {REASON_BLACK: "black", REASON_IDLE: "idle_interior"}
 
+UNEXECUTABLE_ACTION_POLICIES = ("exclude_segment", "drop_event")
+
 FILTER_PARAMS = {
     "drop_black_frames": True,
     "black_luma_max": config.DEFAULT_BLACK_LUMA_MAX,
@@ -103,6 +105,7 @@ FILTER_PARAMS = {
     "idle_keep_tail_s": config.DEFAULT_IDLE_KEEP_TAIL_S,
     "idle_judgment_bin_s": config.DEFAULT_IDLE_JUDGMENT_BIN_S,
     "idle_activity": "canonical_deltatype_v2",
+    "unexecutable_actions": "exclude_segment",
 }
 
 
@@ -128,6 +131,7 @@ def _rounded_activity_mask(
     n_records: int,
     master_fps: float,
     bin_ticks: int,
+    drop_unexecutable: bool,
 ) -> list[bool]:
     if not keylog_path.is_file():
         raise FileNotFoundError(f"Crowd-Cast keylog is missing: {keylog_path}")
@@ -138,7 +142,10 @@ def _rounded_activity_mask(
         for start in range(0, n_records, bin_ticks)
     ]
     labels = format_segment(
-        load_events(keylog_path), windows, (), master_fps=master_fps
+        load_events(keylog_path, drop_unexecutable=drop_unexecutable),
+        windows,
+        (),
+        master_fps=master_fps,
     ).labels
     active = [False] * n_records
     for index, label in enumerate(labels):
@@ -198,7 +205,12 @@ def _compress_reasons(
 def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
     manifest_row = task["manifest_row"]
     master_row = task["master_row"]
+    params = task["params"]
     segment_id = str(manifest_row["segment_id"])
+    if params["unexecutable_actions"] not in UNEXECUTABLE_ACTION_POLICIES:
+        raise ValueError(
+            f"unknown unexecutable action policy: {params['unexecutable_actions']!r}"
+        )
     if master_row["status"] != "ok":
         raise ValueError(
             f"master segment {segment_id} is not complete: {master_row['status']!r}"
@@ -230,6 +242,7 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
             len(master_manifest),
             master_fps,
             round(config.DEFAULT_IDLE_JUDGMENT_BIN_S * master_fps),
+            params["unexecutable_actions"] == "drop_event",
         )
     except KeylogError as exc:
         if exc.reason not in EVENT_EXCLUSION_REASONS:
@@ -306,7 +319,7 @@ def filter_segment(task: dict[str, Any]) -> dict[str, Any]:
             "keylog_path": str(keylog),
             "keylog_sha256": manifest_row["keylog_sha256"],
             "alignment_status": manifest_row["alignment_status"],
-            "params": FILTER_PARAMS,
+            "params": params,
             "kept_ranges": kept_ranges,
             "dropped": dropped,
             "n_kept": n_kept,
@@ -335,6 +348,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--clips_manifest", type=Path, required=True)
     parser.add_argument("--output_dir", type=Path, required=True)
     parser.add_argument("--num_workers", type=int, default=mp.cpu_count())
+    parser.add_argument(
+        "--unexecutable_actions",
+        choices=UNEXECUTABLE_ACTION_POLICIES,
+        default="exclude_segment",
+    )
     return parser.parse_args(argv)
 
 
@@ -458,12 +476,14 @@ def main() -> None:
         != dict(sorted(observed_exclusions.items()))
     ):
         raise ValueError("Crowd-Cast Stage02 alignment counts do not close")
+    params = {**FILTER_PARAMS, "unexecutable_actions": args.unexecutable_actions}
     filter_dir = ensure_dir(output / "filter")
     tasks = [
         {
             "manifest_row": manifest_by_segment[segment_id],
             "master_row": master_by_segment[segment_id],
             "filter_dir": str(filter_dir),
+            "params": params,
         }
         for segment_id in sorted(manifest_by_segment)
     ]
@@ -500,7 +520,7 @@ def main() -> None:
         "n_idle_interior_total": totals["n_idle_interior"],
         "frames_master_dir": str(args.frames_master_dir.resolve()),
         "source_clips_manifest": str(args.clips_manifest.resolve()),
-        **FILTER_PARAMS,
+        **params,
     }
     write_json(output / "filter_summary.json", summary)
     write_json_atomic(
@@ -514,7 +534,7 @@ def main() -> None:
             "filter_index": "filter_index.jsonl",
             "filter_index_sha256": file_sha256_short(filter_index_path, n=64),
             "filter_layout": "filter/<segment_id>.json",
-            "params": FILTER_PARAMS,
+            "params": params,
             **summary,
         },
     )

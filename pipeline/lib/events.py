@@ -190,7 +190,7 @@ def _is_source_metadata(payload: object) -> bool:
     )
 
 
-def load_events(keylog_path: Path) -> list[RawEvent]:
+def load_events(keylog_path: Path, *, drop_unexecutable: bool = False) -> list[RawEvent]:
     """Parse the exact actionable Crowd-Cast keylog schema."""
     events: list[RawEvent] = []
     for index, (timestamp_us, event) in enumerate(load_keylog_entries(keylog_path)):
@@ -273,6 +273,8 @@ def load_events(keylog_path: Path) -> list[RawEvent]:
                 else resolve_button_name(payload)
             )
             if name is None:
+                if drop_unexecutable:
+                    continue
                 raise KeylogError(
                     "unexecutable_action",
                     f"unexecutable {event_type} name at {keylog_path}:{index}: "

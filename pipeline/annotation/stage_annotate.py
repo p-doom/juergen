@@ -34,8 +34,10 @@ WINDOW_TAIL_BUFFER = 0
 EST_TOKENS_PER_FRAME = 1500
 
 
-def _segment_keyboard(view, keylog_path: str) -> list[WindowKeyboard]:
-    events = load_events(Path(keylog_path))
+def _segment_keyboard(
+    view, keylog_path: str, drop_unexecutable: bool
+) -> list[WindowKeyboard]:
+    events = load_events(Path(keylog_path), drop_unexecutable=drop_unexecutable)
     return format_segment(
         events,
         view.windows(),
@@ -122,7 +124,11 @@ def main() -> None:
         view = artifact.segment_view(segment_id, args.fps)
         if not view.frames:
             raise ValueError(f"selected Crowd-Cast view is empty: {segment_id}")
-        keyboard = _segment_keyboard(view, view.keylog_path)
+        keyboard = _segment_keyboard(
+            view,
+            view.keylog_path,
+            artifact.unexecutable_actions == "drop_event",
+        )
         units = build_units(
             view,
             keyboard,

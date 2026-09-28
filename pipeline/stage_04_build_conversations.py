@@ -250,6 +250,11 @@ def main() -> None:
     if args.num_workers <= 0:
         raise SystemExit("--num_workers must be positive")
     art = FilterArtifact(args.filter_dir)
+    if art.unexecutable_actions != "exclude_segment":
+        raise SystemExit(
+            "Stage04 needs executable action labels; rebuild Stage03 with "
+            "--unexecutable_actions exclude_segment"
+        )
     stride = art.stride_for(args.fps)
     goals, goals_id = resolve_goals(art, args.goals_dir)
 
